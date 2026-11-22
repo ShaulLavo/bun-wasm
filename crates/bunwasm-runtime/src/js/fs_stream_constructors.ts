@@ -1,12 +1,26 @@
 (function () {
   "use strict";
 
+  const kFs = Symbol("kFs");
+  const kIsPerformingIO = Symbol("kIsPerformingIO");
+  const kIoDone = Symbol("kIoDone");
+
   type Flags = string | number;
+  interface CustomFs {
+    open?: (path: unknown, flags: Flags, mode: number, callback: (error: unknown, fd?: number) => void) => void;
+    write?: (fd: number | null, data: Uint8Array, offset: number, length: number, position: number | undefined, callback: (error: unknown, bytesWritten?: number, buffer?: Uint8Array) => void) => void;
+    writev?: (fd: number | null, chunks: Uint8Array[], position: number | undefined, callback: (error: unknown, bytesWritten?: number, buffers?: Uint8Array[]) => void) => void;
+    close?: (fd: number, callback: (error?: unknown) => void) => void;
+    fsync?: (fd: number, callback: (error?: unknown) => void) => void;
+  }
+
   type Options = {
     fd?: number | object;
     flags?: Flags;
     mode?: number;
     autoClose?: boolean;
+    flush?: boolean;
+    fs?: CustomFs | null;
     start?: number;
     end?: number;
     encoding?: string;
@@ -21,10 +35,14 @@
     flags: Flags;
     mode: number;
     autoClose: boolean;
+    flush?: boolean;
     pending: boolean;
     pos: number | undefined;
     start: number | undefined;
-    emit(event: string, ...args: unknown[]): unknown;
+    [kFs]?: CustomFs;
+    [kIsPerformingIO]?: boolean;
+    emit(event: string | symbol, ...args: unknown[]): unknown;
+    once(event: string | symbol, listener: (...args: unknown[]) => void): unknown;
     _construct(callback: (error?: unknown) => void): void;
     _destroy(error: unknown, callback: (error?: unknown) => void): void;
   }
@@ -32,21 +50,21 @@
   interface ReadFileStream extends BaseFileStream {
     end: number;
     bytesRead: number;
-    once(event: string, listener: () => void): unknown;
     push(chunk: Uint8Array | null): unknown;
     destroy(error?: unknown): unknown;
     destroyed: boolean;
     _read(size: number): void;
-    close(callback?: () => void): void;
+    close(callback?: (error?: unknown) => void): void;
   }
 
   interface WriteFileStream extends BaseFileStream {
     bytesWritten: number;
     writableFinished: boolean;
-    once(event: string, listener: () => void): unknown;
+    destroyed: boolean;
     destroy(error?: unknown): unknown;
     end(): unknown;
-    _write(chunk: Uint8Array, encoding: string, callback: (error?: unknown) => void): void;
+    _write: ((chunk: Uint8Array, encoding: string, callback: (error?: unknown) => void) => void) | null;
+    _writev?: ((entries: readonly { chunk: Uint8Array }[], callback: (error?: unknown) => void) => void) | null;
     close(callback?: () => void): void;
   }
 
@@ -70,11 +88,13 @@
   interface StreamModule {
     Readable: StreamConstructor;
     Writable: StreamConstructor;
+    finished(stream: object, callback: (error?: unknown) => void): void;
   }
 
   interface Dependencies {
     read(fd: number | null, length: number, position: number): Uint8Array;
     asBuffer(bytes: Uint8Array): Uint8Array;
+    concatBuffers(buffers: readonly Uint8Array[]): Uint8Array;
     readPieceSize: number;
     isRegularReadFd(fd: number | null): boolean;
     openSync(path: unknown, flags: Flags, mode?: number): number;
@@ -165,13 +185,37 @@
       return this;
     } as ReadStreamConstructor;
 
+    function validateCustomWriteFs(stream: WriteFileStream, customFs: CustomFs, flush: boolean) {
+      if (stream.fd === null && typeof customFs.open !== "function") throw invalidArg("options.fs.open", "of type function", customFs.open);
+      if (customFs.write !== undefined && typeof customFs.write !== "function") throw invalidArg("options.fs.write", "of type function", customFs.write);
+      if (customFs.writev !== undefined && typeof customFs.writev !== "function") throw invalidArg("options.fs.writev", "of type function", customFs.writev);
+      if (stream.autoClose && typeof customFs.close !== "function") throw invalidArg("options.fs.close", "of type function", customFs.close);
+      if (flush && typeof customFs.fsync !== "function") throw invalidArg("options.fs.fsync", "of type function", customFs.fsync);
+      if (!customFs.write && !customFs.writev) throw invalidArg("options.fs.write", "of type function", customFs.write);
+      if (!customFs.write) stream._write = null;
+      if (!customFs.writev) stream._writev = null;
+    }
+
     const WriteStream = function (this: WriteFileStream | undefined, path: unknown, options?: string | Options | null): WriteFileStream {
       if (!(this instanceof WriteStream)) return new WriteStream(path, options);
       const streams = initializeFileStreams();
       const config = fileStreamOptions(options);
       initializeFileStream(this, path, config, "w");
+      if (config.flush !== undefined && typeof config.flush !== "boolean") throw invalidArg("options.flush", "of type boolean", config.flush);
+      this.flush = Boolean(config.flush);
       this.start = config.start;
       this.bytesWritten = 0;
+      this[kIsPerformingIO] = false;
+      if (config.fs !== undefined && config.fs !== null) {
+        if (typeof config.fs !== "object") throw invalidArg("options.fs", "of type object", config.fs);
+        if (handleLinks.has(this)) {
+          throw Object.assign(new Error("The FileHandle with fs method is not implemented"), { code: "ERR_METHOD_NOT_IMPLEMENTED" });
+        }
+        this[kFs] = config.fs;
+        validateCustomWriteFs(this, config.fs, this.flush);
+      } else {
+        this._writev = undefined;
+      }
       streams.Writable.call(this, {
         ...config,
         decodeStrings: true,
@@ -183,6 +227,18 @@
 
     function constructFileStream(this: BaseFileStream, callback: (error?: unknown) => void) {
       if (this.fd !== null) { callback(); return; }
+      const customFs = this[kFs];
+      if (customFs?.open) {
+        customFs.open(this.path, this.flags, this.mode, (error, fd) => {
+          this.pending = false;
+          if (error) { callback(error); return; }
+          this.fd = fd ?? null;
+          this.emit("open", this.fd);
+          this.emit("ready");
+          callback();
+        });
+        return;
+      }
       try { this.fd = openSync(this.path, this.flags, this.mode); }
       catch (error) { this.pending = false; callback(error); return; }
       this.pending = false;
@@ -191,13 +247,25 @@
       callback();
     }
 
-    function destroyFileStream(this: BaseFileStream, error: unknown, callback: (error?: unknown) => void) {
-      const fd = this.fd;
-      this.fd = null;
-      this.pending = false;
-      const link = handleLinks.get(this);
+    function closeStreamHandle(stream: BaseFileStream, error: unknown, callback: (error?: unknown) => void) {
+      const fd = stream.fd;
+      stream.fd = null;
+      stream.pending = false;
+      const customFs = stream[kFs];
+      if (customFs) {
+        if (fd === null) { callback(error); return; }
+        const closeFd = (syncError?: unknown) => {
+          const err = error || syncError;
+          if (!customFs.close) { callback(err); return; }
+          customFs.close(fd, (closeError) => callback(closeError || err));
+        };
+        if (stream.flush && customFs.fsync) customFs.fsync(fd, closeFd);
+        else closeFd();
+        return;
+      }
+      const link = handleLinks.get(stream);
       if (link) {
-        handleLinks.delete(this);
+        handleLinks.delete(stream);
         link.close().then(() => callback(error), (closeError: unknown) => callback(error || closeError));
         return;
       }
@@ -205,6 +273,14 @@
       try { closeSync(fd); }
       catch (closeError) { callback(error || closeError); return; }
       callback(error);
+    }
+
+    function destroyFileStream(this: BaseFileStream, error: unknown, callback: (error?: unknown) => void) {
+      if (this[kIsPerformingIO]) {
+        this.once(kIoDone, (ioError: unknown) => closeStreamHandle(this, error || ioError, callback));
+        return;
+      }
+      closeStreamHandle(this, error, callback);
     }
 
     ReadStream.prototype._construct = constructFileStream;
@@ -245,14 +321,100 @@
       while (offset < chunk.length) offset += writeFileStreamStep(stream, chunk, offset);
     }
 
+    function streamDestroyed(operation: string) {
+      return Object.assign(new Error(`Cannot call ${operation} after a stream was destroyed`), { code: "ERR_STREAM_DESTROYED" });
+    }
+
+    function writeAllCustom(
+      stream: WriteFileStream,
+      customFs: CustomFs,
+      data: Uint8Array,
+      size: number,
+      pos: number | undefined,
+      callback: (error?: unknown) => void,
+      retries: number,
+    ) {
+      customFs.write!(stream.fd, data, 0, size, pos, (error, written = 0, buffer) => {
+        if ((error as { code?: string } | null)?.code === "EAGAIN") {
+          error = null;
+          written = 0;
+        }
+        if (stream.destroyed || error) { callback(error || streamDestroyed("write")); return; }
+        stream.bytesWritten += written;
+        const nextRetries = written ? 0 : retries + 1;
+        const remaining = size - written;
+        const nextPos = pos === undefined ? undefined : pos + written;
+        if (nextRetries > 5) callback(new Error("write failed"));
+        else if (remaining > 0) writeAllCustom(stream, customFs, (buffer ?? data).subarray(written), remaining, nextPos, callback, nextRetries);
+        else callback();
+      });
+    }
+
+    function writevAllCustom(
+      stream: WriteFileStream,
+      customFs: CustomFs,
+      chunks: Uint8Array[],
+      size: number,
+      pos: number | undefined,
+      callback: (error?: unknown) => void,
+      retries: number,
+    ) {
+      customFs.writev!(stream.fd, chunks, pos, (error, written = 0, buffers) => {
+        if ((error as { code?: string } | null)?.code === "EAGAIN") {
+          error = null;
+          written = 0;
+        }
+        if (stream.destroyed || error) { callback(error || streamDestroyed("writev")); return; }
+        stream.bytesWritten += written;
+        const nextRetries = written ? 0 : retries + 1;
+        const remaining = size - written;
+        const nextPos = pos === undefined ? undefined : pos + written;
+        if (nextRetries > 5) callback(new Error("writev failed"));
+        else if (remaining > 0) writevAllCustom(stream, customFs, [deps.concatBuffers(buffers ?? chunks).subarray(written)], remaining, nextPos, callback, nextRetries);
+        else callback();
+      });
+    }
+
     WriteStream.prototype._write = function (this: WriteFileStream, chunk: Uint8Array, _encoding: string, callback: (error?: unknown) => void) {
+      const customFs = this[kFs];
+      if (customFs) {
+        const pos = this.pos;
+        if (this.pos !== undefined) this.pos += chunk.length;
+        this[kIsPerformingIO] = true;
+        writeAllCustom(this, customFs, chunk, chunk.length, pos, (error) => {
+          this[kIsPerformingIO] = false;
+          callback(error);
+          if (this.destroyed) this.emit(kIoDone, error);
+        }, 0);
+        return;
+      }
       try { writeFileStreamChunk(this, chunk); }
       catch (error) { callback(error); return; }
       callback();
     };
 
-    ReadStream.prototype.close = function (this: ReadFileStream, callback?: () => void) {
-      if (callback) this.once("close", callback);
+    WriteStream.prototype._writev = function (this: WriteFileStream, entries: readonly { chunk: Uint8Array }[], callback: (error?: unknown) => void) {
+      const customFs = this[kFs];
+      if (!customFs?.writev) { callback(); return; }
+      const chunks = new Array<Uint8Array>(entries.length);
+      let size = 0;
+      for (let i = 0; i < entries.length; i++) {
+        const chunk = entries[i]!.chunk;
+        chunks[i] = chunk;
+        size += chunk.length;
+      }
+      const pos = this.pos;
+      if (this.pos !== undefined) this.pos += size;
+      this[kIsPerformingIO] = true;
+      writevAllCustom(this, customFs, chunks, size, pos, (error) => {
+        this[kIsPerformingIO] = false;
+        callback(error);
+        if (this.destroyed) this.emit(kIoDone, error);
+      }, 0);
+    };
+
+    ReadStream.prototype.close = function (this: ReadFileStream, callback?: (error?: unknown) => void) {
+      if (typeof callback === "function") initializeFileStreams().finished(this, callback);
       this.destroy();
     };
 

@@ -63,6 +63,7 @@ function productionFilesystem(root: string) {
     require(name: string): unknown {
       if (name === "buffer") return { Buffer: buffers };
       if (name === "fs_watch") return () => ({});
+      if (name === "fs_buffer_pins") return { pin: () => null };
       if (name === "fs_options") return optionsFactory({});
       if (name === "fs_stream_constructors") return helperFactory();
       return require(name);
@@ -309,6 +310,11 @@ async function errorAndDestroy(fs: Filesystem, path: string, root: string) {
   reader.close();
   await readerClosed;
   assert.equal(descriptor(reader), null);
+  const prematureReader = fs.createReadStream(path);
+  const prematureErr = await new Promise<unknown>(resolve => { prematureReader.close(resolve); });
+  assert.ok(prematureErr && typeof prematureErr === "object" && "message" in prematureErr && "code" in prematureErr);
+  assert.equal(prematureErr.code, "ERR_STREAM_PREMATURE_CLOSE");
+  assert.ok(String(prematureErr.message).includes("Premature close"));
   assert.throws(() => fs.createReadStream(path, { start: 4, end: 2 }), { code: "ERR_OUT_OF_RANGE" });
   const append = fs.createWriteStream(path, { flags: "a" });
   const appended = once(append, "close");
@@ -316,3 +322,101 @@ async function errorAndDestroy(fs: Filesystem, path: string, root: string) {
   await appended;
   assert.equal(fs.readFileSync(path, "utf8"), "abcdé!");
 }
+
+test("WriteStream options.fs defers _destroy until in-flight _write/_writev finishes and retries short writes cleanly", async () => {
+  const root = hostFs.mkdtempSync(join(tmpdir(), "bun-wasm-fsstream-customfs-"));
+  const runtime = productionFilesystem(root);
+  const { fs } = runtime;
+  try {
+    // 1. _destroy waits for in-flight _write.
+    {
+      const events: string[] = [];
+      let finishWrite!: () => void;
+      let started!: () => void;
+      const writeStarted = new Promise<void>(resolve => { started = resolve; });
+      const stream = Reflect.apply(fs.createWriteStream, fs, [join(root, "w.txt"), {
+        fs: {
+          open: fs.open,
+          write(_fd: number, buf: Buffer, _off: number, len: number, _pos: unknown, cb: Function) {
+            events.push("write-start");
+            started();
+            finishWrite = () => { events.push("write-cb"); cb(null, len, buf); };
+          },
+          close(fd: number, cb: Function) { events.push("close"); fs.close(fd, cb as () => void); },
+        },
+      }]) as import("node:fs").WriteStream;
+      stream.on("error", (error: Error & { code?: string }) => events.push(`error:${error.code}`));
+      const done = closed(stream);
+      stream.on("close", () => events.push("close-event"));
+      stream.write(Buffer.from("hello"));
+      await writeStarted;
+      stream.destroy();
+      await new Promise<void>(resolve => setImmediate(() => setImmediate(resolve)));
+      finishWrite();
+      await done;
+      expect(events).toEqual(["write-start", "write-cb", "close", "error:ERR_STREAM_DESTROYED", "close-event"]);
+    }
+
+    // 2. _destroy waits for in-flight _writev.
+    {
+      const events: string[] = [];
+      let finishWritev!: () => void;
+      let started!: () => void;
+      const writevStarted = new Promise<void>(resolve => { started = resolve; });
+      const stream = Reflect.apply(fs.createWriteStream, fs, [join(root, "wv.txt"), {
+        fs: {
+          open: fs.open,
+          write: fs.write,
+          writev(_fd: number, buffers: Buffer[], _pos: unknown, cb: Function) {
+            events.push("writev-start");
+            started();
+            const total = buffers.reduce((sum, buf) => sum + buf.length, 0);
+            finishWritev = () => { events.push("writev-cb"); cb(null, total, buffers); };
+          },
+          close(fd: number, cb: Function) { events.push("close"); fs.close(fd, cb as () => void); },
+        },
+      }]) as import("node:fs").WriteStream;
+      stream.on("error", (error: Error & { code?: string }) => events.push(`error:${error.code}`));
+      await once(stream, "ready");
+      const done = closed(stream);
+      stream.on("close", () => events.push("close-event"));
+      stream.cork();
+      stream.write(Buffer.from("aa"));
+      stream.write(Buffer.from("bb"));
+      stream.uncork();
+      await writevStarted;
+      stream.destroy();
+      await new Promise<void>(resolve => setImmediate(() => setImmediate(resolve)));
+      finishWritev();
+      await done;
+      expect(events).toEqual(["writev-start", "writev-cb", "close", "error:ERR_STREAM_DESTROYED", "close-event"]);
+    }
+
+    // 3. options.fs without writev sets _writev = null and retries short writes with position undefined.
+    {
+      const target = join(root, "short.txt");
+      const writes: Array<{ length: number; position: unknown }> = [];
+      const stream = Reflect.apply(fs.createWriteStream, fs, [target, {
+        fs: {
+          open: fs.open,
+          close: fs.close,
+          write(fd: number, buf: Buffer, off: number, len: number, pos: unknown, cb: Function) {
+            writes.push({ length: len, position: pos });
+            const take = writes.length === 1 ? 4 : len;
+            return Reflect.apply(hostFs.write, hostFs, [fd, buf, off, take, pos, cb]);
+          },
+        },
+      }]) as import("node:fs").WriteStream;
+      expect(Reflect.get(stream, "_writev")).toBeNull();
+      const done = closed(stream);
+      stream.end(Buffer.from("AAAABBBBCCCCDDDD"));
+      await done;
+      expect(stream.bytesWritten).toBe(16);
+      expect(hostFs.readFileSync(target, "utf8")).toBe("AAAABBBBCCCCDDDD");
+      expect(writes).toEqual([
+        { length: 16, position: undefined },
+        { length: 12, position: undefined },
+      ]);
+    }
+  } finally { runtime.cleanup(); }
+});
