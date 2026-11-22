@@ -16,10 +16,14 @@ export interface EarlyInstance {
 }
 
 const apply = Reflect.apply;
+const create = Object.create;
+const hasOwn = Object.hasOwn;
 const moduleImports = WebAssembly.Module.imports;
 const Instance = WebAssembly.Instance;
 
 type GuestFunction = (...args: unknown[]) => unknown;
+/** One import of the guest: where its calls go once the process is linked. */
+interface Slot { readonly namespace: string; readonly name: string; target: GuestFunction | undefined }
 
 /** The start requests whose guest is one module that the loader found to have no start function. */
 function eligibleModule(request: unknown): WebAssembly.Module | undefined {
@@ -35,12 +39,20 @@ function eligibleModule(request: unknown): WebAssembly.Module | undefined {
   return module;
 }
 
-function forward(targets: { linked?: WebAssembly.Imports }, namespace: string, name: string): GuestFunction {
+function forward(slot: Slot): GuestFunction {
   return (...args) => {
-    const target = targets.linked?.[namespace]?.[name];
-    if (typeof target !== "function") throw new Error(`Guest import ${namespace}.${name} was called before the process linked it`);
+    const target = slot.target;
+    if (!target) throw new Error(`Guest import ${slot.namespace}.${slot.name} was called before the process linked it`);
     return apply(target, undefined, args);
   };
+}
+
+/** The linked import itself, never a property the imports object or a namespace inherits. */
+function linkedImport(linked: WebAssembly.Imports, { namespace, name }: Slot): GuestFunction | undefined {
+  if (!hasOwn(linked, namespace)) return undefined;
+  const members = linked[namespace]!;
+  const value: unknown = hasOwn(members, name) ? members[name] : undefined;
+  return typeof value === "function" ? value as GuestFunction : undefined;
 }
 
 /** The guest instance for a start request, or undefined when the ordinary late path must run. */
@@ -50,12 +62,18 @@ export function earlyInstance(request: unknown): EarlyInstance | undefined {
   const descriptors = moduleImports(module);
   // Memories, tables and globals cannot be forwarded: their values must exist at instantiation.
   if (descriptors.some(entry => entry.kind !== "function")) return undefined;
-  const targets: { linked?: WebAssembly.Imports } = {};
-  const forwards: Record<string, Record<string, GuestFunction>> = {};
-  for (const { module: namespace, name } of descriptors) (forwards[namespace] ??= {})[name] = forward(targets, namespace, name);
+  const slots: Slot[] = [];
+  // Import names are the guest's: no prototype, so a name like `constructor` is only a key.
+  const forwards: Record<string, Record<string, GuestFunction>> = create(null);
+  for (const { module: namespace, name } of descriptors) {
+    const slot: Slot = { namespace, name, target: undefined };
+    slots.push(slot);
+    (forwards[namespace] ??= create(null))[name] = forward(slot);
+  }
   try {
     const instance = new Instance(module, forwards);
-    return { module, instance, link(imports) { targets.linked = imports; } };
+    // Imports resolve once, at linking, as they do for an ordinary instantiation.
+    return { module, instance, link(imports) { for (const slot of slots) slot.target = linkedImport(imports, slot); } };
   } catch {
     // The late path reports a real instantiation failure with the process's own diagnostics.
     return undefined;

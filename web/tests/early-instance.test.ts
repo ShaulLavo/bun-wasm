@@ -41,6 +41,25 @@ test("the guest runs on the imports the process links later", () => {
   expect(seen).toEqual([[2, 3]]);
 });
 
+test("an import named like an inherited property is only a name", () => {
+  // `constructor.prototype`: on an ordinary object the namespace would be the Object function.
+  const module = wasm(binary(
+    section(1, [1].concat(NULLARY)),
+    section(2, [1].concat(name("constructor"), name("prototype"), [0, 0])),
+    section(7, [1].concat(name("call"), [0, 0])),
+  ));
+  const early = earlyInstance({ module, startless: true });
+  expect(early).toBeDefined();
+  const call = early!.instance.exports.call as () => void;
+  // The linked imports do not provide it, and nothing inherited stands in for it.
+  early!.link({});
+  expect(() => call()).toThrow("Guest import constructor.prototype was called before the process linked it");
+  let calls = 0;
+  early!.link({ constructor: { prototype() { calls++; } } } as unknown as WebAssembly.Imports);
+  call();
+  expect(calls).toBe(1);
+});
+
 test("a thrown import passes through unchanged", () => {
   const early = earlyInstance({ module: wasm(caller()), startless: true })!;
   const unwind = new Error("process exit");

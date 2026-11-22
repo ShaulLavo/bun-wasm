@@ -100,7 +100,7 @@ The reason is a WebKit behavior:
 - All workers of a page share a few marking helper threads. A worker that sleeps in `Atomics.wait`, or in the Wasm `memory.atomic.wait32` instruction, with a collection cycle open keeps them.
 - If a cycle is already open in the starting worker, its synchronous collection then waits for helpers that never come, and the process never starts. In CI this stalled about one WebKit storage run in seven, always in a late `/bin/node` child of Vite's bundler.
 
-On the start message the worker has allocated almost nothing, so no cycle is open and the collection finishes by itself. The entry starts loading the bootstrap only after it has handled its first message, so the instance always comes first. The broker posts the start message right after it creates the worker, so the load does not wait.
+On the start message the worker has allocated almost nothing, so no cycle is open and the collection finishes by itself. The entry starts loading the bootstrap only after it has handled its first message, so the instance always comes first. For a child process the broker posts the start message right after it creates the worker, so the load does not wait. For a root process the runner creates the worker before its start request is ready, so the bootstrap load no longer overlaps the runner's preparation and starts when the request arrives.
 
 The early path is taken only when it cannot change behavior:
 
