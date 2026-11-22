@@ -1,14 +1,16 @@
-"""Runs scripts/measure-stack.py with a fake launcher that hangs, without racing a clock.
+"""Runs scripts/measure-stack.py so that a hanging fake launcher times out without racing a clock.
 
 The fixture launcher (stack-measurement-provider.ts) hangs on purpose: on every attempt for the
-"hang" scenario, and at depth 4 for "hidden-timeout". The real per-attempt limit in the script is
-120 seconds, too long to wait in a test, and shortening it to a fraction of a second makes the
-outcome depend on how fast the machine starts a launcher: under load an attempt that should
-complete times out too.
+"hang" scenario, and at depth 4 for "hidden-timeout". The script's own limit is 120 seconds, too
+long to wait in a test, and a fraction of a second makes the outcome depend on how fast the machine
+starts a launcher: under load an attempt that should complete times out too.
 
-Here the timeout is decided by the fixture instead. A hanging attempt is killed, reaped and
-reported as subprocess.TimeoutExpired as soon as its launcher has recorded its pid, which it does
-right before it hangs. Every other attempt runs unchanged with the script's own limit.
+Here the script keeps calling the real subprocess.run with its real timeout, so subprocess.run
+still does the killing and reaping. Only the wait inside it changes: the child waits until the
+launcher has said it is hanging (it appends its pid to hanging.pid after all its other records)
+and only then lets the script's timeout expire. An attempt whose launcher exits instead is waited
+for normally, up to the script's own limit. A call without a timeout is refused, so removing the
+script's limit fails the tests instead of hanging them.
 """
 import os
 import runpy
@@ -17,34 +19,28 @@ import sys
 import time
 from pathlib import Path
 
-HANG_CAP_SECONDS = 60
-HANG_DEPTH = '4' if os.environ.get('STACK_TEST_SCENARIO') == 'hidden-timeout' else None
-PID_FILE = Path(os.environ['STACK_TEST_ROOT']) / 'launcher.pid'
-original = subprocess.run
+HANGING = Path(os.environ['STACK_TEST_ROOT']) / 'hanging.pid'
+EXPIRE_AFTER_SECONDS = 0.05
 
 
-def hangs(command):
-    return HANG_DEPTH is None or command[-1] == HANG_DEPTH
+class FixturePopen(subprocess.Popen):
+    waited = False
 
-
-def started(pid):
-    return PID_FILE.exists() and str(pid) in PID_FILE.read_text().split()
-
-
-def run(command, **kwargs):
-    if not hangs(command):
-        return original(command, **kwargs)
-    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=kwargs.get('text')) as child:
-        deadline = time.monotonic() + HANG_CAP_SECONDS
-        while not started(child.pid) and child.poll() is None and time.monotonic() < deadline:
+    def communicate(self, input=None, timeout=None):
+        if self.waited:  # subprocess.run's second call, after it killed the child
+            return super().communicate(input, timeout)
+        self.waited = True
+        if timeout is None:
+            raise AssertionError('the measurement script must give every launcher attempt a timeout')
+        deadline = time.monotonic() + timeout
+        while self.poll() is None and not self.hanging() and time.monotonic() < deadline:
             time.sleep(0.01)
-        if child.poll() is not None:
-            raise RuntimeError(f'the fixture launcher exited instead of hanging: {command}')
-        child.kill()
-        output, errors = child.communicate()
-    raise subprocess.TimeoutExpired(command, kwargs.get('timeout'), output, errors)
+        return super().communicate(input, EXPIRE_AFTER_SECONDS if self.hanging() else max(deadline - time.monotonic(), 0))
+
+    def hanging(self):
+        return self.poll() is None and HANGING.exists() and str(self.pid) in HANGING.read_text().split()
 
 
-subprocess.run = run
+subprocess.Popen = FixturePopen
 sys.argv[0] = str(Path(__file__).resolve().parents[1] / 'measure-stack.py')
 runpy.run_path(sys.argv[0], run_name='__main__')

@@ -75,13 +75,17 @@ for (const scenario of ["timeout", "throw"]) {
 }
 
 
+function expectLaunchersGone(directory: string) {
+  const pids = readFileSync(join(directory, "launcher.pid"), "utf8").trim().split("\n");
+  expect(pids.length).toBeGreaterThan(0);
+  for (const pid of pids) expect(() => process.kill(Number(pid), 0)).toThrow("No such process");
+}
+
 test("Python timeout kills and reaps every attempted launcher before returning failure", () => {
   const run = command("python", "hang");
   expect(run.result.exitCode).toBe(1);
   expect(run.stdout).toContain('"outcome": "timeout"');
-  const pids = readFileSync(join(run.directory, "launcher.pid"), "utf8").trim().split("\n");
-  expect(pids.length).toBeGreaterThan(0);
-  for (const pid of pids) expect(() => process.kill(Number(pid), 0)).toThrow("No such process");
+  expectLaunchersGone(run.directory);
 });
 
 test("Python keeps every attempt's status and stderr, and a trap hidden inside the search fails it", () => {
@@ -105,6 +109,7 @@ test("Python records a timeout hidden inside the search and fails it", () => {
   expect(row.failures).toEqual([{ depth: 4, outcome: "timeout" }]);
   expect(row.attempts).toContainEqual({ depth: 4, outcome: "timeout", status: null, timed_out: true, stderr: "" });
   expect(row.attempts.every((attempt: { timed_out: boolean; status: number | null }) => attempt.timed_out === (attempt.status === null))).toBe(true);
+  expectLaunchersGone(run.directory);
 });
 
 test("the Ajv mode needs its installed package, and the package option needs the mode", () => {
