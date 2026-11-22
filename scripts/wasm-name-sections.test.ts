@@ -75,7 +75,7 @@ test("the build recipe ships the stripped guest and the shipping paths check it"
 test("the public site never sees the profiling override", () => {
   const site = readFileSync(new URL("../site/build.ts", import.meta.url), "utf8");
   const verified = site.indexOf("await verifySiteGuests(");
-  const dropped = site.indexOf("delete process.env.BUN_WASM_KEEP_NAMES");
+  const dropped = site.indexOf('process.env.BUN_WASM_KEEP_NAMES = "0"');
   const built = site.indexOf("await build(");
   expect(verified).toBeGreaterThan(0);
   expect(dropped).toBeGreaterThan(verified);

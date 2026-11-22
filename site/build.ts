@@ -23,9 +23,10 @@ async function build(app: string): Promise<void> {
 
 const spiderMonkey = resolveSiteSpiderMonkey(root);
 await verifySiteGuests(root, process.env, spiderMonkey);
-// The public site never ships a guest with debug names, so the app builds must not see the
-// profiling override (scripts/wasm-name-sections.ts).
-delete process.env.BUN_WASM_KEEP_NAMES;
+// The public site never ships a guest with debug names. Set the profiling override to "0"
+// instead of deleting it: a variable the app builds find unset could be loaded from their own
+// .env files, while an explicit value wins (scripts/wasm-name-sections.ts).
+process.env.BUN_WASM_KEEP_NAMES = "0";
 requireSharedProgramInputs(spiderMonkey ? ["quickjs", "jsc", "spidermonkey"] : ["quickjs", "jsc"]);
 if (spiderMonkey) process.env.SPIDERMONKEY_WASM = spiderMonkey;
 
