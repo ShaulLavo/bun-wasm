@@ -36,7 +36,7 @@
     return value.addresses.map(parseAddress);
   }
 
-  function installLookup(net: BunWasm.NetWaiterModule): void {
+  function installLookup(): void {
     const native = internal.native;
     if (typeof native.hostLookup === "function") return;
     const required = ["poll", "lookup_start", "lookup_head", "error", "close"];
@@ -48,6 +48,8 @@
     const readHead = head;
 
     const lookup: HostLookup = (hostname, family, hints) => new Promise<LookupAddress[]>((resolve, reject) => {
+      // net.js owns the waiters; it loads on the first lookup, not at startup.
+      const net = internal.require("net");
       let handle = 0;
       let closed = false;
       let settled = false;
@@ -120,7 +122,7 @@
   }
 
   function install(): void {
-    installLookup(internal.require("net"));
+    installLookup();
   }
 
   return { install, cancel: () => internal.require("net").cancelIoWaiters() };

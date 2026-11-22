@@ -1,9 +1,13 @@
-(function () {
+(function (internal?: Pick<BunWasm.Internal, "require">) {
   "use strict";
   const globals: Record<string, unknown> = {
-    Array, ArrayBuffer, Buffer, Error, Function, Infinity, Map, Object, Promise, Proxy,
+    Array, ArrayBuffer, Error, Function, Infinity, Map, Object, Promise, Proxy,
     RangeError, Reflect, RegExp, Set, String, Symbol, TypeError, Uint8Array, URIError, isFinite,
   };
+  // Buffer is a lazy global (bootstrap.js): reading it here would load buffer.js on every start.
+  // The getter returns the original class, as reading the global at startup did.
+  const buffer = internal ? () => internal.require("buffer").Buffer : ((value: unknown) => () => value)(Buffer);
+  Object.defineProperty(globals, "Buffer", { enumerable: true, get: buffer });
   for (const name of ["ReadableByteStreamController", "ReadableStream", "ReadableStreamBYOBReader", "ReadableStreamBYOBRequest", "ReadableStreamDefaultController", "ReadableStreamDefaultReader", "TransformStream", "TransformStreamDefaultController", "WritableStream", "WritableStreamDefaultController", "WritableStreamDefaultWriter"] satisfies (keyof typeof globalThis)[]) {
     globals[name] = globalThis[name];
   }

@@ -37,8 +37,6 @@
   const NO_PROCESSES = "WASI has no processes";
   const NO_NETWORK = "WASI has no network access";
 
-  const dns = internal.require("dns");
-
   // --- os -------------------------------------------------------------------
 
   function osModule() {
@@ -679,8 +677,8 @@
     "node:net": () => Object.assign(internal.require("net").nodeNet(), internal.require("net_address")),
     "node:tls": lazy("node_tls"),
     "node:dgram": () => unsupportedModule("dgram", NO_NETWORK, ["createSocket", "Socket"]),
-    "node:dns": () => dns.module(),
-    "node:dns/promises": () => dns.promises(),
+    "node:dns": () => internal.require("dns").module(),
+    "node:dns/promises": () => internal.require("dns").promises(),
     "node:http": () => httpModule("http"),
     "node:https": () => httpModule("https"),
     "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {}, Http2ServerRequest: internal.require("http2_request"), Http2ServerResponse: internal.require("http2_response") }),

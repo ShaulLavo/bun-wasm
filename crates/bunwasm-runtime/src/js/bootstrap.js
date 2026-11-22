@@ -762,9 +762,13 @@
     networkHandles: internal.ioPending(),
   });
   internal.require("exit_provenance");
-  // Replaced by net.js when a networking host is present.
+  // Replaced by net.js when it loads. net.js owns the waiters, so the first one loads it.
   internal.ioPending = () => 0;
   internal.pumpIo = () => false;
+  internal.addIoWaiter = waiter => {
+    internal.require("net");
+    return internal.addIoWaiter(waiter);
+  };
   internal.removeIoWaiter = () => {};
   internal.cancelIoWaiters = () => {};
   internal.require("loop_scheduler");
@@ -1484,7 +1488,7 @@
   internal.require("import_requests");
   internal.require("source_prepare");
   internal.require("function");
-  internal.fakeTimers = internal.require("fake_timers");
+  // fake_timers loads with bun_test.js, the only module that can turn fake timers on.
   // Networking factories require the installed web globals.
   if (native.hostCaps?.lookup_start && native.hostCaps?.lookup_head) {
     internal.require("host_lookup").install();

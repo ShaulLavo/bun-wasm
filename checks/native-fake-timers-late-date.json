@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fake-timers-late-date",
+  "engines": ["quickjs", "jsc", "browser"]
+}
