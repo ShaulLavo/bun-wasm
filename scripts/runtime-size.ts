@@ -27,9 +27,10 @@ export function initialJavaScript(outputs: OutputGraph, roots: readonly string[]
   return Array.from(seen).sort();
 }
 
-// Waffle 0.0.109's C1 public runtime graph measures 11,371 B gzip, including fs/guest-watch.ts.
-// Reset the guard for the released C1 graph with 10.3% headroom: 12,544 B (12.25 KiB).
-const CORE_BUDGET_KIB = 12.25;
+// Waffle 0.0.147's core graph measures 12,991 B gzip (0.0.146: 12,039 B). The growth is Waffle's
+// path_open, absolute symlink and file-creation work (Waffle PRs 600, 604, 615).
+// Reset the guard with 10.4% headroom: 14,336 B (14 KiB).
+const CORE_BUDGET_KIB = 14;
 export function checkCoreBudget(gzipBytes: number): void {
   const budget = CORE_BUDGET_KIB * 1024;
   if (gzipBytes > budget) throw new Error(`core exceeds ${budget} B gzip budget by ${gzipBytes - budget} B; inspect runtime/core imports and the layer report`);

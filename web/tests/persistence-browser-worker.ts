@@ -300,6 +300,7 @@ const commands: Record<string, (args: any) => Promise<unknown>> = {
       reserveIdentity: workspace => storage.reserveIdentity(workspace),
       readRange: (key, range) => storage.readRange(key, range),
       retainPayload: (key, expectedSize, metadata) => storage.retainPayload(key, expectedSize, metadata),
+      checkPayload: (key, expectedSize) => storage.checkPayload(key, expectedSize),
       load: () => storage.load(),
       async read(key: string) { reads++; const bytes = await storage.read(key); readBytes += bytes.length; return bytes; },
       async persist(batch: PersistenceBatch) {

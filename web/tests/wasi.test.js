@@ -43,11 +43,12 @@ test("opened subdirectories cannot climb back to the preopen", () => {
   expect(h.open("../sub", sub.fd, 2).result).toBe(63);
 });
 
-test("the root preopen rejects absolute paths and parent traversal", () => {
+// Waffle 0.0.147 (PR 604): `..` at a filesystem-root preopen stops at `/`, as on Linux.
+test("the root preopen rejects absolute paths and stops parent traversal at the root", () => {
   const h = host({ "/": "/" });
   expect(h.open("allowed/inside").result).toBe(0);
   expect(h.open("/allowed/inside").result).toBe(63);
-  expect(h.open("../allowed/inside").result).toBe(63);
+  expect(h.open("../allowed/inside").result).toBe(0);
 });
 
 test("invalid and nondirectory fds keep their errors for path calls", () => {

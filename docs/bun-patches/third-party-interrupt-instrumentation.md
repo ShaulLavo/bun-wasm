@@ -27,6 +27,30 @@ wasm32 target, exported memory and a 16 MiB maximum memory. Source comments pres
 flags. The benchmark optionally takes the retained spike rewriter as an external input; it is
 bundled only into the disposable measurement app, never into the shipped runtime.
 
+### Local copy of the browser fixtures
+
+Waffle 0.0.147 (PR 607) stopped publishing `tests/` in the npm package, so the browser
+interrupt gate can no longer bundle these fixtures from `@waffle-os/runtime`. bun-wasm keeps a
+copy in `web/tests/fixtures/interrupt/`, taken from Waffle revision
+`4151b800bf27e8211403d0da3e32358cd9fd4c9a` (`@waffle-os/runtime@0.0.147`):
+
+| Upstream path (`packages/waffle/`) | Local file |
+| --- | --- |
+| `tests/interrupt-browser.ts` | `interrupt-browser.ts` |
+| `tests/interrupt-browser-control.ts` | `interrupt-browser-control.ts` |
+| `tests/interrupt-browser-benchmark.ts` | `interrupt-browser-benchmark.ts` |
+| `tests/fixtures/interrupt-browser-worker.ts` | `interrupt-browser-worker.ts` |
+| `tests/fixtures/interrupt-browser-loops.ts` | `interrupt-browser-loops.ts` |
+| `tests/fixtures/interrupt-browser-workload.ts` | `interrupt-browser-workload.ts` |
+
+`interrupt-browser.ts` moves its per-repetition shape and signal loops into
+`cancelEveryShape()` to meet our three-level nesting limit; the cancellation order and results
+are unchanged. The other changes are imports. Relative Waffle source imports (`../proc/*`, `../interrupt/*`,
+`../../core/wasi`, `../../fs/memory`) became the package's public `waffle/*` exports, the two
+inline `import("../../proc/*.js")` types became type imports, and the six files sit in one
+directory, so `./fixtures/` prefixes were dropped. `web/scripts/ci-process-bundles.ts` bundles
+`interrupt-browser.ts` and `interrupt-browser-worker.ts` from this directory.
+
 
 
 ## Classification

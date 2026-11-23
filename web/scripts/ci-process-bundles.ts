@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { cp, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { buildBrowserEntries, resolveRuntimePackage } from "../../scripts/browser-build";
+import { buildBrowserEntries } from "../../scripts/browser-build";
 
 type Fixture = "supervisor" | "runtime-proc" | "interrupt" | "bun-runtime-proc";
 const web = resolve(import.meta.dir, "..");
@@ -39,9 +39,9 @@ export async function processBundle(fixture: Fixture, out: string): Promise<void
     return;
   }
   if (fixture === "interrupt") {
-    const runtime = resolveRuntimePackage(join(web, "tests/browser-interrupt.ts"));
+    const fixtures = join(web, "tests/fixtures/interrupt");
     const result = await Bun.build({
-      entrypoints: [join(runtime.physical, "tests/interrupt-browser.ts"), join(runtime.physical, "tests/fixtures/interrupt-browser-worker.ts")],
+      entrypoints: [join(fixtures, "interrupt-browser.ts"), join(fixtures, "interrupt-browser-worker.ts")],
       outdir: out, target: "browser", format: "esm", splitting: true, minify: true,
       naming: { entry: "[name].[ext]", chunk: "chunks/[name]-[hash].[ext]" },
     });
