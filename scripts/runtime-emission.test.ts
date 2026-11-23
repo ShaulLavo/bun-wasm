@@ -335,10 +335,82 @@ function inStrictCode(node: ts.Node): boolean {
   return false;
 }
 
+const isWrapper = (node: ts.Expression): node is ts.Expression & { expression: ts.Expression } =>
+  ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isNonNullExpression(node)
+  || ts.isTypeAssertionExpression(node) || ts.isExpressionWithTypeArguments(node);
+
+/** `node` without the wrappers that erasure or the printer drops: parentheses, `as`, `satisfies`, `!`, `<T>` casts and `f<T>` instantiations. */
+function unwrapped(node: ts.Expression): ts.Expression {
+  let current = node;
+  while (isWrapper(current)) current = current.expression;
+  return current;
+}
+
+/** Whether the object literal is the target of a destructuring assignment, where `{ __proto__ }` reads the same property. */
+function isDestructuringTarget(literal: ts.Node): boolean {
+  let child: ts.Node = literal;
+  for (let parent = child.parent; parent; child = parent, parent = parent.parent) {
+    if (ts.isBinaryExpression(parent)) return parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && parent.left === child;
+    if (ts.isForOfStatement(parent) || ts.isForInStatement(parent)) return parent.initializer === child;
+    const pattern = ts.isObjectLiteralExpression(parent) || ts.isArrayLiteralExpression(parent) || ts.isPropertyAssignment(parent)
+      || ts.isSpreadAssignment(parent) || ts.isSpreadElement(parent) || ts.isParenthesizedExpression(parent);
+    if (!pattern) return false;
+  }
+  return false;
+}
+
+/**
+ * The object-literal properties `__proto__: __proto__`, however the key is written (name or string, any
+ * spacing or comments) and however the value is wrapped. `.js` text parses as JavaScript, because
+ * TypeScript would read some valid JavaScript (`a < { ... } > (0)`) as a type.
+ */
+function protoSelfAssignments(code: string, kind: "js" | "ts"): number {
+  const file = ts.createSourceFile(`module.${kind}`, code, ts.ScriptTarget.Latest, true, kind === "ts" ? ts.ScriptKind.TS : ts.ScriptKind.JS);
+  let found = 0;
+  const visit = (node: ts.Node) => {
+    if (ts.isPropertyAssignment(node) && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) && node.name.text === "__proto__") {
+      const value = unwrapped(node.initializer);
+      if (ts.isIdentifier(value) && value.text === "__proto__" && !isDestructuringTarget(node.parent)) found++;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
+test("the `__proto__: __proto__` finder sees every spelling that Bun reprints as a shorthand", () => {
+  for (const spelling of ["{ __proto__: __proto__ }", '{ "__proto__": __proto__ }', "{ '__proto__' : __proto__ }", "{ __proto__: /* comment */ __proto__ }", "{ a: 1, __proto__ // note\n: __proto__ }"]) {
+    expect(protoSelfAssignments(`const o = ${spelling};`, "js"), spelling).toBe(1);
+    expect(protoSelfAssignments(`const o = ${spelling};`, "ts"), spelling).toBe(1);
+    // The hazard is real: the reprint becomes a shorthand, which defines an own property instead of setting the prototype.
+    expect(compact(`(function (__proto__) { return ${spelling}; })\n`).output, spelling).toMatch(/[{,]__proto__\}/);
+  }
+  // Wrappers the printer or the type eraser drops, and braces that TypeScript would read as a type.
+  for (const wrapped of ["{ __proto__: (__proto__) }", "{ __proto__: ((__proto__)) }", "{ __proto__: /* c */ (/* d */ __proto__) }"]) {
+    expect(protoSelfAssignments(`const o = ${wrapped};`, "js"), wrapped).toBe(1);
+    expect(compact(`(function (__proto__) { return ${wrapped}; })\n`).output, wrapped).toMatch(/[{,]__proto__\}/);
+  }
+  for (const wrapped of ["{ __proto__: __proto__ as object }", "{ __proto__: __proto__ satisfies object }", "{ __proto__: __proto__! }", "{ __proto__: <object>__proto__ }", "{ __proto__: __proto__<string> }"]) {
+    expect(protoSelfAssignments(`const o = ${wrapped};`, "ts"), wrapped).toBe(1);
+  }
+  // Through the real pipeline: type erasure leaves a bare `__proto__`, and the reprint collapses it.
+  const typed = join(source, "proto-typed.ts");
+  writeFileSync(typed, "(function (__proto__: <T>() => T) { return { __proto__: __proto__<string> }; })\n");
+  expect(compact(emit(typed)).output).toMatch(/[{,]__proto__\}/);
+  expect(protoSelfAssignments("const o = other < { __proto__: __proto__ } > (0);", "js")).toBe(1);
+  for (const harmless of ["{ __proto__: null }", "{ __proto__: base }", "{ ['__proto__']: __proto__ }", "{ other: __proto__ }"]) {
+    expect(protoSelfAssignments(`const o = ${harmless};`, "js"), harmless).toBe(0);
+  }
+  // Destructuring reads the same property either way, so it is not a hazard.
+  for (const target of ["({ __proto__: __proto__ } = source);", "for ({ __proto__: __proto__ } of list) {}", "[{ __proto__: __proto__ }] = list;"]) {
+    expect(protoSelfAssignments(target, "js"), target).toBe(0);
+  }
+});
+
 test("no runtime module writes `__proto__: __proto__`, which Bun reprints as a shorthand that no longer sets the prototype", () => {
   const directory = join(root, "crates/bunwasm-runtime/src/js");
   for (const name of readdirSync(directory).filter(entry => /\.(js|ts)$/.test(entry) && !entry.endsWith(".d.ts") && !/^(intl|tz_data)\./.test(entry))) {
-    expect(readFileSync(join(directory, name), "utf8"), name).not.toMatch(/__proto__\s*:\s*__proto__\b/);
+    expect(protoSelfAssignments(readFileSync(join(directory, name), "utf8"), name.endsWith(".ts") ? "ts" : "js"), name).toBe(0);
   }
 });
 
