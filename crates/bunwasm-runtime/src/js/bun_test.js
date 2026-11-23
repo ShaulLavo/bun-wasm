@@ -2312,35 +2312,39 @@
    * { timeout, done }, never rejects. Uses a done callback when the function
    * declares one.
    */
-  function invoke(fn, args, usesDone, timeout, slot = running(), context = undefined, hook = false) {
-    return new Promise((resolve) => {
-      let timer = null;
-      const invocation = matcherSupport.pending();
-      invocation.hook = hook;
-      const finish = (result) => invocation.complete(result, finalize, usesDone);
-      const finalize = (result) => {
-        if (invocation.settled) return;
-        invocation.settled = true;
-        if (timer !== null) internal.realTimers.clearTimeout(timer);
-        if (slot.invocation === invocation) slot.invocation = null;
-        resolve(result);
-      };
-      invocation.fail = (error) => finish({ error });
-      slot.invocation = invocation;
-      const startTimer = () => {
-        timer = internal.realTimers.setTimeout(() => finish({ timeout: true, done: usesDone }), timeout);
-      };
-      startTimer();
-      const body = () => internal.require("test_lifecycle").body(fn, args, usesDone, finish);
-      // The callback runs in the async context it was registered in, as in Bun, so stores
-      // entered before it are visible. A lane's slot goes on top, entered again for each call:
-      // runtime JS awaits between a test's hooks and body, and a Browser host does not carry
-      // the frame across those.
-      const call = "blocked" in slot ? () => runInSlot(slot, body) : body;
-      internal.runInContext(context, call, undefined, []);
-      // In a concurrent group, the next test starts only once this one really waits, as in Bun.
-      if (slot.blocked && !invocation.settled) whenStillPending(invocation, slot.blocked);
-    });
+  function invokeCore(fn, args, usesDone, timeout, slot = running(), context = undefined, hook = false) {
+    let settledResult;
+    let resolvePromise;
+    let timer = null;
+    const invocation = matcherSupport.pending();
+    invocation.hook = hook;
+    const finish = (result) => invocation.complete(result, finalize, usesDone);
+    const finalize = (result) => {
+      if (invocation.settled) return;
+      invocation.settled = true;
+      if (timer !== null) internal.realTimers.clearTimeout(timer);
+      if (slot.invocation === invocation) slot.invocation = null;
+      if (resolvePromise) resolvePromise(result);
+      else settledResult = result;
+    };
+    invocation.fail = (error) => finish({ error });
+    slot.invocation = invocation;
+    const startTimer = () => {
+      timer = internal.realTimers.setTimeout(() => finish({ timeout: true, done: usesDone }), timeout);
+    };
+    startTimer();
+    const body = () => internal.require("test_lifecycle").body(fn, args, usesDone, finish);
+    // The callback runs in the async context it was registered in, as in Bun, so stores
+    // entered before it are visible. A lane's slot goes on top, entered again for each call:
+    // runtime JS awaits between a test's hooks and body, and a Browser host does not carry
+    // the frame across those.
+    const call = "blocked" in slot ? () => runInSlot(slot, body) : body;
+    internal.runInContext(context, call, undefined, []);
+    if (invocation.settled) return settledResult;
+    // In a concurrent group, the next test starts only once this one really waits, as in Bun.
+    if (slot.blocked) whenStillPending(invocation, slot.blocked);
+    if (invocation.settled) return settledResult;
+    return new Promise((resolve) => { resolvePromise = resolve; });
   }
 
   // Bun drains the microtask queue after calling a callback and only then reads its promise:
@@ -2365,9 +2369,33 @@
     check();
   }
 
-  function invokeHook(hook, slot) {
+  function invokeHookCore(hook, slot) {
     const timeout = hook.timeout === undefined ? options.timeout : hook.timeout;
-    return invoke(hook.fn, [], hook.fn.length > 0, timeout, slot, hook.context, true);
+    return invokeCore(hook.fn, [], hook.fn.length > 0, timeout, slot, hook.context, true);
+  }
+
+  function invokeHook(hook, slot) {
+    return Promise.resolve(invokeHookCore(hook, slot));
+  }
+
+  // Runs hooks synchronously while they settle synchronously, avoiding an extra
+  // microtask turn between synchronous beforeEach hooks and a test body.
+  function runHooksMaybeSync(hooks, slot) {
+    for (let i = 0; i < hooks.length; i++) {
+      const result = invokeHookCore(hooks[i], slot);
+      if (result && typeof result.then === "function") {
+        return result.then(async (first) => {
+          if (!first.ok) return first;
+          for (let j = i + 1; j < hooks.length; j++) {
+            const next = await invokeHook(hooks[j], slot);
+            if (!next.ok) return next;
+          }
+          return { ok: true };
+        });
+      }
+      if (!result.ok) return result;
+    }
+    return { ok: true };
   }
 
   async function runHooks(hooks, slot) {
@@ -2524,15 +2552,27 @@
     const slot = running();
     slot.test = record;
     const start = now();
-    // Without beforeEach hooks the body starts synchronously, so a concurrent group's tests
-    // each reach their first callback in order before the next one starts.
+    // Run beforeEach hooks and the test body in the same scheduled turn for serial tests,
+    // so synchronous hooks stay ahead of immediates they queue and the body starts in a
+    // clean macrotask turn before promise continuations.
     const beforeEach = chain.flatMap((s) => s.beforeEach);
-    let result = beforeEach.length ? await runHooks(beforeEach, slot) : { ok: true };
-    if (result.ok) {
-      const timeout = test.timeout === undefined ? options.timeout : test.timeout;
-      result = await invoke(test.fn, [], test.usesDone, timeout, slot, test.context);
-      if (result.timeout) result.timeoutMs = timeout;
-    }
+    const runAttempt = () => {
+      const runBody = (beforeResult) => {
+        if (!beforeResult.ok) return beforeResult;
+        const timeout = test.timeout === undefined ? options.timeout : test.timeout;
+        const bodyResult = invokeCore(test.fn, [], test.usesDone, timeout, slot, test.context);
+        const annotate = (res) => {
+          if (res.timeout) res.timeoutMs = timeout;
+          return res;
+        };
+        return bodyResult && typeof bodyResult.then === "function" ? bodyResult.then(annotate) : annotate(bodyResult);
+      };
+      const beforeResult = beforeEach.length ? runHooksMaybeSync(beforeEach, slot) : { ok: true };
+      return beforeResult && typeof beforeResult.then === "function" ? beforeResult.then(runBody) : runBody(beforeResult);
+    };
+    let result = concurrentGroups === 0 && internal.realTimers?.setImmediate
+      ? await new Promise((resolve) => internal.realTimers.setImmediate(() => resolve(runAttempt())))
+      : await runAttempt();
     const after = await runHooks(cleanupHooks(record, chain.reverse().flatMap((s) => s.afterEach)), slot);
     if (!result.ok && !after.ok) {
       printFileHeaderIfNeeded();

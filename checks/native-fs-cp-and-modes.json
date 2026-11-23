@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fs-cp-and-modes",
+  "engines": ["quickjs", "jsc", "browser"]
+}

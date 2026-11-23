@@ -27,6 +27,8 @@
     writevSync(fd: number, buffers: unknown, position?: unknown): number;
     fstatSync(fd: number, options?: unknown): unknown;
     ftruncateSync(fd: number, length?: unknown): void;
+    fsyncSync(fd: number): void;
+    fdatasyncSync(fd: number): void;
     createReadStream(path: undefined, options: Options): unknown;
     createWriteStream(path: undefined, options: Options): unknown;
     later(callback: () => void): void;
@@ -233,10 +235,12 @@
         deps.ftruncateSync(this.#open("ftruncate"), length);
       }
       async sync() {
-        this.#open("fsync");
+        const fd = this.#open("fsync");
+        deps.fsyncSync(fd);
       }
       async datasync() {
-        this.#open("fdatasync");
+        const fd = this.#open("fdatasync");
+        deps.fdatasyncSync(fd);
       }
 
       async close() {

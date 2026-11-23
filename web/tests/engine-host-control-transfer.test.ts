@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import { RuntimeWorkerSignal } from "waffle/browser/worker";
 import { memoryViews } from "waffle/core";
 import { DefaultSignal } from "../src/default-signal.ts";
+import { createTickScheduler } from "../src/tick-scheduler.ts";
 
 // The released constructor is private. Use the same module as the installed bootstrap,
 // rather than inventing a lookalike or loading a second copy of Waffle's source.
@@ -142,4 +143,355 @@ test("failed unwind cleanup reports both errors without manufacturing an ordinar
   expect(result.error).toMatchObject({ errors: [control, cleanupError] });
   expect(f.exits).toEqual([]);
   expect(f.cleanup).toEqual(["startup", "shared", "tls", "dirs", "flush"]);
+});
+
+function bootstrapTimerHarness() {
+  const bootstrapSource = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/bootstrap.js", import.meta.url), "utf8");
+  const start = bootstrapSource.indexOf("  function reportCallbackError(err) {");
+  const end = bootstrapSource.indexOf("  internal.pendingIo = 0;", start);
+  if (start < 0 || end < 0) throw new Error("Expected runTimers block in bootstrap.js");
+  return bootstrapSource.slice(start, end);
+}
+
+function runImmediateUnwindFixture(
+  firstCallback: (ctx: {
+    internalObj: { exitStarted: boolean };
+    hostNative: { exit: (code: number) => never };
+  }) => void,
+) {
+  const f = fixture(() => {});
+  const ran: string[] = [];
+  const block = bootstrapTimerHarness();
+  let exitedCode: number | undefined;
+  const hostNative = {
+    now: () => 0,
+    exit(code: number): never {
+      exitedCode = code;
+      f.host.exit(code);
+      throw f.exitSignal();
+    },
+    isExecutionUnwind: (error: unknown) => f.options.isExecutionUnwind(error),
+  };
+  const immediates: Array<{ _active: boolean; _running: boolean; _context: unknown; _callback: () => void; _args: unknown[] }> = [];
+  const internalObj = {
+    exitStarted: false,
+    workerPump: null,
+    pendingIo: 0,
+    messagePortRefs: new Set(),
+    handleUncaught(error: unknown) { f.errors.push(error); return true; },
+    runTimers: () => -1,
+  };
+  runInNewContext(
+    `(function(internal, native, immediates) {
+      let timerPhaseEnd = null, immediateBatchRemaining = null, immediateRan = false, refedTimers = 0;
+      const timerQueue = [];
+      const runInContext = (_c, fn, self, args) => fn.apply(self, args);
+      const runDueTimer = () => false;
+      const runOneTimer = () => {};
+      const loopStopped = () => false;
+      ${block}
+    })`,
+  )(internalObj, hostNative, immediates);
+
+  immediates.push(
+    { _active: true, _running: false, _context: undefined, _callback: () => { ran.push("first"); firstCallback({ internalObj, hostNative }); }, _args: [] },
+    { _active: true, _running: false, _context: undefined, _callback: () => { ran.push("second"); }, _args: [] },
+  );
+  f.host.internal = { ...f.host.internal, ...internalObj, pumpSignals: () => false, ioPending: () => 0, pumpIo: () => false };
+  f.host.pump();
+  return { f, ran, exitedCode: () => exitedCode };
+}
+
+test("returning onExit host unwinds process.exit(7) from first immediate without uncaughtException or second immediate", async () => {
+  const { f, ran, exitedCode } = runImmediateUnwindFixture(({ internalObj, hostNative }) => {
+    internalObj.exitStarted = true;
+    hostNative.exit(7);
+  });
+  expect(await f.result).toEqual({ code: 7 });
+  expect(exitedCode()).toBe(7);
+  expect(ran).toEqual(["first"]);
+  expect(f.errors).toEqual([]);
+  expect(f.exits).toEqual([7]);
+});
+
+test("execution unwind inside an immediate skips uncaughtException and remaining immediates", async () => {
+  const control = new ProcessReplaced("process image replaced");
+  const { f, ran } = runImmediateUnwindFixture(() => { throw control; });
+  const result = await f.result;
+  expect("error" in result && result.error).toBe(control);
+  expect(ran).toEqual(["first"]);
+  expect(f.errors).toEqual([]);
+  expect(f.exits).toEqual([]);
+});
+
+test("tick scheduler drains sync ticks before native await and microtask ticks after five awaits before next turn", async () => {
+  const order: string[] = [];
+  const queuedTicks: Array<() => void> = [];
+  const channel = new MessageChannel();
+  let turnScheduled = false;
+  let nextTurnCallback: (() => void) | null = null;
+  const done = Promise.withResolvers<void>();
+  const scheduler = createTickScheduler(
+    () => {
+      while (queuedTicks.length > 0) queuedTicks.shift()!();
+    },
+    () => {
+      if (turnScheduled) return;
+      turnScheduled = true;
+      channel.port2.postMessage(0);
+    },
+    queueMicrotask,
+    () => false,
+  );
+  const enqueueTick = (fn: () => void) => {
+    queuedTicks.push(fn);
+    scheduler.schedule();
+  };
+  channel.port1.onmessage = () => {
+    turnScheduled = false;
+    if (scheduler.drainBeforeTurn()) {
+      if (nextTurnCallback) {
+        turnScheduled = true;
+        channel.port2.postMessage(0);
+      }
+      return;
+    }
+    const cb = nextTurnCallback;
+    nextTurnCallback = null;
+    if (cb) scheduler.runTask(cb);
+  };
+  scheduler.runTask(() => {
+    enqueueTick(() => order.push("sync-tick"));
+    Promise.resolve().then(() => {
+      enqueueTick(() => order.push("micro-tick"));
+      void (async () => {
+        await 0;
+        await 0;
+        await 0;
+        await 0;
+        await 0;
+        order.push("five-awaits");
+      })();
+    });
+    nextTurnCallback = () => {
+      order.push("next-immediate");
+      done.resolve();
+    };
+    turnScheduled = true;
+    channel.port2.postMessage(0);
+  });
+  await done.promise;
+  channel.port1.close();
+  channel.port2.close();
+  expect(order).toEqual(["sync-tick", "five-awaits", "micro-tick", "next-immediate"]);
+});
+
+function tickHostHarness(extraContext: Record<string, unknown> = {}) {
+  const events: string[] = [];
+  const ticks: Array<() => void> = [];
+  const done = Promise.withResolvers<number>();
+  const context = {
+    TextEncoder,
+    TextDecoder,
+    URL,
+    Blob,
+    queueMicrotask,
+    setTimeout,
+    clearTimeout,
+    MessageChannel,
+    SLOT_NAMES: [],
+    memoryViews,
+    createTickScheduler,
+    installNativeStreamState: () => () => {},
+    ...extraContext,
+  };
+  const { EngineHost } = runInNewContext(source + "\n({ EngineHost });", context);
+  const host = new EngineHost(
+    { instance: { exports: { memory: new WebAssembly.Memory({ initial: 1 }) } }, moduleUrls: "blob", onExit: () => {} },
+    done.resolve,
+    done.reject,
+  );
+  host.native = { tlsDispose() {}, closeAllDirs() {}, flushOutput() {}, hostCaps: {} };
+  const baseInternal = {
+    pumpSignals: () => false,
+    ioPending: () => 0,
+    pumpIo: () => false,
+    runTicks() {
+      while (ticks.length > 0) ticks.shift()!();
+    },
+    emitBeforeExit: () => false,
+    beforeExit: () => 0,
+    handleUncaught(error: unknown) {
+      throw error;
+    },
+  };
+  return { events, ticks, done, host, baseInternal };
+}
+
+test("beforeExit microtask tick drains without triggering an extra beforeExit unless it schedules loop work", async () => {
+  const { events, ticks, done, host, baseInternal } = tickHostHarness();
+  let beforeExitCalls = 0;
+  let pendingTimer = false;
+  host.internal = {
+    ...baseInternal,
+    runTimers() {
+      if (!pendingTimer) return -1;
+      pendingTimer = false;
+      events.push("timer");
+      return 0;
+    },
+    emitBeforeExit() {
+      beforeExitCalls++;
+      events.push(`beforeExit:${beforeExitCalls}`);
+      if (beforeExitCalls === 1) {
+        Promise.resolve().then(() => {
+          events.push("microtask:1");
+          ticks.push(() => {
+            events.push("tick:1");
+            pendingTimer = true;
+          });
+          host.ticks.schedule();
+        });
+        return true;
+      }
+      if (beforeExitCalls === 2) {
+        Promise.resolve().then(() => {
+          events.push("microtask:2");
+          ticks.push(() => events.push("tick:2"));
+          host.ticks.schedule();
+        });
+        return true;
+      }
+      return true;
+    },
+    beforeExit() {
+      events.push("exit");
+      return 0;
+    },
+  };
+  host.schedule(0);
+  expect(await done.promise).toBe(0);
+  expect(events).toEqual([
+    "beforeExit:1",
+    "microtask:1",
+    "tick:1",
+    "timer",
+    "beforeExit:2",
+    "microtask:2",
+    "tick:2",
+    "exit",
+  ]);
+});
+
+test("unhandledRejection pass drains queued nextTicks before follow-up microtasks on Node host", async () => {
+  const hostNextTicks: Array<() => void> = [];
+  const rejectionListeners: Array<(reason: unknown, promise: Promise<unknown>) => void> = [];
+  const fakeProcess = {
+    versions: { node: "24.0.0", bun: "1.4.4" },
+    on(event: string, listener: (reason: unknown, promise: Promise<unknown>) => void) {
+      if (event === "unhandledRejection") rejectionListeners.push(listener);
+    },
+    nextTick(callback: () => void) {
+      hostNextTicks.push(callback);
+    },
+  };
+  const { events, ticks, done, host, baseInternal } = tickHostHarness({ process: fakeProcess });
+  let immediateRan = false;
+  const flushHostTicks = () => {
+    while (hostNextTicks.length > 0) hostNextTicks.shift()!();
+  };
+  const emitRejection = (reason: string) => {
+    const p = Promise.resolve();
+    for (const listener of rejectionListeners) listener(reason, p);
+  };
+  host.internal = {
+    ...baseInternal,
+    runTimers() {
+      if (immediateRan) return -1;
+      immediateRan = true;
+      events.push("immediate");
+      return -1;
+    },
+    handleRejection(reason: unknown) {
+      events.push(`rejection:${String(reason)}`);
+      ticks.push(() => events.push(`tick:${String(reason)}`));
+      host.ticks.schedule();
+      Promise.resolve().then(() => {
+        events.push(`micro:${String(reason)}`);
+        if (reason === "r2") {
+          Promise.resolve().then(() => {
+            emitRejection("from micro");
+            flushHostTicks();
+          });
+        }
+      });
+      return true;
+    },
+    runMain() {
+      host.schedule(0);
+    },
+  };
+  host.entry = { kind: "script", main: "/app/index.ts" };
+  host.watchRejections();
+  host.runEntry();
+  emitRejection("r1");
+  emitRejection("r2");
+  flushHostTicks();
+  expect(await done.promise).toBe(0);
+  expect(events).toEqual([
+    "rejection:r1",
+    "rejection:r2",
+    "tick:r1",
+    "tick:r2",
+    "micro:r1",
+    "micro:r2",
+    "rejection:from micro",
+    "tick:from micro",
+    "micro:from micro",
+    "immediate",
+  ]);
+});
+
+test("unhandledrejection event drains queued nextTicks before follow-up microtasks on Browser host", async () => {
+  const listeners = new Map<string, Array<(event: { preventDefault(): void; reason?: unknown; promise?: unknown }) => void>>();
+  const { events, ticks, done, host, baseInternal } = tickHostHarness({
+    addEventListener(type: string, listener: (event: { preventDefault(): void; reason?: unknown; promise?: unknown }) => void) {
+      const list = listeners.get(type) ?? [];
+      list.push(listener);
+      listeners.set(type, list);
+    },
+  });
+  let immediateRan = false;
+  host.internal = {
+    ...baseInternal,
+    runTimers() {
+      if (immediateRan) return -1;
+      immediateRan = true;
+      events.push("immediate");
+      return -1;
+    },
+    handleRejection(reason: unknown) {
+      events.push(`rejection:${String(reason)}`);
+      ticks.push(() => events.push(`tick:${String(reason)}`));
+      host.ticks.schedule();
+      Promise.resolve().then(() => events.push(`micro:${String(reason)}`));
+      return true;
+    },
+    runMain() {
+      host.schedule(0);
+    },
+  };
+  host.entry = { kind: "script", main: "/app/index.ts" };
+  host.watchRejections();
+  host.runEntry();
+  for (const listener of listeners.get("unhandledrejection") ?? []) {
+    listener({ preventDefault() {}, reason: "r1", promise: Promise.resolve() });
+  }
+  expect(await done.promise).toBe(0);
+  expect(events).toEqual([
+    "rejection:r1",
+    "tick:r1",
+    "micro:r1",
+    "immediate",
+  ]);
 });

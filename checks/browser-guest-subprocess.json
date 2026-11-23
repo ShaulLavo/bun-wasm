@@ -101,6 +101,7 @@
     "web/src/program-launcher.ts",
     "web/src/program-profile.ts",
     "web/src/promise-reactions.ts",
+    "web/src/tick-scheduler.ts",
     "web/src/runner.ts",
     "web/src/script-evaluation.ts",
     "web/src/shared-objects/broker.ts",

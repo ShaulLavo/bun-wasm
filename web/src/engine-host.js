@@ -13,6 +13,7 @@ import { bindSharedObjectHost } from "./shared-objects/host.ts";
 import { hostCrypto } from "./host-crypto.ts";
 import { reportWasmCallTrap } from "./wasm-call-trap.ts";
 import { installSharedBufferRealm } from "./shared-objects/realm.ts";
+import { createTickScheduler } from "./tick-scheduler.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -125,6 +126,7 @@ const nativePromiseHasInstance = Function.prototype.call.bind(Function.prototype
 const NativeString = globalThis.String;
 const PENDING = Object.freeze({ state: "pending", value: undefined });
 const nativeProcess = typeof process === "object" && process && process.versions && process.versions.node ? process : null;
+const nativeProcessNextTick = nativeProcess && typeof nativeProcess.nextTick === "function" ? nativeProcess.nextTick.bind(nativeProcess) : null;
 const nativeAddEventListener = typeof globalThis.addEventListener === "function" ? globalThis.addEventListener.bind(globalThis) : null;
 
 const utf8 = new NativeTextEncoder();
@@ -423,6 +425,15 @@ class EngineHost {
     this.timer = null;
     this.timerAt = Infinity;
     this.immediate = false;
+    this.tickQueued = false;
+    this.ticks = typeof createTickScheduler === "function"
+      ? createTickScheduler(
+        () => { this.tickQueued = false; this.guard(() => this.internal.runTicks()); },
+        () => this.schedule(0),
+        nativeQueueMicrotask,
+        () => this.exited,
+      )
+      : null;
     this.gcYield = false;
     // Module graph: key (path or builtin) -> URL; URL -> path for stack traces.
     this.urls = new Map();
@@ -575,14 +586,33 @@ class EngineHost {
         host.exit(status);
         throw new ExitSignal(status);
       },
+      isExecutionUnwind(error) {
+        return Boolean(host.o.isExecutionUnwind?.(error));
+      },
       scheduleTick() {
+        if (host.ticks) {
+          host.ticks.schedule();
+          host.tickQueued = host.ticks.queued;
+          return;
+        }
         if (host.tickQueued) return;
         host.tickQueued = true;
-        nativeQueueMicrotask(() => host.drainTicks());
+        nativeQueueMicrotask(() => {
+          if (!host.tickQueued || host.exited) return;
+          host.tickQueued = false;
+          host.guard(() => host.internal.runTicks());
+        });
       },
       runMicrotasks() {
         // Native Promise jobs cannot run until the synchronous guest drain returns.
-        host.drainTicks();
+        if (host.ticks) {
+          host.ticks.drainNow();
+          host.tickQueued = host.ticks.queued;
+          return;
+        }
+        if (!host.tickQueued) return;
+        host.tickQueued = false;
+        host.guard(() => host.internal.runTicks());
       },
       // A timer or immediate was added, maybe while the loop waits on a
       // promise (top-level await) with nothing armed.
@@ -934,17 +964,8 @@ class EngineHost {
     Object.defineProperty(globalThis, "fetch", { value: fetch, configurable: true, writable: true, enumerable: false });
   }
 
-  drainTicks() {
-    this.tickQueued = false;
-    this.guard(() => this.internal.runTicks());
-  }
-
-  // Bun runs process.nextTick callbacks before promise jobs, and promise
-  // callbacks keep the AsyncLocalStorage context they were registered in.
-  // The host engine owns the job queue, so every callback given to
-  // Promise.prototype.then (queueMicrotask goes through it too) drains
-  // pending ticks first and restores its context. `await` doesn't call
-  // `then` on native promises, so it is not covered.
+  // Promise callbacks keep the AsyncLocalStorage context they were registered in,
+  // and track settled states for console.log and Bun.peek.
   wrapPromiseJobs() {
     const host = this;
     const states = this.promiseStates;
@@ -966,7 +987,6 @@ class EngineHost {
       const context = host.asyncContext;
       const nativeContext = host.o.asyncContext;
       return (value) => {
-        if (host.tickQueued) host.drainTicks();
         const previous = host.asyncContext;
         if (!nativeContext) host.asyncContext = context;
         try {
@@ -1061,16 +1081,18 @@ class EngineHost {
         stop();
       }
     };
+    const scheduleRejectionFlush = nativeProcessNextTick || nativeQueueMicrotask;
+    const runRejection = fn => (this.ticks ? this.ticks.runRejectionCallback(fn, scheduleRejectionFlush) : fn());
     const onRejection = (reason, promise) => {
       if (this.exited || reason instanceof ExitSignal) return;
       if (handledWhileReporting.has(promise)) return;
       if (this.transfer(reason)) return;
-      if (!this.guard(() => report(reason, promise))) this.exit(1);
+      if (!runRejection(() => this.guard(() => report(reason, promise)))) this.exit(1);
     };
     // The host reports a late handler on a promise it reported; the runtime emits
     // 'rejectionHandled' when that report reached an 'unhandledRejection' listener.
     const onHandled = (promise) => {
-      if (!this.exited) this.guard(() => this.internal.handleRejectionHandled(promise));
+      if (!this.exited) runRejection(() => this.guard(() => this.internal.handleRejectionHandled(promise)));
     };
     if (nativeProcess) {
       nativeProcess.on("unhandledRejection", onRejection);
@@ -1107,12 +1129,16 @@ class EngineHost {
   }
 
   runEntry() {
+    this.enterRoot();
     const { entry, internal } = this;
+    const run = () => {
+      if (entry.kind === "eval") return this.importKey(entry.main);
+      if (entry.kind === "test") return internal.runTests(entry.args);
+      return internal.runMain(entry.main);
+    };
     let started;
     try {
-      if (entry.kind === "eval") started = this.importKey(entry.main);
-      else if (entry.kind === "test") started = internal.runTests(entry.args);
-      else started = internal.runMain(entry.main);
+      started = this.ticks ? this.ticks.runTask(run) : run();
     } catch (err) {
       this.uncaught(err);
       return;
@@ -1189,16 +1215,27 @@ class EngineHost {
   pump() {
     if (this.exited) return;
     this.enterRoot();
+    const step = fn => (this.ticks ? this.ticks.runTask(fn) : fn());
     // Read before stepping I/O, so a change published meanwhile still ends the next wait.
     const observedWake = this.o.processWake ? nativeAtomicsLoad(this.o.processWake, 0) : 0;
-    this.guard(() => this.internal.pumpSignals(), false);
+    step(() => this.guard(() => this.internal.pumpSignals(), false));
     if (this.exited) return;
+    // Drain ticks queued during the previous turn's host microtask checkpoint (including
+    // native `await` chains) after V8's microtask queue has emptied and ahead of the next
+    // timer or immediate.
+    if (this.ticks?.drainBeforeTurn()) {
+      this.flush();
+      if (this.exited) return;
+      this.idleWait = false;
+      return this.schedule(0);
+    }
     if (this.testComplete) return this.finish();
-    let next = this.guard(() => this.internal.runTimers(), 0);
+    let next = step(() => this.guard(() => this.internal.runTimers(), 0));
+    if (this.exited) return;
     // Network handles (net.js waiters): step them; the networking host's
     // onNews wakes the loop when something changes.
     const io = this.guard(() => this.internal.ioPending(), 0);
-    if (io > 0 && this.guard(() => this.internal.pumpIo(), false) && next !== 0) next = 0;
+    if (io > 0 && step(() => this.guard(() => this.internal.pumpIo(), false)) && next !== 0) next = 0;
     if (this.o.debug) this.o.debug(`pump next=${next} pending=${this.pendingAsync} io=${io}`);
     this.flush();
     if (this.exited) return;
@@ -1259,7 +1296,9 @@ class EngineHost {
     // Bun's on_before_exit: the microtasks and ticks that 'beforeExit' listeners queue run
     // first (the next turn), and the event comes again only after loop work they left alive.
     if (!stopped && !this.beforeExitRan) {
-      this.beforeExitRan = !this.testComplete && this.guard(() => this.internal.emitBeforeExit(), false);
+      const emit = () => this.guard(() => this.internal.emitBeforeExit(), false);
+      this.beforeExitRan = !this.testComplete && (this.ticks ? this.ticks.runTask(emit) : emit());
+      if (this.exited) return undefined;
       if (this.beforeExitRan) return this.schedule(0);
     }
     this.beforeExitRan = false;

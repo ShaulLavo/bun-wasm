@@ -322,7 +322,7 @@
       internal.realTimers.setImmediate(() => callback(null, buf));
     }
 
-    const unsupportedCrypto = ["scrypt", "scryptSync", "privateEncrypt", "publicDecrypt"];
+    const unsupportedCrypto = ["scrypt", "scryptSync"];
     return unsupportedModule("crypto", "this Node crypto operation is not implemented", unsupportedCrypto, {
       createHash,
       createHmac,

@@ -54,7 +54,14 @@
       return fn(absolute(given), given);
     } catch (err) {
       if (err && typeof err.path === "string" && err.path !== given) {
-        err.message = err.message.replace(`'${err.path}'`, `'${given}'`);
+        if (err.message.includes(`'${err.path}'`)) {
+          err.message = err.message.replace(`'${err.path}'`, `'${given}'`);
+        } else if (err.message.endsWith(` ${err.path}`)) {
+          err.message = `${err.message.slice(0, -err.path.length)}${given}`;
+        }
+        if (err.info && typeof err.info === "object" && err.info.path === err.path) {
+          err.info.path = given;
+        }
         err.path = given;
       }
       throw err;
@@ -290,10 +297,10 @@
   function readFileSync(path, options) {
     if (typeof path !== "number" && typeof path !== "string") path = toPath(path);
     const encoding = encodingOf(options);
-    // Node validates the flag before opening; the read itself does not use it here.
-    // A null or undefined flag means the default, as in Bun.
-    flagsNumber((options && typeof options === "object" ? options.flag : undefined) ?? "r");
-    const bytes = typeof path === "number" ? readAllFd(path) : withPath(path, (abs) => native.readFile(abs));
+    // A null or undefined flag means the default ("r"), as in Bun.
+    const flags = flagsNumber((options && typeof options === "object" ? options.flag : undefined) ?? "r");
+    if (typeof path === "number") validateFd(path);
+    const bytes = typeof path === "number" ? readAllFd(path) : withPath(path, (abs) => (flags === 0 ? native.readFile(abs) : native.readFile(abs, flags)));
     const buf = asBuffer(bytes);
     return encoding && encoding !== "buffer" ? buf.toString(encoding) : buf;
   }
@@ -307,6 +314,10 @@
       chunks.push(chunk);
     }
     return internal.concatBytes(chunks);
+  }
+
+  function currentUmask() {
+    return typeof process !== "undefined" && typeof process.umask === "function" ? process.umask() : 0o022;
   }
 
   function writeAllFd(fd, data) {
@@ -325,10 +336,11 @@
     const flag = (options && typeof options === "object" ? options.flag : undefined) ?? "w";
     const bytes = toBytes(data, encoding);
     if (typeof path === "number") {
+      validateFd(path);
       writeAllFd(path, bytes);
       return;
     }
-    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), parseFileMode(options && typeof options === "object" ? options.mode : undefined, "mode", 0o666)));
+    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), parseFileMode(options && typeof options === "object" ? options.mode : undefined, "mode", 0o666), currentUmask()));
   }
 
   function appendFileSync(path, data, options) {
@@ -370,9 +382,8 @@
       throw Object.assign(new TypeError(`The "recursive" property must be of type boolean, got ${kind}`), { code: "ERR_INVALID_ARG_TYPE" });
     }
     const recursive = given === true;
-    // Node validates the mode (a number or string argument, or options.mode); WASI applies none.
-    parseFileMode(options && typeof options === "object" ? options.mode : options, "mode", 0o777);
-    const created = withPath(path, (abs) => native.mkdir(abs, recursive));
+    const mode = parseFileMode(options && typeof options === "object" ? options.mode : options, "mode", 0o777);
+    const created = withPath(path, (abs) => native.mkdir(abs, recursive, mode, currentUmask()));
     return recursive ? (created === null ? undefined : created) : undefined;
   }
 
@@ -405,12 +416,16 @@
     return readdirImpl(path, options, false);
   }
 
+  function withTrailingSlash(abs, given) {
+    return given.endsWith("/") && !abs.endsWith("/") ? `${abs}/` : abs;
+  }
+
   function rmSync(path, options = {}) {
-    withPath(path, (abs) => native.rm(abs, Boolean(options.recursive), Boolean(options.force)));
+    withPath(path, (abs, given) => native.rm(withTrailingSlash(abs, given), Boolean(options.recursive), Boolean(options.force)));
   }
 
   function rmdirSync(path, options = {}) {
-    withPath(path, (abs) => native.rmdir(abs, Boolean(options.recursive)));
+    withPath(path, (abs, given) => native.rmdir(withTrailingSlash(abs, given), Boolean(options.recursive)));
   }
 
   function unlinkSync(path) {
@@ -421,8 +436,24 @@
     withPath(from, (abs) => native.rename(abs, absolute(toPath(to, "newPath"))));
   }
 
+  function rewriteCopyDest(err, dest) {
+    if (err && typeof err.dest === "string" && err.dest !== dest) {
+      err.message = err.message.replace(`-> '${err.dest}'`, `-> '${dest}'`);
+      err.dest = dest;
+    }
+    return err;
+  }
+
   function copyFileSync(from, to, mode = 0) {
-    withPath(from, (abs) => native.copyFile(abs, absolute(toPath(to, "dest")), mode));
+    const dest = toPath(to, "dest");
+    const absDest = absolute(dest);
+    withPath(from, (abs) => {
+      try {
+        native.copyFile(abs, absDest, mode);
+      } catch (err) {
+        throw rewriteCopyDest(err, dest);
+      }
+    });
   }
 
   function cpSync(from, to, options = {}) {
@@ -479,7 +510,7 @@
       const suffix = Array.from(native.randomBytes(6), (b) => chars[b % chars.length]).join("");
       const path = given + suffix;
       try {
-        native.mkdir(absolute(path), false);
+        native.mkdir(absolute(path), false, 0o700, 0);
       } catch (err) {
         if (err && err.code === "EEXIST") continue;
         if (!err || typeof err.code !== "string") throw err;
@@ -490,10 +521,11 @@
   }
 
   function openSync(path, flags, mode) {
-    return withPath(path, (abs) => native.open(abs, flagsNumber(flags), parseFileMode(mode, "mode", 0o666)));
+    return withPath(path, (abs) => native.open(abs, flagsNumber(flags), parseFileMode(mode, "mode", 0o666), currentUmask()));
   }
 
   function closeSync(fd) {
+    validateFd(fd);
     native.close(fd);
   }
 
@@ -688,10 +720,12 @@
   // options object. The "buffer" encoding writes UTF-8, as Bun's does.
   function writeSync(fd, data, offsetOrPosition, lengthOrEncoding, position) {
     if (typeof data === "string") {
+      validateFd(fd);
       const encoding = typeof lengthOrEncoding === "string" && lengthOrEncoding !== "buffer" ? lengthOrEncoding : "utf8";
       return native.write(fd, toBytes(data, encoding), filePosition(offsetOrPosition));
     }
     if (!ArrayBuffer.isView(data)) throw invalidArg("buffer", "of type string or an instance of Buffer, TypedArray, or DataView", data);
+    validateFd(fd);
     if (offsetOrPosition !== null && typeof offsetOrPosition === "object") {
       const { offset = 0, length = data.byteLength - offset, position: at = null } = offsetOrPosition;
       return writeView(fd, data, offset, length, at);
@@ -803,6 +837,19 @@
     later(() => callback(error, result));
   }
 
+  function checkOpenFd(fd, syscall) {
+    validateFd(fd);
+    try {
+      native.fstat(fd, false);
+    } catch (err) {
+      if (err && typeof err === "object" && err.syscall === "fstat") {
+        err.syscall = syscall;
+        if (typeof err.message === "string") err.message = err.message.replace(", fstat", `, ${syscall}`);
+      }
+      throw err;
+    }
+  }
+
   const sync = {
     readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, mkdirSync, readdirSync,
     rmSync, rmdirSync, unlinkSync, renameSync, copyFileSync, cpSync, realpathSync, accessSync, mkdtempSync,
@@ -812,7 +859,10 @@
       validateFd(fd);
       return makeStats(native.fstat(fd, Boolean(options && options.bigint)), Boolean(options && options.bigint));
     },
-    ftruncateSync: (fd, len) => native.ftruncate(fd, truncateLength(len)),
+    ftruncateSync: (fd, len) => {
+      validateFd(fd);
+      native.ftruncate(fd, truncateLength(len));
+    },
     truncateSync: (path, len) => {
       if (typeof path === "number") return sync.ftruncateSync(path, len);
       const length = truncateLength(len);
@@ -824,17 +874,18 @@
     },
     symlinkSync: (target, path) => withPath(path, (abs) => native.symlink(toPath(target, "target"), abs)),
     linkSync: (from, to) => withPath(from, (abs) => native.link(abs, absolute(toPath(to, "newPath")))),
-    // WASI has no permission bits to set: the mode is validated as Node's parseFileMode does
-    // and the path must exist.
     chmodSync: (path, mode) => {
-      parseFileMode(mode, "mode");
-      void statSync(path);
+      const parsed = parseFileMode(mode, "mode");
+      withPath(path, (abs) => native.chmod(abs, parsed));
     },
     lchmodSync: (path, mode) => void parseFileMode(mode, "mode"),
-    fchmodSync: (fd, mode) => void parseFileMode(mode, "mode"),
+    fchmodSync: (fd, mode) => {
+      validateFd(fd);
+      native.fchmod(fd, parseFileMode(mode, "mode"));
+    },
     chownSync: (path) => void statSync(path),
     lchownSync: () => {},
-    fchownSync: () => {},
+    fchownSync: (fd) => checkOpenFd(fd, "fchown"),
     utimesSync: (path, atime, mtime) => setPathTimes(path, atime, mtime, false),
     lutimesSync: (path, atime, mtime) => setPathTimes(path, atime, mtime, true),
     futimesSync: (fd, atime, mtime) => {
@@ -845,7 +896,10 @@
       validateFd(fd);
       native.fsync(fd);
     },
-    fdatasyncSync: () => {},
+    fdatasyncSync: (fd) => {
+      validateFd(fd);
+      native.fdatasync(fd);
+    },
   };
 
   // Bun's truncate length: missing means 0, anything but a number is a TypeError.
@@ -1097,7 +1151,8 @@
   function fileHandles() {
     fileHandleModule ??= internal.require("fs_file_handle")({
       Buffer, closeSync, readFileSync, writeFileSync: writeHandleFile, appendFileSync, readSync, readvSync, writeSync, writevSync,
-      fstatSync: sync.fstatSync, ftruncateSync: sync.ftruncateSync, later, createReadStream, createWriteStream,
+      fstatSync: sync.fstatSync, ftruncateSync: sync.ftruncateSync, fsyncSync: sync.fsyncSync, fdatasyncSync: sync.fdatasyncSync,
+      later, createReadStream, createWriteStream,
     });
     return fileHandleModule;
   }

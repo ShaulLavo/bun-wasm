@@ -1,5 +1,6 @@
 // Node's Timeout and Immediate internals that libraries read and write:
 // _destroyed, _idleStart, hasRef, refresh, string ids and util.promisify.
+import { rmSync, writeFileSync } from "node:fs";
 import { promisify } from "node:util";
 import * as timersPromises from "node:timers/promises";
 
@@ -225,6 +226,173 @@ async function abortResistsStopPropagation() {
   }
 }
 
+async function immediateExceptionDefersMicrotasks() {
+  const order: string[] = [];
+  const onUncaught = (err: Error) => { order.push(`uncaught:${err.message}`); };
+  process.on("uncaughtException", onUncaught);
+  await new Promise<void>(resolve => {
+    setImmediate(() => {
+      order.push("imm1");
+      queueMicrotask(() => order.push("micro1"));
+      throw new Error("boom");
+    });
+    setImmediate(() => {
+      order.push("imm2");
+      queueMicrotask(() => {
+        order.push("micro2");
+        resolve();
+      });
+    });
+  });
+  process.off("uncaughtException", onUncaught);
+  console.log("immediate exception order", order.join(","));
+
+  const cancelledOrder: string[] = [];
+  const onCancelledErr = (err: Error) => { cancelledOrder.push(`err:${err.message}`); };
+  process.on("uncaughtException", onCancelledErr);
+  await new Promise<void>(resolve => {
+    let second!: ReturnType<typeof setImmediate>;
+    setImmediate(() => {
+      cancelledOrder.push("imm1");
+      queueMicrotask(() => cancelledOrder.push("micro"));
+      setTimeout(() => {
+        cancelledOrder.push("timer");
+        resolve();
+      }, 0);
+      const due = performance.now() + 5;
+      while (performance.now() < due);
+      clearImmediate(second);
+      throw new Error("boom");
+    });
+    second = setImmediate(() => { cancelledOrder.push("imm2"); });
+  });
+  process.off("uncaughtException", onCancelledErr);
+  console.log("immediate cancelled remainder order", cancelledOrder.join(","));
+}
+
+function runInFreshImmediateTurn(first: () => void, second: () => void): Promise<void> {
+  return new Promise<void>(resolve => {
+    process.nextTick(() => {
+      setImmediate(() => {
+        setImmediate(first);
+        setImmediate(() => {
+          second();
+          resolve();
+        });
+      });
+    });
+  });
+}
+
+async function runFiveAwaits(order: string[]) {
+  await 0;
+  await 0;
+  await 0;
+  await 0;
+  await 0;
+  order.push("awaits");
+}
+
+async function nextTickAfterFirstAwait(order: string[]) {
+  await 0;
+  process.nextTick(() => order.push("tick"));
+  await 0;
+  await 0;
+  await 0;
+  await 0;
+  order.push("awaits");
+}
+
+async function nextTickMicrotaskOrdering() {
+  const fromMicrotask: string[] = [];
+  await runInFreshImmediateTurn(
+    () => {
+      Promise.resolve().then(() => {
+        fromMicrotask.push("microtask");
+        process.nextTick(() => fromMicrotask.push("tick"));
+        Promise.resolve().then(() => fromMicrotask.push("microtask2"));
+      });
+    },
+    () => fromMicrotask.push("next-immediate"),
+  );
+  console.log("nextTick from microtask", fromMicrotask.join(","));
+
+  const fromCallback: string[] = [];
+  await runInFreshImmediateTurn(
+    () => {
+      process.nextTick(() => fromCallback.push("tick"));
+      Promise.resolve().then(() => fromCallback.push("microtask"));
+    },
+    () => fromCallback.push("next-immediate"),
+  );
+  console.log("nextTick from callback", fromCallback.join(","));
+
+  const nativeAwaits: string[] = [];
+  await runInFreshImmediateTurn(
+    () => {
+      Promise.resolve().then(() => {
+        process.nextTick(() => nativeAwaits.push("tick"));
+        void runFiveAwaits(nativeAwaits);
+      });
+    },
+    () => nativeAwaits.push("next-immediate"),
+  );
+  console.log("nextTick with native awaits", nativeAwaits.join(","));
+
+  const afterAwait: string[] = [];
+  await runInFreshImmediateTurn(
+    () => { void nextTickAfterFirstAwait(afterAwait); },
+    () => afterAwait.push("next-immediate"),
+  );
+  console.log("nextTick after first await", afterAwait.join(","));
+
+  const syncWithAwait: string[] = [];
+  await runInFreshImmediateTurn(
+    () => {
+      void (async () => { await 0; syncWithAwait.push("await"); })();
+      process.nextTick(() => syncWithAwait.push("tick"));
+    },
+    () => syncWithAwait.push("next-immediate"),
+  );
+  console.log("nextTick sync before await", syncWithAwait.join(","));
+
+  const thrown: string[] = [];
+  const onErr = (err: Error) => { thrown.push(err.message); };
+  process.on("uncaughtException", onErr);
+  await new Promise<void>(resolve => {
+    process.nextTick(() => { throw new Error("tick-err"); });
+    process.nextTick(() => { thrown.push("tick-after"); resolve(); });
+  });
+  process.off("uncaughtException", onErr);
+  console.log("nextTick throwing continues", thrown.join(","));
+
+  const hookTestPath = `${import.meta.dir}/before-each-immediate.test.ts`;
+  try {
+    writeFileSync(
+      hookTestPath,
+      `import { beforeEach, expect, test } from "bun:test";
+const trace: string[] = [];
+beforeEach(() => {
+  trace.push("before");
+  setImmediate(() => trace.push("immediate"));
+});
+test("body runs before beforeEach setImmediate", async () => {
+  expect(trace).toEqual(["before"]);
+  const order: string[] = [];
+  process.nextTick(() => order.push("tick"));
+  Promise.resolve().then(() => order.push("micro"));
+  await new Promise(resolve => setImmediate(resolve));
+  expect(order).toEqual(["tick", "micro"]);
+});
+`,
+    );
+    const child = Bun.spawnSync([process.execPath, "test", hookTestPath]);
+    console.log("bun:test beforeEach immediate", child.exitCode === 0);
+  } finally {
+    rmSync(hookTestPath, { force: true });
+  }
+}
+
 await destroyed();
 await refresh();
 await stringIds();
@@ -233,4 +401,6 @@ await intervalWritesInCallback();
 await dueTimersBeforeImmediates();
 await promisified();
 await abortResistsStopPropagation();
+await immediateExceptionDefersMicrotasks();
+await nextTickMicrotaskOrdering();
 console.log("done");
