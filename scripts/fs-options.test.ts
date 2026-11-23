@@ -395,7 +395,7 @@ test("recursive readdir error paths and Dirent parentPath match Bun for sync and
   const loops = [path.join(walk, "sub", "loop"), path.join(walk, "alias", "loop")];
   const cbErr = await new Promise<NodeJS.ErrnoException | null>(resolve => fs.readdir(walk, { recursive: true }, resolve));
   expect(cbErr?.code).toBe("ELOOP");
-  expect(loops).toContain(cbErr?.path);
+  expect(loops).toContain(cbErr?.path ?? "");
   expect(cbErr?.syscall).toBe("open");
 
   let promErr: NodeJS.ErrnoException | undefined;
@@ -405,7 +405,7 @@ test("recursive readdir error paths and Dirent parentPath match Bun for sync and
     promErr = err as NodeJS.ErrnoException;
   }
   expect(promErr?.code).toBe("ELOOP");
-  expect(loops).toContain(promErr?.path);
+  expect(loops).toContain(promErr?.path ?? "");
   expect(promErr?.syscall).toBe("open");
 });
 
