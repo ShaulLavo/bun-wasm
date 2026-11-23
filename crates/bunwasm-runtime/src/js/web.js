@@ -1064,6 +1064,42 @@
     "x-content-type-options x-dns-prefetch-control x-frame-options x-sourcemap x-xss-protection x-temp-tablet " +
     "icy-metaint icy-metadata").split(" "));
 
+  // The spelling WebCore gives a well-known name in errors; other names keep the caller's spelling.
+  const headerNameSpellings = new Map([
+    ["dnt", "DNT"], ["etag", "ETag"], ["last-event-id", "Last-Event-ID"], ["sourcemap", "SourceMap"], ["te", "TE"],
+    ["x-dns-prefetch-control", "X-DNS-Prefetch-Control"], ["x-sourcemap", "X-SourceMap"],
+    ["x-xss-protection", "X-XSS-Protection"], ["icy-metaint", "Icy-MetaInt"], ["icy-metadata", "Icy-Metadata"],
+    ["sec-websocket-accept", "Sec-WebSocket-Accept"], ["sec-websocket-extensions", "Sec-WebSocket-Extensions"],
+    ["sec-websocket-key", "Sec-WebSocket-Key"], ["sec-websocket-protocol", "Sec-WebSocket-Protocol"],
+    ["sec-websocket-version", "Sec-WebSocket-Version"],
+  ]);
+  function headerNameSpelling(key, name) {
+    if (key !== "set-cookie" && !commonHeaderNames.has(key)) return String(name);
+    return headerNameSpellings.get(key) ?? key.replace(/(^|-)([a-z])/g, (_, dash, letter) => dash + letter.toUpperCase());
+  }
+
+  // A header value is a byte string without NUL, CR or LF; the surrounding HTTP whitespace
+  // (tab, LF, CR, space) is cut off. The error names the header and never quotes the value,
+  // which is often a credential.
+  const invalidHeaderValue = /[\0\n\rĀ-￿]/;
+
+  // Tab, LF, CR and space.
+  function isHttpSpace(code) {
+    return code === 9 || code === 10 || code === 13 || code === 32;
+  }
+
+  // `name` is the name as the caller wrote it, already coerced to a string once.
+  function normalizeHeaderValue(key, name, value) {
+    let v = typeof value === "string" ? value : String(value);
+    let start = 0;
+    let end = v.length;
+    while (start < end && isHttpSpace(v.charCodeAt(start))) start++;
+    while (end > start && isHttpSpace(v.charCodeAt(end - 1))) end--;
+    if (start !== 0 || end !== v.length) v = v.slice(start, end);
+    if (invalidHeaderValue.test(v)) throw new TypeError(`Header '${headerNameSpelling(key, name)}' has invalid value`);
+    return v;
+  }
+
   class Headers {
     #map = new Map();
     #cookies = [];
@@ -1084,8 +1120,9 @@
       for (const key of Object.keys(init)) this.append(key, init[key]);
     }
     append(name, value) {
-      const key = normalizeHeaderName(name);
-      const v = String(value).trim();
+      const text = String(name);
+      const key = normalizeHeaderName(text);
+      const v = normalizeHeaderValue(key, text, value);
       if (key === "set-cookie") {
         this.#cookies.push(v);
         return;
@@ -1094,12 +1131,14 @@
       this.#map.set(key, prev === undefined ? v : `${prev}, ${v}`);
     }
     set(name, value) {
-      const key = normalizeHeaderName(name);
+      const text = String(name);
+      const key = normalizeHeaderName(text);
+      const v = normalizeHeaderValue(key, text, value);
       if (key === "set-cookie") {
-        this.#cookies = [String(value).trim()];
+        this.#cookies = [v];
         return;
       }
-      this.#map.set(key, String(value).trim());
+      this.#map.set(key, v);
     }
     get(name) {
       const key = normalizeHeaderName(name);
@@ -1108,7 +1147,9 @@
       return v === undefined ? null : v;
     }
     getAll(name) {
-      return normalizeHeaderName(name) === "set-cookie" ? this.#cookies.slice() : [this.get(name)].filter((v) => v !== null);
+      const key = normalizeHeaderName(name);
+      if (key === "set-cookie") return this.#cookies.slice();
+      return this.#map.has(key) ? [this.#map.get(key)] : [];
     }
     getSetCookie() {
       return this.#cookies.slice();

@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 
 // Response header values are bytes: each one is a character (Latin-1), as Bun reads them.
 {
@@ -52,4 +52,74 @@ import type { AddressInfo } from "node:net";
   console.log("direct:", JSON.stringify(await report(fetch(`http://${host}/`))));
   await using server = Bun.serve({ port: 0, fetch: () => Response.redirect(`http://${redirectHost}/`, 302) });
   console.log("after a redirect:", JSON.stringify(await report(fetch(server.url))));
+}
+
+// A request header value is a byte string: each character up to U+00FF is one byte on the wire,
+// and only tab, LF, CR and space are trimmed from its ends.
+{
+  const head = Promise.withResolvers<Buffer>();
+  const raw = net.createServer(socket => {
+    let received = Buffer.alloc(0);
+    socket.on("data", chunk => {
+      received = Buffer.concat([received, chunk]);
+      if (received.indexOf("\r\n\r\n") < 0) return;
+      head.resolve(received);
+      socket.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    });
+  });
+  await new Promise<void>(resolve => raw.listen(0, "127.0.0.1", resolve));
+  const port = (raw.address() as AddressInfo).port;
+  await fetch(`http://127.0.0.1:${port}/`, {
+    headers: { "X-Latin": "aé\x80ÿz", "X-Ascii": "alpha beta", "X-Inner": "a\tb  c", "X-Padded": " \t\r\ntrimmed \t", "X-Nbsp": "a b" },
+  });
+  const lines = (await head.promise).toString("latin1").split("\r\n");
+  for (const name of ["x-latin", "x-ascii", "x-inner", "x-padded", "x-nbsp"]) {
+    const line = lines.find(candidate => candidate.toLowerCase().startsWith(name + ":")) ?? "";
+    const value = Buffer.from(line.slice(name.length + 1), "latin1");
+    console.log("wire", name, Array.from(value, byte => byte.toString(16).padStart(2, "0")).join(" "));
+  }
+  raw.close();
+}
+
+// An invalid value throws a TypeError that names the header and never shows the value.
+{
+  const attempts: [string, () => unknown][] = [
+    ["append NUL", () => new Headers().append("Authorization", "Bearer secret\0token")],
+    ["append CRLF", () => new Headers().append("x-api-key", "secret\r\nX-Injected: 1")],
+    ["set above U+00FF", () => new Headers().set("X-Test", "okĀ")],
+    ["constructor", () => new Headers({ location: "a\nb" })],
+    ["Request", () => new Request("http://example.com", { headers: { Cookie: "session=secret\ntoken" } })],
+    ["fetch", () => fetch("http://127.0.0.1:1/", { headers: { "X-Test": "❤" } })],
+    ["set-cookie", () => new Headers().append("set-cookie", "a\0b")],
+  ];
+  for (const [label, run] of attempts) {
+    try {
+      await run();
+      console.log("invalid value", label, "did not throw");
+    } catch (error) {
+      console.log("invalid value", label, (error as Error).name, (error as Error).message);
+    }
+  }
+  // Values are valid in the Latin-1 range and are trimmed only of HTTP whitespace.
+  const headers = new Headers({ "X-Value": " \t\r\n é  " });
+  console.log("kept", JSON.stringify(headers.get("x-value")));
+
+  // The name is converted to a string once, and that string is the one named in the error.
+  for (const method of ["append", "set"] as const) {
+    const conversions: string[] = [];
+    const name = {
+      toString() {
+        conversions.push("call");
+        return conversions.length === 1 ? "X-Input" : "X-Recoerced";
+      },
+    };
+    try {
+      new Headers()[method](name as unknown as string, "bad\0value");
+    } catch (error) {
+      console.log(method, "name converted", conversions.length, "time:", (error as Error).message);
+    }
+  }
+  // A quadratic scan over this much interior whitespace would never finish.
+  const spaced = "x" + " ".repeat(1 << 18) + "z";
+  console.log("long interior whitespace", new Headers({ "X-Probe": spaced }).get("x-probe")!.length);
 }
