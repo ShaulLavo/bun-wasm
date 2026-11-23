@@ -147,6 +147,35 @@ fn millis(time: io::Result<SystemTime>) -> f64 {
         .unwrap_or(0.0)
 }
 
+fn io_error_with_dest(err: io::Error, syscall: &str, path: &str, dest: &str) -> NativeError {
+    let (code, errno, desc) = errno_info(&err);
+    let message = format!("{code}: {desc}, {syscall} '{path}' -> '{dest}'");
+    NativeError::error(message)
+        .prop("path", path)
+        .prop("dest", dest)
+        .prop("syscall", syscall)
+        .prop("errno", errno)
+        .prop("code", code)
+}
+
+fn rm_eisdir_error(path: &str) -> NativeError {
+    let info = Record::new()
+        .set("code", "EISDIR")
+        .set("message", "is a directory")
+        .set("path", path)
+        .set("syscall", "rm")
+        .set("errno", 21);
+    NativeError::error(format!(
+        "Path is a directory: rm returned EISDIR (is a directory) {path}"
+    ))
+    .prop("name", "SystemError")
+    .prop("code", "ERR_FS_EISDIR")
+    .prop("errno", 21)
+    .prop("syscall", "rm")
+    .prop("path", path)
+    .prop("info", Val::from(info))
+}
+
 #[cfg(any(unix, test))]
 fn nanos(time: io::Result<SystemTime>) -> i128 {
     match time {
@@ -402,11 +431,39 @@ fn path_metadata(path: &str, lstat: bool) -> io::Result<StatMetadata> {
     Ok(unsafe { stat.assume_init() })
 }
 
+#[cfg(unix)]
+fn same_file(from: &str, to: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let (Ok(src), Ok(dst)) = (path_metadata(from, false), path_metadata(to, false)) else {
+        return false;
+    };
+    !src.is_dir() && !dst.is_dir() && src.dev() == dst.dev() && src.ino() == dst.ino()
+}
+
+#[cfg(target_os = "wasi")]
+fn same_file(from: &str, to: &str) -> bool {
+    let (Ok(src), Ok(dst)) = (path_metadata(from, false), path_metadata(to, false)) else {
+        return false;
+    };
+    (src.st_mode & 0o170000) != 0o040000
+        && (dst.st_mode & 0o170000) != 0o040000
+        && src.st_dev == dst.st_dev
+        && src.st_ino == dst.st_ino
+}
+
+#[cfg(not(any(unix, target_os = "wasi")))]
+fn same_file(_from: &str, _to: &str) -> bool {
+    false
+}
+
 fn copy_file(from: &str, to: &str, flags: i32) -> io::Result<()> {
     if flags & !3 != 0 {
         return Err(io::ErrorKind::Unsupported.into());
     }
     if flags & 1 == 0 {
+        if same_file(from, to) {
+            return Ok(());
+        }
         fs::copy(from, to)?;
         return Ok(());
     }
@@ -449,9 +506,9 @@ fn sync_mode(flags: i32) -> SyncMode {
 fn sync_fd(fd: i32, mode: SyncMode) -> io::Result<()> {
     let status = match mode {
         SyncMode::None => return Ok(()),
-        #[cfg(target_os = "wasi")]
+        #[cfg(any(target_os = "wasi", target_os = "linux"))]
         SyncMode::Data => unsafe { libc::fdatasync(fd) },
-        #[cfg(not(target_os = "wasi"))]
+        #[cfg(all(unix, not(target_os = "linux")))]
         SyncMode::Data => unsafe { libc::fsync(fd) },
         SyncMode::All => unsafe { libc::fsync(fd) },
     };
@@ -467,7 +524,7 @@ fn sync_fd(_fd: i32, _mode: SyncMode) -> io::Result<()> {
 }
 
 fn sync_explicit_fd(state: &State, fd: i32, mode: SyncMode) -> io::Result<()> {
-    if (0..=2).contains(&fd) {
+    if state.fds.borrow().is_stdio_attached(fd) {
         let stat = descriptor_metadata(fd)?;
         #[cfg(target_os = "wasi")]
         let non_file = matches!(stat.st_mode & 0o170000, 0o010000 | 0o020000 | 0o140000);
@@ -478,6 +535,14 @@ fn sync_explicit_fd(state: &State, fd: i32, mode: SyncMode) -> io::Result<()> {
         }
         return flush_descriptor_output(state);
     }
+    // On WASI, wasi-libc omits RIGHT_FD_DATASYNC on read-only opens, which Waffle
+    // enforces with EBADF while host Bun allows fdatasync on read-only fds. Using fsync
+    // provides a stronger barrier and succeeds on both read-only and writable descriptors.
+    #[cfg(target_os = "wasi")]
+    let mode = match mode {
+        SyncMode::Data => SyncMode::All,
+        other => other,
+    };
     sync_fd(fd, mode)
 }
 
@@ -487,9 +552,24 @@ fn sync_explicit_fd(state: &State, fd: i32, mode: SyncMode) -> io::Result<()> {
 pub struct FdTable {
     files: HashMap<i32, File>,
     sync_modes: HashMap<i32, SyncMode>,
-    /// Standard descriptors the program closed. The host's own streams stay open; the guest sees
-    /// them as closed, so a later write fails with EBADF as it would after `close(2)`.
-    closed_stdio: [bool; 3],
+    detached_stdio: [bool; 3],
+}
+
+impl FdTable {
+    fn is_stdio_attached(&self, fd: i32) -> bool {
+        usize::try_from(fd)
+            .ok()
+            .and_then(|i| self.detached_stdio.get(i))
+            .is_some_and(|&detached| !detached)
+    }
+
+    fn detach_stdio(&mut self, fd: i32) {
+        if let Ok(index) = usize::try_from(fd)
+            && let Some(slot) = self.detached_stdio.get_mut(index)
+        {
+            *slot = true;
+        }
+    }
 }
 
 fn synchronize_descriptor(state: &State, fd: i32, written: usize) -> io::Result<()> {
@@ -867,12 +947,108 @@ fn mkdir_recursive(path: &str, mode: u32) -> io::Result<(Option<String>, Vec<Str
     ))
 }
 
+fn split_trailing_slash(path: &str) -> (&str, bool) {
+    let has_trailing_slash = path.ends_with('/') && path.bytes().any(|b| b != b'/');
+    let target = if has_trailing_slash {
+        path.trim_end_matches('/')
+    } else {
+        path
+    };
+    (target, has_trailing_slash)
+}
+
+fn remove_path(
+    state: &State,
+    path: &str,
+    recursive: bool,
+    force: bool,
+    syscall: &str,
+) -> NativeResult {
+    let (target, has_trailing_slash) = split_trailing_slash(path);
+    let meta = match fs::symlink_metadata(target) {
+        Ok(m) => m,
+        Err(e) if force && e.kind() == io::ErrorKind::NotFound => return ok(),
+        Err(e) => return Err(io_error(e, syscall, Some(path))),
+    };
+    if has_trailing_slash && (meta.file_type().is_symlink() || !meta.is_dir()) {
+        if !recursive
+            && meta.file_type().is_symlink()
+            && fs::metadata(target).is_ok_and(|resolved| resolved.is_dir())
+        {
+            return Err(rm_eisdir_error(path));
+        }
+        return Err(io_error(
+            io::Error::from(io::ErrorKind::NotADirectory),
+            syscall,
+            Some(path),
+        ));
+    }
+    if meta.is_dir() && !recursive {
+        return Err(rm_eisdir_error(path));
+    }
+    #[cfg(target_os = "wasi")]
+    let pending = if meta.is_dir() {
+        pending_tree_mode_clears(target)
+    } else {
+        pending_mode_clear(target)
+    };
+    let result = if meta.is_dir() {
+        fs::remove_dir_all(target)
+    } else {
+        fs::remove_file(target)
+    };
+    result.map_err(|e| io_error(e, syscall, Some(path)))?;
+    #[cfg(target_os = "wasi")]
+    finish_mode_clears(state, pending);
+    #[cfg(not(target_os = "wasi"))]
+    let _ = state;
+    ok()
+}
+
+fn remove_dir_non_recursive(state: &State, path: &str) -> NativeResult {
+    let (target, has_trailing_slash) = split_trailing_slash(path);
+    if has_trailing_slash {
+        let meta = fs::symlink_metadata(target).map_err(|e| io_error(e, "rmdir", Some(path)))?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            return Err(io_error(
+                io::Error::from(io::ErrorKind::NotADirectory),
+                "rmdir",
+                Some(path),
+            ));
+        }
+    }
+    #[cfg(target_os = "wasi")]
+    let pending = pending_mode_clear(target);
+    fs::remove_dir(target).map_err(|e| io_error(e, "rmdir", Some(path)))?;
+    #[cfg(target_os = "wasi")]
+    finish_mode_clears(state, pending);
+    #[cfg(not(target_os = "wasi"))]
+    let _ = state;
+    ok()
+}
+
 fn install_fs(t: &mut Table, state: &Rc<State>) {
     t.add("readFile", |a| {
         let path = required_path(a.str(0)?, "open")?;
-        Ok(Val::Bytes(
-            fs::read(path).map_err(|e| io_error(e, "open", Some(path)))?,
-        ))
+        let flags = a.opt_num(1).map(|n| n as i32).unwrap_or(0);
+        if flags == 0 {
+            return Ok(Val::Bytes(
+                fs::read(path).map_err(|e| io_error(e, "open", Some(path)))?,
+            ));
+        }
+        let mut file =
+            open_file(path, flags, 0o666).map_err(|e| io_error(e, "open", Some(path)))?;
+        if flags & 3 == 1 {
+            return Err(io_error(
+                io::Error::from_raw_os_error(libc::EBADF),
+                "read",
+                None,
+            ));
+        }
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)
+            .map_err(|e| io_error(e, "read", Some(path)))?;
+        Ok(Val::Bytes(buf))
     });
     t.add("readFileUtf8", |a| {
         let path = required_path(a.str(0)?, "open")?;
@@ -1005,51 +1181,15 @@ fn install_fs(t: &mut Table, state: &Rc<State>) {
             return ok();
         }
         let path = required_path(path, "rm")?;
-        let recursive = a.bool(1);
-        let meta = match fs::symlink_metadata(path) {
-            Ok(m) => m,
-            Err(e) if a.bool(2) && e.kind() == io::ErrorKind::NotFound => return ok(),
-            Err(e) => return Err(io_error(e, "rm", Some(path))),
-        };
-        #[cfg(target_os = "wasi")]
-        let pending = if meta.is_dir() && recursive {
-            pending_tree_mode_clears(path)
-        } else {
-            pending_mode_clear(path)
-        };
-        let result = match (meta.is_dir(), recursive) {
-            (true, true) => fs::remove_dir_all(path),
-            (true, false) => Err(io::Error::from(io::ErrorKind::IsADirectory)),
-            _ => fs::remove_file(path),
-        };
-        result.map_err(|e| io_error(e, "rm", Some(path)))?;
-        #[cfg(target_os = "wasi")]
-        finish_mode_clears(&st, pending);
-        #[cfg(not(target_os = "wasi"))]
-        let _ = &st;
-        ok()
+        remove_path(&st, path, a.bool(1), a.bool(2), "rm")
     });
     let st = state.clone();
     t.add("rmdir", move |a| {
         let path = required_path(a.str(0)?, "rmdir")?;
-        let recursive = a.bool(1);
-        #[cfg(target_os = "wasi")]
-        let pending = if recursive {
-            pending_tree_mode_clears(path)
-        } else {
-            pending_mode_clear(path)
-        };
-        let result = if recursive {
-            fs::remove_dir_all(path)
-        } else {
-            fs::remove_dir(path)
-        };
-        result.map_err(|e| io_error(e, "rmdir", Some(path)))?;
-        #[cfg(target_os = "wasi")]
-        finish_mode_clears(&st, pending);
-        #[cfg(not(target_os = "wasi"))]
-        let _ = &st;
-        ok()
+        if a.bool(1) {
+            return remove_path(&st, path, true, false, "rm");
+        }
+        remove_dir_non_recursive(&st, path)
     });
     let st = state.clone();
     t.add("unlink", move |a| {
@@ -1097,7 +1237,7 @@ fn install_fs(t: &mut Table, state: &Rc<State>) {
             .ok()
             .map(|stat| effective_permissions(&st, &stat));
         copy_file(from, to, a.opt_num(2).unwrap_or(0.0) as i32)
-            .map_err(|e| io_error(e, "copyfile", Some(from)))?;
+            .map_err(|e| io_error_with_dest(e, "copyfile", from, to))?;
         #[cfg(target_os = "wasi")]
         if let Some(perms) = src_mode {
             record_path_mode(&st, to, perms, false);
@@ -1246,8 +1386,17 @@ fn writev(state: &State, args: Args<'_>) -> NativeResult {
 }
 
 fn flush_descriptor_output(state: &State) -> io::Result<()> {
-    state.flush_stdout()?;
-    io::stderr().flush()
+    let fds = state.fds.borrow();
+    let flush_out = fds.is_stdio_attached(1);
+    let flush_err = fds.is_stdio_attached(2);
+    drop(fds);
+    if flush_out {
+        state.flush_stdout()?;
+    }
+    if flush_err {
+        io::stderr().flush()?;
+    }
+    Ok(())
 }
 
 fn retry_interrupted(mut operation: impl FnMut() -> io::Result<usize>) -> io::Result<usize> {
@@ -1314,20 +1463,13 @@ fn write_descriptor(state: &State, args: Args<'_>) -> NativeResult {
             .map(|n| Val::Num(n as f64))
             .map_err(|e| io_error(e, "write", None));
     }
-    if (1..=2).contains(&fd) && state.fds.borrow().closed_stdio[fd as usize] {
-        return Err(io_error(
-            io::Error::from_raw_os_error(libc::EBADF),
-            "write",
-            None,
-        ));
-    }
-    if fd == 1 {
+    if fd == 1 && state.fds.borrow().is_stdio_attached(1) {
         state
             .write_stdout(bytes)
             .map_err(|e| io_error(e, "write", None))?;
         return Ok(Val::Num(bytes.len() as f64));
     }
-    if fd == 2 {
+    if fd == 2 && state.fds.borrow().is_stdio_attached(2) {
         state
             .write_stderr(bytes)
             .map_err(|e| io_error(e, "write", None))?;
@@ -1348,18 +1490,13 @@ fn write_descriptor(state: &State, args: Args<'_>) -> NativeResult {
 
 fn close_descriptor(state: &State, args: Args<'_>) -> NativeResult {
     let fd = args.i32(0)?;
-    if (0..=2).contains(&fd) {
-        let mut fds = state.fds.borrow_mut();
-        if std::mem::replace(&mut fds.closed_stdio[fd as usize], true) {
-            return Err(io_error(
-                io::Error::from_raw_os_error(libc::EBADF),
-                "close",
-                None,
-            ));
-        }
-        return ok();
+    if fd == 1 && state.fds.borrow().is_stdio_attached(1) {
+        let _ = state.flush_stdout();
+    } else if fd == 2 && state.fds.borrow().is_stdio_attached(2) {
+        let _ = io::stderr().flush();
     }
     let mut fds = state.fds.borrow_mut();
+    fds.detach_stdio(fd);
     fds.sync_modes.remove(&fd);
     if fds.files.remove(&fd).is_some() {
         return ok();
@@ -1441,7 +1578,15 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     });
     let st = state.clone();
     t.add("fsync", move |a| {
-        sync_explicit_fd(&st, a.i32(0)?, SyncMode::All).map_err(|e| io_error(e, "fsync", None))?;
+        let fd = a.i32(0)?;
+        sync_explicit_fd(&st, fd, SyncMode::All).map_err(|e| io_error(e, "fsync", None))?;
+        ok()
+    });
+    let st = state.clone();
+    t.add("fdatasync", move |a| {
+        let fd = a.i32(0)?;
+        sync_explicit_fd(&st, fd, SyncMode::Data)
+            .map_err(|e| io_error(e, "fdatasync", None).prop("fd", fd))?;
         ok()
     });
 }
