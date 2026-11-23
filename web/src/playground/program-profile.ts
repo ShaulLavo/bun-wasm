@@ -5,6 +5,7 @@ import { projectTemplate } from "./project-templates";
 import { ENGINE_BIN } from "../../../src/executable-paths";
 import { packageService, preparePackageContinuation } from "../../../src/package-continuation-installation";
 import { createExecutable, rollbackExecutables } from "../../../src/executable-marker";
+import { PACKAGE_CONTINUATION } from "../../../src/package-continuation-binding";
 
 export type PlaygroundProfile = "split" | "shared-group";
 
@@ -30,6 +31,8 @@ export async function registerPlaygroundBun(options: {
   runtime: Runtime; engine: Engine; module: WebAssembly.Module; profile: PlaygroundProfile;
   launcher(engine: Engine): GuestLauncher;
   loadModule(engine: Engine, profile: PlaygroundProfile): Promise<WebAssembly.Module>;
+  /** True once the page gave up on startup; registration then rolls back before it commits. */
+  abandoned?(): boolean;
 }): Promise<{ profile: PlaygroundProfile; bin: string; dispose(): void }> {
   const { runtime, engine, module } = options;
   requireProfileEngine(engine, options.profile);
@@ -42,7 +45,9 @@ export async function registerPlaygroundBun(options: {
   const removals: Array<() => void> = [];
   const created: string[] = [];
   const dispose = () => { for (const remove of removals.splice(0).reverse()) remove(); packages?.dispose(); };
+  const proceed = () => { if (options.abandoned?.()) throw new Error("Bun registration was abandoned with its startup"); };
   async function register(provider: Engine): Promise<void> {
+    proceed();
     removals.push(runtime.registerAdapter(`bun:${provider}`, options.launcher(provider)));
     const directory = ENGINE_BIN[provider];
     const memoryProfile = provider === "browser" ? "split" : profile;
@@ -50,6 +55,7 @@ export async function registerPlaygroundBun(options: {
     const load = provider === engine ? () => module : () => loading ??= options.loadModule(provider, memoryProfile);
     await filesystem.asyncCall("mkdirp", [directory]);
     for (const name of ["bun", "bunx", "node", "nodejs"]) {
+      proceed();
       const path = `${directory}/${name}`;
       removals.push(runtime.registerProgram(path, { adapter: `bun:${provider}`, cooperative: true, module: load }));
       if (await createExecutable(filesystem, path)) created.push(path);
@@ -59,7 +65,12 @@ export async function registerPlaygroundBun(options: {
     packages = packageService(runtime);
     const providers: readonly Engine[] = pairedEngines;
     for (const provider of providers.concat(["browser"], engine === "spidermonkey" ? [engine] : [])) await register(provider);
+    proceed();
+    // A continuation marker this call creates is rolled back with the executables.
+    const continuationExisted = await filesystem.asyncCall("lookup", [PACKAGE_CONTINUATION]) !== undefined;
     await preparePackageContinuation(runtime);
+    if (!continuationExisted) created.push(PACKAGE_CONTINUATION);
+    proceed();
     packages.commit();
     return { profile, bin, dispose };
   } catch (error) { dispose(); packages?.rollback(); await rollbackExecutables(filesystem, created); throw error; }

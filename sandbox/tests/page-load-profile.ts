@@ -63,7 +63,7 @@ const contexts = new ContextGroup<BrowserContext>();
 const profiles = await mkdtemp(join(option("profiles", tmpdir()), "bun-wasm-page-load-"));
 let teardown: Promise<void> | undefined;
 const cleanup = () => teardown ??= runAll([
-  () => contexts.close(),
+  () => contexts.closeAll(),
   () => children.stop(),
   () => rm(profiles, { recursive: true, force: true }),
 ]);

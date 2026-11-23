@@ -34,7 +34,7 @@ test("teardown closes a browser context that is still launching", async () => {
   const launch = Promise.withResolvers<{ close(): Promise<void> }>();
   let closed = 0;
   const visit = group.open(() => launch.promise, async () => "visited");
-  const teardown = group.close();
+  const teardown = group.closeAll();
   launch.resolve({ close: async () => { closed++; } });
   await teardown;
   expect(await visit).toBe("visited");
@@ -47,7 +47,7 @@ test("teardown waits for a context close that is already under way", async () =>
   const visit = group.open(async () => ({ close: () => closing.promise }), async () => "visited");
   await Bun.sleep(1);
   let finished = false;
-  const teardown = group.close().then(() => { finished = true; });
+  const teardown = group.closeAll().then(() => { finished = true; });
   await Bun.sleep(20);
   expect(finished).toBe(false);
   closing.resolve();
@@ -58,8 +58,8 @@ test("teardown waits for a context close that is already under way", async () =>
 test("teardown happens once and refuses later launches", async () => {
   const group = new ContextGroup<{ close(): Promise<void> }>();
   let launched = 0;
-  const first = group.close();
-  expect(group.close()).toBe(first);
+  const first = group.closeAll();
+  expect(group.closeAll()).toBe(first);
   const refused = await group.open(async () => { launched++; return { close: async () => {} }; }, async () => "visited")
     .then(() => () => {}, (error: unknown) => () => { throw error; });
   expect(refused).toThrow("no new launch");
@@ -67,18 +67,38 @@ test("teardown happens once and refuses later launches", async () => {
   await first;
 });
 
-test("a context whose close fails does not stop the rest of teardown", async () => {
+const outcome = (pending: Promise<unknown>) => pending.then(() => () => {}, (error: unknown) => () => { throw error; });
+
+test("a context that fails to close fails its visit, so its profile is not reused", async () => {
   const group = new ContextGroup<{ close(): Promise<void> }>();
-  const visit = group.open(async () => ({ close: async () => { throw new Error("close failed"); } }), async () => "visited");
-  expect(await visit).toBe("visited");
+  const visited = await outcome(group.open(async () => ({ close: async () => { throw new Error("close failed"); } }), async () => "visited"));
+  expect(visited).toThrow("close failed");
+});
+
+test("teardown closes every context, then reports a close that failed", async () => {
+  const group = new ContextGroup<{ close(): Promise<void> }>();
+  const using = Promise.withResolvers<void>();
+  let closed = 0;
+  const failing = group.open(async () => ({ close: async () => { throw new Error("close failed"); } }), () => using.promise);
+  const healthy = group.open(async () => ({ close: async () => { closed++; } }), () => using.promise);
+  await Bun.sleep(1);
+  const teardown = outcome(group.closeAll());
+  using.resolve();
+  expect(await teardown).toThrow("Teardown failed");
+  expect(closed).toBeGreaterThan(0);
+  expect(await outcome(failing)).toThrow("close failed");
+  expect(await outcome(healthy)).not.toThrow();
+});
+
+test("each teardown step runs even when an earlier one fails", async () => {
   const steps: string[] = [];
-  const outcome = await runAll([
-    () => group.close().then(() => { steps.push("contexts"); }),
-    async () => { steps.push("servers"); throw new Error("server stop failed"); },
+  const result = await outcome(runAll([
+    async () => { steps.push("contexts"); throw new Error("close failed"); },
+    async () => { steps.push("servers"); },
     async () => { steps.push("profiles"); },
-  ]).then(() => () => {}, (error: unknown) => () => { throw error; });
+  ]));
   expect(steps).toEqual(["contexts", "servers", "profiles"]);
-  expect(outcome).toThrow("Teardown failed");
+  expect(result).toThrow("Teardown failed");
 });
 
 test("interrupting the profiler stops the servers it started", async () => {

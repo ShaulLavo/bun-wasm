@@ -375,11 +375,14 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
           loadTools,
         })(context, service);
       },
+      // Abandonment during any registration step rolls back its programs and markers.
+      abandoned: () => this.abandoned,
     });
     stage("bun-registered");
     try {
       // Mutations are already visible to every worker; the checkpoint only makes them durable.
       await runtime.filesystem.flush();
+      if (this.abandoned) throw new Error("Playground startup was abandoned during Bun registration");
     } catch (error) {
       registration.dispose();
       throw error;

@@ -71,7 +71,8 @@ async function stopChild({ child, ended, done }: Tracked, graceMs: number): Prom
 /**
  * Browser contexts tracked from the launch call until their close settles, so teardown closes
  * one still launching and waits for closes already under way. Teardown is single-shot and
- * refuses later launches. A close that fails never stops the rest of teardown.
+ * refuses later launches. A context that fails to close fails its visit (its profile must not
+ * be reused), while teardown still closes every other context before reporting the failures.
  */
 export class ContextGroup<Context extends { close(): Promise<void> }> {
   private readonly launches = new Set<Promise<Context>>();
@@ -82,22 +83,32 @@ export class ContextGroup<Context extends { close(): Promise<void> }> {
     if (this.closing) return Promise.reject(new Error("Browser contexts are closing; no new launch"));
     const launching = launch();
     this.launches.add(launching);
-    const lifetime = (async () => {
-      try { return await use(await launching); }
-      finally { await closeLaunched(launching).catch(() => {}); }
-    })();
+    const lifetime = visit(launching, use);
     const settled = lifetime.then(() => {}, () => {});
     this.lifetimes.add(settled);
     void settled.then(() => { this.launches.delete(launching); this.lifetimes.delete(settled); });
     return lifetime;
   }
 
-  close(): Promise<void> {
+  closeAll(): Promise<void> {
     return this.closing ??= (async () => {
-      await Promise.allSettled(Array.from(this.launches, closeLaunched));
-      await Promise.allSettled(this.lifetimes);
+      try { await runAll(Array.from(this.launches, launching => () => closeLaunched(launching))); }
+      finally { await Promise.allSettled(this.lifetimes); }
     })();
   }
+}
+
+/** Uses a context, then closes it. A close failure fails the visit unless the visit failed first. */
+async function visit<Context extends { close(): Promise<void> }, T>(launching: Promise<Context>, use: (context: Context) => Promise<T>): Promise<T> {
+  let result: T;
+  try {
+    result = await use(await launching);
+  } catch (error) {
+    await closeLaunched(launching).catch(() => {});
+    throw error;
+  }
+  await closeLaunched(launching);
+  return result;
 }
 
 function closeLaunched<Context extends { close(): Promise<void> }>(launching: Promise<Context>): Promise<void> {

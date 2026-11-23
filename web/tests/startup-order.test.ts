@@ -251,6 +251,40 @@ test("a shell that fails while the engine downloads fails startup, and nothing l
   expect(page.fixture.files.has(PACKAGE_CONTINUATION)).toBe(false);
 });
 
+test("a shell that fails during Bun registration leaves no registrations or markers behind", async () => {
+  const fixture = filesystemFixture();
+  const engine = deferred<ReturnType<typeof engineModule>>();
+  const page = await models(fixture, undefined, () => engine.promise);
+  cleanups.push(page.cleanup);
+  let active = 0;
+  Object.assign(page.runtime, { registerProgram: () => { active++; return () => { active--; }; } });
+  let reportState: ((state: string, detail?: string) => void) | undefined;
+  const create = page.boundary.BrowserSession.create;
+  Object.assign(page.boundary.BrowserSession, {
+    create: async (options: Parameters<typeof create>[0] & { onState(state: string, detail?: string): void }) => {
+      reportState = options.onState;
+      return create(options);
+    },
+  });
+  const playground = new page.Playground("");
+  method<() => void>(playground, "terminalOpened")();
+  const started = playground.start();
+  await until(() => reportState !== undefined);
+  // Registration starts, then waits on its first executable marker write.
+  fixture.control.holdWrites = true;
+  engine.resolve(engineModule());
+  await until(() => fixture.writes.length === 1);
+  const registeredBeforeFailure = active;
+  reportState?.("failed", "shell worker crashed");
+  releaseWrites(fixture);
+  await started;
+  expect(playground.failure).toBe("startup");
+  const markers = () => Array.from(fixture.files.keys()).filter(path => path === PACKAGE_CONTINUATION
+    || Object.values(ENGINE_BIN).some(bin => ["bun", "bunx", "node", "nodejs"].some(name => path === `${bin}/${name}`)));
+  await until(() => active === 0 && markers().length === 0);
+  expect(registeredBeforeFailure).toBeGreaterThan(0);
+});
+
 test("input the shell rejects during replay is reported and startup still finishes", async () => {
   const engine = deferred<ReturnType<typeof engineModule>>();
   const page = await models(undefined, undefined, () => engine.promise);
