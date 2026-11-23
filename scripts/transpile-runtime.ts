@@ -16,12 +16,12 @@ if (paths.length === 0 || paths.length % 2 !== 0 || (!batch && paths.length !== 
 }
 const { stripTypeScriptTypes } = compact ? { stripTypeScriptTypes: undefined } : await import("node:module");
 if (compact && typeof Bun === "undefined") throw new Error("--minify-whitespace requires Bun");
-// Bun replaces `process.env.NODE_ENV` (with the build host's value), `process.browser` and `process.env.BUN_ENV`
-// while transpiling. The guest reads them when it runs, so each is mapped to itself.
-const keepAtRuntime = Object.fromEntries(["process.env.NODE_ENV", "process.browser", "process.env.BUN_ENV"].map(name => [name, name]));
-const transpiler = compact ? new Bun.Transpiler({ loader: "js", minifyWhitespace: true, define: keepAtRuntime }) : undefined;
-// Bun also turns `typeof require` into "function". The guest's answer differs, so the build refuses it.
-const typeofRequire = /\btypeof\s+require\b/g;
+// Bun substitutes `process.env.NODE_ENV` (with the build host's value), `process.browser` and
+// `process.env.BUN_ENV`, folds `typeof require` to "function" and drops the `?.` of `require?.()`. The
+// guest answers all of these when it runs, so each is mapped to itself. With dead-code elimination on, Bun
+// also rewrites `void 0` to the shadowable name `undefined`, so that stays off.
+const keepAtRuntime = Object.fromEntries(["process.env.NODE_ENV", "process.browser", "process.env.BUN_ENV", "require"].map(name => [name, name]));
+const transpiler = compact ? new Bun.Transpiler({ loader: "js", minifyWhitespace: true, define: keepAtRuntime, deadCodeElimination: false }) : undefined;
 
 const isLineEnd = (char: string) => char === "\n" || char === "\r" || char.charCodeAt(0) === 0x2028 || char.charCodeAt(0) === 0x2029;
 const noticeWords = /copyright|licen[sc]e|permission/i;
@@ -203,11 +203,7 @@ function minify(input: string): string {
   const prefix = "globalThis.factory=";
   const output = transpiler.transformSync(`globalThis.factory = ${factory}`);
   if (!output.startsWith(prefix) || !output.endsWith(";")) throw new Error("Unexpected compact runtime output");
-  const body = output.slice(prefix.length, -1).replaceAll(marker, directive);
-  if ((factory.match(typeofRequire)?.length ?? 0) > (body.match(typeofRequire)?.length ?? 0)) {
-    throw new Error("Bun replaces `typeof require` with a constant; write the check another way");
-  }
-  // The loader calls the result, so it must be one function or arrow expression with a block body, not
+  const body = output.slice(prefix.length, -1).replaceAll(marker, directive);  // The loader calls the result, so it must be one function or arrow expression with a block body, not
   // a call of one; it is parsed here, never run.
   if (!/^(async\b|function\b|\([^()]*\)\s*=>|[\w$]+\s*=>)/.test(body) || !body.endsWith("}")) {
     throw new Error("Runtime module must be a function expression with a block body");

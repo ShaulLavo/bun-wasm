@@ -16,7 +16,9 @@ Second, Bun's transpiler (`--minify-whitespace`) removes whitespace and comments
 every module, `.js` ones included, except `intl.js` and `tz_data.js`. That step changes
 no names: identifiers, function names and messages keep their source spelling. Bun
 reprints the code, so `Function.prototype.toString()` returns the reprinted text (string
-escapes may be normalized) and a bare no-op expression statement is dropped. Bun also
+escapes may be normalized). Dead-code elimination is off, and `process.env.NODE_ENV`,
+`process.browser`, `process.env.BUN_ENV` and `require` are mapped to themselves, so Bun
+neither bakes the build host's values into the guest nor folds `typeof require`. Bun also
 drops `"use strict"` directives, so the script swaps each directive statement for a
 random marker and back. Leading comments that mention a copyright, license or permission
 stay, as do `/*!` comments. The build rejects a module that is not one function or arrow

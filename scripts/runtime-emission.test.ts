@@ -236,9 +236,21 @@ test("minifying keeps the lookups Bun would otherwise bake in at build time", ()
   // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
   const seen = (0, eval)(`(function (process) { return ${output.trim()}.call(undefined); })`)({ env: { NODE_ENV: "guest", BUN_ENV: "bun" }, browser: "guest-browser" });
   expect(seen).toEqual(["guest", "guest-browser", "bun"]);
-  // `typeof require` would become "function", so the build refuses it.
-  expect(compact('(function () { return typeof require; })\n').exitCode).not.toBe(0);
-  expect(compact('(function () { return "typeof require"; })\n').exitCode).toBe(0);
+});
+
+test("minifying keeps typeof require, optional require calls and void 0 as written", () => {
+  for (const [expression, kept] of [
+    ["typeof require", "typeof require"], ["typeof (require)", "typeof require"], ["typeof /* g */ require", "typeof require"],
+    ['require?.("x")', 'require?.("x")'], ['require?.resolve("x")', 'require?.resolve("x")'], ["[void 0]", "[void 0]"],
+  ] as const) {
+    const { exitCode, output } = compact(`(function (undefined) { return ${expression}; })\n`);
+    expect(exitCode, expression).toBe(0);
+    expect(output, expression).toContain(kept);
+  }
+  // In a guest with no `require` the check must still say so, and `void 0` must ignore a shadowing name.
+  const { output } = compact("(function (undefined) { return [typeof require, void 0, undefined]; })\n");
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  expect((0, eval)(output)(17)).toEqual(["undefined", undefined, 17]);
 });
 
 test("minifying parses the factory but never runs it, and refuses what is not a function", () => {
