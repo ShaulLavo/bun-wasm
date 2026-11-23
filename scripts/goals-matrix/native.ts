@@ -79,6 +79,7 @@ async function captureNative<T>(state: NativeResources, signal: AbortSignal, own
     cancellation: { source: "native-wrapper-signal", aborted: signal.aborted,
       reason: signal.aborted ? cancellationReason(signal.reason) : null },
     limitations: ["Null exitCode and signalCode mean no child exit observed, not proof of liveness.",
+      "Desktop Safari is a LaunchServices process, not a child; its record is the attributed launch, not handle state.",
       "Handle reads are sequential observations, not atomic process state or kernel exit times.",
       "Cancellation covers only the wrapper signal; no initiating actor is identified.",
       "After-teardown marks bounded settlement; an unjoined cleanup may still be running."],
@@ -95,12 +96,10 @@ function cancellationReason(reason: unknown) {
 function safariChildState(child: Pick<ReturnType<typeof Bun.spawn>, "pid" | "exitCode" | "signalCode">) {
   return { source: "retained-child-handle", pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode };
 }
+// LaunchServices starts desktop Safari, so it has no child handle. Record its attribution state.
 function desktopSafariState(state: DesktopSafari) {
   const launch = state.launch;
-  if (launch.kind === "none") return { kind: launch.kind };
-  const child = safariChildState(launch.process);
-  if (launch.kind === "spawned") return { kind: launch.kind, child };
-  return { kind: launch.kind, child, application: { ...launch.application } };
+  return launch.kind === "owned" ? { ...launch, application: { ...launch.application } } : { ...launch };
 }
 async function driverReady(endpoint: string, signal: AbortSignal): Promise<boolean> {
   signal.throwIfAborted();

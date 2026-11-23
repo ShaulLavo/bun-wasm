@@ -2,7 +2,7 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFile, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { prepareDesktopSafari, stopDesktopSafari, parseSafariApplications, type DesktopSafari, type SafariApplication, type SafariApplicationHost } from "./native-safari";
+import { prepareDesktopSafari, stopDesktopSafari, parseSafariApplications, parseSafariLaunch, type DesktopSafari, type SafariApplication, type SafariApplicationHost } from "./native-safari";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -31,33 +31,26 @@ function fixture() {
   const calls: string[] = [];
   const controller = new AbortController();
   const application = { pid: 42, started: now };
-  let resolveExit: (code: number) => void = () => {};
-  let exitCode: number | null = null, signalCode: ReturnType<SafariApplicationHost["spawn"]>["signalCode"] = null;
-  const child = {
-    pid: 42, get exitCode() { return exitCode; }, get signalCode() { return signalCode; },
-    exited: new Promise<number>(resolve => { resolveExit = resolve; }),
-    kill: (kind: number | NodeJS.Signals = "SIGTERM") => {
-      calls.push(`${kind}:42`); applications = applications.filter(application => application.pid !== 42);
-      signalCode = kind; resolveExit(0);
-    },
-  };
   const io: SafariApplicationHost = {
     applications: async () => applications,
-    spawn: uid => { calls.push(`spawn:${uid}`); applications = [application]; return child; },
+    launch: async uid => { calls.push(`launch:${uid}`); applications = applications.concat([application]); return application.pid; },
+    terminate: (pid, kind) => { calls.push(`${kind}:${pid}`); applications = applications.filter(row => row.pid !== pid); },
     wait: async (ms, signal) => { signal?.throwIfAborted(); calls.push(`wait:${ms}`); now += ms; },
     now: () => now,
   };
-  return { state, calls, io, child, controller, application, exit: () => { exitCode = 0; resolveExit(0); }, setApplications: (value: SafariApplication[]) => { applications = value; } };
+  return { state, calls, io, controller, application, setApplications: (value: SafariApplication[]) => { applications = value; } };
 }
-test("a fresh desktop launch gets its GUI startup allowance and owns only the launched PID", async () => {
+const signals = (calls: string[]) => calls.filter(call => call.startsWith("SIG"));
+
+test("a fresh LaunchServices launch gets its GUI startup allowance and owns only the reported PID", async () => {
   const f = fixture();
   await prepareDesktopSafari(f.state, 501, f.controller.signal, f.io);
-  expect(f.calls).toEqual(["spawn:501", "wait:5000"]);
+  expect(f.calls).toEqual(["launch:501", "wait:5000"]);
   expect(f.state.launch).toMatchObject({ kind: "owned", application: f.application });
   await stopDesktopSafari(f.state, f.io);
   expect(f.calls.at(-1)).toBe("SIGTERM:42");
 });
-test("an already-running owner Safari is neither opened again nor stopped", async () => {
+test("an already-running owner Safari is neither launched again nor stopped", async () => {
   const f = fixture();
   f.setApplications([{ pid: 7, started: 1000 }]);
   await prepareDesktopSafari(f.state, 501, f.controller.signal, f.io);
@@ -65,35 +58,59 @@ test("an already-running owner Safari is neither opened again nor stopped", asyn
   expect(f.state.launch.kind).toBe("none");
   expect(f.calls).toEqual([]);
 });
-test("cancellation during the startup allowance still cleans the task-opened app", async () => {
+test("cancellation during the startup allowance still cleans the task-launched app", async () => {
   const f = fixture();
   f.io.wait = async (_ms, signal) => { f.controller.abort(); signal?.throwIfAborted(); };
   await expect(prepareDesktopSafari(f.state, 501, f.controller.signal, f.io)).rejects.toThrow();
   await stopDesktopSafari(f.state, f.io);
-  expect(f.calls).toEqual(["spawn:501", "SIGTERM:42"]);
+  expect(f.calls).toEqual(["launch:501", "SIGTERM:42"]);
 });
-test("a synchronous spawn failure leaves no pending application", async () => {
+test("a failed launch request without a new Safari leaves nothing to stop", async () => {
   const f = fixture();
-  f.io.spawn = () => { throw new Error("spawn failed"); };
-  await expect(prepareDesktopSafari(f.state, 501, f.controller.signal, f.io)).rejects.toThrow("spawn failed");
+  f.io.launch = async () => { throw new Error("osascript failed"); };
+  await expect(prepareDesktopSafari(f.state, 501, f.controller.signal, f.io)).rejects.toThrow("osascript failed");
   await stopDesktopSafari(f.state, f.io);
-  expect(f.state.launch.kind).toBe("none");
-  expect(f.calls).toEqual([]);
+  expect(f.state.launch.kind).toBe("requested");
+  expect(signals(f.calls)).toEqual([]);
 });
-test("an absent launched app fails setup without starting a driver", async () => {
+test("a failed launch request that still produced a Safari keeps cleanup unproved", async () => {
   const f = fixture();
-  f.io.spawn = () => f.child;
+  f.io.launch = async () => { f.setApplications([f.application]); throw new Error("osascript timed out"); };
+  await expect(prepareDesktopSafari(f.state, 501, f.controller.signal, f.io)).rejects.toThrow("osascript timed out");
+  await expect(stopDesktopSafari(f.state, f.io)).rejects.toThrow("launch ownership is unproved");
+  expect(signals(f.calls)).toEqual([]);
+});
+test("an absent reported app fails setup without starting a driver", async () => {
+  const f = fixture();
+  f.io.launch = async () => 42;
+  await expect(prepareDesktopSafari(f.state, 501, f.controller.signal, f.io)).rejects.toThrow("bounded prelaunch");
+  await stopDesktopSafari(f.state, f.io);
+  expect(signals(f.calls)).toEqual([]);
+});
+test("a reported PID that is not ours keeps cleanup unproved while a new Safari runs", async () => {
+  const f = fixture();
+  f.io.launch = async () => { f.setApplications([{ pid: 99, started: 10_000 }]); return 42; };
   await expect(prepareDesktopSafari(f.state, 501, f.controller.signal, f.io)).rejects.toThrow("bounded prelaunch");
   await expect(stopDesktopSafari(f.state, f.io)).rejects.toThrow("launch ownership is unproved");
-  expect(f.calls.filter(call => call.startsWith("SIG"))).toEqual([]);
+  expect(signals(f.calls)).toEqual([]);
+});
+test("LaunchServices returning an instance started before the request is never owned", async () => {
+  const f = fixture();
+  const owner = { pid: 77, started: 9_000 };
+  let scans = 0;
+  f.io.applications = async () => ++scans === 1 ? [] : [owner];
+  f.io.launch = async () => owner.pid;
+  await expect(prepareDesktopSafari(f.state, 501, f.controller.signal, f.io)).rejects.toThrow("bounded prelaunch");
+  await stopDesktopSafari(f.state, f.io);
+  expect(f.state.launch.kind).toBe("reported");
+  expect(signals(f.calls)).toEqual([]);
 });
 test("cleanup never adopts a replacement Safari or a reused PID", async () => {
   const f = fixture();
   await prepareDesktopSafari(f.state, 501, f.controller.signal, f.io);
-  f.exit();
   f.setApplications([{ pid: 42, started: 16_000 }, { pid: 99, started: 16_000 }]);
   await stopDesktopSafari(f.state, f.io);
-  expect(f.calls).toEqual(["spawn:501", "wait:5000"]);
+  expect(f.calls).toEqual(["launch:501", "wait:5000"]);
 });
 test("startup cancellation before launch leaves owner resources alone", async () => {
   const f = fixture();
@@ -105,9 +122,9 @@ test("startup cancellation before launch leaves owner resources alone", async ()
 test("shutdown escalates only the same owned PID and fails when exit is unproved", async () => {
   const f = fixture();
   await prepareDesktopSafari(f.state, 501, f.controller.signal, f.io);
-  f.child.kill = (kind = "SIGTERM") => { f.calls.push(`${kind}:42`); };
+  f.io.terminate = (pid, kind) => { f.calls.push(`${kind}:${pid}`); };
   await expect(stopDesktopSafari(f.state, f.io)).rejects.toThrow("shutdown is unproved");
-  expect(f.calls.filter(call => call.startsWith("SIG"))).toEqual(["SIGTERM:42", "SIGKILL:42"]);
+  expect(signals(f.calls)).toEqual(["SIGTERM:42", "SIGKILL:42"]);
 });
 test("process discovery ignores simulator Safari and rejects malformed desktop identities", () => {
   const started = "Sun Nov  8 18:12:41 2026";
@@ -115,44 +132,31 @@ test("process discovery ignores simulator Safari and rejects malformed desktop i
   expect(() => parseSafariApplications("invalid /Applications/Safari.app/Contents/MacOS/Safari")).toThrow();
   expect(() => parseSafariApplications(` 42 ${"invalid timestamp".padEnd(24)} /Applications/Safari.app/Contents/MacOS/Safari`)).toThrow();
 });
+test("the LaunchServices report must name one positive PID", () => {
+  expect(parseSafariLaunch('{"pid":26592}\n')).toBe(26592);
+  for (const output of ['{"pid":0}', '{"pid":-1}', '{"pid":1.5}', '{"pid":"42"}', "{}"]) expect(() => parseSafariLaunch(output)).toThrow("reported no Safari");
+  expect(() => parseSafariLaunch("launch failed")).toThrow();
+});
 
 test("a replacement launched during the GUI allowance is not adopted", async () => {
   const f = fixture();
-  f.io.wait = async () => { f.exit(); f.setApplications([{ pid: 99, started: 16_000 }]); };
+  f.io.wait = async () => { f.setApplications([{ pid: 99, started: 16_000 }]); };
   await expect(prepareDesktopSafari(f.state, 501, f.controller.signal, f.io)).rejects.toThrow("bounded prelaunch");
   await stopDesktopSafari(f.state, f.io);
-  expect(f.calls).toEqual(["spawn:501"]);
+  expect(f.calls).toEqual(["launch:501"]);
 });
 
-
-test("owner Safari starting between the snapshot and spawn is never signalled", async () => {
+test("owner Safari starting between the snapshot and launch is never signalled", async () => {
   const f = fixture();
-  const owner = { pid: 77, started: 10_000 };
+  const owner = { pid: 77, started: 9_000 };
   let scans = 0;
   f.io.applications = async () => {
     if (++scans === 1) { f.setApplications([owner]); return []; }
     return [owner];
   };
-  f.io.spawn = () => f.child;
   await prepareDesktopSafari(f.state, 501, f.controller.signal, f.io).catch(() => {});
   await stopDesktopSafari(f.state, f.io).catch(() => {});
-  expect(f.calls.filter(call => call.startsWith("SIG"))).toEqual([]);
-});
-
-test("an uncaptured live child cannot report clean shutdown", async () => {
-  const f = fixture();
-  f.io.spawn = () => f.child;
-  await expect(prepareDesktopSafari(f.state, 501, f.controller.signal, f.io)).rejects.toThrow("bounded prelaunch");
-  await expect(stopDesktopSafari(f.state, f.io)).rejects.toThrow("ownership is unproved");
-  expect(f.calls.filter(call => call.startsWith("SIG"))).toEqual([]);
-});
-
-test("a child that exits before attribution keeps cleanup unproved", async () => {
-  const f = fixture();
-  f.io.spawn = () => { f.exit(); return f.child; };
-  await expect(prepareDesktopSafari(f.state, 501, f.controller.signal, f.io)).rejects.toThrow("bounded prelaunch");
-  await expect(stopDesktopSafari(f.state, f.io)).rejects.toThrow("exited before ownership");
-  expect(f.calls.filter(call => call.startsWith("SIG"))).toEqual([]);
+  expect(f.calls.filter(call => call.endsWith(":77"))).toEqual([]);
 });
 
 test("unproved driver shutdown preserves the dependent app and leaves queue ownership alone", async () => {
@@ -194,54 +198,46 @@ try {
 `;
 }
 
-
-test("cleanup captures only the direct child if cancellation preceded exec", async () => {
+test("cleanup signals only the owned PID when another Safari appears after cancellation", async () => {
   const f = fixture();
-  f.io.spawn = () => f.child;
   f.io.wait = async (_ms, signal) => { f.controller.abort(); signal?.throwIfAborted(); };
   await expect(prepareDesktopSafari(f.state, 501, f.controller.signal, f.io)).rejects.toThrow();
   f.setApplications([f.application, { pid: 99, started: 16_000 }]);
   await stopDesktopSafari(f.state, f.io);
-  expect(f.calls.filter(call => call.startsWith("SIG"))).toEqual(["SIGTERM:42"]);
+  expect(signals(f.calls)).toEqual(["SIGTERM:42"]);
 });
 
-test("a task-spawned Safari without an environment marker still has positive ownership", async () => {
-  const f = fixture();
-  // Exact ps eww need not expose an environment marker: ownership is the child.
+test("desktop Safari launches through LaunchServices, not by executing its binary", async () => {
+  // SafariDriver finds its Safari through LaunchServices. A directly executed binary gets a
+  // separate record, so a stale record for an automatically terminated Safari wins instead.
   const source = await readFile(new URL("./native-safari.ts", import.meta.url), "utf8");
   expect(source).not.toContain("BUN_WASM_GOALS_SAFARI_OWNER");
-  expect(source).toContain('"/Applications/Safari.app/Contents/MacOS/Safari"');
-  await prepareDesktopSafari(f.state, 501, f.controller.signal, f.io);
-  expect(f.state.launch).toMatchObject({ kind: "owned", application: f.application });
-  await stopDesktopSafari(f.state, f.io);
-  expect(f.calls.at(-1)).toBe("SIGTERM:42");
+  expect(source).not.toContain('"/Applications/Safari.app/Contents/MacOS/Safari"');
+  expect(source).toContain("launchApplicationAtURLOptionsConfigurationError");
+  expect(source).toContain('"/usr/bin/osascript", "-l", "JavaScript"');
 });
-
 
 test("a second owner Safari during prelaunch blocks the driver without becoming owned", async () => {
   const f = fixture();
   f.io.wait = async () => { f.setApplications([f.application, { pid: 77, started: 10_000 }]); };
   await expect(prepareDesktopSafari(f.state, 501, f.controller.signal, f.io)).rejects.toThrow("Owner Safari raced");
   await stopDesktopSafari(f.state, f.io);
-  expect(f.calls).toEqual(["spawn:501", "SIGTERM:42"]);
+  expect(f.calls).toEqual(["launch:501", "SIGTERM:42"]);
 });
 
-
-test("a live handle with a changed process birth identity is never signalled", async () => {
-  const f = fixture();
-  await prepareDesktopSafari(f.state, 501, f.controller.signal, f.io);
-  f.setApplications([{ pid: f.child.pid, started: 16_000 }]);
-  await expect(stopDesktopSafari(f.state, f.io)).rejects.toThrow("ownership is unproved");
-  expect(f.calls.filter(call => call.startsWith("SIG"))).toEqual([]);
-});
-
-test("marker-free ownership reaps a real task child", async () => {
+test("LaunchServices ownership reaps a real task process", async () => {
   const state: DesktopSafari = { launch: { kind: "none" } };
   const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore", env: {} });
   try {
-    const application = { pid: child.pid, started: Date.now() };
-    let launched = false;
-    const io: SafariApplicationHost = { applications: async () => launched ? [application] : [], spawn: () => { launched = true; return child; }, wait: async () => {}, now: Date.now };
+    let application: SafariApplication | undefined;
+    const alive = () => application !== undefined && child.exitCode === null && child.signalCode === null;
+    const io: SafariApplicationHost = {
+      applications: async () => alive() && application ? [application] : [],
+      launch: async () => { application = { pid: child.pid, started: Date.now() }; return child.pid; },
+      terminate: (pid, kind) => { process.kill(pid, kind); },
+      wait: async ms => { await Bun.sleep(Math.min(ms, 50)); },
+      now: Date.now,
+    };
     await prepareDesktopSafari(state, 501, new AbortController().signal, io);
     expect(state.launch).toMatchObject({ kind: "owned", application });
     await stopDesktopSafari(state, io);

@@ -57,10 +57,10 @@ async function fixture(joinMs = 1000, sink?: Sink) {
   const io: NativeHost = {
     platform: "darwin", uid: () => 501, signals: operation => operation(controller.signal),
     queue: async () => { events.push("queue"); }, available: async () => {}, console: async () => "",
-    prepare: async state => { events.push("prepare"); state.launch = { kind: "owned", process: app, application: { pid: app.pid, started: 1 } }; },
+    prepare: async state => { events.push("prepare"); state.launch = { kind: "owned", requested: 1, application: { pid: app.pid, started: 1 } }; },
     port: async () => 12345, spawn: () => driver, own: ownSafariDriver, ready: async () => true,
     stopDriver: async () => { events.push("driver-stop"); pending.push(9); await stop(driver); },
-    stopApp: async state => { events.push("app-stop"); pending.push(15); if (state.launch.kind !== "none") await stop(state.launch.process); },
+    stopApp: async state => { events.push("app-stop"); pending.push(15); if (state.launch.kind !== "none") await stop(app); },
   };
   const config = { desktopSafari: true, cleanupFile: join(root, "receipt.json"), exitOwner: owner };
   return { root, io, owner, config, events, native, pending, controller, driver, app, get closes() { return closes; } };
@@ -132,14 +132,15 @@ test.each([false, true])("real null reply snapshots retained children and cancel
   expect(first).toMatchObject({ phase: "workload", target: { pid: 101, birth: "7" }, value: { state: {
     observerPid: process.pid, observedAt: { utc: expect.any(String), monotonicMs: expect.any(Number) },
     driver: { child: { source: "retained-child-handle", pid: f.driver.pid, exitCode: null, signalCode: null }, spawnedAfter: expect.any(Number), root: null },
-    safari: { kind: "owned", application: { pid: f.app.pid, started: 1 }, child: { pid: f.app.pid, exitCode: null, signalCode: null } },
+    safari: { kind: "owned", requested: 1, application: { pid: f.app.pid, started: 1 } },
     cancellation: { source: "native-wrapper-signal", aborted: cancel, reason: cancel ? { kind: "error", name: "Error" } : null },
   } } });
   const deletion = f.owner.records.find(entry => entry.kind === "dispatch-boundary" && entry.phase === "session-delete");
   if (!first || !deletion) throw new Error("Missing first-invalid snapshot or deletion boundary");
   expect(first.sequence).toBeLessThan(deletion.sequence);
-  expect(snapshots).toContainEqual(expect.objectContaining({ phase: "driver-teardown", value: expect.objectContaining({ moment: "after-teardown", state: expect.objectContaining({ driver: expect.objectContaining({ child: expect.objectContaining({ signalCode: "SIGKILL" }) }), safari: expect.objectContaining({ child: expect.objectContaining({ signalCode: null }) }) }) }) }));
-  expect(snapshots).toContainEqual(expect.objectContaining({ phase: "app-teardown", value: expect.objectContaining({ moment: "after-teardown", state: expect.objectContaining({ safari: expect.objectContaining({ child: expect.objectContaining({ signalCode: "SIGKILL" }) }) }) }) }));
+  expect(snapshots).toContainEqual(expect.objectContaining({ phase: "driver-teardown", value: expect.objectContaining({ moment: "after-teardown", state: expect.objectContaining({ driver: expect.objectContaining({ child: expect.objectContaining({ signalCode: "SIGKILL" }) }), safari: { kind: "owned", requested: 1, application: { pid: f.app.pid, started: 1 } } }) }) }));
+  expect(snapshots).toContainEqual(expect.objectContaining({ phase: "app-teardown", value: expect.objectContaining({ moment: "after-teardown", state: expect.objectContaining({ safari: expect.objectContaining({ kind: "owned" }) }) }) }));
+  expect(f.app.signalCode).toBe("SIGKILL");
   expect(getEventListeners(f.controller.signal, "abort")).toHaveLength(listeners);
   const count = f.owner.records.length;
   f.controller.abort();
@@ -148,7 +149,8 @@ test.each([false, true])("real null reply snapshots retained children and cancel
 
 test("exit observed before first-invalid and cancellation during failing teardown stay separate from cleanup success", async () => {
   const f = await fixture();
-  await stop(f.app);
+  // The driver is the retained child; desktop Safari is a LaunchServices process.
+  await stop(f.driver);
   const original = { failure: "operation" };
   f.io.stopDriver = async () => { f.controller.abort(new Error("cancel during teardown")); await stop(f.driver); throw new Error("driver failure"); };
   const result = await f.owner.run(() => withNativeDriver(async () => {
@@ -158,7 +160,7 @@ test("exit observed before first-invalid and cancellation during failing teardow
     throw original;
   }, f.config, f.io)).catch(error => error);
   expect(result).toBe(original);
-  expect(targetRecords(f.owner, "native-state")).toContainEqual(expect.objectContaining({ value: expect.objectContaining({ moment: "first-invalid", state: expect.objectContaining({ safari: expect.objectContaining({ child: expect.objectContaining({ signalCode: "SIGKILL" }) }) }) }) }));
+  expect(targetRecords(f.owner, "native-state")).toContainEqual(expect.objectContaining({ value: expect.objectContaining({ moment: "first-invalid", state: expect.objectContaining({ driver: expect.objectContaining({ child: expect.objectContaining({ signalCode: "SIGKILL" }) }) }) }) }));
   expect(targetRecords(f.owner, "native-state")).toContainEqual(expect.objectContaining({ phase: "driver-teardown", value: expect.objectContaining({ moment: "cancellation", state: expect.objectContaining({ cancellation: expect.objectContaining({ aborted: true }) }) }) }));
   expect(f.events).toContain("app-stop");
   expect(f.owner.proof()).toMatchObject({ state: "unproved", descriptor: "closed", writersClosed: true, cleanupCompleted: false });
@@ -201,9 +203,18 @@ test.each(["reject", "unjoined"])("native wrapper preserves the real protocol er
   } finally { gate.resolve(); }
 });
 
+// Desktop Safari has no child handle; the driver handle is the one a snapshot reads.
+function unreadableDriver(driver: ReturnType<typeof Bun.spawn>, message: string): ReturnType<typeof Bun.spawn> {
+  return new Proxy(driver, { get(target, key) {
+    if (key === "exitCode") throw new Error(message);
+    const value: unknown = Reflect.get(target, key, target);
+    return typeof value === "function" ? value.bind(target) : value;
+  } });
+}
+
 test("disabled capture reads no added handle snapshots and removes no signal listener", async () => {
   const f = await fixture();
-  f.io.prepare = async state => { state.launch = { kind: "spawned", process: { pid: f.app.pid, get exitCode(): number | null { throw new Error("unexpected snapshot"); }, signalCode: null, exited: f.app.exited, kill: () => {} } }; };
+  f.io.spawn = () => unreadableDriver(f.driver, "unexpected snapshot");
   f.io.stopApp = async () => { await stop(f.app); };
   const expected = { unchanged: true };
   expect(await withNativeDriver(async () => expected, { desktopSafari: true }, f.io)).toBe(expected);
@@ -213,7 +224,7 @@ test("disabled capture reads no added handle snapshots and removes no signal lis
 
 test("snapshot read failure degrades evidence without replacing the operation or skipping either cleanup", async () => {
   const f = await fixture();
-  f.io.prepare = async state => { state.launch = { kind: "spawned", process: { pid: f.app.pid, get exitCode(): number | null { throw new Error("handle read failed"); }, signalCode: null, exited: f.app.exited, kill: () => {} } }; };
+  f.io.spawn = () => unreadableDriver(f.driver, "handle read failed");
   f.io.stopApp = async () => { f.events.push("app-stop"); await stop(f.app); };
   const original = new Error("original");
   const result = await f.owner.run(() => withNativeDriver(async () => { throw original; }, f.config, f.io)).catch(error => error);

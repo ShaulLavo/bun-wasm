@@ -10,26 +10,38 @@ it does not accept the stop until both shell and listener report stopped, change
 the stop deadline, or turn failed cleanup into a pass.
 
 `scripts/goals-matrix/native.ts` and `native-safari.ts` adapt the installed macOS
-`launchctl`, `ps`, and SafariDriver commands for the goals campaign. The existing
-Mac lock, owner availability check, and unlocked-console check run first.
-Desktop Safari starts directly with `launchctl asuser <uid>
-/Applications/Safari.app/Contents/MacOS/Safari`. The retained subprocess handle
-must identify that exact live desktop Safari PID before the driver starts.
-There is no LaunchServices `open` handoff or environment-marker assumption.
+`launchctl`, `osascript`, `ps`, and SafariDriver commands for the goals campaign.
+The existing Mac lock, owner availability check, and unlocked-console check run
+first. Desktop Safari starts through LaunchServices: `launchctl asuser <uid>
+osascript -l JavaScript` calls `NSWorkspace launchApplicationAtURL` for
+`/Applications/Safari.app` and prints the PID of the returned
+`NSRunningApplication`. There is no environment or argument marker: LaunchServices
+ignores launch modifiers when it revives an existing record.
+
+SafariDriver's HTTP service finds its Safari through LaunchServices, not through
+the process table. On November 23, 2026 LaunchServices still held a record for a
+Safari that a SafariDriver had launched on November 16 and that macOS later ended
+through automatic termination. A directly executed Safari binary got a second,
+separate record, so every session waited 30 seconds for the dead PID of the old
+record. A LaunchServices launch revives that record with the new process, and the
+session matched it in under a second. Launching the binary directly is therefore
+not used.
 
 The finite five-second GUI startup allowance, driver readiness bound and product
 phase deadlines are unchanged. Simulator-only runs do not launch desktop Safari.
-An already-running Safari is neither relaunched nor owned. If an owner app races
-startup, a different PID cannot become owned; a second application also blocks
-driver startup. Process birth time checks only preserve an already-proved child
-identity, never establish ownership.
+An already-running Safari is neither relaunched nor owned. Ownership needs both
+the PID LaunchServices reported for this request and a live desktop Safari row
+for that PID that started no earlier than the request's second (`ps lstart`
+precision). An instance LaunchServices returns that started before the request
+is never owned. A second Safari after the startup allowance blocks driver startup.
 
-Cleanup signals only the retained child after checking its PID and captured start
-time. An uncaptured live child gets a finite opportunity to reach its executable;
-unproved ownership retains the application and lock. A child that exits before
-attribution also leaves cleanup unproved. The application stops only after driver exit is
-proved. Failed driver shutdown preserves both its dependent application and lock.
-No preferences, automation settings, login state, or credentials change.
+Cleanup signals only the owned PID after re-checking its captured start time, and
+waits a finite time for it to exit before escalating once. A launch request whose
+PID was never attributed gets a finite settle period; any Safari started since the
+request then leaves cleanup unproved, preserving the application and lock. The
+application stops only after driver exit is proved. Failed driver shutdown
+preserves both its dependent application and lock. No preferences, automation
+settings, login state, or credentials change.
 
 `fleet.ts` validates the collected native report before copying its artifacts.
 Only a report with zero attempted cells may omit the terminal logs directory.
