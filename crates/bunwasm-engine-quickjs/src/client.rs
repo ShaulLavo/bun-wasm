@@ -162,10 +162,10 @@ impl Spare {
 /// length, which may be shorter than the buffer.
 fn request(args: &Val) -> Result<(TransportBuffer, u32), NativeError> {
     let encode_error = |_| NativeError::error("encode core request");
-    let Some(spare) = Spare::REQUEST.take(SPARE_REQUEST_MIN) else {
+    let Some(mut spare) = Spare::REQUEST.take(SPARE_REQUEST_MIN) else {
         return allocation_failed();
     };
-    let encoded = codec::encode_prefix(args, buffer_bytes(&spare));
+    let encoded = codec::encode_prefix(args, buffer_bytes(&mut spare));
     if let Some(len) = encoded.map_err(encode_error)? {
         return Ok((spare, u32::try_from(len).expect("request size")));
     }
@@ -177,19 +177,19 @@ fn request(args: &Val) -> Result<(TransportBuffer, u32), NativeError> {
         Some(size) if size <= SPARE_LIMIT => size,
         _ => len,
     };
-    let Some(request) = Spare::REQUEST.take(size) else {
+    let Some(mut request) = Spare::REQUEST.take(size) else {
         return allocation_failed();
     };
-    let bytes = &mut buffer_bytes(&request)[..len as usize];
+    let bytes = &mut buffer_bytes(&mut request)[..len as usize];
     codec::encode_into(args, bytes).map_err(encode_error)?;
     Ok((request, len))
 }
 
-/// The whole of a buffer core allocated for this client.
-#[allow(clippy::mut_from_ref, reason = "core memory the client holds alone")]
-fn buffer_bytes(buffer: &TransportBuffer) -> &mut [u8] {
-    // SAFETY: core allocated buffer.bytes initialized bytes at buffer.pointer. The client holds
-    // the buffer alone until it dispatches, and core reads it only during that dispatch.
+/// The whole of a buffer core allocated for this client, borrowed for as long as the buffer is.
+fn buffer_bytes(buffer: &mut TransportBuffer) -> &mut [u8] {
+    // SAFETY: core allocated buffer.bytes initialized bytes at buffer.pointer. The client owns
+    // the buffer, and the exclusive borrow keeps this the only view of it; core reads it only
+    // during a later dispatch.
     unsafe { std::slice::from_raw_parts_mut(buffer.pointer as *mut u8, buffer.bytes as usize) }
 }
 
