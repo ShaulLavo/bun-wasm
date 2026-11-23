@@ -185,17 +185,25 @@ test("raw GET carries its immutable request stamp, policy and cookies without re
   } finally { f.adapter.dispose(); f.source.close(); }
 });
 
-test("private origins require exact scheme, host and effective port; disposed adapters have no endpoints", async () => {
+test("private origins require the request host and effective port; disposed adapters have no endpoints", async () => {
   const f = await setup();
   try {
     const endpoint = `/_bun/wasm-dev/${f.stamp.server}/events`;
-    for (const origin of ["http://evil.example", "http://localhost:5174", "https://localhost:5173", "null"]) {
+    for (const origin of ["http://evil.example", "https://evil.example", "http://localhost:5174", "https://localhost:5174", "https://localhost", "ws://localhost:5173", "null"]) {
       const request = f.request(endpoint, { headers: { origin } });
       expect(f.adapter.upgrade(request)).toBe(false);
       expect(f.adapter.respond(request).status).toBe(403);
     }
     expect(f.adapter.upgrade(f.request(endpoint, { headers: { origin: "http://localhost:5173" } }))).toBe(true);
-    expect(f.upgrades).toHaveLength(1);
+    // The plain listener sits behind TLS when the preview page is served over HTTPS (bun.sprockt.dev).
+    expect(f.adapter.upgrade(f.request(endpoint, { headers: { origin: "https://localhost:5173" } }))).toBe(true);
+    const tunneled = (origin: string) => new Request(`http://bun.sprockt.dev${endpoint}`, { headers: { origin } });
+    expect(f.adapter.upgrade(tunneled("https://bun.sprockt.dev"))).toBe(true);
+    for (const origin of ["https://bun.sprockt.dev:8443", "https://evil.example", "http://localhost:5174"]) {
+      expect(f.adapter.upgrade(tunneled(origin))).toBe(false);
+      expect(f.adapter.respond(tunneled(origin)).status).toBe(403);
+    }
+    expect(f.upgrades).toHaveLength(3);
     f.adapter.dispose();
     f.adapter.dispose();
     expect(f.adapter.respond(f.request(endpoint))).toBe(null);

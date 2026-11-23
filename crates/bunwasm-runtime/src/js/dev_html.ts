@@ -132,7 +132,10 @@
     function validOrigin(request: Request): boolean {
       const origin = request.headers.get("origin");
       if (!origin) return false;
-      return origin === new URL(request.url).origin || origin === `http://localhost:${server.port}`;
+      const url = new URL(request.url);
+      if (origin === url.origin || origin === `http://localhost:${server.port}`) return true;
+      // A plain listener behind TLS (the HTTPS preview tunnel, a proxy) sees the page's https origin.
+      return url.protocol === "http:" && origin === `https://${url.host}`;
     }
 
     function respond(request: Request): Response | null {
