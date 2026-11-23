@@ -206,13 +206,19 @@ test("workers that block, fail or close are reported with their reason, and thei
   const closing = fakeWorker("http://x/closing.js", call => Promise.resolve(call === 0 ? origin : reads));
   observer.watch(closing.worker);
   closing.close();
+  const closedEarly = fakeWorker("http://x/closed-early.js", () => new Promise(() => {}));
+  observer.watch(closedEarly.worker);
+  closedEarly.close();
   const collected = await observer.collect(50);
   expect(collected.reads).toEqual(reads);
   expect(collected.workers.map(({ url, status, reason, reads: count, installedAt }) => ({ url, status, reason, reads: count, installedAt }))).toEqual([
     { url: "http://x/observed.js", status: "observed", reason: undefined, reads: 1, installedAt: origin + 5 },
     { url: "http://x/blocked.js", status: "unavailable", reason: "counter not installed within 50 ms", reads: 0, installedAt: undefined },
     { url: "http://x/failed.js", status: "unavailable", reason: "counter not installed: Target closed", reads: 0, installedAt: undefined },
-    { url: "http://x/closing.js", status: "unavailable", reason: "closed before collection", reads: 0, installedAt: undefined },
+    // Installed, then closed before collection: no readback, but its install time is kept.
+    { url: "http://x/closing.js", status: "unavailable", reason: "closed before collection", reads: 0, installedAt: origin },
+    // Closed before its counter was installed: no install time to report.
+    { url: "http://x/closed-early.js", status: "unavailable", reason: "closed before collection", reads: 0, installedAt: undefined },
   ]);
 });
 

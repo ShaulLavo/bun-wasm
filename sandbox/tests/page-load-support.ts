@@ -162,7 +162,12 @@ const asError = (error: unknown) => error instanceof Error ? error : new Error(S
 
 async function collectWorker(entry: WatchedWorker, waitMs: number): Promise<Collected> {
   const base = { url: entry.worker.url(), createdAt: entry.createdAt };
-  if (entry.closed) return unavailable(base, "closed before collection");
+  if (entry.closed) {
+    // No readback, but an install that already finished still says from when it was covered.
+    // The next task runs after every already-settled install result has been delivered.
+    const known = await Promise.race([entry.installed, new Promise<"pending">(resolve => setTimeout(resolve, 0, "pending"))]);
+    return unavailable(typeof known === "number" ? { ...base, installedAt: known } : base, "closed before collection");
+  }
   const timeout = new Promise<"blocked">(resolve => setTimeout(resolve, waitMs, "blocked"));
   const installed = await Promise.race([entry.installed, timeout]);
   if (installed === "blocked") return unavailable(base, `counter not installed within ${waitMs} ms`);
