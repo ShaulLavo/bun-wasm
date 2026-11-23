@@ -10,8 +10,11 @@ const catalog = join(import.meta.dir, "../crates/bunwasm-runtime/src/split_api.r
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-split-api-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-const coreOperations = "DESCRIBE, RESOLVE, PREPARE_SOURCE, POLYFILL_SOURCE, TAKE_TICK, FLUSH, WRAPPER_SOURCE, MAIN_PATH, LOWER_SCRIPT";
-const engineOperations = "DESCRIBE, RESOLVE, PREPARE_SOURCE, POLYFILL_SOURCE, TAKE_TICK, FLUSH, WRAPPER_SOURCE, MAIN_PATH";
+// Data operations, then the split API's word operations (numbered from 1 << 31).
+const coreOperations = "DESCRIBE, RESOLVE, PREPARE_SOURCE, POLYFILL_SOURCE, WRAPPER_SOURCE, MAIN_PATH, LOWER_SCRIPT, WORD_TAKE_TICK, WORD_FLUSH";
+const engineOperations = "DESCRIBE, RESOLVE, PREPARE_SOURCE, POLYFILL_SOURCE, WRAPPER_SOURCE, MAIN_PATH, WORD_TAKE_TICK, WORD_FLUSH";
+const coreIds = "1, 2, 3, 4, 7, 8, 9, 2147483648, 2147483649";
+const engineIds = "1, 2, 3, 4, 7, 8, 2147483648, 2147483649";
 
 function compile(role: string, operations: string, ids: string, source = catalog) {
   const input = join(scratch, `${role}.rs`);
@@ -38,17 +41,17 @@ function verifyRole(role: string, operations: string, ids: string): void {
 }
 
 test("core catalog consumer preserves all operation IDs under -D warnings", () => {
-  verifyRole("core_consumer", coreOperations, "1, 2, 3, 4, 5, 6, 7, 8, 9");
+  verifyRole("core_consumer", coreOperations, coreIds);
 });
 
 test("native-module engine catalog role need not send script-lowering requests", () => {
-  verifyRole("engine_consumer", engineOperations, "1, 2, 3, 4, 5, 6, 7, 8");
+  verifyRole("engine_consumer", engineOperations, engineIds);
 });
 
 test("the catalog exemption does not hide unused executable code", () => {
   const source = join(scratch, "catalog_with_code.rs");
   writeFileSync(source, readFileSync(catalog, "utf8") + "\nfn unexpected_live_code() {}\n");
-  const compiled = compile("strict_catalog", coreOperations, "1, 2, 3, 4, 5, 6, 7, 8, 9", source);
+  const compiled = compile("strict_catalog", coreOperations, coreIds, source);
   expect(compiled.status).not.toBe(0);
   expect(compiled.stderr).toContain("function `unexpected_live_code` is never used");
 });
