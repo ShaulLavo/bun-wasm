@@ -29,7 +29,7 @@ test("the selected native producer feeds the discovered Browser group consumer o
   expect(step).toContain('bun scripts/ci-shared-consumer-run.ts "${{ matrix.group }}"');
   expect(step).not.toMatch(/continue-on-error|build-native|build-bun|build-engine|BUN_WASM_SPIDERMONKEY_TIER/);
   expect(runner).toContain("program-${engine}");
-  expect(runner).toContain('engine === "spidermonkey" ? 1320 : 420');
+  expect(runner).toContain("sharedBrowserClocks(engine).consumerSeconds");
   expect(runner).toContain('"browser-guest", "--profile", "shared-group"');
   expect(workflow.match(/name: Consume the discovered shared native and Browser checks/g)).toHaveLength(1);
   expect(workflow.indexOf("name: Produce the shared JSC profile once")).toBeLessThan(workflow.indexOf("name: Consume the discovered shared native and Browser checks"));
@@ -80,7 +80,7 @@ test("the real wrapper schedules both SpiderMonkey tiers with the same selected 
     executable: process.execPath, args: ["tests/shared-wasm-memory-browser.ts", "chromium"],
     cwd: join(root, "web"), program: result.program, tier, trace: "1",
   })));
-  expect(readFileSync(wrapper, "utf8")).toContain("}, 600_000)");
+  expect(readFileSync(wrapper, "utf8")).toContain("}, sharedBrowserClocks(kind).driverMs + 60_000)");
 });
 
 test.each(["interp", "pbl"])("a failed %s Browser tier fails qualification", tier => {
