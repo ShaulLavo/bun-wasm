@@ -1,5 +1,5 @@
 name: Native production seed
-description: Optional compatible Cargo acceleration followed by cold standard-library dependency preparation
+description: Restore compatible Cargo caches and prepare the locked workspace and standard-library dependencies
 inputs:
   host-tools:
     description: Effective pinned host tools
@@ -49,11 +49,12 @@ runs:
         key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'env.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp') }}-${{ hashFiles('scripts/build-bun-tools.sh', 'scripts/build-bun-browser.sh', 'scripts/src/program-profile.ts', '.github/workflows/ci.yml', '.github/actions/native-*/action.yml', 'scripts/build-wasi-sysroot.ts') }}
         restore-keys: |
           native-v4-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'env.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-
-    - name: Prepare pinned Rust standard-library dependencies
+    - name: Prepare locked workspace and Rust standard-library dependencies
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
         source env.sh
         guest_environment=$(bun scripts/guest-build-receipt.ts environment)
         eval "$guest_environment"
+        "$GUEST_CARGO" fetch --locked
         sysroot=$("$RUSTC" --print sysroot)
         "$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1

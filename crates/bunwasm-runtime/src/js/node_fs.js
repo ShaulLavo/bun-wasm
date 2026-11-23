@@ -54,7 +54,14 @@
       return fn(absolute(given), given);
     } catch (err) {
       if (err && typeof err.path === "string" && err.path !== given) {
-        err.message = err.message.replace(`'${err.path}'`, `'${given}'`);
+        if (err.message.includes(`'${err.path}'`)) {
+          err.message = err.message.replace(`'${err.path}'`, `'${given}'`);
+        } else if (err.message.endsWith(` ${err.path}`)) {
+          err.message = `${err.message.slice(0, -err.path.length)}${given}`;
+        }
+        if (err.info && typeof err.info === "object" && err.info.path === err.path) {
+          err.info.path = given;
+        }
         err.path = given;
       }
       throw err;
@@ -66,6 +73,13 @@
     const encoding = typeof options === "string" ? options : options && typeof options === "object" ? options.encoding || null : null;
     if (encoding === null || encoding === "buffer" || Buffer.isEncoding(encoding)) return encoding;
     throw Object.assign(new TypeError(`encoding '${String(encoding)}' is an invalid encoding`), { code: "ERR_INVALID_ARG_VALUE" });
+  }
+
+  // A returned path in the caller's encoding: a Buffer of its UTF-8 bytes, or those bytes re-encoded.
+  function encodedPath(path, encoding) {
+    if (encoding === null || encoding === "utf8" || encoding === "utf-8") return path;
+    const bytes = Buffer.from(path);
+    return encoding === "buffer" ? bytes : bytes.toString(encoding);
   }
 
   function toBytes(data, encoding) {
@@ -283,10 +297,10 @@
   function readFileSync(path, options) {
     if (typeof path !== "number" && typeof path !== "string") path = toPath(path);
     const encoding = encodingOf(options);
-    // Node validates the flag before opening; the read itself does not use it here.
-    // A null or undefined flag means the default, as in Bun.
-    flagsNumber((options && typeof options === "object" ? options.flag : undefined) ?? "r");
-    const bytes = typeof path === "number" ? readAllFd(path) : withPath(path, (abs) => native.readFile(abs));
+    // A null or undefined flag means the default ("r"), as in Bun.
+    const flags = flagsNumber((options && typeof options === "object" ? options.flag : undefined) ?? "r");
+    if (typeof path === "number") validateFd(path);
+    const bytes = typeof path === "number" ? readAllFd(path) : withPath(path, (abs) => (flags === 0 ? native.readFile(abs) : native.readFile(abs, flags)));
     const buf = asBuffer(bytes);
     return encoding && encoding !== "buffer" ? buf.toString(encoding) : buf;
   }
@@ -302,16 +316,31 @@
     return internal.concatBytes(chunks);
   }
 
+  function currentUmask() {
+    return typeof process !== "undefined" && typeof process.umask === "function" ? process.umask() : 0o022;
+  }
+
+  function writeAllFd(fd, data) {
+    const bytes = typeof data === "string" ? Buffer.from(data, "utf8") : data;
+    let offset = 0;
+    while (offset < bytes.length) {
+      const written = native.write(fd, bytes.subarray(offset), -1);
+      if (written <= 0) throw Object.assign(new Error("write made no progress"), { code: "EIO", syscall: "write" });
+      offset += written;
+    }
+  }
+
   function writeFileSync(path, data, options) {
     if (typeof path !== "number" && typeof path !== "string") path = toPath(path);
     const encoding = encodingOf(options);
     const flag = (options && typeof options === "object" ? options.flag : undefined) ?? "w";
     const bytes = toBytes(data, encoding);
     if (typeof path === "number") {
-      native.write(path, bytes, -1);
+      validateFd(path);
+      writeAllFd(path, bytes);
       return;
     }
-    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), parseFileMode(options && typeof options === "object" ? options.mode : undefined, "mode", 0o666)));
+    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), parseFileMode(options && typeof options === "object" ? options.mode : undefined, "mode", 0o666), currentUmask()));
   }
 
   function appendFileSync(path, data, options) {
@@ -353,38 +382,50 @@
       throw Object.assign(new TypeError(`The "recursive" property must be of type boolean, got ${kind}`), { code: "ERR_INVALID_ARG_TYPE" });
     }
     const recursive = given === true;
-    // Node validates the mode (a number or string argument, or options.mode); WASI applies none.
-    parseFileMode(options && typeof options === "object" ? options.mode : options, "mode", 0o777);
-    const created = withPath(path, (abs) => native.mkdir(abs, recursive));
+    const mode = parseFileMode(options && typeof options === "object" ? options.mode : options, "mode", 0o777);
+    const created = withPath(path, (abs) => native.mkdir(abs, recursive, mode, currentUmask()));
     return recursive ? (created === null ? undefined : created) : undefined;
   }
 
-  function readdirSync(path, options) {
+  let buffersReaddirModule;
+  function buffersReaddir() {
+    buffersReaddirModule ??= internal.require("fs_buffers_readdir");
+    return buffersReaddirModule;
+  }
+
+  function readdirImpl(path, options, isAsync) {
     const withFileTypes = Boolean(options && options.withFileTypes);
     const recursive = Boolean(options && options.recursive);
     const encoding = encodingOf(options);
-    return withPath(path, (abs, given) => {
-      const out = [];
-      collectDir(abs, given, "", recursive, withFileTypes, out);
-      if (encoding === "buffer") return out.map((n) => (typeof n === "string" ? Buffer.from(n) : n));
-      return out;
-    });
+    const given = toPath(path);
+    const abs = given === "" ? "" : absolute(given);
+    const out = buffersReaddir().readdirTree(
+      abs,
+      given,
+      recursive,
+      withFileTypes,
+      isAsync,
+      native.readdir,
+      (name, kind, parentPath) => new Dirent(name, kind, parentPath),
+    );
+    if (encoding === "buffer") return out.map((n) => (typeof n === "string" ? Buffer.from(n) : n));
+    return out;
   }
 
-  function collectDir(abs, given, prefix, recursive, withFileTypes, out) {
-    for (const [name, kind] of native.readdir(abs)) {
-      const rel = prefix ? `${prefix}/${name}` : name;
-      out.push(withFileTypes ? new Dirent(name, kind, prefix ? `${given}/${prefix}` : given) : rel);
-      if (recursive && kind === "dir") collectDir(`${abs}/${name}`, given, rel, recursive, withFileTypes, out);
-    }
+  function readdirSync(path, options) {
+    return readdirImpl(path, options, false);
+  }
+
+  function withTrailingSlash(abs, given) {
+    return given.endsWith("/") && !abs.endsWith("/") ? `${abs}/` : abs;
   }
 
   function rmSync(path, options = {}) {
-    withPath(path, (abs) => native.rm(abs, Boolean(options.recursive), Boolean(options.force)));
+    withPath(path, (abs, given) => native.rm(withTrailingSlash(abs, given), Boolean(options.recursive), Boolean(options.force)));
   }
 
   function rmdirSync(path, options = {}) {
-    withPath(path, (abs) => native.rmdir(abs, Boolean(options.recursive)));
+    withPath(path, (abs, given) => native.rmdir(withTrailingSlash(abs, given), Boolean(options.recursive)));
   }
 
   function unlinkSync(path) {
@@ -395,8 +436,24 @@
     withPath(from, (abs) => native.rename(abs, absolute(toPath(to, "newPath"))));
   }
 
+  function rewriteCopyDest(err, dest) {
+    if (err && typeof err.dest === "string" && err.dest !== dest) {
+      err.message = err.message.replace(`-> '${err.dest}'`, `-> '${dest}'`);
+      err.dest = dest;
+    }
+    return err;
+  }
+
   function copyFileSync(from, to, mode = 0) {
-    withPath(from, (abs) => native.copyFile(abs, absolute(toPath(to, "dest")), mode));
+    const dest = toPath(to, "dest");
+    const absDest = absolute(dest);
+    withPath(from, (abs) => {
+      try {
+        native.copyFile(abs, absDest, mode);
+      } catch (err) {
+        throw rewriteCopyDest(err, dest);
+      }
+    });
   }
 
   function cpSync(from, to, options = {}) {
@@ -410,8 +467,8 @@
   }
 
   function realpathSync(path, options) {
-    encodingOf(options);
-    return withPath(path, (abs) => native.realpath(abs === "" ? absolute(".") : abs));
+    const encoding = encodingOf(options);
+    return encodedPath(withPath(path, (abs) => native.realpath(abs === "" ? absolute(".") : abs)), encoding);
   }
   realpathSync.native = realpathSync;
 
@@ -453,7 +510,7 @@
       const suffix = Array.from(native.randomBytes(6), (b) => chars[b % chars.length]).join("");
       const path = given + suffix;
       try {
-        native.mkdir(absolute(path), false);
+        native.mkdir(absolute(path), false, 0o700, 0);
       } catch (err) {
         if (err && err.code === "EEXIST") continue;
         if (!err || typeof err.code !== "string") throw err;
@@ -464,10 +521,11 @@
   }
 
   function openSync(path, flags, mode) {
-    return withPath(path, (abs) => native.open(abs, flagsNumber(flags), parseFileMode(mode, "mode", 0o666)));
+    return withPath(path, (abs) => native.open(abs, flagsNumber(flags), parseFileMode(mode, "mode", 0o666), currentUmask()));
   }
 
   function closeSync(fd) {
+    validateFd(fd);
     native.close(fd);
   }
 
@@ -617,11 +675,21 @@
   }
 
   function readvStdin(views, buffers, length, callback) {
+    const release = pinArguments(1, [0, views]);
     const target = new Uint8Array(length);
-    return callbackApi.read(0, target, 0, length, null, (error, count) => {
-      if (!error) scatterRead(views, target.subarray(0, count));
-      callback(error, count, buffers);
-    });
+    try {
+      return callbackApi.read(0, target, 0, length, null, (error, count) => {
+        try {
+          if (!error) scatterRead(views, target.subarray(0, count));
+        } finally {
+          if (release !== null) release();
+        }
+        callback(error, count, buffers);
+      });
+    } catch (err) {
+      if (release !== null) release();
+      throw err;
+    }
   }
 
   function readv(fd, buffers, position, callback) {
@@ -632,9 +700,13 @@
     const length = boundedVectorLength(views);
     // One bounded stdin read: after progress, never wait for another vector to fill.
     if (fd === 0 && native.hostCaps.proc_spawn && length > 0 && readvPosition(position) < 0 && !isRegularReadFd(fd)) return readvStdin(views, buffers, length, callback);
+    const release = pinArguments(1, [fd, views]);
     let count = 0, error = null;
     try { count = readVectorViews(fd, views, readvPosition(position)); } catch (err) { error = err; }
-    later(() => callback(error, count, buffers));
+    later(() => {
+      if (release !== null) release();
+      callback(error, count, buffers);
+    });
   }
 
   // Node's GetOffset (src/node_file.cc): only a non-negative safe integer is a file
@@ -648,10 +720,12 @@
   // options object. The "buffer" encoding writes UTF-8, as Bun's does.
   function writeSync(fd, data, offsetOrPosition, lengthOrEncoding, position) {
     if (typeof data === "string") {
+      validateFd(fd);
       const encoding = typeof lengthOrEncoding === "string" && lengthOrEncoding !== "buffer" ? lengthOrEncoding : "utf8";
       return native.write(fd, toBytes(data, encoding), filePosition(offsetOrPosition));
     }
     if (!ArrayBuffer.isView(data)) throw invalidArg("buffer", "of type string or an instance of Buffer, TypedArray, or DataView", data);
+    validateFd(fd);
     if (offsetOrPosition !== null && typeof offsetOrPosition === "object") {
       const { offset = 0, length = data.byteLength - offset, position: at = null } = offsetOrPosition;
       return writeView(fd, data, offset, length, at);
@@ -680,34 +754,27 @@
     throw error;
   }
 
-  function validateWritev(buffers) {
-    if (!Array.isArray(buffers)) throw invalidArg("buffers", "an array", buffers);
-    for (const buffer of buffers) {
-      if (!ArrayBuffer.isView(buffer)) throw invalidArg("buffers", "an array of ArrayBufferView instances", buffers);
-    }
-  }
-
-  function writeBuffers(fd, buffers, position) {
-    if (buffers.length === 0) return 0;
-    return native.writev(fd, buffers.map(internal.toUint8), filePosition(position));
+  function writeBuffers(fd, items, position) {
+    if (items.length === 0) return 0;
+    return native.writev(fd, buffersReaddir().writevViews(items), filePosition(position));
   }
 
   function writevSync(fd, buffers, position) {
-    validateWritev(buffers);
-    if (buffers.length === 0) return 0;
+    const items = buffersReaddir().snapshotWritev(buffers, invalidArg);
+    if (items.length === 0) return 0;
     validateFd(fd);
-    return writeBuffers(fd, buffers, position);
+    return writeBuffers(fd, items, position);
   }
 
   function writev(fd, buffers, position, callback) {
     if (typeof position === "function") { callback = position; position = null; }
     validateFd(fd);
-    validateWritev(buffers);
+    const items = buffersReaddir().snapshotWritev(buffers, invalidArg);
     if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
-    const release = pinArguments(1, [fd, buffers]);
+    const release = pinArguments(1, [fd, items]);
     let written = 0;
     let error = null;
-    try { written = writeBuffers(fd, buffers, position); } catch (err) { error = err; }
+    try { written = writeBuffers(fd, items, position); } catch (err) { error = err; }
     later(() => {
       if (release !== null) release();
       callback(error, written, buffers);
@@ -770,6 +837,19 @@
     later(() => callback(error, result));
   }
 
+  function checkOpenFd(fd, syscall) {
+    validateFd(fd);
+    try {
+      native.fstat(fd, false);
+    } catch (err) {
+      if (err && typeof err === "object" && err.syscall === "fstat") {
+        err.syscall = syscall;
+        if (typeof err.message === "string") err.message = err.message.replace(", fstat", `, ${syscall}`);
+      }
+      throw err;
+    }
+  }
+
   const sync = {
     readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, mkdirSync, readdirSync,
     rmSync, rmdirSync, unlinkSync, renameSync, copyFileSync, cpSync, realpathSync, accessSync, mkdtempSync,
@@ -779,37 +859,47 @@
       validateFd(fd);
       return makeStats(native.fstat(fd, Boolean(options && options.bigint)), Boolean(options && options.bigint));
     },
-    ftruncateSync: (fd, len) => native.ftruncate(fd, truncateLength(len)),
+    ftruncateSync: (fd, len) => {
+      validateFd(fd);
+      native.ftruncate(fd, truncateLength(len));
+    },
     truncateSync: (path, len) => {
       if (typeof path === "number") return sync.ftruncateSync(path, len);
       const length = truncateLength(len);
       withPath(path, (abs) => native.truncate(abs, length));
     },
     readlinkSync: (path, options) => {
-      encodingOf(options);
-      return withPath(path, (abs) => native.readlink(abs));
+      const encoding = encodingOf(options);
+      return encodedPath(withPath(path, (abs) => native.readlink(abs)), encoding);
     },
     symlinkSync: (target, path) => withPath(path, (abs) => native.symlink(toPath(target, "target"), abs)),
     linkSync: (from, to) => withPath(from, (abs) => native.link(abs, absolute(toPath(to, "newPath")))),
-    // WASI has no permission bits to set: the mode is validated as Node's parseFileMode does
-    // and the path must exist.
     chmodSync: (path, mode) => {
-      parseFileMode(mode, "mode");
-      void statSync(path);
+      const parsed = parseFileMode(mode, "mode");
+      withPath(path, (abs) => native.chmod(abs, parsed));
     },
     lchmodSync: (path, mode) => void parseFileMode(mode, "mode"),
-    fchmodSync: (fd, mode) => void parseFileMode(mode, "mode"),
+    fchmodSync: (fd, mode) => {
+      validateFd(fd);
+      native.fchmod(fd, parseFileMode(mode, "mode"));
+    },
     chownSync: (path) => void statSync(path),
     lchownSync: () => {},
-    fchownSync: () => {},
+    fchownSync: (fd) => checkOpenFd(fd, "fchown"),
     utimesSync: (path, atime, mtime) => setPathTimes(path, atime, mtime, false),
     lutimesSync: (path, atime, mtime) => setPathTimes(path, atime, mtime, true),
     futimesSync: (fd, atime, mtime) => {
       validateFd(fd);
       native.futimes(fd, ...timeSpec(atime, "atime"), ...timeSpec(mtime, "mtime"));
     },
-    fsyncSync: () => {},
-    fdatasyncSync: () => {},
+    fsyncSync: (fd) => {
+      validateFd(fd);
+      native.fsync(fd);
+    },
+    fdatasyncSync: (fd) => {
+      validateFd(fd);
+      native.fdatasync(fd);
+    },
   };
 
   // Bun's truncate length: missing means 0, anything but a number is a TypeError.
@@ -829,7 +919,7 @@
   // Bun keeps a Buffer path and the data a write reads attached until the call completes
   // (fs_buffer_pins.ts). The module loads on the first call that has bytes to pin.
   let bufferPins;
-  const dataArguments = { write: 1, writev: 1, writeFile: 1, appendFile: 1 };
+  const dataArguments = { read: 1, readv: 1, write: 1, writev: 1, writeFile: 1, appendFile: 1 };
   const holdsBytes = (value) => typeof value === "object" && value !== null && (ArrayBuffer.isView(value) || value instanceof ArrayBuffer || Array.isArray(value));
   // The release function, or null (allocating nothing) when neither the path nor the
   // data holds bytes, which is nearly every call.
@@ -910,6 +1000,19 @@
     validateFd(fd);
     later(() => closeSync(fd));
   };
+  callbackApi.readdir = callbackify("readdir", (path, options) => readdirImpl(path, options, true));
+  // Node does not validate the 4-argument symlink overload's callback; a non-callable
+  // callback stays an ignored promise handler, matching Bun's src/js/node/fs.ts.
+  callbackApi.symlink = function symlink(target, path, type, callback) {
+    buffersReaddir().runSymlinkCallback(target, path, type, callback, {
+      symlinkSync: sync.symlinkSync,
+      symlinkPromise: promises.symlink,
+      later,
+      pinArguments,
+      argumentErrors,
+      invalidArg,
+    });
+  };
   callbackApi.cp = cp;
   callbackApi.glob = glob;
   callbackApi.opendir = opendir;
@@ -945,7 +1048,12 @@
     const complete = (...values) => internal.runInContext(context, callback, undefined, values);
     const [fd, buffer, offsetOrOptions, length, position] = args;
     const options = readOptions(buffer, offsetOrOptions, length, position);
-    if (options.length === 0) return later(() => complete(null, 0, buffer));
+    const release = pinArguments(1, [fd, buffer]);
+    const finish = (error, count) => later(() => {
+      if (release !== null) release();
+      complete(error, count, buffer);
+    });
+    if (options.length === 0) return finish(null, 0);
     const step = () => {
       const chunk = native.procRead(fd, options.length);
       if (chunk === -6) return false; // WASI EAGAIN: leave the waiter registered.
@@ -954,14 +1062,19 @@
         throw Object.assign(new Error(`read ${code}`), { code, syscall: "read", errno });
       }
       if (chunk !== 0) internal.toUint8(buffer).set(chunk, options.offset);
-      later(() => complete(null, chunk === 0 ? 0 : chunk.length, buffer));
+      finish(null, chunk === 0 ? 0 : chunk.length);
       return true;
     };
     // One 16-byte runtime_proc subscription: u32 READABLE (0), u32 fd, u64 userdata.
     const subscription = new Uint8Array(16);
     new DataView(subscription.buffer).setUint32(4, fd, true);
-    internal.require("net");
-    internal.addIoWaiter({ step, subscriptions: () => subscription, fail: error => later(() => complete(error, 0, buffer)) });
+    try {
+      internal.require("net");
+      internal.addIoWaiter({ step, subscriptions: () => subscription, fail: error => finish(error, 0) });
+    } catch (err) {
+      if (release !== null) release();
+      throw err;
+    }
   };
   callbackApi.write = callbackify("write", writeSync, (cb, err, n, args) => cb(err, n, args[1]));
   // util.promisify resolves these with named results, as Bun's defineCustomPromisifyArgs does.
@@ -974,24 +1087,24 @@
 
   function promisifySync(fn, name) {
     const dataIndex = dataArguments[name] ?? 0;
-    return named(name, function (...args) {
-      return new Promise((resolve, reject) => {
-        const release = pinArguments(dataIndex, args);
-        let result;
-        try {
-          result = fn.apply(undefined, args);
-        } catch (err) {
-          later(release === null ? () => reject(err) : () => {
-            release();
-            reject(err);
-          });
-          return;
-        }
-        later(release === null ? () => resolve(result) : () => {
-          release();
-          resolve(result);
-        });
-      });
+    return named(name, async function (...args) {
+      const release = pinArguments(dataIndex, args);
+      let result;
+      let failed = false;
+      let error;
+      try {
+        result = fn.apply(undefined, args);
+      } catch (err) {
+        failed = true;
+        error = err;
+      }
+      await new Promise((resolve) => later(resolve));
+      if (release !== null) release();
+      if (failed) {
+        buffersReaddir().attachAsyncStack(error);
+        throw error;
+      }
+      return result;
     });
   }
 
@@ -1038,7 +1151,8 @@
   function fileHandles() {
     fileHandleModule ??= internal.require("fs_file_handle")({
       Buffer, closeSync, readFileSync, writeFileSync: writeHandleFile, appendFileSync, readSync, readvSync, writeSync, writevSync,
-      fstatSync: sync.fstatSync, ftruncateSync: sync.ftruncateSync, later, createReadStream, createWriteStream,
+      fstatSync: sync.fstatSync, ftruncateSync: sync.ftruncateSync, fsyncSync: sync.fsyncSync, fdatasyncSync: sync.fdatasyncSync,
+      later, createReadStream, createWriteStream,
     });
     return fileHandleModule;
   }
@@ -1052,8 +1166,12 @@
   for (const name of ["readFile", "writeFile", "appendFile"]) {
     promises[name] = wholeFilePromise(name, promises[name]);
   }
+  promises.readdir = promisifySync((path, options) => readdirImpl(path, options, true), "readdir");
   promises.glob = async function* glob(pattern, options) { yield* globSync(pattern, options); };
-  promises.open = async (path, flags, mode) => new (fileHandles().FileHandle)(openSync(path, flags, mode));
+  promises.open = async (path, flags, mode) => {
+    const pathForDiag = typeof path === "string" ? path : path == null ? undefined : String(path);
+    return new (fileHandles().FileHandle)(openSync(path, flags, mode), pathForDiag);
+  };
   promises.cp = async (from, to, options) => copyAsync(toPath(from, "src"), toPath(to, "dest"), options);
   promises.constants = constants;
   delete promises.close;
@@ -1066,9 +1184,12 @@
   let fileStreamAdapter;
   function fileStreams() {
     fileStreamAdapter ??= internal.require("fs_stream_constructors")({
-      read: native.read, asBuffer, openSync, closeSync, writeSync, toPath, validateFd, readRange, invalidArg,
+      read: native.read, asBuffer, concatBuffers: (buffers) => Buffer.concat(buffers),
+      openSync, closeSync, writeSync, fsyncSync: sync.fsyncSync, toPath, validateFd, readRange, invalidArg,
       isEncoding: (encoding) => Buffer.isEncoding(encoding), inspect: (value) => internal.require("inspect").nodeInspect(value),
-      readPieceSize: kReadPiece, isRegularReadFd, later, linkHandle: (value, onClose) => fileHandleModule?.linkStream(value, onClose),
+      readPieceSize: kReadPiece, isRegularReadFd, later,
+      isHandle: (value) => Boolean(fileHandleModule?.isFileHandle(value)),
+      linkHandle: (value, onClose) => fileHandleModule?.linkStream(value, onClose),
       loadStreams: () => internal.builtin("node:stream"),
     });
     return fileStreamAdapter;
@@ -1092,6 +1213,10 @@
     const adapter = fileStreams();
     adapter.initializeFileStreams();
     return adapter.WriteStream;
+  }
+
+  function utf8StreamConstructor() {
+    return internal.require("bun_builtins").require("internal:streams/fast-utf8-stream");
   }
 
   function watchUnsupported() {
@@ -1128,6 +1253,7 @@
     WriteStream: { get: writeStreamConstructor, enumerable: true, configurable: true },
     FileReadStream: { get: readStreamConstructor, enumerable: true, configurable: true },
     FileWriteStream: { get: writeStreamConstructor, enumerable: true, configurable: true },
+    Utf8Stream: { get: utf8StreamConstructor, enumerable: true, configurable: true },
     // Bun's `get promises()`: node:fs/promises, read through a getter.
     promises: { get: function promises() { return promisesApi; }, enumerable: true, configurable: true },
   });

@@ -10,6 +10,8 @@ use super::{AGAIN, BADF, FAULT, INVAL};
 use crate::Host;
 use crate::guest::GuestMemory;
 
+pub(crate) mod links;
+
 /// Start sections run before instantiate returns, but already expose memory to imports.
 pub(crate) fn memory(caller: &mut Caller<'_, Host>) -> Result<GuestMemory> {
     if let Some(memory) = &caller.data().memory {
@@ -433,16 +435,31 @@ struct Namespace {
     closing: Arc<Delegated>,
     files: HashMap<i32, i32>,
     preopens: HashSet<i32>,
+    /// Each file's guest path as opened, where a guest-namespace retry starts (`links`).
+    paths: HashMap<i32, String>,
+    roots: links::Roots,
 }
 impl Namespace {
-    fn new(count: usize, closing: Arc<Delegated>) -> Self {
-        let preopens: HashSet<i32> = (3..3 + count as i32).collect();
+    fn new(dirs: Vec<(std::path::PathBuf, String)>, closing: Arc<Delegated>) -> Self {
+        let preopens: HashSet<i32> = (3..3 + dirs.len() as i32).collect();
         Self {
             initialized: false,
             closing,
             files: preopens.iter().map(|&fd| (fd, fd)).collect(),
             preopens,
+            paths: (3..)
+                .zip(dirs.iter().map(|(_, guest)| guest.clone()))
+                .collect(),
+            roots: links::Roots::new(dirs),
         }
+    }
+    /// Wasmtime's descriptor for preopen `index`, while some guest descriptor still holds it.
+    fn root_fd(&self, index: usize) -> Option<i32> {
+        let actual = 3 + index as i32;
+        self.preopens
+            .iter()
+            .any(|fd| self.files.get(fd) == Some(&actual))
+            .then_some(actual)
     }
     fn initialize(&mut self, caller: &mut Caller<'_, Host>) -> Result<()> {
         if self.initialized {
@@ -468,11 +485,12 @@ impl Namespace {
         Ok(())
     }
     fn available(&self, host: &Host) -> Option<i32> {
-        (3..i32::MAX).find(|fd| !self.files.contains_key(fd) && !host.processes.owns(*fd))
+        (0..i32::MAX).find(|fd| !self.files.contains_key(fd) && !host.processes.owns(*fd))
     }
     fn remove(&mut self, fd: i32) {
         self.files.remove(&fd);
         self.preopens.remove(&fd);
+        self.paths.remove(&fd);
     }
     fn close(&mut self, caller: &mut Caller<'_, Host>, fd: i32) -> Result<i32> {
         let Some(&actual) = self.files.get(&fd) else {
@@ -503,7 +521,7 @@ pub fn initialize(linker: &Linker<Host>, store: &mut Store<Host>) -> Result<()> 
 pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()> {
     let close = Arc::new(original(linker, store, "fd_close")?);
     let namespace = Arc::new(Mutex::new(Namespace::new(
-        store.data().processes.preopen_count(),
+        store.data().processes.dirs().to_vec(),
         close.clone(),
     )));
     let read = original(linker, store, "fd_read")?;
@@ -514,6 +532,8 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
     let watch_stat = original(linker, store, "fd_filestat_get")?;
     let prestat = original(linker, store, "fd_prestat_get")?;
     let open = original(linker, store, "path_open")?;
+    let open_again = links::rebind(&open);
+    let scratch = wasmtime::Memory::new(&mut *store, wasmtime::MemoryType::new(1, None))?;
     let poll = original(linker, store, "poll_oneoff")?;
     let poll_scratch = wasmtime::Memory::new(&mut *store, wasmtime::MemoryType::new(1, None))?;
     // Separate delegate instances cache the private scratch memory rather than
@@ -655,15 +675,6 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
         "fd_sync",
         "fd_tell",
         "fd_prestat_dir_name",
-        "path_create_directory",
-        "path_filestat_get",
-        "path_filestat_set_times",
-        "path_link",
-        "path_readlink",
-        "path_remove_directory",
-        "path_rename",
-        "path_symlink",
-        "path_unlink_file",
         "sock_accept",
         "sock_recv",
         "sock_shutdown",
@@ -678,21 +689,12 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
             move |mut caller, args, results| {
                 let mut state = state.lock().unwrap();
                 state.initialize(&mut caller)?;
-                let indices: &[usize] = match name {
-                    "path_link" => &[0, 4],
-                    "path_rename" => &[0, 3],
-                    "path_symlink" => &[2],
-                    _ => &[0],
-                };
                 let mut args = args.to_vec();
-                for &index in indices {
-                    let external = args[index].unwrap_i32();
-                    let Some(&actual) = state.files.get(&external) else {
-                        results[0] = Val::I32(-BADF);
-                        return Ok(());
-                    };
-                    args[index] = Val::I32(actual);
-                }
+                let Some(&actual) = state.files.get(&args[0].unwrap_i32()) else {
+                    results[0] = Val::I32(-BADF);
+                    return Ok(());
+                };
+                args[0] = Val::I32(actual);
                 results[0] = Val::I32(call_values(&delegate, &mut caller, &args)?);
                 Ok(())
             },
@@ -785,6 +787,9 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
             }
             let actual = state.files.remove(&from).unwrap();
             let preopen = state.preopens.remove(&from);
+            if let Some(path) = state.paths.remove(&from) {
+                state.paths.insert(to, path);
+            }
             state.files.insert(to, actual);
             caller.data_mut().processes.reserve_file(to);
             if preopen {
@@ -820,21 +825,34 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
             let Some(external) = state.available(caller.data()) else {
                 return Ok(-super::AGAIN);
             };
-            let result = call_values(
-                &open,
-                &mut caller,
-                &[
-                    Val::I32(actual),
-                    Val::I32(dirflags),
-                    Val::I32(path),
-                    Val::I32(length),
-                    Val::I32(flags),
-                    Val::I64(rights),
-                    Val::I64(inheriting),
-                    Val::I32(fdflags),
-                    Val::I32(out),
-                ],
-            )?;
+            let mut args = [
+                Val::I32(fd),
+                Val::I32(dirflags),
+                Val::I32(path),
+                Val::I32(length),
+                Val::I32(flags),
+                Val::I64(rights),
+                Val::I64(inheriting),
+                Val::I32(fdflags),
+                Val::I32(out),
+            ];
+            links::follow_trailing_slash(&mut caller, &links::OPEN, &mut args)?;
+            args[0] = Val::I32(actual);
+            let mut result = call_values(&open, &mut caller, &args)?;
+            let mut guest = None;
+            if result == links::PERM {
+                args[0] = Val::I32(fd);
+                let guests;
+                (result, guests) = links::retry(
+                    &mut state,
+                    &mut caller,
+                    &open_again,
+                    scratch,
+                    &links::OPEN,
+                    &args,
+                )?;
+                guest = guests.into_iter().next();
+            }
             if result != 0 {
                 return Ok(result);
             }
@@ -842,6 +860,16 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
                 .read(&caller, output.clone())
                 .context("validated descriptor output")?;
             let opened = i32::from_le_bytes(opened.try_into().unwrap());
+            let guest = match (guest, state.paths.get(&fd)) {
+                (Some(guest), _) => Some(guest),
+                (None, Some(base)) => links::read_path(&mut caller, path, length)?
+                    .ok()
+                    .map(|path| links::join(base, &path)),
+                (None, None) => None,
+            };
+            if let Some(guest) = guest {
+                state.paths.insert(external, guest);
+            }
             state.files.insert(external, opened);
             caller.data_mut().processes.reserve_file(external);
             store_word(&memory, &mut caller, output.start, external as u32)?;
@@ -942,6 +970,7 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
             Ok(0)
         },
     )?;
+    links::install(linker, store, &namespace, scratch)?;
     install_watches(linker, &namespace, watch_stat, poll_scratch)?;
     linker.allow_shadowing(false);
     Ok(())

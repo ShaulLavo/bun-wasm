@@ -4,6 +4,8 @@ use crate::process::{self, Cancellation, FinalOutcome, Runtime, Stdio};
 use std::sync::Arc;
 use wasmtime::{Config, Engine, Memory, MemoryType, Module, StoreLimitsBuilder, WasmParams};
 
+mod links;
+
 #[test]
 fn bash_54a_terminal_geometry_phase_and_no_prompt_contract() {
     use wasm_encoder::{
@@ -1780,4 +1782,17 @@ fn runtime_fs_watches_the_descriptor_node_through_rename_replacement_and_renumbe
     let unlinked = open_read_only(&mut f, b"app/gone.tsx");
     std::fs::remove_file(root.join("app/gone.tsx")).unwrap();
     assert_eq!(f.call("runtime_fs", "watch_open", (unlinked, 0, 132)), 44);
+}
+
+#[test]
+fn closing_stdio_descriptor_reuses_it_on_path_open_and_rejects_double_close() {
+    let mut f = Fixture::new();
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 2), 0);
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_close", 2),
+        -process::BADF
+    );
+    let reopened = f.open_manifest(3);
+    assert_eq!(reopened, 2);
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 2), 0);
 }

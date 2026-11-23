@@ -29,7 +29,7 @@ function canonical(value: unknown): string {
 function producerRecipe(root: string) {
   const workflow: unknown = Bun.YAML.parse(readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8'));
   assert(record(workflow) && record(workflow.jobs));
-  const producer = workflow.jobs['shared-spidermonkey-prebuild'];
+  const producer = workflow.jobs['shared-sysroot'];
   assert(record(producer) && Array.isArray(producer.steps), 'Missing shared SpiderMonkey producer');
   const steps: unknown[] = producer.steps;
   const boundary = steps.findIndex(step => record(step) && step.id === 'shared-sm-artifact');

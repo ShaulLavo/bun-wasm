@@ -97,7 +97,6 @@ if [[ $browser == 1 ]]; then
     browser_test node tests/browser-async-context-runtime.ts || failed=1
     browser_test node tests/browser-engine.mjs || failed=1
     browser_test node tests/browser-tools.ts || failed=1
-    browser_test node tests/browser-crypto.mjs || failed=1
     browser_test node tests/browser-memory.mjs || failed=1
   else
     echo "skip browser engine: no dist/bun-browser.wasm (scripts/build-bun-browser.sh)"

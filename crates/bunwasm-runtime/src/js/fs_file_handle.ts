@@ -27,6 +27,8 @@
     writevSync(fd: number, buffers: unknown, position?: unknown): number;
     fstatSync(fd: number, options?: unknown): unknown;
     ftruncateSync(fd: number, length?: unknown): void;
+    fsyncSync(fd: number): void;
+    fdatasyncSync(fd: number): void;
     createReadStream(path: undefined, options: Options): unknown;
     createWriteStream(path: undefined, options: Options): unknown;
     later(callback: () => void): void;
@@ -138,6 +140,29 @@
 
   return function createFileHandles(deps: Dependencies) {
     const handles = new WeakSet<object>();
+    type FinalizerState = { fd: number; path: string | undefined; closed: boolean };
+    // Adapted from Bun's src/js/node/fs.promises.ts (DEP0137 end-of-life): close a leaked
+    // FileHandle's fd on GC and raise ERR_INVALID_STATE on a later turn.
+    const finalizers = typeof FinalizationRegistry === "function"
+      ? new FinalizationRegistry<FinalizerState>((held) => {
+        if (held.closed) return;
+        held.closed = true;
+        try {
+          deps.closeSync(held.fd);
+        } catch {}
+        const suffix = held.path !== undefined ? ` (${held.path})` : "";
+        const err = codeError(
+          Error,
+          "ERR_INVALID_STATE",
+          "A FileHandle object was closed during garbage collection. This used to be allowed " +
+            "with a deprecation warning but is now considered an error. Please close FileHandle " +
+            `objects explicitly. File descriptor: ${held.fd}${suffix}`,
+        );
+        deps.later(() => {
+          throw err;
+        });
+      })
+      : undefined;
 
     class FileHandle extends EventEmitter {
       #fd: number;
@@ -146,11 +171,20 @@
       #closing: Promise<void> | undefined;
       #closeResolve: (() => void) | undefined;
       #closeReject: Reject | undefined;
+      #finalizerState: FinalizerState;
 
-      constructor(fd: number) {
+      constructor(fd: number, path?: string) {
         super();
         this.#fd = fd;
+        this.#finalizerState = { fd, path, closed: fd < 0 };
+        if (fd >= 0) finalizers?.register(this, this.#finalizerState, this.#finalizerState);
         handles.add(this);
+      }
+
+      #disarmFinalizer() {
+        if (this.#finalizerState.closed) return;
+        this.#finalizerState.closed = true;
+        finalizers?.unregister(this.#finalizerState);
       }
 
       get fd() {
@@ -201,10 +235,12 @@
         deps.ftruncateSync(this.#open("ftruncate"), length);
       }
       async sync() {
-        this.#open("fsync");
+        const fd = this.#open("fsync");
+        deps.fsyncSync(fd);
       }
       async datasync() {
-        this.#open("fdatasync");
+        const fd = this.#open("fdatasync");
+        deps.fdatasyncSync(fd);
       }
 
       async close() {
@@ -213,6 +249,7 @@
         if (--this.#refs === 0) {
           const fd = this.#fd;
           this.#fd = -1;
+          this.#disarmFinalizer();
           this.#closing = settleClose(fd).finally(() => { this.#closing = undefined; });
         } else {
           this.#closing = new Promise<void>((resolve, reject) => {
@@ -241,6 +278,7 @@
         if (--this.#refs !== 0) return;
         const fd = this.#fd;
         this.#fd = -1;
+        this.#disarmFinalizer();
         (fd === -1 ? Promise.resolve() : settleClose(fd)).then(this.#closeResolve, this.#closeReject);
       }
 
@@ -250,6 +288,7 @@
         if (this.#closing) throw invalidState("The FileHandle is closing");
         const fd = this.#fd;
         this.#fd = -1;
+        this.#disarmFinalizer();
         deps.closeSync(fd);
         this.emit("close");
       }

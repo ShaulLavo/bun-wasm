@@ -2,7 +2,6 @@
 // PKCS#8 (seed form), raw and AKP JWK encodings, signing with and without a context,
 // encapsulation, structuredClone, getPublicKey and Bun's errors. Signatures and
 // encapsulations are randomized, so the fixture prints their sizes and checks.
-// The browser engine delegates WebCrypto to its host, so this fixture skips it.
 const subtle = crypto.subtle;
 const hex = (b: ArrayBuffer) => Buffer.from(b).toString("hex");
 const digest = async (b: ArrayBuffer) => hex(await subtle.digest("SHA-256", b)).slice(0, 16);

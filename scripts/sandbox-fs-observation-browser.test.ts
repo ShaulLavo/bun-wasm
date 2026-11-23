@@ -27,7 +27,8 @@ async function command(page: Page, text: string): Promise<void> {
 }
 test("Firefox: installed observation covers original root and successful Bun, shell and selected terminal Preview1 entries", async () => {
   const requested = process.env.BUN_WASM_TEST_BROWSERS;
-  if (requested && !requested.split(",").some(name => name === "chromium" || name === "firefox")) return;
+  const exactBrowsers = process.env.BUN_WASM_STORAGE_EXACT_BROWSERS === "1";
+  if (requested && !requested.split(",").some(name => name === "firefox" || (!exactBrowsers && name === "chromium"))) return;
   const lifetime = storageEvidence(process.env.BUN_WASM_STORAGE_CONTROL_PROGRESS);
   lifetimes.push(lifetime);
   const task = session("bun-wasm-fs-control-");

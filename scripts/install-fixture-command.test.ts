@@ -62,9 +62,11 @@ function workflowStep(name: string): string {
 }
 
 function ciTargets(paths: readonly string[]) {
-  const selection = workflowStep("Blocking native fixture checks").match(/INSTALL_ENGINES: \$\{\{ (.+) && '([^']+)' \|\| '([^']+)' \}\}/);
+  const selection = workflowStep("Blocking native runtime checks").match(/INSTALL_ENGINES: \$\{\{ (.+) && '([^']+)' \|\| '([^']+)' \}\}/);
   if (!selection) throw new Error("Missing explicit installer producer selection");
   expect(selection[1]).toBe("needs.selection.outputs.jsc == 'true'");
+  const fixturesSelection = workflowStep("Blocking native fixture and install checks").match(/INSTALL_ENGINES: \$\{\{ (.+) && '([^']+)' \|\| '([^']+)' \}\}/);
+  expect(fixturesSelection?.slice(1, 4)).toEqual(selection.slice(1, 4));
   for (const name of ["Start the JSC Cargo guest build", "Build the JSC Cargo guest"]) {
     expect(workflowStep(name)).toContain(`if: ${selection[1]}\n`);
   }
@@ -84,11 +86,11 @@ test("installer changes retain all nine tarball cases under the single blocking 
   expect(ciTargets(["scripts/install-tarballs.test.ts"])).toEqual(installFixtureTargets({}, "/fixture"));
   expect(selectChecks("runtime").filter(path => path === "scripts/install-tarballs.test.ts")).toHaveLength(1);
   expect(checkCommand("runtime").filter(path => path.endsWith("/install-tarballs.test.ts"))).toHaveLength(1);
-  const step = workflowStep("Blocking native fixture checks");
+  const step = workflowStep("Blocking native runtime checks");
   expect(step).not.toMatch(/(?:continue-on-error|if):/);
-  expect(step.match(/bun scripts\/test-checks.ts native/g)).toHaveLength(1);
+  expect(step.match(/bun scripts\/test-checks.ts native --only runtime/g)).toHaveLength(1);
   expect(step).not.toContain("install-tarballs.test.ts");
-  expect(workflowStep("Build the standard Browser guest once")).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh');
+  expect(workflowStep("Build the standard Browser guest once")).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=3 bash scripts/build-bun-browser.sh');
   expect(step).not.toContain("ln -s source-cache-browser");
 });
 

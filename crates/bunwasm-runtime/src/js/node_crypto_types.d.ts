@@ -20,6 +20,8 @@ declare namespace NodeCrypto {
     encodeOut(bytes: Bytes, encoding: unknown): Buffer | string;
     /** Bun's KeyObject::prepareSecretKey. */
     secretKey(key: unknown, encoding?: string): Bytes;
+    /** crypto.hash's argument checks; returns the encoding to digest with ("buffer" canonical). */
+    hashOutputEncoding(algorithm: unknown, input: unknown, outputEncoding: unknown): string;
     /** An OpenSSL error as Bun's createCryptoError builds it. */
     opensslError(packed: string, library: string, reason: string, code: string): Error;
     invalidState(message: string): Error;

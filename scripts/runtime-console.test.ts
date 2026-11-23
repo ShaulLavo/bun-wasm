@@ -13,9 +13,10 @@ const root = resolve(import.meta.dir, "..");
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-console-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const originals: Record<string, string> = {
-  // Re-pinned for console.trace dropping the stack header (docs/bun-patches/error-stack-header.md), and
-  // for group indentation, the warn level and console.dir's depth rule (docs/bun-patches/bun-console-formatter.md).
-  console: "5466759c107e020a798f90c200e8564817da61dcb8e10196b47852156612e487",
+  // Re-pinned for console.trace dropping the stack header (docs/bun-patches/error-stack-header.md).
+  // Re-pinned for console._stdout and console._stderr built on first use (docs/bun-patches/process-heap-and-stdio.md).
+  // Re-pinned for group indentation, the warn level and console.dir's depth rule (docs/bun-patches/bun-console-formatter.md).
+  console: "83b3c75341be46f256ce2cdf9003b540a2a0fc22f729211c97272bbdcc82b161",
   console_constructor: "d70e5d7de10633d8dc36e2a623d3f6253c9bcc7f785db581152bcf345beebbbf",
 };
 

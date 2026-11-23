@@ -40,7 +40,7 @@ const mutations: [string, string, string, string][] = [
   ["TLS probe root dropped", targetRoots, '  { path: "tls-probe", presence: "required",', '  { path: "tls-probe", presence: "optional",'],
   ["mtimes discarded", controller, "tar --posix --no-recursion", "tar --posix --mtime=@0 --no-recursion"],
   ["symlinks dereferenced", controller, "tar --posix --no-recursion", "tar --posix --dereference --no-recursion"],
-  ["duplicate common core", workflow, "          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh", "          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh\n          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh"],
+  ["duplicate common core", workflow, "          CARGO_BUILD_JOBS=4 bash scripts/build-bun-core.sh", "          CARGO_BUILD_JOBS=4 bash scripts/build-bun-core.sh\n          CARGO_BUILD_JOBS=4 bash scripts/build-bun-core.sh"],
   ["PR heavy save", workflow, "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-cargo-cache.outputs.cache-hit != 'true'", "steps.native-cargo-cache.outputs.cache-hit != 'true'"],
 ];
 const tests = ["scripts/ci-build-tools.test.ts", "scripts/ci-native-handoff.test.ts", "scripts/ci-jsc-prebuild.test.ts", "scripts/ci-cache-inputs.test.ts", "scripts/ci-cache-policy.test.ts", "scripts/ci-quality.test.ts", "scripts/test-web-guests.test.ts"];

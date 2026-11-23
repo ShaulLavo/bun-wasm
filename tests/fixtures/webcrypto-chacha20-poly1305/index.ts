@@ -1,6 +1,5 @@
 // WebCrypto ChaCha20-Poly1305: the RFC 8439 section 2.8.2 vector, key formats, Bun's
-// parameter and usage errors, deriveKey, key wrapping and structuredClone. The browser
-// engine delegates WebCrypto to its host, so this fixture skips it.
+// parameter and usage errors, deriveKey, key wrapping and structuredClone.
 const subtle = crypto.subtle;
 const hex = (b: ArrayBuffer) => Buffer.from(b).toString("hex");
 const report = async (label: string, run: () => Promise<unknown>) => {

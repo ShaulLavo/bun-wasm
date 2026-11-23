@@ -1,0 +1,4 @@
+before first collection true
+gc result positive true
+heapUsed is the last collection true
+retained allocation counted true true

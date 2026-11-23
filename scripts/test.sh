@@ -148,6 +148,10 @@ cleanup() {
   if [[ -n "$child_pid" ]]; then
     kill -KILL -- "-$child_pid" 2>/dev/null || kill -KILL "$child_pid" 2>/dev/null || true
     wait "$child_pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 -- "-$child_pid" 2>/dev/null || break
+      sleep 0.02
+    done
   fi
   if [[ -n "$server_pid" ]]; then
     kill "$server_pid" 2>/dev/null || true

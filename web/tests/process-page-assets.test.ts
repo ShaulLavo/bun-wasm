@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { cp, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -8,6 +8,8 @@ import { processFixture } from "./process-fixtures";
 import { automaticChecks } from "../../scripts/test-checks";
 import { joinProcessBundleProducer, prepareProcessAssets, prepareProcessBundle, processDirectoryAssets } from "./process-page-assets";
 
+// These tests build and copy process bundles. The limit only catches a hang, and a busy machine needs more than Bun's 5 seconds.
+setDefaultTimeout(120_000);
 let root: string | undefined;
 let produced: Promise<Record<string, Blob>> | undefined;
 let assets: Record<string, Blob>;

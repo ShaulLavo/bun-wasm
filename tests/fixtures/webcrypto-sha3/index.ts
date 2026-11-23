@@ -1,7 +1,6 @@
 // WebCrypto SHA3-256/384/512: digests (FIPS 202 vectors), HMAC with the hash's block size
 // as the default length, RSA-PSS and ECDSA with SHA-3, PBKDF2 and HKDF, and the JWK "alg"
-// JOSE does not define. The browser engine delegates WebCrypto to its host, so this
-// fixture skips it.
+// JOSE does not define.
 const subtle = crypto.subtle;
 const hex = (b: ArrayBuffer) => Buffer.from(b).toString("hex");
 const report = async (label: string, run: () => Promise<unknown>) => {

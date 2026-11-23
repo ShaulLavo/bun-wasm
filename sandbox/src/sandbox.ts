@@ -37,6 +37,8 @@ const HOME = "/home/user";
 const APP = `${HOME}/app`;
 const PORT = 5173;
 const DEFAULT_ENGINE: Engine = "browser";
+/** Hang cap for a stopped server's run: its outcome normally settles within milliseconds. */
+const STOP_WAIT_MS = 30_000;
 
 /** What exists once the page's runtime is built; construction can fail before it does. */
 interface Workspace {
@@ -95,6 +97,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private engineLoading?: Promise<void>;
   private firstStart = true;
   private run: Run | null = null;
+  /** Stopped runs that have neither ended nor passed their deadline. */
+  private readonly stopping = new Set<StoppingRun>();
   private server: Server | null = null;
   private preview: PreviewNavigation | null = null;
   private serverRevision = 0;
@@ -292,9 +296,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.changed();
     try {
       workspace.editor.discard();
-      const current = this.run;
       this.stopDevServer();
-      await current?.done;
+      // Includes runs a Restart already stopped: none may write while the template is replaced.
+      // The same per-run deadline applies, so a run that never ends cannot lock the page.
+      await Promise.all(Array.from(this.stopping, (run) => run.ended));
       await workspace.editor.waitForSaves();
       const replace = () => loadTemplate(workspace.fs, APP, this.project.file, true).then(() => {});
       if (this.storage) await this.storage.reset(replace);
@@ -411,6 +416,12 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const { wasm, workspace } = this;
     if (!wasm || !workspace) return;
     const { runtime, fs, browserPrograms, editor, term } = workspace;
+    // The old server must be gone before its replacement asks for the same port.
+    if (this.stopping.size) {
+      const ended = await Promise.all(Array.from(this.stopping, (run) => run.ended));
+      if (revision !== this.serverRevision) return;
+      if (ended.includes(false)) term.write(`\x1b[33mThe previous dev server did not stop within ${STOP_WAIT_MS / 1000} s; starting anyway.\x1b[0m\r\n`);
+    }
     await editor.flushAll();
     if (revision !== this.serverRevision) return;
     const visibleStart = this.firstStart ? 0 : performance.now();
@@ -496,8 +507,13 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const current = this.run;
     this.run = null;
     this.server = null;
+    if (!current) return;
     // Restart discards this Run handle, so request the force-stop action explicitly.
-    current?.kill(9);
+    current.kill(9);
+    const stopping = stoppingRun(current.done, STOP_WAIT_MS);
+    this.stopping.add(stopping);
+    // A run past its deadline is reported once and no longer delays later starts.
+    void stopping.ended.then(() => { this.stopping.delete(stopping); });
   }
 
   private async showPreview(target: Server, visibleStart: number): Promise<void> {
@@ -548,6 +564,20 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     }
   }
 
+}
+
+interface StoppingRun {
+  /** True once the run ends; false if it is still running `ms` after its stop was requested. */
+  readonly ended: Promise<boolean>;
+}
+
+/** One deadline per stopped run, from its kill: later waits only inherit what remains of it. */
+function stoppingRun(done: Promise<unknown>, ms: number): StoppingRun {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>((resolve) => { timer = setTimeout(resolve, ms, false); });
+  const settled = done.then(() => true, () => true);
+  void settled.then(() => clearTimeout(timer));
+  return { ended: Promise.race([settled, expired]) };
 }
 
 const rel = (path: string) => path.slice(APP.length + 1);

@@ -1,11 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
-import { availableParallelism } from "node:os";
-import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { availableParallelism, constants } from "node:os";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 const owners = ["runtime", "web", "quality", "package-extra", "cmake", "web-browser", "browser-guest", "native", "native-probe"] as const;
 type Owner = typeof owners[number];
-const batchOwners = new Set<Owner>(["web", "browser-guest", "web-browser"]);
+const batchOwners = new Set<Owner>(["web", "browser-guest", "web-browser", "native-probe", "runtime"]);
 export type NativeProfile = "split" | "shared-group";
 const nativeEngines = ["quickjs", "jsc", "browser", "spidermonkey"] as const;
 export type NativeEngine = typeof nativeEngines[number];
@@ -238,16 +238,27 @@ export function nativeGroups(paths: readonly string[], count: number): string[][
   return groups;
 }
 
-export function nativeEngineGroups(paths: readonly string[], options: { count: number; checks?: readonly Check[]; producers?: readonly NativeEngine[]; env?: NodeJS.ProcessEnv }) {
-  const { count, checks = discoverChecks(), producers = nativeEngines, env = process.env } = options;
+function nativeChunkCount(length: number, count: number): number {
+  if (count <= 1) return 1;
+  return Math.min(length, Math.max(count, Math.ceil(length / 16)));
+}
+
+export function nativeEngineGroups(paths: readonly string[], options: { count: number; checks?: readonly Check[]; producers?: readonly NativeEngine[]; env?: NodeJS.ProcessEnv; chunked?: boolean }) {
+  const { count, checks = discoverChecks(), producers = nativeEngines, env = process.env, chunked = false } = options;
   const selected = new Set(paths);
   const native = checks.filter(check => check.owner === "native");
   return nativeEngines.flatMap(engine => {
     if (!producers.includes(engine)) return [];
     const selectedPaths = native.filter(check => check.profile !== "shared-group" && selected.has(check.path) && (check.engines ?? ["quickjs"]).includes(engine)).map(check => check.path);
     if (selectedPaths.length === 0) return [];
-    return [{ engine, commands: nativeGroups(selectedPaths, count).map(group => checkCommand("native", group, "split", engine, env)) }];
+    const buckets = chunked ? nativeChunkCount(selectedPaths.length, count) : count;
+    return [{ engine, commands: nativeGroups(selectedPaths, buckets).map(group => checkCommand("native", group, "split", engine, env)) }];
   });
+}
+
+function bufferedClose(chunks: Buffer[], status: number | null, signal: NodeJS.Signals | null): { status: number; output: Buffer } {
+  const output = signal ? Buffer.concat(chunks.concat([Buffer.from(`\n[check runner terminated by ${signal}]\n`)])) : Buffer.concat(chunks);
+  return { status: signal ? 128 + (constants.signals[signal] ?? 1) : (status ?? 1), output };
 }
 
 function runBuffered(command: readonly string[], env: NodeJS.ProcessEnv): Promise<{ status: number; output: Buffer }> {
@@ -259,50 +270,150 @@ function runBuffered(command: readonly string[], env: NodeJS.ProcessEnv): Promis
     child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => chunks.push(chunk));
     child.on("error", reject);
-    child.on("close", (status, signal) => {
-      if (signal) reject(new Error(`Check runner terminated by ${signal}`));
-      else resolvePromise({ status: status ?? 1, output: Buffer.concat(chunks) });
-    });
+    child.on("close", (status, signal) => resolvePromise(bufferedClose(chunks, status, signal)));
   });
 }
 
-async function runNative(paths: readonly string[], profile: NativeProfile): Promise<number> {
+export function testJobs(value: string | undefined): number {
+  if (value === undefined) return 1;
+  const jobs = Number(value);
+  if (!Number.isInteger(jobs) || jobs < 1 || jobs > 4) throw new Error(`Invalid BUN_WASM_TEST_JOBS: ${value}`);
+  return jobs;
+}
+
+const heavyTestFiles = [
+  "scripts/ci-changes.test.ts",
+  "scripts/ci-check-inputs.test.ts",
+  "scripts/goals-matrix/playground.test.ts",
+  "scripts/quality-probes.test.ts",
+  "scripts/runtime-js-controls.test.ts",
+  "scripts/goals-matrix/iphone-load.test.ts",
+  "scripts/goals-matrix/iphone.test.ts",
+  "scripts/spidermonkey-filenames.test.ts",
+  "scripts/update-waffle-records.test.ts",
+  "scripts/goals-matrix/deadlines.test.ts",
+  "scripts/runtime-types.test.ts",
+  "scripts/stack-measurement.test.ts",
+  "scripts/c1/subreaper-isolation.test.ts",
+];
+
+export function shardTestFiles(paths: readonly string[], jobs: number): string[][] {
+  if (jobs <= 1 || paths.length <= 1) return [paths.slice()];
+  const heavyRank = new Map(heavyTestFiles.map((path, index) => [path, index]));
+  const keyOf = (path: string) => isAbsolute(path) ? relative(root, path) : path;
+  const heavy = paths
+    .filter(path => heavyRank.has(keyOf(path)))
+    .toSorted((a, b) => heavyRank.get(keyOf(a))! - heavyRank.get(keyOf(b))!);
+  const rest = paths.filter(path => !heavyRank.has(keyOf(path)));
+  const ordered = heavy.concat(rest);
+  const count = Math.min(jobs, ordered.length);
+  const shards = Array.from({ length: count }, (): string[] => []);
+  ordered.forEach((path, index) => shards[index % count]!.push(path));
+  return shards;
+}
+
+// Bun's 5 second default is a speed judgment on a busy machine. This only catches a hang.
+const hangCap = ["--timeout", "60000"];
+
+export async function runShardedFiles(files: readonly string[], jobs: number, env = process.env): Promise<number> {
+  if (jobs <= 1 || files.length <= 1) return runCheck(["bun", "test"].concat(hangCap, files), env);
+  const shards = shardTestFiles(files, jobs);
+  const results = await Promise.all(shards.map(shard => runBuffered(["bun", "test"].concat(hangCap, shard), env)));
+  for (const result of results) process.stdout.write(result.output);
+  return results.find(result => result.status !== 0)?.status ?? 0;
+}
+
+function warmWasmtimeCache(producers: readonly NativeEngine[], env: NodeJS.ProcessEnv): void {
+  const cacheDir = env.BUN_WASM_CACHE_DIR;
+  if (cacheDir === "off" || cacheDir === "0") return;
+  const launcher = env.BUN_WASM_LAUNCHER;
+  if (!launcher || !existsSync(launcher)) return;
+  const cores: string[] = [];
+  if (producers.includes("quickjs")) cores.push(join(root, "dist/bun.wasm"));
+  if (producers.includes("jsc")) cores.push(join(root, "dist/bun-jsc.wasm"));
+  if (producers.includes("spidermonkey") && env.SPIDERMONKEY_WASM) cores.push(env.SPIDERMONKEY_WASM);
+  const warmEnv = { ...env, RAYON_NUM_THREADS: String(Math.max(2, Math.min(4, availableParallelism()))) };
+  for (const core of cores) {
+    if (!existsSync(core)) continue;
+    const result = spawnSync(launcher, ["--wasm", core, "--", "-e", ""], { env: warmEnv, stdio: "ignore", timeout: 120_000 });
+    if (result.error || result.status !== 0) {
+      console.error(`Wasmtime cache warm-up for ${core} exited with ${result.error ? result.error.message : String(result.status ?? result.signal)}`);
+    }
+  }
+}
+
+export type NativePhase = "runtime" | "fixtures";
+
+async function runNative(paths: readonly string[], profile: NativeProfile, only?: NativePhase): Promise<number> {
   if (profile === "shared-group") return runCheck(checkCommand("native", paths.slice(), profile));
   const count = Number(process.env.BUN_WASM_CHECK_JOBS ?? availableParallelism());
   if (!Number.isInteger(count) || count < 1) throw new Error(`Invalid BUN_WASM_CHECK_JOBS: ${String(count)}`);
   const producers = nativeProducerEngines();
   const env = { ...process.env, BUN_WASM_CI_CHECKS: "1" };
-  // Each test.sh would otherwise run the whole runtime suite again, in parallel.
-  const runtime = runCheck(["bash", join(root, "scripts/check-runtime.sh")], env);
-  if (runtime !== 0) return runtime;
-  const grouped = { ...env, BUN_WASM_RUNTIME_CHECKED: "1" };
-  for (const group of nativeEngineGroups(paths, { count, producers, env: grouped })) {
-    console.log(`Native fixture engine: ${group.engine}`);
-    const results = await Promise.all(group.commands.map(command => runBuffered(command, grouped)));
-    for (const result of results) process.stdout.write(result.output);
-    const failure = results.find(result => result.status !== 0);
-    if (failure) return failure.status;
+  // Populate Wasmtime's module cache once at full core width before parallel runtime/fixture workers start.
+  if (count > 1) warmWasmtimeCache(producers, env);
+  if (only !== "fixtures") {
+    // Each test.sh would otherwise run the whole runtime suite again, in parallel.
+    const runtime = runCheck(["bash", join(root, "scripts/check-runtime.sh")], env);
+    if (runtime !== 0 || only === "runtime") return runtime;
   }
-  return 0;
+  const grouped = { ...env, BUN_WASM_RUNTIME_CHECKED: "1" };
+  const groups = nativeEngineGroups(paths, { count, producers, env: grouped, chunked: count > 1 });
+  const tasks = groups.flatMap(group => group.commands.map(command => ({ engine: group.engine, command })));
+  const outputs: ({ engine: NativeEngine; status: number; output: Buffer } | undefined)[] = Array.from({ length: tasks.length });
+  let next = 0;
+  let failure = 0;
+  async function worker(): Promise<void> {
+    while (failure === 0) {
+      const index = next++;
+      const task = tasks[index];
+      if (!task) return;
+      const result = await runBuffered(task.command, grouped);
+      outputs[index] = { engine: task.engine, ...result };
+      if (result.status !== 0) failure ||= result.status;
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(count, tasks.length) }, () => worker()));
+  let activeEngine: NativeEngine | undefined;
+  for (const item of outputs) {
+    if (!item) continue;
+    if (item.engine !== activeEngine) {
+      console.log(`Native fixture engine: ${item.engine}`);
+      activeEngine = item.engine;
+    }
+    process.stdout.write(item.output);
+  }
+  return failure;
 }
 
-async function runOwner(owner: string, profile: NativeProfile, selectedBatch?: string): Promise<void> {
+async function runOwner(owner: string, profile: NativeProfile, selectedBatch?: string, only?: NativePhase): Promise<void> {
   if (owner === "runtime" && process.env.BUN_WASM_RUNTIME_JOBS !== undefined) {
     const { runtimeJobs, runRuntimeChecks } = await import("./runtime-file-checks.ts");
     const jobs = runtimeJobs(process.env.BUN_WASM_RUNTIME_JOBS);
-    if (jobs === 2) {
+    if (jobs > 1) {
       const paths = selectedBatch === undefined ? selectChecks(owner) : selectCheckBatch(owner, selectedBatch);
-      process.exitCode = await runRuntimeChecks(paths);
+      process.exitCode = await runRuntimeChecks(paths, process.env, jobs);
       return;
     }
   }
+  const shardable = owner === "quality" || owner === "web";
+  const jobs = shardable ? testJobs(process.env.BUN_WASM_TEST_JOBS) : 1;
   const batches = selectedBatch === undefined ? checkBatches(owner, undefined, profile) : [selectCheckBatch(owner, selectedBatch, undefined, profile)];
   for (const batch of batches) {
-    const status = owner === "native" ? await runNative(batch, profile) : runCheck(checkCommand(owner, batch), process.env);
+    const status = owner === "native"
+      ? await runNative(batch, profile, only)
+      : shardable && jobs > 1
+        ? await runShardedFiles(batch.map(path => join(root, path)), jobs, process.env)
+        : runCheck(checkCommand(owner, batch), process.env);
     if (status === 0) continue;
     process.exitCode = status;
     return;
   }
+}
+
+function nativePhase(value: unknown): NativePhase {
+  if (value === "runtime" || value === "fixtures") return value;
+  throw new Error(`Invalid native phase: ${String(value)}`);
 }
 
 export function checkArguments(args: readonly string[]) {
@@ -316,15 +427,20 @@ export function checkArguments(args: readonly string[]) {
   const batchAt = remaining.indexOf("--batch");
   const batch = batchAt < 0 ? undefined : remaining[batchAt + 1];
   if (batchAt >= 0 && (!batch || batch.startsWith("--"))) throw new Error("Missing check batch");
-  const rest = batchAt < 0 ? remaining : remaining.slice(0, batchAt).concat(remaining.slice(batchAt + 2));
+  const afterBatch = batchAt < 0 ? remaining : remaining.slice(0, batchAt).concat(remaining.slice(batchAt + 2));
+  const onlyAt = afterBatch.indexOf("--only");
+  const only = onlyAt < 0 ? undefined : nativePhase(afterBatch[onlyAt + 1]);
+  if (onlyAt >= 0 && (owner !== "native" || profile !== "split")) throw new Error("Only split native checks select --only");
+  const rest = onlyAt < 0 ? afterBatch : afterBatch.slice(0, onlyAt).concat(afterBatch.slice(onlyAt + 2));
   if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--list" && rest[0] !== "--batches")) throw new Error("Unexpected check arguments");
   if (batch !== undefined && rest[0] === "--batches") throw new Error("Cannot list batches while selecting one");
-  return { owner, profile, batch, list: rest[0] === "--list", batches: rest[0] === "--batches" };
+  if (only !== undefined && (rest[0] === "--list" || rest[0] === "--batches")) throw new Error("Cannot combine --only with --list or --batches");
+  return { owner, profile, batch, ...(only === undefined ? {} : { only }), list: rest[0] === "--list", batches: rest[0] === "--batches" };
 }
 
 if (import.meta.main) {
-  const { owner, profile, batch, list, batches } = checkArguments(process.argv.slice(2));
+  const { owner, profile, batch, only, list, batches } = checkArguments(process.argv.slice(2));
   if (batches) console.log(JSON.stringify(namedCheckBatches(owner, undefined, profile).map(batch => batch.name)));
   else if (list) console.log((batch === undefined ? selectChecks(owner, undefined, profile) : selectCheckBatch(owner, batch, undefined, profile)).join("\n"));
-  else await runOwner(owner, profile, batch);
+  else await runOwner(owner, profile, batch, only);
 }

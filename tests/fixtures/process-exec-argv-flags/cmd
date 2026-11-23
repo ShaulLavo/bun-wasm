@@ -1,0 +1,4 @@
+--bun
+./index.ts
+foo
+-a

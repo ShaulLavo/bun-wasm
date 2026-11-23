@@ -29,4 +29,13 @@ promisified setTimeout value
 promisified setInterval 3 tick
 abort setTimeout rejected AbortError
 abort setImmediate rejected AbortError
+immediate exception order imm1,uncaught:boom,imm2,micro1,micro2
+immediate cancelled remainder order imm1,err:boom,micro,timer
+nextTick from microtask microtask,microtask2,tick,next-immediate
+nextTick from callback tick,microtask,next-immediate
+nextTick with native awaits awaits,tick,next-immediate
+nextTick after first await awaits,tick,next-immediate
+nextTick sync before await tick,await,next-immediate
+nextTick throwing continues tick-err,tick-after
+bun:test beforeEach immediate true
 done

@@ -43,16 +43,6 @@ run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$BRANC
 if [[ -z "$run" ]] || jq -e '.status == "completed" and .conclusion != "success"' <<< "$run" >/dev/null; then
   contexts=(
     'Code quality'
-    'JSC C/C++ prebuild'
-    'Native quality checkpoint'
-    'Rust workspace tests (QuickJS host)'
-    'Browser adapter package'
-    'Shared PIC sysroot proof'
-    'Web host'
-    'Shared process browser bundles'
-    'Processes (chromium)'
-    'Processes (firefox)'
-    'Processes (webkit)'
   )
   for context in "${contexts[@]}"; do
     gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$head" \

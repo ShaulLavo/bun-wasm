@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fs-fdatasync-and-fds",
+  "engines": ["quickjs", "jsc", "browser"]
+}

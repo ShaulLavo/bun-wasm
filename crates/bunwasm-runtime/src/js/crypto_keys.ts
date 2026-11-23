@@ -16,9 +16,8 @@ declare namespace CryptoKeys {
     algorithm: Algorithm;
     key: KeyMaterial;
     type: KeyType;
-    nativeKey?: ManagedCryptoKey;
   };
-  type Record = Pick<NativeRecord, "algorithm" | "key" | "type" | "nativeKey">;
+  type Record = Pick<NativeRecord, "algorithm" | "key" | "type">;
   type BackendResult = { key?: KeyMaterial; data?: string; verified?: boolean };
   interface Crypto extends BunWasm.CryptoHostBridge {
     record(key: CryptoKey): NativeRecord;
@@ -35,10 +34,24 @@ declare namespace CryptoKeys {
   type WritableConstructor = new(options?: unknown) => Writable;
   interface Internal extends Pick<BunWasm.Internal, "realTimers"> {
     crypto: Crypto;
-    native: BunWasm.Native & { randomBytes(size: number): Uint8Array };
+    native: BunWasm.Native & {
+      randomBytes(size: number): Uint8Array;
+      nodeCrypto: {
+        // node_rsa.rs: op 0 publicEncrypt, 1 privateDecrypt, 2 privateEncrypt, 3 publicDecrypt.
+        rsaCipher(op: number, jwk: string, padding: number, oaepHash: string | undefined, label: Uint8Array, input: Uint8Array): Uint8Array;
+        keyEncoding(mode: number, data: Uint8Array, password: Uint8Array, cipher: string): Uint8Array;
+        // node_cipher.rs: Bun's getCipherByName, undefined for an unknown cipher.
+        cipherInfo(name: string): unknown;
+      };
+    };
     nodeCryptoIsKeyObject(value: unknown): boolean;
     builtin(name: "node:stream"): { Writable: WritableConstructor };
     require(name: "node_crypto_args"): Args;
+    // node_digest.ts: Bun's digest names onto BoringSSL's short names.
+    require(name: "node_digest"): { hmacName(name: string): string | undefined };
+    // process_warning.ts: process.emitWarning's implementation, which a user cannot replace.
+    require(name: "process_warning"): { emitWarning(process: object, warning: string, type: string, code: string): void };
+    require(name: "process"): object;
   }
   // The part of node_crypto_args.ts this adapter uses.
   type Args = {
@@ -46,6 +59,9 @@ declare namespace CryptoKeys {
     invalidArgValue(name: string, value: unknown, reason?: string): TypeError;
     operationFailed(message: string): Error;
     opensslError(packed: string, library: string, reason: string, code: string): Error;
+    validateInt32(value: unknown, name: string, min?: number, max?: number): number;
+    validateString(value: unknown, name: string): void;
+    validateObject(value: unknown, name: string): void;
   };
   type ExportType = "pkcs8" | "spki" | "pkcs1" | "sec1";
   type ExportOptions = {
@@ -76,11 +92,15 @@ declare namespace CryptoKeys {
     encoding?: string;
   };
   type KeyInput = KeyOptions | Input | KeyObject | CryptoKey;
-  type GeneratePairType = "rsa" | "ec" | "ed25519" | "x25519";
+  type GeneratePairType = "rsa" | "rsa-pss" | "ec" | "ed25519" | "x25519";
   type GeneratePairOptions = {
     modulusLength?: number;
     publicExponent?: number;
     hashAlgorithm?: string;
+    mgf1HashAlgorithm?: unknown;
+    hash?: unknown;
+    mgf1Hash?: unknown;
+    saltLength?: unknown;
     namedCurve?: string;
     privateKeyEncoding?: ExportOptions;
     publicKeyEncoding?: ExportOptions;
@@ -323,22 +343,13 @@ declare namespace CryptoKeys {
       }
       toCryptoKey(algorithm: BunWasm.CryptoAlgorithm, extractable: boolean, keyUsages: KeyUsage[]): CryptoKey {
         const r = nodeRecord(this);
-        const converted = c.importKey(
+        return c.importKey(
           r.type === "secret" ? "raw" : "jwk",
           r.type === "secret" ? c.decode(r.key.k) : { ...r.key },
           algorithm,
           extractable,
           keyUsages,
         );
-        if (!r.nativeKey) return converted;
-        const requested = c.record(converted), original = r.nativeKey;
-        const a = requested.algorithm, b = original.algorithm;
-        const sameAlgorithm = (["name", "namedCurve", "length", "modulusLength"] satisfies (keyof CryptoKeys.Algorithm)[])
-          .every(field => a[field] === b[field]) && a.hash?.name === b.hash?.name;
-        const samePolicy = requested.extractable === original.extractable &&
-          requested.usages.length === original.usages.length &&
-          requested.usages.every(usage => original.usages.includes(usage));
-        return sameAlgorithm && samePolicy ? original : converted;
       }
       get [Symbol.toStringTag]() {
         return "KeyObject";
@@ -457,74 +468,98 @@ declare namespace CryptoKeys {
         throw Object.assign(new RangeError("Passphrase is too long"), {
           code: "ERR_OUT_OF_RANGE",
         });
+      let encoded: Uint8Array;
       try {
-        return Buffer.from(
-          c.decode(
-            c.backend(
-              "keyEncoding",
-              {},
-              { mode, data: c.encode(data), password: c.encode(pass), cipher },
-            ).data,
-          ),
-        );
+        encoded = internal.native.nodeCrypto.keyEncoding(mode, inputBytes(data), pass, cipher);
       } catch (error) {
-        throw Object.assign(
-          new Error(
-            mode <= 1
-              ? "Failed to decrypt private key"
-              : "Failed to encrypt private key",
-          ),
-          {
-            code:
-              mode <= 1 ? "ERR_OSSL_BAD_DECRYPT" : "ERR_CRYPTO_UNKNOWN_CIPHER",
-            cause: error,
-          },
-        );
+        // Reading a key reports BoringSSL's error, as Bun does (BAD_DECRYPT for a wrong
+        // passphrase).
+        if (mode <= 1) throw error;
+        throw Object.assign(new Error("Failed to encrypt private key"), { code: "ERR_CRYPTO_UNKNOWN_CIPHER", cause: error });
       }
+      return Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength);
     }
-    function readPem(key: unknown, password?: CryptoKeys.Input): CryptoKeys.PemData {
-      const pem = typeof key === "string" ? key : Buffer.from(key).toString();
-      if (
-        pem.includes("ENCRYPTED") ||
-        (password !== undefined && pem.includes("PRIVATE KEY"))
-      ) {
-        if (password === undefined && pem.includes("ENCRYPTED"))
-          throw Object.assign(
-            new Error("Passphrase required for encrypted key"),
-            { code: "ERR_MISSING_PASSPHRASE" },
-          );
-        return {
-          format: "pkcs8",
-          bytes: keyEncoding(0, Buffer.from(pem), password),
-          private: true,
-        };
-      }
-      const match =
-        /-----BEGIN (RSA PRIVATE KEY|RSA PUBLIC KEY|EC PRIVATE KEY|PRIVATE KEY|PUBLIC KEY)-----([\s\S]*?)-----END \1-----/.exec(
-          pem,
-        );
-      if (!match) throw error("Invalid PEM key");
-      const format =
-        match[1] === "RSA PRIVATE KEY" || match[1] === "RSA PUBLIC KEY"
-          ? "pkcs1"
-          : match[1] === "EC PRIVATE KEY"
-            ? "sec1"
-            : match[1] === "PRIVATE KEY"
-              ? "pkcs8"
-              : "spki";
-      return {
-        format,
-        bytes: Buffer.from(match[2].replace(/\s/g, ""), "base64"),
-        private: match[1].endsWith("PRIVATE KEY"),
-      };
+    // The PEM blocks of a key input, in order: label, base64 body (with any RFC 1421 headers)
+    // and the whole block text.
+    function pemBlocks(key: unknown): { label: string; body: string; text: string }[] {
+      const bytes = ArrayBuffer.isView(key) || key instanceof ArrayBuffer ? inputBytes(key) : key;
+      const pem = typeof key === "string" ? key : Buffer.from(bytes).toString();
+      return Array.from(pem.matchAll(/-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----/g), match => ({
+        label: match[1],
+        body: match[2],
+        text: match[0],
+      }));
+    }
+    const pemBase64 = (body: string) => Buffer.from(body.replace(/\s/g, ""), "base64");
+    const privateLabels: Partial<Record<string, CryptoKeys.ExportType>> = {
+      "PRIVATE KEY": "pkcs8",
+      "ENCRYPTED PRIVATE KEY": "pkcs8",
+      "RSA PRIVATE KEY": "pkcs1",
+      "EC PRIVATE KEY": "sec1",
+    };
+    const noStartLine = () => args().opensslError("0900006e", "PEM routines", "NO_START_LINE", "ERR_OSSL_PEM_NO_START_LINE");
+    // BoringSSL's PEM_read_bio_PrivateKey: the first private key block, decrypted with the
+    // passphrase when it is encrypted.
+    function readPrivatePem(blocks: ReturnType<typeof pemBlocks>, password?: CryptoKeys.Input): CryptoKeys.PemData {
+      const block = blocks.find(candidate => privateLabels[candidate.label] !== undefined);
+      if (!block) throw noStartLine();
+      const encrypted = block.label === "ENCRYPTED PRIVATE KEY" || /^Proc-Type: *4, *ENCRYPTED/m.test(block.body);
+      if (!encrypted) return { format: privateLabels[block.label]!, bytes: pemBase64(block.body), private: true };
+      if (password === undefined)
+        throw Object.assign(new TypeError("Passphrase required for encrypted key"), { code: "ERR_MISSING_PASSPHRASE" });
+      return { format: "pkcs8", bytes: keyEncoding(0, Buffer.from(block.text), password), private: true };
+    }
+    // ncrypto's ParsePublicKeyPEM tries SubjectPublicKeyInfo, then PKCS#1 RSAPublicKey, then a
+    // certificate's subject public key, each anywhere in the input; a public operation then
+    // falls back to a private key. A private operation reads only private keys.
+    function readPem(key: unknown, password: CryptoKeys.Input | undefined, wantPrivate: boolean): CryptoKeys.PemData {
+      const blocks = pemBlocks(key);
+      if (wantPrivate) return readPrivatePem(blocks, password);
+      const find = (label: string) => blocks.find(block => block.label === label);
+      const spki = find("PUBLIC KEY");
+      if (spki) return { format: "spki", bytes: pemBase64(spki.body), private: false };
+      const pkcs1 = find("RSA PUBLIC KEY");
+      if (pkcs1) return { format: "pkcs1", bytes: pemBase64(pkcs1.body), private: false };
+      const certificate = find("CERTIFICATE");
+      if (certificate)
+        return { format: "spki", bytes: Buffer.from(internal.native.x509("publicKey", pemBase64(certificate.body))), private: false };
+      return readPrivatePem(blocks, password);
+    }
+    const keyObjectType = (type: string, expected: string) =>
+      Object.assign(new TypeError(`Invalid key object type ${type}, expected ${expected}.`), { code: "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE" });
+    // ncrypto's IsRSAPrivateKey: an RSAPrivateKey SEQUENCE opens with the one-byte version
+    // INTEGER 0 or 1, an RSAPublicKey with the modulus.
+    function pkcs1Private(der: Uint8Array): boolean {
+      if (der.length < 2 || der[0] !== 0x30) return false;
+      const long = der[1] & 0x80 ? der[1] & 0x7f : 0;
+      if (long > 4) return false;
+      const offset = 2 + long;
+      let length = long ? 0 : der[1];
+      for (let i = 2; i < offset; i++) length = length * 256 + der[i];
+      return length >= 3 && offset + 3 <= der.length && der[offset] === 2 && der[offset + 1] === 1 && (der[offset + 2] & 0xfe) === 0;
+    }
+    // Node's prepareAsymmetricKey decodes a string key with options.encoding.
+    function keyMaterial(options: CryptoKeys.KeyOptions): CryptoKeys.KeyOptions["key"] {
+      const { key, encoding } = options;
+      if (typeof key !== "string" || options.format === "jwk" || encoding === undefined) return key;
+      return cipherBytes(key, "key", encoding);
+    }
+    // DER key bytes: encrypted PKCS#8 is decrypted first, and a PKCS#1 key read as a public
+    // key may hold a private key.
+    function readDer(key: CryptoKeys.Input, options: CryptoKeys.KeyOptions, format: CryptoKeys.ExportType, wantPrivate: boolean): CryptoKeys.PemData {
+      const bytes = inputBytes(key);
+      if (options.passphrase !== undefined && (options.type === undefined || options.type === "pkcs8"))
+        return { format: "pkcs8", bytes: keyEncoding(1, bytes, options.passphrase), private: true };
+      const isPrivate = wantPrivate || (format === "pkcs1" && pkcs1Private(bytes));
+      return { format, bytes: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), private: isPrivate };
     }
     function importAsymmetric(input: CryptoKeys.KeyInput, wantPrivate: boolean): KeyObject {
-      const options = parseInput(input),
-        key = options.key;
+      const options = parseInput(input);
+      const key = keyMaterial(options);
       if (key instanceof KeyObject || c.isKey(key)) {
         const r = key instanceof KeyObject ? nodeRecord(key) : c.record(key);
         if (r.type === "secret" || (wantPrivate && r.type !== "private"))
-          throw error("Invalid key object type");
+          throw keyObjectType(r.type, wantPrivate ? "private" : "private or public");
         if (wantPrivate) return make({ ...r });
         return publicPart(r);
       }
@@ -535,20 +570,15 @@ declare namespace CryptoKeys {
         isPrivateEncoding = wantPrivate;
       if (jwk) bytes = key as JsonWebKey;
       else if (typeof key === "string" || options.format !== "der") {
-        const decoded = readPem(key, options.passphrase);
+        const decoded = readPem(key, options.passphrase, wantPrivate);
         format = decoded.format;
         bytes = decoded.bytes;
         isPrivateEncoding = decoded.private;
       } else {
-        bytes = inputBytes(key as CryptoKeys.Input);
-        if (
-          options.passphrase !== undefined &&
-          (options.type === undefined || options.type === "pkcs8")
-        ) {
-          bytes = keyEncoding(1, bytes, options.passphrase);
-          format = "pkcs8";
-          isPrivateEncoding = true;
-        }
+        const decoded = readDer(key as CryptoKeys.Input, options, format, wantPrivate);
+        format = decoded.format;
+        bytes = decoded.bytes;
+        isPrivateEncoding = decoded.private;
       }
       const attempts = [
         { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
@@ -614,11 +644,7 @@ declare namespace CryptoKeys {
           : c.isKey(key)
             ? c.record(key).type
             : undefined;
-      if (type === "public")
-        throw Object.assign(
-          new TypeError("Invalid key object type public, expected private."),
-          { code: "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE" },
-        );
+      if (type === "public" || type === "secret") throw keyObjectType(type, "private");
       return importAsymmetric(options, false);
     }
     function generateKeySync(type: "hmac" | "aes", options: { length: number }): KeyObject {
@@ -658,101 +684,180 @@ declare namespace CryptoKeys {
         callback(null, key);
       });
     }
-    // generateKeyPair's raw encodings, as Bun's parseKeyFormatAndType checks them.
-    function checkRawEncoding(encoding: CryptoKeys.ExportOptions | undefined, isPublic: boolean): void {
-      const format = String(encoding?.format);
-      if (!rawFormats.includes(format)) return;
-      const name = `options.${isPublic ? "public" : "private"}KeyEncoding`;
-      if (isPublic !== (format === "raw-public")) throw args().invalidArgValue(`${name}.format`, encoding!.format);
-      const type: unknown = encoding!.type;
-      if (type !== undefined && (!isPublic || (type !== "compressed" && type !== "uncompressed")))
-        throw args().invalidArgValue(`${name}.type`, type);
-      if (!isPublic && (encoding!.cipher !== undefined || encoding!.passphrase !== undefined))
+    type PairJob = () => CryptoKeys.KeyPair;
+    const encodingFormats = ["pem", "der", "jwk", "raw-public", "raw-private", "raw-seed"];
+    // Bun's parseKeyEncoding (CryptoUtil.cpp) for one of generateKeyPair's output encodings:
+    // a format, a type that fits the key type and the side, and encryption on the private side.
+    function checkPairEncoding(keyType: string, encoding: unknown, side: "public" | "private"): void {
+      if (encoding === undefined || encoding === null) return;
+      const name = `options.${side}KeyEncoding`;
+      if (typeof encoding !== "object" && typeof encoding !== "function") throw args().invalidArgValue(name, encoding);
+      const format: unknown = Reflect.get(encoding, "format");
+      const type: unknown = Reflect.get(encoding, "type");
+      if (typeof format !== "string" || !encodingFormats.includes(format)) throw args().invalidArgValue(`${name}.format`, format);
+      checkPairEncodingType(keyType, format, type, side === "public", name);
+      if (side === "private") checkPairEncryption(encoding, format, type, name);
+    }
+    // Bun's parseKeyFormatAndType and parseKeyType.
+    function checkPairEncodingType(keyType: string, format: string, type: unknown, isPublic: boolean, name: string): void {
+      const invalid = (option: string, value: unknown) => args().invalidArgValue(`${name}.${option}`, value);
+      if (format === "raw-public" || format === "raw-private" || format === "raw-seed") {
+        if (isPublic !== (format === "raw-public")) throw invalid("format", format);
+        if (type !== undefined && (!isPublic || (type !== "compressed" && type !== "uncompressed"))) throw invalid("type", type);
+        return;
+      }
+      if (type === undefined && format === "jwk") return;
+      const onlyFor = (expected: string, family: string) => {
+        if (keyType !== expected) throw incompatible(`The selected key encoding ${String(type)} can only be used for ${family} keys.`);
+      };
+      if (type === "pkcs1") return onlyFor("rsa", "RSA");
+      if (type === "spki" && isPublic) return;
+      if (type === "pkcs8" && !isPublic) return;
+      if (type === "sec1" && !isPublic) return onlyFor("ec", "EC");
+      throw invalid("type", type);
+    }
+    // Bun's parseKeyEncoding for an output private key: a string cipher BoringSSL knows, with a
+    // string or buffer passphrase, and no encryption for raw formats or DER PKCS#1 and SEC1.
+    function checkPairEncryption(encoding: object, format: string, type: unknown, name: string): void {
+      const cipher: unknown = Reflect.get(encoding, "cipher");
+      const passphrase: unknown = Reflect.get(encoding, "passphrase");
+      Reflect.get(encoding, "encoding");
+      if (rawFormats.includes(format) && (cipher != null || passphrase !== undefined))
         throw incompatible("The selected key encoding raw format does not support encryption.");
+      if (cipher == null) {
+        if (passphrase !== undefined) throw args().invalidArgValue(`${name}.cipher`, cipher);
+        return;
+      }
+      if (typeof cipher !== "string") throw args().invalidArgValue(`${name}.cipher`, cipher);
+      if (format === "der" && (type === "pkcs1" || type === "sec1"))
+        throw incompatible(`The selected key encoding ${type} does not support encryption.`);
+      if (typeof passphrase !== "string" && !ArrayBuffer.isView(passphrase) && !(passphrase instanceof ArrayBuffer))
+        throw args().invalidArgValue(`${name}.passphrase`, passphrase);
+      if (internal.native.nodeCrypto.cipherInfo(cipher) === undefined)
+        throw Object.assign(new Error("Unknown cipher"), { code: "ERR_CRYPTO_UNKNOWN_CIPHER" });
+    }
+    // Bun's RsaKeyPairJobCtx::fromJS (CryptoGenRsaKeyPair.cpp): the options object, the
+    // required uint32 modulus length and the optional uint32 exponent, then for "rsa-pss" its
+    // hash options.
+    function rsaKeyPair(type: "rsa" | "rsa-pss", options: unknown): PairJob {
+      args().validateObject(options, "options");
+      const o = options as CryptoKeys.GeneratePairOptions;
+      const modulusLength = args().validateInt32(o.modulusLength, "options.modulusLength", 0, 0xffffffff);
+      const exponentValue: unknown = o.publicExponent;
+      const exponent = exponentValue == null ? 65537 : args().validateInt32(exponentValue, "options.publicExponent", 0, 0xffffffff);
+      if (exponent < 3 || exponent % 2 === 0)
+        throw Object.assign(new RangeError("publicExponent is invalid"), { code: "ERR_OUT_OF_RANGE" });
+      if (type === "rsa-pss") {
+        checkRsaPssOptions(o);
+        // Bun's BoringSSL refuses EVP_PKEY_RSA_PSS key generation, and so does this one.
+        return () => {
+          throw args().opensslError("06000080", "public key routines", "UNSUPPORTED_ALGORITHM", "ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM");
+        };
+      }
+      const bytes = [exponent >>> 24, (exponent >>> 16) & 255, (exponent >>> 8) & 255, exponent & 255];
+      return pairJob({ name: "RSASSA-PKCS1-v1_5", modulusLength, publicExponent: new Uint8Array(bytes), hash: "SHA-256" }, o);
+    }
+    // The "rsa-pss" hash options: every option is read, then checked; each deprecated name
+    // warns (DEP0154) through the runtime's own warning path before its check, so an error
+    // thrown while warning propagates, and the deprecated name then wins. Bun's conflict check
+    // compares the wrong views and never fires. Digests use ncrypto's Digest::FromName.
+    function checkRsaPssOptions(options: CryptoKeys.GeneratePairOptions): void {
+      const { hash: oldHash, mgf1Hash: oldMgf1Hash, hashAlgorithm, mgf1HashAlgorithm, saltLength } = options;
+      if (saltLength !== undefined) args().validateInt32(saltLength, "options.saltLength", 0);
+      if (hashAlgorithm !== undefined) args().validateString(hashAlgorithm, "options.hashAlgorithm");
+      if (mgf1HashAlgorithm !== undefined) args().validateString(mgf1HashAlgorithm, "options.mgf1HashAlgorithm");
+      const deprecated = (name: string, value: unknown, current: unknown): unknown => {
+        if (value === undefined) return current;
+        const warning = `"options.${name}" is deprecated, use "options.${name}Algorithm" instead.`;
+        internal.require("process_warning").emitWarning(internal.require("process"), warning, "DeprecationWarning", "DEP0154");
+        args().validateString(value, `options.${name}`);
+        return value;
+      };
+      const md = deprecated("hash", oldHash, hashAlgorithm);
+      const mgf1Md = deprecated("mgf1Hash", oldMgf1Hash, mgf1HashAlgorithm);
+      const known = (name: unknown) => internal.require("node_digest").hmacName(String(name)) !== undefined;
+      if (md !== undefined && !known(md))
+        throw Object.assign(new TypeError(`Invalid digest: ${String(md)}`), { code: "ERR_CRYPTO_INVALID_DIGEST" });
+      if (mgf1Md !== undefined && !known(mgf1Md))
+        throw Object.assign(new TypeError(`Invalid MGF1 digest: ${String(mgf1Md)}`), { code: "ERR_CRYPTO_INVALID_DIGEST" });
+    }
+    // Bun's EcKeyPairJobCtx::fromJS: the options object and a string curve Bun knows. A curve
+    // Bun builds keys on that BoringSSL here lacks (P-224, secp256k1) fails in the job; Bun
+    // generates such a key and then fails a JWK export of a P-224 key, so that error comes first.
+    function ecKeyPair(options: unknown): PairJob {
+      args().validateObject(options, "options");
+      const o = options as CryptoKeys.GeneratePairOptions;
+      const named: unknown = o.namedCurve;
+      args().validateString(named, "options.namedCurve");
+      const curve = webCurve(named as string);
+      if (curve !== undefined) return pairJob({ name: "ECDSA", namedCurve: curve }, o);
+      if (!knownCurve(named as string)) throw invalidCurve();
+      const jwk = o.publicKeyEncoding?.format === "jwk" || o.privateKeyEncoding?.format === "jwk";
+      const failure = jwk && (named === "P-224" || named === "secp224r1")
+        ? Object.assign(new Error("Unsupported JWK EC curve: secp224r1."), { code: "ERR_CRYPTO_JWK_UNSUPPORTED_CURVE" })
+        : args().opensslError("0f00007b", "elliptic curve routines", "UNKNOWN_GROUP", "ERR_OSSL_EC_UNKNOWN_GROUP");
+      return () => {
+        throw failure;
+      };
+    }
+    // Generation and export, the part Bun runs as a job.
+    function pairJob(a: BunWasm.CryptoParameters, options: CryptoKeys.GeneratePairOptions | undefined): PairJob {
+      return () => {
+        const pair = c.generate(a, true, privateUsages(a).concat(publicUsages(a)));
+        const privateKey = fromCrypto(pair.privateKey), publicKey = fromCrypto(pair.publicKey);
+        return {
+          privateKey: options?.privateKeyEncoding ? privateKey.export(options.privateKeyEncoding) : privateKey,
+          publicKey: options?.publicKeyEncoding ? publicKey.export(options.publicKeyEncoding) : publicKey,
+        };
+      };
+    }
+    // Bun's jsGenerateKeyPair and jsGenerateKeyPairSync (CryptoGenKeyPair.cpp): the type, both
+    // encodings, the options object, then the key type's own options, all before any work.
+    function prepareKeyPair(type: unknown, options: unknown): PairJob {
+      args().validateString(type, "type");
+      const holder = options !== null && (typeof options === "object" || typeof options === "function") ? options : undefined;
+      const publicEncoding: unknown = holder && Reflect.get(holder, "publicKeyEncoding");
+      const privateEncoding: unknown = holder && Reflect.get(holder, "privateKeyEncoding");
+      checkPairEncoding(type as string, publicEncoding, "public");
+      checkPairEncoding(type as string, privateEncoding, "private");
+      if (options !== undefined) args().validateObject(options, "options");
+      if (type === "rsa" || type === "rsa-pss") return rsaKeyPair(type, options);
+      if (type === "ec") return ecKeyPair(options);
+      if (type === "ed25519" || type === "x25519")
+        return pairJob({ name: type === "ed25519" ? "Ed25519" : "X25519" }, options as CryptoKeys.GeneratePairOptions | undefined);
+      throw args().invalidArgValue("type", type, "must be a supported key type");
     }
     function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options?: CryptoKeys.GeneratePairOptions & { privateKeyEncoding?: undefined; publicKeyEncoding?: undefined }): CryptoKeys.KeyPair<KeyObject>;
     function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options?: CryptoKeys.GeneratePairOptions): CryptoKeys.KeyPair;
-    function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options: CryptoKeys.GeneratePairOptions = {}): CryptoKeys.KeyPair {
-      checkRawEncoding(options.publicKeyEncoding, true);
-      checkRawEncoding(options.privateKeyEncoding, false);
-      let a: BunWasm.CryptoParameters;
-      const exponent = options.publicExponent ?? 65537;
-      if (
-        type === "rsa" &&
-        (!Number.isInteger(exponent) ||
-          exponent < 3 ||
-          exponent > 0xffffffff ||
-          exponent % 2 === 0)
-      )
-        throw Object.assign(new RangeError("Invalid publicExponent"), {
-          code: "ERR_OUT_OF_RANGE",
-        });
-      if (type === "rsa")
-        a = {
-          name: "RSASSA-PKCS1-v1_5",
-          modulusLength: options.modulusLength,
-          publicExponent: new Uint8Array([
-            exponent >>> 24,
-            (exponent >>> 16) & 255,
-            (exponent >>> 8) & 255,
-            exponent & 255,
-          ]),
-          hash: options.hashAlgorithm || "SHA-256",
-        };
-      else if (type === "ec") {
-        const named = options.namedCurve;
-        const curve = typeof named === "string" ? webCurve(named) : undefined;
-        if (typeof named === "string" && curve === undefined)
-          throw knownCurve(named)
-            ? args().opensslError("0f00007b", "elliptic curve routines", "UNKNOWN_GROUP", "ERR_OSSL_EC_UNKNOWN_GROUP")
-            : invalidCurve();
-        a = { name: "ECDSA", namedCurve: curve ?? named };
-      }
-      else if (type === "ed25519" || type === "x25519")
-        a = { name: type === "ed25519" ? "Ed25519" : "X25519" };
-      else
-        throw Object.assign(new TypeError(`Unsupported key type ${type}`), {
-          code: "ERR_INVALID_ARG_VALUE",
-        });
-      const pair = c.generate(
-        a,
-        true,
-        privateUsages(a).concat(publicUsages(a)),
-      );
-      const privateKey = fromCrypto(pair.privateKey),
-        publicKey = fromCrypto(pair.publicKey);
-      return {
-        privateKey: options.privateKeyEncoding
-          ? privateKey.export(options.privateKeyEncoding)
-          : privateKey,
-        publicKey: options.publicKeyEncoding
-          ? publicKey.export(options.publicKeyEncoding)
-          : publicKey,
-      };
+    function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options?: CryptoKeys.GeneratePairOptions): CryptoKeys.KeyPair {
+      return prepareKeyPair(type, options)();
     }
     function generateKeyPair(type: CryptoKeys.GeneratePairType, callback: CryptoKeys.GeneratePairCallback): void;
     function generateKeyPair(type: CryptoKeys.GeneratePairType, options: CryptoKeys.GeneratePairOptions | undefined, callback: CryptoKeys.GeneratePairCallback): void;
     function generateKeyPair(type: CryptoKeys.GeneratePairType, options: CryptoKeys.GeneratePairOptions | CryptoKeys.GeneratePairCallback | undefined, callback?: CryptoKeys.GeneratePairCallback): void {
       if (typeof options === "function") {
         callback = options;
-        options = {};
+        options = undefined;
       }
-      if (typeof callback !== "function")
-        throw error("Callback must be a function");
+      if (typeof callback !== "function") throw args().argType("callback", "function", callback);
+      const done = callback;
+      // Argument errors throw here; generation and export errors reach the callback.
+      const job = prepareKeyPair(type, options);
       internal.realTimers.setImmediate(() => {
         let pair: CryptoKeys.KeyPair;
         try {
-          pair = generateKeyPairSync(type, options);
+          pair = job();
         } catch (e) {
-          (callback as (error: Error) => unknown)(e as Error);
+          (done as (error: Error) => unknown)(e as Error);
           return;
         }
-        callback(null, pair.publicKey, pair.privateKey);
+        done(null, pair.publicKey, pair.privateKey);
       });
     }
     function signVerify(verify: false, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature?: undefined): CryptoKeys.Buffer;
-    function signVerify(verify: true, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature: CryptoKeys.Input): boolean;
-    function signVerify(verify: boolean, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature?: CryptoKeys.Input): CryptoKeys.Buffer | boolean {
+    function signVerify(verify: true, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature: string): boolean;
+    // A signature arrives already encoded: verify() reads its bytes before the key's options.
+    function signVerify(verify: boolean, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature?: string): CryptoKeys.Buffer | boolean {
       const options = parseInput(input);
       // Node's getIntOption: an int32 or undefined.
       for (const name of ["padding", "saltLength"] as const) {
@@ -803,37 +908,56 @@ declare namespace CryptoKeys {
       const result = c.backend(verify ? "verify" : "sign", a, {
         key: r.key,
         data: c.encode(inputBytes(data)),
-        ...(verify ? { signature: c.encode(inputBytes(signature!)) } : {}),
+        ...(verify ? { signature } : {}),
       });
       return verify ? result.verified! : Buffer.from(c.decode(result.data));
     }
-    function rsaCrypt(decrypt: boolean, inputKey: CryptoKeys.KeyInput, data: CryptoKeys.Input): CryptoKeys.Buffer {
-      // Bun's JSCipher reads padding, oaepHash, encoding and oaepLabel before the key, and
-      // copies the label: parsing the key runs option getters that may detach its buffer.
-      const given = isOptions(inputKey) ? inputKey : undefined;
-      const padding = given?.padding;
-      const oaepHash = given?.oaepHash;
-      const encoding = given?.encoding;
-      const oaepLabel = given?.oaepLabel;
-      const label = oaepLabel === undefined ? "" : c.encode(inputBytes(oaepLabel, encoding));
-      if (padding !== undefined && padding !== constants.RSA_PKCS1_OAEP_PADDING)
-        throw Object.assign(
-          new Error("Only RSA-OAEP encryption is implemented"),
-          { code: "ERR_NOT_SUPPORTED_IN_WASM" },
-        );
-      const digest = hash(oaepHash || "sha1");
-      const key = importAsymmetric(parseInput(inputKey), decrypt);
-      const r = nodeRecord(key);
-      if (r.key.kty !== "RSA") throw error("Expected an RSA key");
-      const algorithm = { name: "RSA-OAEP", hash: { name: digest }, label };
-      return Buffer.from(
-        c.decode(
-          c.backend(decrypt ? "decrypt" : "encrypt", algorithm, {
-            key: r.key,
-            data: c.encode(inputBytes(data)),
-          }).data,
-        ),
-      );
+    // Bun's getArrayBufferOrView2: a string in the given encoding (UTF-8 when it is unknown
+    // or "buffer"), an ArrayBuffer or a view.
+    function cipherBytes(value: unknown, name: string, encoding: unknown): Uint8Array {
+      if (typeof value === "string") {
+        const known = typeof encoding === "string" && encoding !== "buffer" && Buffer.isEncoding(encoding);
+        return Buffer.from(value, known ? encoding : "utf8");
+      }
+      if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return inputBytes(value);
+      throw args().argType(name, "string or an instance of ArrayBuffer, Buffer, TypedArray, or DataView", value);
+    }
+    // publicEncrypt (op 0), privateDecrypt (1), privateEncrypt (2) and publicDecrypt (3), in the
+    // order of Bun's rsaFunction (JSCipher.cpp): padding, oaepHash, encoding and oaepLabel, then
+    // the key, then the data. The label is copied: parsing the key runs option getters that may
+    // detach its buffer.
+    function rsaCipher(op: number, inputKey: CryptoKeys.KeyInput, data: unknown): CryptoKeys.Buffer {
+      const options = inputKey !== null && typeof inputKey === "object" ? (inputKey as CryptoKeys.KeyOptions) : undefined;
+      let padding = op <= 1 ? constants.RSA_PKCS1_OAEP_PADDING : constants.RSA_PKCS1_PADDING;
+      let oaepHash: string | undefined;
+      let encoding: unknown;
+      let label = new Uint8Array(0);
+      if (options) {
+        const paddingValue: unknown = options.padding;
+        // JSValue::toInt32: ToNumber, which throws for a BigInt or a Symbol, then int32.
+        if (paddingValue !== undefined) padding = +(paddingValue as number) | 0;
+        const hashValue: unknown = options.oaepHash;
+        if (hashValue !== undefined) {
+          if (typeof hashValue !== "string") throw args().argType("options.oaepHash", "string", hashValue);
+          // ncrypto's Digest::FromName, which createHmac shares.
+          oaepHash = internal.require("node_digest").hmacName(hashValue);
+          if (oaepHash === undefined)
+            throw Object.assign(new Error("Invalid digest used"), { code: "ERR_OSSL_EVP_INVALID_DIGEST" });
+        }
+        encoding = options.encoding;
+        const labelValue: unknown = options.oaepLabel;
+        if (labelValue !== undefined) label = Uint8Array.from(cipherBytes(labelValue, "options.oaepLabel", encoding));
+      }
+      const r = nodeRecord(importAsymmetric(parseInput(inputKey), op === 1 || op === 2));
+      const bytes = cipherBytes(data, "buffer", encoding);
+      if (r.key.kty !== "RSA")
+        throw args().opensslError("0600007d", "public key routines", "OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE", "ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE");
+      if (op === 1 && padding === constants.RSA_PKCS1_PADDING)
+        throw Object.assign(new TypeError("RSA_PKCS1_PADDING is no longer supported for private decryption"), {
+          code: "ERR_INVALID_ARG_VALUE",
+        });
+      const result = internal.native.nodeCrypto.rsaCipher(op, JSON.stringify(r.key), padding, oaepHash, label, bytes);
+      return Buffer.from(result.buffer, result.byteOffset, result.byteLength);
     }
     function sign(algorithm: string | null | undefined, data: CryptoKeys.Input, key: CryptoKeys.KeyInput, callback?: null): CryptoKeys.Buffer;
     function sign(algorithm: string | null | undefined, data: CryptoKeys.Input, key: CryptoKeys.KeyInput, callback: CryptoKeys.SignCallback): void;
@@ -857,12 +981,14 @@ declare namespace CryptoKeys {
       // Node's one-shot verify takes the signature only as a view, checked before the key.
       if (!ArrayBuffer.isView(signature))
         throw args().argType("signature", "an instance of Buffer, TypedArray, or DataView", signature);
+      // The signature's bytes are read at call time, before the key's options (and their getters).
+      const encoded = c.encode(inputBytes(signature));
       if (typeof callback !== "function")
-        return signVerify(true, algorithm, data, key, signature);
+        return signVerify(true, algorithm, data, key, encoded);
       internal.realTimers.setImmediate(() => {
         let value: boolean;
         try {
-          value = signVerify(true, algorithm, data, key, signature);
+          value = signVerify(true, algorithm, data, key, encoded);
         } catch (e) {
           (callback as (error: Error) => unknown)(e as Error);
           return;
@@ -1002,8 +1128,10 @@ declare namespace CryptoKeys {
       generateKey,
       generateKeyPairSync,
       generateKeyPair,
-      publicEncrypt: (key: CryptoKeys.KeyInput, data: CryptoKeys.Input) => rsaCrypt(false, key, data),
-      privateDecrypt: (key: CryptoKeys.KeyInput, data: CryptoKeys.Input) => rsaCrypt(true, key, data),
+      publicEncrypt: (key: CryptoKeys.KeyInput, data: CryptoKeys.Input) => rsaCipher(0, key, data),
+      privateDecrypt: (key: CryptoKeys.KeyInput, data: CryptoKeys.Input) => rsaCipher(1, key, data),
+      privateEncrypt: (key: CryptoKeys.KeyInput, data: CryptoKeys.Input) => rsaCipher(2, key, data),
+      publicDecrypt: (key: CryptoKeys.KeyInput, data: CryptoKeys.Input) => rsaCipher(3, key, data),
       sign,
       verify,
       Sign,

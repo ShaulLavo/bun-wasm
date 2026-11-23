@@ -48,13 +48,32 @@ Setup can locate
 an ordinary group from its AX text, including duplicate nodes at the same bounds
 in the same group strip. Selection still requires a settled snapshot with one
 selected numbered group button. Missing or ambiguous targets stop navigation.
-Setup never closes a tab or reads a private tab total.
+Before navigating, setup can also close an exact recorded leftover visible in the
+ordinary group. The PC keeps these titles in
+`~/.local/state/bun-wasm/c4d2-safari-tabs`. The observer supplies the unique
+title before Safari opens it. The runner removes the record after proved closure.
+Titles with no record, ambiguous matches, and records outside the current view
+are left alone.
+
+The runner checks the existing supervised exclusive Mac FIFO ticket before each
+native command. If the status command fails or returns invalid data, the runner
+logs the error and retries once before allowing input. A confirmed owner
+reservation or different holder stops input immediately. If both probes fail,
+the runner stops input and reports that admission could not be verified. Keep
+the FIFO supervisor live until the bound device session closes. Remove the
+one-shot FIFO watchdog from any copied attempt script.
 
 The dispatched gate's PC controller also owns the finish procedure in
 [the manual smoke guide](iphone-smoke.md#read-the-result-and-finish-cleanup).
 Install its finalizer before setup. Cleanup selects ordinary tabs before counting,
 closes only its exact owned card in either group, restores ordinary selection and
 proves Done/overview exit before `device_close`, wrapper stop and FIFO release.
+Ordinary closure requires the exact card to disappear and the group count to
+drop by one. Previously visible neighbors must remain accounted for. Safari can
+expose additional cards after a close.
+When the overview exposes only part of the group, the runner also checks the
+settled press receipt. The press must land on the exact card's Close child, and
+Safari must report that card's removal.
 Private closure uses ownership and before/after card contents, never a fabricated
 count. Keep the live binding and admission through finalization, including after
 failure or cancellation. Native-command failure, deadline or lost ownership stops
@@ -81,6 +100,14 @@ bun /work/heavy-runner/current/run.js --host local --class build "iphone-smoke-$
   bash scripts/with-build-cache.sh bash "$attempt_build"
 ```
 
+The slot runs frozen dependency installs in the scheduled checkout's root and
+`web/` before starting the preparation script. Bun reads the settings in each
+project. The npm Waffle pin uses the isolated linker so the runtime and its
+alias resolve to the same installed package. Leave install commands out of the
+attempt script when copying an older build. The slot keeps the lock until
+the installer and its subprocesses stop, and Bun's diagnostics go to the
+build log.
+
 In the preparation script, use the current checkout and the supplied
 `CARGO_TARGET_DIR`, `BROWSER_CARGO_TARGET_DIR`, `TOOLS_CARGO_TARGET_DIR` and
 `TMPDIR`. Put the generated shared sysroot and QuickJS group under
@@ -89,7 +116,10 @@ before exiting. The cache wrapper starts and stops its own sccache server and
 prints its statistics in the build log.
 
 The device controller uses a separate checkout of the scheduled commit for its
-runtime source checks. If a build is killed and leaves its checkout behind,
+runtime source checks. Run `bun install --frozen-lockfile` in that checkout's
+root and in `web/`. Let each project supply its own linker settings.
+
+If a build is killed and leaves its checkout behind,
 audit the stopped build before removing that checkout with `git worktree remove`.
 
 ## Queue and reports

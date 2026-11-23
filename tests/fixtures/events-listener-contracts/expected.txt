@@ -4,3 +4,4 @@ error monitor, error identity and validation
 one leak warning with emitter, event and count
 promise once, abort listener and queued iterator close
 FIFO pending, queued, close and error iterator settlement
+once wrappers release collected emitters

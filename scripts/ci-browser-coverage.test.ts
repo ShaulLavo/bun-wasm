@@ -48,6 +48,7 @@ test("real manifest snapshots retain removed shared, QuickJS, generator and prev
     ["crates/bunwasm-engine-quickjs/src/transport.rs", 20], ["third_party/rquickjs-sys/src/lib.rs", 11],
     ["web/src/preview-websocket-client.ts", 4], ["scripts/generate-node-path.ts", 44],
     ["scripts/generate-dev-html-client.ts", 44], ["web/src/dev-html-client.ts", 44],
+    ["scripts/wasm-name-sections.ts", 44], ["scripts/stage-guest-wasm.ts", 44],
     ["scripts/src/engine-init.c", 20], ["scripts/src/engine-explicit-init.ts", 20], ["scripts/build-bash-web-shell.sh", 44],
   ] as const) {
     const selection = selectBrowserGuestCoverage({ changedPaths: [path], snapshots, full: false });
@@ -66,12 +67,55 @@ test("Git snapshots reject symlink manifests and directories", () => {
   expect(() => browserCoverageSnapshot(git("rev-parse", "HEAD"), "head", directory)).toThrow("Unsafe check directory");
 });
 test("selected batches keep existing Storage/default cells and narrower engines", () => {
-  expect(browserCoverageOutputs([])).toContain('batches=["10-storage","default"]');
-  const quickjs = browserCoverageOutputs([{ owner: "installer-links", engines: ["quickjs"] }]);
-  expect(quickjs).toContain('batches=["10-storage","20-installer-links","default"]');
-  expect(quickjs).toContain("needed=true\njsc=false");
+  const verify = (selection: Parameters<typeof browserCoverageOutputs>[0], batches: string[], count: number) => {
+    const [matrix, ...outputs] = browserCoverageOutputs(selection).split("\n");
+    if (!matrix?.startsWith("matrix=")) throw new Error("Missing browser guest matrix");
+    const { include } = JSON.parse(matrix.slice("matrix=".length));
+    expect(include).toHaveLength(count);
+    for (const browser of ["chromium", "webkit"]) {
+      const names = include.filter((job: { browser: string }) => job.browser === browser)
+        .flatMap((job: { batches: { name: string }[] }) => job.batches.map(batch => batch.name));
+      expect(names.toSorted()).toEqual(batches);
+    }
+    return outputs.join("\n");
+  };
+  verify([], ["10-storage", "default"], 4);
+  expect(verify([{ owner: "installer-links", engines: ["quickjs"] }], ["10-storage", "20-installer-links", "default"], 4)).toContain("needed=true\njsc=false");
   expect(browserCoverageOutputs([{ owner: "installer-links", engines: ["jsc"] }])).toContain("jsc=true");
-  expect(JSON.parse(browserCoverageOutputs(fullBrowserGuestSelection).split("\n")[0]!.slice(8))).toHaveLength(9);
+  verify(fullBrowserGuestSelection, ["10-storage", "20-installer-links", "21-subprocess-aliases", "22-preview-websocket-headers", "23-engine-interruption", "24-worker-modules", "25-terminal-stdin", "26-tools-integrity", "default"], 4);
+});
+
+test.each([0, 1, 124])("the actual CI batch runner keeps independent results when the first command exits %s", firstStatus => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-shard-"));
+  cleanup.add(directory);
+  mkdirSync(join(directory, "web"));
+  writeFileSync(join(directory, "bun"), `#!/bin/bash
+    read -r _ && exit 99
+    printf '%s %s\\n' "$2" "$7" >> ../commands
+    test "$BUN_WASM_BROWSER_REPORT_DIR" = "$BUN_WASM_BROWSER_COVERAGE_REPORTS" || exit 98
+    printf '%s\\n' "$7" > "$BUN_WASM_BROWSER_REPORT_DIR/check.txt"
+    if [[ "$7" == 21-subprocess-aliases ]]; then exit "\${FIRST_STATUS}"; fi
+  `, { mode: 0o755 });
+  const reports = join(directory, "reports");
+  const summary = join(directory, "summary");
+  const started = String(Math.floor(Date.now() / 1000) - 120);
+  const result = spawnSync(process.execPath, [new URL("./ci-browser-guest-run.ts", import.meta.url).pathname], {
+    cwd: join(directory, "web"), encoding: "utf8", env: { ...process.env, FIRST_STATUS: String(firstStatus),
+      PATH: `${directory}:${process.env.PATH}`, GITHUB_WORKSPACE: directory, GITHUB_STEP_SUMMARY: summary,
+      BUN_WASM_BROWSER_REPORT_DIR: reports, BUN_WASM_TEST_BROWSERS: "chromium", BROWSER_GUEST_SETUP_STARTED: started,
+      BROWSER_GUEST_BATCHES: JSON.stringify([{ name: "21-subprocess-aliases", group: "suite", jobSeconds: 3600, commandSeconds: 3240 },
+        { name: "default", group: "suite", jobSeconds: 600, commandSeconds: 900 }]),
+    },
+  });
+  expect(result.status, result.stderr).toBe(firstStatus === 0 ? 0 : 1);
+  const lines = readFileSync(join(directory, "commands"), "utf8").trim().split("\n");
+  expect(lines).toHaveLength(2);
+  expect(lines[0]).toBe("3240 21-subprocess-aliases");
+  expect(lines[1]).toMatch(/^4(?:7[89]|80) default$/);
+  expect(readFileSync(join(reports, "21-subprocess-aliases/check.txt"), "utf8")).toBe("21-subprocess-aliases\n");
+  expect(readFileSync(join(reports, "default/check.txt"), "utf8")).toBe("default\n");
+  expect(readFileSync(summary, "utf8")).toContain(`21-subprocess-aliases | ${firstStatus}\n`);
+  expect(readFileSync(summary, "utf8")).toContain("default | 0\n");
 });
 test("CI passes selected cells to same-run site consumers and builds interruption once", () => {
   const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -79,12 +123,17 @@ test("CI passes selected cells to same-run site consumers and builds interruptio
   expect(producer.match(/browser-guest-site.ts build/g)).toHaveLength(1);
   expect(producer.match(/browser-guest-coverage.ts/g)).toHaveLength(1);
   expect(producer).toContain('bun scripts/browser-guest-coverage.ts "$RUNNER_TEMP/browser-guest-site" "$BUN_WASM_BROWSER_COVERAGE_SELECTION"');
-  expect(workflow.match(/BUN_WASM_BROWSER_COVERAGE_SELECTION: \$\{\{ needs.selection.outputs.browser-coverage-selection \}\}/g)).toHaveLength(3);
+  expect(workflow.match(/BUN_WASM_BROWSER_COVERAGE_SELECTION: \$\{\{ needs.selection.outputs.browser-coverage-selection \}\}/g)).toHaveLength(2);
   expect(workflow).not.toContain("browser-guest-coverage.ts");
-  const consumer = workflow.split("\n  browser-guest:\n")[1]!.split("\n  browser-process:\n")[0]!;
+  const consumer = workflow.split("\n  browser-guest:\n")[1]!.split("\n  shared-consumers:\n")[0]!;
+  const runner = readFileSync(new URL("./ci-browser-guest-run.ts", import.meta.url), "utf8");
   expect(consumer).toContain("BUN_WASM_BROWSER_COVERAGE_SELECTION");
-  expect(consumer).toContain("BUN_WASM_BROWSER_COVERAGE_REPORTS");
-  expect(consumer).toContain("startsWith(matrix.batch, '2') && 3240 || 900");
+  expect(consumer).toContain("bun ../scripts/ci-browser-guest-run.ts");
+  expect(runner).toContain("BUN_WASM_BROWSER_COVERAGE_REPORTS");
+  expect(runner).toContain('"browser-guest", "--batch", batch.name');
+  expect(consumer.match(/name: browser-guest-site\n/g)).toHaveLength(1);
+  expect(consumer).toContain('working-directory: ${{ runner.temp }}\n        run: echo "BROWSER_GUEST_SETUP_STARTED=');
+  expect(consumer).toContain("name: Retain Browser guest diagnostics\n        if: ${{ always() }}");
   expect(consumer).not.toMatch(/build\.sh|test-web\.sh|coverage\.json|browser-guest-site.ts build/);
 });
 

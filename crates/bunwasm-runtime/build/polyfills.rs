@@ -22,8 +22,14 @@ pub fn embed(manifest: &Path, out: &Path) {
     // polyfills (handy to test a module without touching the tree).
     println!("cargo:rerun-if-env-changed=BUNWASM_JS_OVERRIDE_DIR");
     let override_dir = std::env::var_os("BUNWASM_JS_OVERRIDE_DIR").map(std::path::PathBuf::from);
-    let mut ordinary = Vec::new();
+    // Debugging aid: keep every token at its source line and column (types erased only).
+    println!("cargo:rerun-if-env-changed=BUNWASM_JS_PRESERVE_POSITIONS");
+    let minify =
+        std::env::var_os("BUNWASM_JS_PRESERVE_POSITIONS").is_none_or(|value| value.is_empty());
+    fs::create_dir_all(out.join("runtime-js")).expect("create transpiled runtime directory");
+    // Files whose whitespace and comments are removed, and TypeScript files that only lose their types.
     let mut compact = Vec::new();
+    let mut strip = Vec::new();
     let mut table = String::from("pub static POLYFILLS: &[(&str, &str)] = &[\n");
     for name in &names {
         let path = override_dir
@@ -37,14 +43,13 @@ pub fn embed(manifest: &Path, out: &Path) {
             stems.insert(stem),
             "duplicate runtime module {stem} (.js and .ts)"
         );
-        let batch = if matches!(stem, "stack_trace" | "bun_builtins") {
-            &mut compact
-        } else {
-            &mut ordinary
-        };
-        let path = if name.ends_with(".ts") {
-            let destination = out.join("runtime-js").join(format!("{stem}.js"));
-            batch.push((path, destination.clone()));
+        let destination = out.join("runtime-js").join(format!("{stem}.js"));
+        // The Intl data modules are another lane's and stay as written.
+        let path = if minify && !matches!(stem, "intl" | "tz_data") {
+            compact.push((path, destination.clone()));
+            destination
+        } else if name.ends_with(".ts") {
+            strip.push((path, destination.clone()));
             destination
         } else {
             path
@@ -54,36 +59,50 @@ pub fn embed(manifest: &Path, out: &Path) {
             path.display().to_string()
         ));
     }
-    fs::create_dir_all(out.join("runtime-js")).expect("create transpiled runtime directory");
-    transpile_batch(&ordinary, &transpiler, false);
+    let generated = [
+        (
+            "bun_wrap",
+            "generate-bun-wrap.ts",
+            manifest.join("../../vendor/bun/src/runtime.js"),
+        ),
+        (
+            "direct_stream",
+            "generate-direct-stream.ts",
+            manifest.join("../../web/src/native-direct-stream.ts"),
+        ),
+        (
+            "dev_html_client",
+            "generate-dev-html-client.ts",
+            manifest.join("../../web/src/dev-html-client.ts"),
+        ),
+    ];
+    for (name, generator, input) in generated {
+        let source = generate(
+            name,
+            &manifest.join("../../scripts").join(generator),
+            &input,
+            out,
+        );
+        let path = if minify {
+            let destination = out.join("runtime-js").join(format!("{name}.js"));
+            compact.push((source, destination.clone()));
+            destination
+        } else {
+            source
+        };
+        table.push_str(&format!(
+            "    ({name:?}, include_str!({:?})),\n",
+            path.display().to_string()
+        ));
+    }
+    transpile_batch(&strip, &transpiler, false);
     transpile_batch(&compact, &transpiler, true);
-    generate(
-        &mut table,
-        "bun_wrap",
-        &manifest.join("../../scripts/generate-bun-wrap.ts"),
-        &manifest.join("../../vendor/bun/src/runtime.js"),
-        out,
-    );
-    generate(
-        &mut table,
-        "direct_stream",
-        &manifest.join("../../scripts/generate-direct-stream.ts"),
-        &manifest.join("../../web/src/native-direct-stream.ts"),
-        out,
-    );
-    generate(
-        &mut table,
-        "dev_html_client",
-        &manifest.join("../../scripts/generate-dev-html-client.ts"),
-        &manifest.join("../../web/src/dev-html-client.ts"),
-        out,
-    );
     table.push_str("];\n");
     fs::write(out.join("polyfills.rs"), table).unwrap();
 }
 
-/// Adds runtime module `name`, written by a source generator script from `input`.
-fn generate(table: &mut String, name: &str, generator: &Path, input: &Path, out: &Path) {
+/// Writes runtime module `name` with a source generator script from `input`; returns its path.
+fn generate(name: &str, generator: &Path, input: &Path, out: &Path) -> PathBuf {
     println!("cargo:rerun-if-changed={}", input.display());
     println!("cargo:rerun-if-changed={}", generator.display());
     let destination = out.join(format!("{name}.js"));
@@ -105,10 +124,7 @@ fn generate(table: &mut String, name: &str, generator: &Path, input: &Path, out:
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    table.push_str(&format!(
-        "    ({name:?}, include_str!({:?})),\n",
-        destination.display().to_string()
-    ));
+    destination
 }
 
 fn transpile_batch(files: &[(PathBuf, PathBuf)], script: &Path, compact: bool) {

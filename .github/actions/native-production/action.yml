@@ -1,20 +1,20 @@
 name: Current source guest production
-description: Shared ordinary producer entrypoints and original full-route correctness and exports
+description: Build ordinary guests, launcher, shell, tools, and browser-guest site
 inputs:
   full:
-    description: Run native correctness and native-live-gated exports
+    description: Build native launcher and export full native artifacts
     required: true
   jsc:
     description: Selected JSC guest consumer
-    required: true
-  shared-native:
-    description: Selected shared native consumer
     required: true
   host-tools:
     description: Effective pinned host tools
     required: true
   native-inputs:
     description: Effective native toolchain and verified sysroot
+    required: true
+  jsc-inputs:
+    description: Effective JSC prebuild inputs
     required: true
   object-key:
     description: Original compiler object writer key
@@ -28,25 +28,14 @@ runs:
     - name: Preserve unchanged build-script input timestamps
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: bun scripts/quality-input-times.ts
-    - name: Identify JSC prebuild inputs
-      id: jsc-inputs
-      env:
-        JOBS: "2"
-        CAGE: ""
-      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-      run: |
-        source jsc/common.sh
-        copy_jsc_config_inputs
-        inputs=$(jsc_inputs_hash)
-        echo "hash=$inputs" >> "$GITHUB_OUTPUT"
     - uses: actions/cache/restore@v4
       if: inputs.jsc == 'true'
       id: jsc-cargo-cache
       with:
         path: ${{ runner.temp }}/jsc/engine
-        key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/build-engine-jsc.sh', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build.sh', 'scripts/quickjs-core-exports.txt', 'scripts/src/engine-explicit-init.ts', 'scripts/src/engine-init.c', 'scripts/guest-core-receipt.ts', 'scripts/guest-engine-receipt.ts', 'scripts/guest-build-receipt.ts', 'scripts/jsc-embedding.ts', 'tests/linker/**', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts', '.github/actions/native-*/action.yml') }}
+        key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ inputs.jsc-inputs }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/build-engine-jsc.sh', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build.sh', 'scripts/quickjs-core-exports.txt', 'scripts/src/engine-explicit-init.ts', 'scripts/src/engine-init.c', 'scripts/guest-core-receipt.ts', 'scripts/guest-engine-receipt.ts', 'scripts/guest-build-receipt.ts', 'scripts/jsc-embedding.ts', 'scripts/wasm-name-sections.ts', 'tests/linker/**', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts', '.github/actions/native-*/action.yml') }}
         restore-keys: |
-          jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-
+          jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ inputs.jsc-inputs }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-
     - name: Identify the shell's WASI link inputs
       id: shell-wasi-inputs
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -129,10 +118,9 @@ runs:
       run: |
         source env.sh
         export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
-        CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh
+        CARGO_BUILD_JOBS=4 bash scripts/build-bun-core.sh
     # Each side reuses the completed common core and owns its target and outputs.
-    # JSC builds at low priority beside QuickJS and host-engine work; timed checks
-    # start only after the background producer finishes.
+    # JSC builds at low priority beside QuickJS and host-engine work.
     - name: Start the JSC Cargo guest build
       id: jsc-guest-start
       if: inputs.jsc == 'true'
@@ -144,29 +132,29 @@ runs:
         bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash scripts/with-build-cache.sh bash -c 'start=$SECONDS; source env.sh && export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common" && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; exit "$status"'
     - name: Build native fixtures after the cache checkpoint
       env:
-        JOBS: "2"
+        JOBS: "3"
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
       run: |
         source env.sh
         export WASI_SDK="$WASI_SDK_PATH"
-        if [[ "${{ inputs.full }}" == true ]]; then cargo build --release --locked -j 2 -p bunwasm-host; fi
+        if [[ "${{ inputs.full }}" == true ]]; then cargo build --release --locked -j 3 -p bunwasm-host; fi
         trap 'exit 130' INT
         trap 'exit 143' TERM
         export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
-        CARGO_BUILD_JOBS=2 bash scripts/build.sh
+        CARGO_BUILD_JOBS=3 bash scripts/build.sh
     - name: Build the ordinary SpiderMonkey side using the completed core
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
       run: |
         source env.sh
         export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
         export SPIDERMONKEY_CARGO_TARGET_DIR="$RUNNER_TEMP/ordinary-side-cargo/${{ steps.ordinary-spidermonkey-native.outputs.generation }}"
-        CARGO_BUILD_JOBS=2 bash scripts/build-bun-spidermonkey.sh
+        CARGO_BUILD_JOBS=3 bash scripts/build-bun-spidermonkey.sh
         if llvm-nm "$SPIDERMONKEY_CARGO_TARGET_DIR/wasm32-wasip1/release/build/bunwasm-spidermonkey/"*/out/libspidermonkey_shim.a | grep -q 'bsm_control_'; then
           echo 'Production SpiderMonkey adapter contains control symbols' >&2
           exit 1
         fi
     - name: Package the native profile launcher
-      if: inputs.full == 'true' && (inputs.jsc == 'true' || inputs.shared-native == 'true')
+      if: inputs.full == 'true'
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
         mkdir -p "$RUNNER_TEMP/native-profile-launcher"
@@ -176,8 +164,15 @@ runs:
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
       run: |
         source env.sh
-        BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh
-
+        BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=3 bash scripts/build-bun-browser.sh
+    - name: Build pinned shell guests
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        export WASI_SDK="$WASI_SDK_PATH"
+        guest_environment=$(bun scripts/guest-build-receipt.ts environment)
+        eval "$guest_environment"
+        CARGO_TARGET_DIR="$RUNNER_TEMP/bash-web-shell-build" JOBS=2 bash scripts/build-bash-web-shell.sh
     - name: Build the JSC Cargo guest
       if: inputs.jsc == 'true'
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -193,41 +188,11 @@ runs:
       uses: actions/cache/save@v4
       with:
         path: ${{ runner.temp }}/jsc/engine
-        key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/build-engine-jsc.sh', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build.sh', 'scripts/quickjs-core-exports.txt', 'scripts/src/engine-explicit-init.ts', 'scripts/src/engine-init.c', 'scripts/guest-core-receipt.ts', 'scripts/guest-engine-receipt.ts', 'scripts/guest-build-receipt.ts', 'scripts/jsc-embedding.ts', 'tests/linker/**', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts', '.github/actions/native-*/action.yml') }}
-
+        key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ inputs.jsc-inputs }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/build-engine-jsc.sh', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build.sh', 'scripts/quickjs-core-exports.txt', 'scripts/src/engine-explicit-init.ts', 'scripts/src/engine-init.c', 'scripts/guest-core-receipt.ts', 'scripts/guest-engine-receipt.ts', 'scripts/guest-build-receipt.ts', 'scripts/jsc-embedding.ts', 'scripts/wasm-name-sections.ts', 'tests/linker/**', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts', '.github/actions/native-*/action.yml') }}
     - name: Verify JSC embedding source and native backing
       if: inputs.full == 'true' && inputs.jsc == 'true'
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: bun scripts/jsc-embedding.ts verify dist/bun-jsc.wasm
-    - name: Blocking native fixture checks
-      if: inputs.full == 'true'
-      env:
-        BUN_WASM_RUNTIME_JOBS: "2"
-        INSTALL_ENGINES: ${{ inputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}
-        BUN_WASM_CHECK_ENGINES: ${{ inputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}
-      shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
-      run: |
-        source env.sh
-        export WASI_SDK="$WASI_SDK_PATH"
-        guest_environment=$(bun scripts/guest-build-receipt.ts environment)
-        eval "$guest_environment"
-        CARGO_TARGET_DIR="$RUNNER_TEMP/bash-web-shell-build" JOBS=2 bash scripts/build-bash-web-shell.sh
-        export BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm"
-        export BUN_WASM_SHELL="$GITHUB_WORKSPACE/dist/bash-web-shell.wasm"
-        export BUN_WASM_ENV_UTILITY="$GITHUB_WORKSPACE/dist/bash-web-env.wasm"
-        bun scripts/test-checks.ts native
-        BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts
-        BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/root-overrides.ts
-
-    - name: Build pinned shell guests for Browser production
-      if: inputs.full == 'false'
-      shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
-      run: |
-        source env.sh
-        export WASI_SDK="$WASI_SDK_PATH"
-        guest_environment=$(bun scripts/guest-build-receipt.ts environment)
-        eval "$guest_environment"
-        CARGO_TARGET_DIR="$RUNNER_TEMP/bash-web-shell-build" JOBS=2 bash scripts/build-bash-web-shell.sh
     - name: Export the validated ordinary JSC pair
       if: inputs.full == 'true' && inputs.jsc == 'true'
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -240,6 +205,64 @@ runs:
       run: |
         source env.sh
         bun scripts/spidermonkey-ordinary-ci.ts export "$RUNNER_TEMP/ordinary-spidermonkey-program"
+    - name: Blocking JSC native probe
+      if: inputs.full == 'true'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        bun scripts/test-checks.ts native-probe --batch 02-jsc
+    - name: Blocking producer-bound SpiderMonkey runtime checks
+      if: inputs.full == 'true'
+      env:
+        BUN_WASM_RUNTIME_JOBS: "2"
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        export WASI_SDK="$WASI_SDK_PATH"
+        export BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm"
+        bun scripts/test-checks.ts runtime --batch 02-producer
+    - name: Build the single tools fixture in the existing native target
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=4 bash scripts/build-bun-tools.sh
+    - name: Package ordinary shell and SpiderMonkey native inputs
+      if: inputs.full == 'true'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        stage="$RUNNER_TEMP/ordinary-native-bundle-stage"
+        mkdir -p "$stage/dist" "$stage/spidermonkey-native"
+        cp dist/bash-web-shell.wasm dist/bash-web-env.wasm dist/bash-web-guests.json "$stage/dist/"
+        cp -a "$SPIDERMONKEY_NATIVE_DIR"/. "$stage/spidermonkey-native/"
+        git rev-parse HEAD > "$stage/source.txt"
+        mkdir -p "$RUNNER_TEMP/ordinary-native-bundle"
+        tar --posix -C "$stage" -cf - . | zstd -T0 -q -o "$RUNNER_TEMP/ordinary-native-bundle/bundle.tar.zst"
+        rm -rf -- "$stage"
+    - name: Blocking Web guest cases (QuickJS and host engine)
+      if: inputs.full != 'true'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        bun scripts/test-web-guests.ts quickjs browser 2>&1 | tee dist/web-guests-quickjs-browser.log
+    # The playground site the browser-guest checks serve, bundled once from the verified guest
+    # (and the bash-web shell) linked above.
+    - name: Build the browser-guest site once
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        bun scripts/ci-install.ts --cwd sandbox --frozen-lockfile --ignore-scripts
+        bun scripts/browser-guest-site.ts build "$RUNNER_TEMP/browser-guest-site"
+        bun scripts/browser-guest-coverage.ts "$RUNNER_TEMP/browser-guest-site" "$BUN_WASM_BROWSER_COVERAGE_SELECTION"
+    - name: Blocking Web guest case (JSC)
+      if: inputs.full != 'true' && inputs.jsc == 'true'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        bun scripts/test-web-guests.ts jsc 2>&1 | tee dist/web-guests-jsc.log
+    - name: Export the validated standard Browser and tools guests
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        bun scripts/ci-browser-program.ts export "$RUNNER_TEMP/browser-program"
     - name: Save verified ordinary SpiderMonkey native generation
       if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ordinary-spidermonkey-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
@@ -262,18 +285,12 @@ runs:
       if: always()
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: rm -rf -- "$RUNNER_TEMP/ordinary-cbindgen-target"
-
     - name: Save the completed bash-web shell guest build
       if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shell-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: ${{ runner.temp }}/bash-web-shell-build
         key: ${{ steps.shell-cache.outputs.cache-primary-key }}
-    - name: Build the single tools fixture in the existing native target
-      shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
-      run: |
-        source env.sh
-        TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-tools.sh
     # PR-scoped archives cannot be shared with other PRs and evict main's warm builds.
     - name: Save the refined native Cargo cache once per input revision
       if: github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.cargo-matched == ''
@@ -285,35 +302,6 @@ runs:
           ${{ env.CARGO_HOME }}/bin/cargo-machete
           ${{ env.CARGO_TARGET_DIR }}
         key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp', 'scripts/build-bun-tools.sh', 'scripts/build-bun-browser.sh', 'scripts/build-bun-core.sh', 'scripts/src/program-profile.ts', 'scripts/guest-core-receipt.ts', 'scripts/guest-source-manifest.ts', 'scripts/waffle-release-inputs.*', '.github/workflows/ci.yml', '.github/actions/native-*/action.yml', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
-
-    - name: Blocking Web guest cases (QuickJS and host engine)
-      if: inputs.full != 'true'
-      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-      run: |
-        source env.sh
-        bun scripts/test-web-guests.ts quickjs browser 2>&1 | tee dist/web-guests-quickjs-browser.log
-    # The playground site the browser-guest checks serve, bundled once from the verified guest
-    # (and the bash-web shell) linked above; each Processes browser leg verifies and serves it.
-    - name: Build the browser-guest site once
-      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-      run: |
-        bun scripts/ci-install.ts --cwd sandbox --frozen-lockfile --ignore-scripts
-        bun scripts/browser-guest-site.ts build "$RUNNER_TEMP/browser-guest-site"
-        bun scripts/browser-guest-coverage.ts "$RUNNER_TEMP/browser-guest-site" "$BUN_WASM_BROWSER_COVERAGE_SELECTION"
-    - name: Blocking Web guest case (JSC)
-      if: inputs.full != 'true' && inputs.jsc == 'true'
-      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-      run: |
-        source env.sh
-        bun scripts/test-web-guests.ts jsc 2>&1 | tee dist/web-guests-jsc.log
-    - name: Export the validated standard Browser and tools guests
-      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-      run: |
-        source env.sh
-        bun scripts/ci-browser-program.ts export "$RUNNER_TEMP/browser-program"
-    # Full-route seeds are qualified by source, native checks and verified exports.
-    # The independent ordinary-web-guests consumer and Code quality qualify the run.
-    # Alternate production retains its inline Web checks before these saves.
     - uses: ./.github/actions/save-rust-build-cache
       with:
         key: ${{ inputs.object-key }}

@@ -738,14 +738,17 @@
         frame.release();
       }
     }
+    function observeStart(): boolean {
+      if (!observingStart) return true;
+      const startup = native.procStartStatus(spec.pid);
+      // Do not consume a completion racing entry: retain the record until startup is final.
+      if (startup === AGAIN) return false;
+      observingStart = false;
+      if (startup === 0) pendingSpawn = true;
+      return true;
+    }
     function observeAndWait(): Exit | null {
-      if (observingStart) {
-        const startup = native.procStartStatus(spec.pid);
-        // Do not consume a completion racing entry: retain the record until startup is final.
-        if (startup === AGAIN) return null;
-        observingStart = false;
-        if (startup === 0) pendingSpawn = true;
-      }
+      if (!observeStart()) return null;
       return waitChild(spec);
     }
     function refreshRef() {
@@ -755,12 +758,19 @@
       if (closed) return true;
       if (!settled) {
         // Every consuming path, including kill probes, observes startup first.
-        const status = observeAndWait();
+        observeStart();
         // Kill probes cache entry synchronously, but Node events stay on the async step.
         if (pendingSpawn) {
           pendingSpawn = false;
           frame.run(spec.options._onSpawn as () => void, spec.options, []);
         }
+      }
+      // Read ready output before consuming exit so a fast child's buffered stdout/stderr
+      // resolves its pending reader ahead of child.exited / Node 'exit' listeners.
+      let progress = false;
+      for (const state of states) if (readPipe(state, state.consume)) progress = true;
+      if (!settled) {
+        const status = observeAndWait();
         if (status) {
           sink.destroy(Object.assign(new Error("stdin closed before drain"), { code: "EPIPE", errno: -32, syscall: "write" }));
           finish(status);
@@ -774,8 +784,6 @@
           sink.destroy();
         }
       }
-      let progress = false;
-      for (const state of states) if (readPipe(state, state.consume)) progress = true;
       if (settled && !reaped) reaped = reapJob(spec.job);
       if (settled && states.every((state) => state.fd < 0)) {
         if (!reaped) reapLater(spec.job);
@@ -987,24 +995,37 @@
           );
         },
       });
-      async function readChunk() {
-        const { value, done } = await reader.read();
-        if (ended) return false;
-        if (!done) return readable.push(Buffer.from(value));
-        complete();
-        readable.push(null);
-        return false;
-      }
-      async function pump() {
+      function pump() {
         if (pumping || ended) return;
         pumping = true;
-        try {
-          while (!ended && await readChunk()) { /* Stop at downstream backpressure. */ }
-        } catch (error) {
-          readable.destroy(error);
-        } finally {
-          pumping = false;
-        }
+        const stepRead = () => {
+          reader.read().then(
+            ({ value, done }: { value?: Uint8Array; done: boolean }) => {
+              try {
+                if (ended) { pumping = false; return; }
+                if (done) {
+                  pumping = false;
+                  complete();
+                  readable.push(null);
+                  return;
+                }
+                if (readable.push(Buffer.from(value!)) && !ended) {
+                  stepRead();
+                  return;
+                }
+                pumping = false;
+              } catch (error) {
+                pumping = false;
+                readable.destroy(error);
+              }
+            },
+            (error: unknown) => {
+              pumping = false;
+              readable.destroy(error);
+            },
+          );
+        };
+        stepRead();
       }
       (readable as Loose)._childDrained = drained;
       void pump();
@@ -1209,10 +1230,22 @@
       return execFile(argv[0], argv.slice(1), options, callback);
     }
 
+    function inheritedExecArgv(flags: string[]): string[] {
+      const kept: string[] = [];
+      for (let index = 0; index < flags.length; index++) {
+        const flag = flags[index];
+        if (flag === "-e" || flag === "--eval" || flag === "-p" || flag === "--print") index++;
+        else kept.push(flag);
+      }
+      return kept;
+    }
+
     function fork(modulePath: string, args?: Loose, options?: Loose) {
       if (!Array.isArray(args)) { options = args || {}; args = []; }
       options = options || {};
-      const execArgs = options.execArgv || (process as unknown as BunWasm.GuestProcess).execArgv;
+      // The parent's flags, less the code `bun run -e CODE entry` kept there: replayed in a child, it
+      // would run instead of the child's entry.
+      const execArgs = options.execArgv || inheritedExecArgv((process as unknown as BunWasm.GuestProcess).execArgv);
       const mode = options.stdio || (options.silent ? "pipe" : "inherit");
       const stdio = Array.isArray(mode) ? mode : [mode, mode, mode, "ipc"];
       if (!stdio.includes("ipc")) throw Object.assign(new Error("Fork requires an IPC channel"), { code: "ERR_CHILD_PROCESS_IPC_REQUIRED" });

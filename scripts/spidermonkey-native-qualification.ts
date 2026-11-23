@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 export const spiderMonkeyTiers = ['interp', 'pbl'] as const;
 export type SpiderMonkeyTier = typeof spiderMonkeyTiers[number];
 
-/** Generous hang caps; correctness is determined by the fixture output and ownership checks. */
+/**
+ * Generous hang caps; correctness is determined by the fixture output and ownership checks.
+ * CI runs the QuickJS and JSC drivers side by side on one runner, where browser-guest.ts alone
+ * has taken about 250 s, so their caps leave room for twice the slowest healthy run.
+ */
 export function sharedBrowserClocks(kind: string, entry = "browser-guest.ts") {
   const spiderMonkey = kind === "spidermonkey";
-  return {
-    pageMs: spiderMonkey && entry === "browser-guest.ts" ? 480_000 : 240_000,
-    driverMs: spiderMonkey ? 540_000 : 300_000,
-    consumerSeconds: spiderMonkey ? 1320 : 420,
-  };
+  const guest = entry === "browser-guest.ts";
+  if (spiderMonkey) return { pageMs: guest ? 480_000 : 240_000, driverMs: 540_000, consumerSeconds: 1320 };
+  return { pageMs: guest ? 600_000 : 240_000, driverMs: 720_000, consumerSeconds: 900 };
 }
 
 /** Marker offsets may change with Rust layout; host observations independently bind the carved stack. */

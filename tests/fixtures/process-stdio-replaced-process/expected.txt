@@ -1,0 +1,4 @@
+cached streams true true
+reported TypeError
+cold read undefined
+reports 1

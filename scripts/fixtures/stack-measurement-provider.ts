@@ -92,7 +92,11 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
   const depth = Number(process.argv.at(-1));
   appendFileSync(join(root, "launcher.pid"), `${process.pid}\n`);
   if (mode === "require") recordRequire(depth);
-  if (scenario === "hang" || (scenario === "hidden-timeout" && depth === 4)) await new Promise(() => setInterval(() => {}, 1000));
+  if (scenario === "hang" || (scenario === "hidden-timeout" && depth === 4)) {
+    // Tells the timeout wrapper (stack-measurement-timeout.py) that every record is written and the hang starts now.
+    appendFileSync(join(root, "hanging.pid"), `${process.pid}\n`);
+    await new Promise(() => setInterval(() => {}, 1000));
+  }
   const result = attempt(mode, depth);
   process.stdout.write(result.output);
   if (result.code !== 0) process.stderr.write(`fake trap at ${mode} ${depth}\n`);

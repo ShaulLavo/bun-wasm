@@ -1,4 +1,5 @@
 import { installNativeWasmLifetime } from "../../src/native-wasm-lifetime.ts";
+import { createTickScheduler } from "../../src/tick-scheduler.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
@@ -10,7 +11,7 @@ export function engineHostSource(): string {
   const host = readFileSync(new URL("../../src/engine-host.js", import.meta.url), "utf8")
     .replace(/^import .*;\n/gm, "")
     .replace("export function startEngineHost", "function startEngineHost");
-  return installNativeWasmLifetime.toString().concat("\n", host);
+  return installNativeWasmLifetime.toString().concat("\n", createTickScheduler.toString(), "\n", host);
 }
 
 export function runInContextSource(): string {

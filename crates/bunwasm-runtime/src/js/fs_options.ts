@@ -2,8 +2,12 @@
   return function createFsOptions(native: {
     stat(path: string, link: boolean): { mode: number };
     readdir(path: string): [string, string][];
-    mkdir(path: string, recursive: boolean): unknown;
+    mkdir(path: string, recursive: boolean, mode?: number, umask?: number): unknown;
+    chmod(path: string, mode: number): void;
     copyFile(from: string, to: string, mode: number): void;
+    readlink(path: string): string;
+    symlink(target: string, path: string): void;
+    unlink(path: string): void;
   }, absolute: (path: string) => string, inspect: (value: unknown) => string = String) {
     const stringFlags: Record<string, number> = {
       r: 0, "r+": 2, rs: 1052672, sr: 1052672, "rs+": 1052674, "sr+": 1052674,
@@ -50,19 +54,30 @@
 
     const { Stats, BigIntStats, makeStats } = createStats();
 
-    type CopyOptions = { recursive?: boolean; force?: boolean; errorOnExist?: boolean; filter?: (from: string, to: string) => boolean | Promise<boolean> };
+    type CopyOptions = {
+      recursive?: boolean; force?: boolean; errorOnExist?: boolean; dereference?: boolean; verbatimSymlinks?: boolean;
+      filter?: (from: string, to: string) => boolean | Promise<boolean>;
+    };
+    // Bun 1.4.4's messages and paths for a destination that is in the way: its path is the destination.
+    const destinationErrors: Record<string, (from: string, to: string) => string> = {
+      ERR_FS_CP_EEXIST: (_from, to) => `Target already exists: cp returned EEXIST (${to} already exists) ${to}`,
+      ERR_FS_CP_NON_DIR_TO_DIR: (from, to) =>
+        `Cannot overwrite directory with non-directory: cp returned ENOTDIR (cannot overwrite directory ${to} with non-directory ${from}) ${to}`,
+      ERR_FS_CP_DIR_TO_NON_DIR: (from, to) =>
+        `Cannot overwrite non-directory with directory: cp returned EISDIR (cannot overwrite non-directory ${to} with directory ${from}) ${to}`,
+      ERR_FS_CP_EINVAL: (from, to) => from === to
+        ? `Invalid src or dest: cp returned EINVAL (src and dest cannot be the same) ${to}`
+        : `Invalid src or dest: cp returned EINVAL (cannot copy ${from} to a subdirectory of self ${to}) ${to}`,
+    };
     function copyError(code: string, from: string, to: string): Error {
-      return Object.assign(new Error(`${code}: cannot copy '${from}' to '${to}'`), { code, path: from, dest: to, syscall: "cp" });
+      const message = destinationErrors[code];
+      if (message) return Object.assign(new Error(message(from, to)), { code, path: to, syscall: "cp" });
+      return Object.assign(new Error(`${code}: cannot copy '${from}' to '${to}'`), { code, path: from, syscall: "cp" });
     }
     function isCode(error: unknown, code: string): boolean {
       return error !== null && typeof error === "object" && "code" in error && error.code === code;
     }
-    function copyEntry(from: string, to: string, options: CopyOptions): boolean {
-      const src = absolute(from), dest = absolute(to);
-      const directory = (native.stat(src, false).mode & 0o170000) === 0o040000;
-      if (src === dest || (directory && dest.startsWith(src.endsWith("/") ? src : `${src}/`))) throw copyError("ERR_FS_CP_EINVAL", from, to);
-      if (directory && !options.recursive) throw copyError("ERR_FS_EISDIR", from, to);
-      if (directory) { native.mkdir(dest, true); return true; }
+    function ensureParent(dest: string): void {
       const parent = dest.replace(/\/+$/, "").replace(/\/[^/]*$/, "") || "/";
       try {
         native.stat(parent, false);
@@ -70,26 +85,113 @@
         if (!isCode(error, "ENOENT")) throw error;
         native.mkdir(parent, true);
       }
+    }
+    // A relative link target resolved against the source link's directory, as Bun writes it,
+    // or kept as written with `verbatimSymlinks`.
+    function linkTarget(src: string, verbatim: boolean): string {
+      const target = native.readlink(src);
+      if (verbatim || target.startsWith("/")) return target;
+      const parts: string[] = [];
+      for (const part of `${src.replace(/\/[^/]*$/, "")}/${target}`.split("/")) {
+        if (part === "..") parts.pop();
+        else if (part && part !== ".") parts.push(part);
+      }
+      return `/${parts.join("/")}`;
+    }
+    // Bun copies a symlink as a symlink unless `dereference` is set. As Bun 1.4.4 does, whatever
+    // `force` says: a link in the way is replaced, a directory is NON_DIR_TO_DIR, and anything else
+    // keeps the symlink call's EEXIST.
+    function copyLink(from: string, to: string, src: string, dest: string, options: CopyOptions): void {
+      const target = linkTarget(src, Boolean(options.verbatimSymlinks));
+      ensureParent(dest);
+      try {
+        native.symlink(target, dest);
+        return;
+      } catch (error) {
+        if (!isCode(error, "EEXIST")) throw error;
+        const existing = native.stat(dest, true).mode & 0o170000;
+        if (existing === 0o040000) throw copyError("ERR_FS_CP_NON_DIR_TO_DIR", from, to);
+        if (existing !== 0o120000) throw error;
+      }
+      // Bun stats a link in the way, so a dangling one is ENOENT.
+      native.stat(dest, false);
+      native.unlink(dest);
+      native.symlink(target, dest);
+    }
+    // The destination's own type, never following a link there; 0 when it is absent.
+    function destinationKind(dest: string): number {
+      try {
+        return native.stat(dest, true).mode & 0o170000;
+      } catch (error) {
+        if (isCode(error, "ENOENT")) return 0;
+        throw error;
+      }
+    }
+    // As Bun 1.4.4 does, a directory is never copied into or through a non-directory (a link to a
+    // directory included), and an existing directory is ERR_FS_CP_EEXIST under errorOnExist.
+    // Returns true only when this call created the destination directory so callers preserve its mode.
+    function copyDirectory(from: string, to: string, dest: string, options: CopyOptions): boolean {
+      const existing = destinationKind(dest);
+      if (existing !== 0 && existing !== 0o040000) throw copyError("ERR_FS_CP_DIR_TO_NON_DIR", from, to);
+      if (!options.recursive) throw copyError("ERR_FS_EISDIR", from, to);
+      if (existing === 0) { native.mkdir(dest, true); return true; }
+      if (options.force === false && options.errorOnExist) throw copyError("ERR_FS_CP_EEXIST", from, to);
+      return false;
+    }
+    // A file never writes through a link at the destination: Bun replaces the link itself, or
+    // leaves it with `force: false`. Returns whether the copy should go on.
+    function clearLinkInTheWay(from: string, to: string, dest: string, options: CopyOptions): boolean {
+      if (destinationKind(dest) !== 0o120000) return true;
+      if (options.force === false) {
+        if (options.errorOnExist) throw copyError("ERR_FS_CP_EEXIST", from, to);
+        return false;
+      }
+      native.unlink(dest);
+      return true;
+    }
+    function copyEntry(from: string, to: string, options: CopyOptions): { isDir: boolean; createdMode: number | null } {
+      const src = absolute(from), dest = absolute(to);
+      const srcStat = native.stat(src, !options.dereference);
+      const kind = srcStat.mode & 0o170000;
+      if (src === dest) throw copyError("ERR_FS_CP_EINVAL", from, to);
+      if (kind === 0o120000) { copyLink(from, to, src, dest, options); return { isDir: false, createdMode: null }; }
+      const directory = kind === 0o040000;
+      if (directory && dest.startsWith(src.endsWith("/") ? src : `${src}/`)) throw copyError("ERR_FS_CP_EINVAL", from, to);
+      if (directory) {
+        const created = copyDirectory(from, to, dest, options);
+        return { isDir: true, createdMode: created ? (srcStat.mode & 0o7777) : null };
+      }
+      ensureParent(dest);
+      if (!clearLinkInTheWay(from, to, dest, options)) return { isDir: false, createdMode: null };
       try {
         native.copyFile(src, dest, options.force === false ? 1 : 0);
       } catch (error) {
-        if (options.force !== false || !isCode(error, "EEXIST")) throw error;
+        if (!isCode(error, "EEXIST") && !isCode(error, "EISDIR")) throw error;
         if ((native.stat(dest, false).mode & 0o170000) === 0o040000) throw copyError("ERR_FS_CP_NON_DIR_TO_DIR", from, to);
+        if (options.force !== false || !isCode(error, "EEXIST")) throw error;
         if (options.errorOnExist) throw copyError("ERR_FS_CP_EEXIST", from, to);
       }
-      return false;
+      return { isDir: false, createdMode: null };
     }
     function childPath(parent: string, name: string): string { return `${parent.endsWith("/") ? parent.slice(0, -1) : parent}/${name}`; }
     function cpSync(from: string, to: string, options: CopyOptions = {}): void {
       const accepted = options.filter ? options.filter(from, to) : true;
-      if (typeof accepted !== "boolean") throw Object.assign(new TypeError("options.filter must return a boolean"), { code: "ERR_INVALID_RETURN_VALUE" });
-      if (!accepted || !copyEntry(from, to, options)) return;
+      if (accepted instanceof Promise) {
+        throw Object.assign(new TypeError('Expected boolean to be returned from the "filter" function but got an instance of Promise.'), { code: "ERR_INVALID_RETURN_VALUE" });
+      }
+      if (!accepted) return;
+      const result = copyEntry(from, to, options);
+      if (!result.isDir) return;
       for (const [name] of native.readdir(absolute(from))) cpSync(childPath(from, name), childPath(to, name), options);
+      if (result.createdMode !== null) native.chmod(absolute(to), result.createdMode);
     }
     async function cp(from: string, to: string, options: CopyOptions = {}): Promise<void> {
       const accepted = options.filter ? await options.filter(from, to) : true;
-      if (!accepted || !copyEntry(from, to, options)) return;
+      if (!accepted) return;
+      const result = copyEntry(from, to, options);
+      if (!result.isDir) return;
       for (const [name] of native.readdir(absolute(from))) await cp(childPath(from, name), childPath(to, name), options);
+      if (result.createdMode !== null) native.chmod(absolute(to), result.createdMode);
     }
     return { flagsNumber, parseFileMode, Stats, BigIntStats, makeStats, timeSpec, cpSync, cp };
   };
