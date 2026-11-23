@@ -1,6 +1,6 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { installToolsRoute } from "../web/tests/tools-route.ts";
 import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
@@ -29,17 +29,25 @@ test.each(["chromium", "firefox", "webkit"] as const)("%s tools route keeps exac
     const useVerifiedTools = await installToolsRoute(page, rejected);
     await navigateTestPage(page, server.url.href);
     expect((await response(page, "/other.wasm.gz")).bytes).toEqual(Array.from(verified));
-    expect((await response(page, "/bun-tools.wasm")).bytes).toEqual(Array.from(verified));
+    expect((await response(page, "/other.wasm")).bytes).toEqual(Array.from(verified));
     const peer = await page.context().newPage();
     await navigateTestPage(peer, server.url.href);
     expect((await response(peer, "/bun-tools.wasm.gz?v=peer")).bytes).toEqual(Array.from(verified));
+    expect((await response(peer, "/bun-tools.wasm?v=peer")).bytes).toEqual(Array.from(verified));
     for (const path of ["/bun-tools.wasm.gz", "/bun-tools.wasm.gz?v=expected"]) {
       expect(await response(page, path)).toEqual({ status: 200, type: "application/wasm", bytes: Array.from(rejected) });
+      expect(requests).not.toContain(path);
+    }
+    // The loader's logical URL gets the decoded substitute, as a host's native Content-Encoding delivers it.
+    for (const path of ["/bun-tools.wasm", "/bun-tools.wasm?v=expected"]) {
+      expect(await response(page, path)).toEqual({ status: 200, type: "application/wasm", bytes: Array.from(gunzipSync(rejected)) });
       expect(requests).not.toContain(path);
     }
     useVerifiedTools();
     expect((await response(page, "/bun-tools.wasm.gz?v=verified")).bytes).toEqual(Array.from(verified));
     expect(requests).toContain("/bun-tools.wasm.gz?v=verified");
+    expect((await response(page, "/bun-tools.wasm?v=verified")).bytes).toEqual(Array.from(verified));
+    expect(requests).toContain("/bun-tools.wasm?v=verified");
     await page.reload();
     useVerifiedTools();
     expect((await response(page, "/bun-tools.wasm.gz?v=reload")).bytes).toEqual(Array.from(verified));

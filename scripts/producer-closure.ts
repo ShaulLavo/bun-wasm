@@ -36,6 +36,8 @@ export function producerArtifactPaths(profile: ProgramProfile): string[] {
 function isWebClosureAsset(path: string): boolean {
   if (!path.startsWith("web/")) return false;
   if (!/\.wasm(?:\.|$)/.test(path)) return true;
+  // web/build.ts also writes a Brotli twin beside each required gzip guest; negotiating hosts prefer it.
+  if (path.endsWith(".br") && publicationAssets.some(name => path === `web/${name}.br`)) return true;
   return /^web\/programs\/(?:shell-engine|env)\.wasm(?:\.(?:br|gz))?$/.test(path)
     || /^web\/(?:__bunwasm\/)?(?:chunks\/)?network\.wasm$/.test(path)
     || /^web\/programs\/base\/waffle-(?:coreutils|findutils|grep|ripgrep|sed)\/dist\/[^/]+\.wasm(?:\.(?:br|gz))?$/.test(path);

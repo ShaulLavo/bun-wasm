@@ -36,6 +36,12 @@ test("owner drivers select only their explicit complete engine family", () => {
     expect(select([driver!])).toEqual(fullBrowserGuestSelection.filter(item => item.owner === owner));
   }
 });
+test("the app builds' output helper selects the same Browser guest coverage as the builds that import it", () => {
+  const helper = select(["scripts/app-output.ts"]);
+  expect(helper.length).toBeGreaterThan(0);
+  expect(helper).toEqual(unionBrowserGuestSelections(select(["web/build.ts"]), select(["sandbox/build.ts"])));
+});
+
 test("engine producer changes retain narrower QuickJS, JSC and Browser predicates", () => {
   const jsc = select(["crates/bunwasm-engine-jsc/src/vm.rs"]);
   expect(jsc.every(item => item.engines.join() === "jsc")).toBe(true);

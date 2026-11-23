@@ -7,7 +7,9 @@ import { dirname, join, resolve } from "node:path";
 import { loadNodeProgram } from "../scripts/node-linked";
 import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
 import { stageSharedPrograms } from "../../scripts/stage-program-profiles";
-import { stageGuestWasm } from "../../scripts/stage-guest-wasm";
+import { sortedBuilds, stageGuestWasm } from "../../scripts/stage-guest-wasm";
+import { settleAll } from "../../scripts/stage-wasm-sidecars";
+import { brotliDecompressSync } from "node:zlib";
 import { linkedFixtureValue } from "../../tests/package/linked-fixture";
 
 const roots: string[] = [];
@@ -21,22 +23,24 @@ async function scratch() {
 async function stagedAssets(root: string, project: "web" | "sandbox" = "sandbox", env: Record<string, string> = {}) {
   const source = await Bun.file(new URL(`../../${project}/build.ts`, import.meta.url)).text();
   const start = source.indexOf("const engineBuilds:");
-  const end = project === "sandbox" ? source.indexOf("\nfor (const template of templates)") : source.indexOf("await buildShellAssets(");
+  const settled = "await settleAll(staging);";
+  const end = source.indexOf(settled) + settled.length;
   if (start < 0 || end <= start) throw new Error(`${project} engine staging boundary missing`);
   const engineBlock = source.slice(start, end);
-  const writeManifest = source.split("\n").find(line => line.startsWith('await Bun.write(join(out, "engine-builds.json")'));
-  if (!writeManifest) throw new Error(`${project} engine manifest writer missing`);
-  const body = new Bun.Transpiler({ loader: "ts" }).transformSync(`${engineBlock}\n${writeManifest}`);
-  const run = new Function("Bun", "existsSync", "statSync", "dirname", "join", "resolve", "here", "out", "process", "wasmSource", "stageSharedPrograms", "stageGuestWasm", `return (async () => { ${body} })();`);
+  const sorted = source.split("\n").find(line => line.startsWith("const builds = sortedBuilds(engineBuilds);"));
+  const writeManifest = source.split("\n").find(line => line.startsWith('await Bun.write(join(out, "engine-builds.json"), JSON.stringify(builds))'));
+  if (!sorted || !writeManifest) throw new Error(`${project} engine manifest writer missing`);
+  const body = new Bun.Transpiler({ loader: "ts" }).transformSync(`${engineBlock}\n${sorted}\n${writeManifest}`);
+  const run = new Function("Bun", "existsSync", "statSync", "dirname", "join", "resolve", "here", "out", "process", "wasmSource", "stageSharedPrograms", "stageGuestWasm", "sortedBuilds", "buildShellAssets", "settleAll", `return (async () => { ${body} })();`);
   const here = join(root, project), out = join(root, "output");
   await mkdir(out, { recursive: true });
   await run(Bun, existsSync, statSync, dirname, join, resolve, here, out, { env }, join(root, "dist/bun.wasm"),
-    (directory: string, builds: Record<string, string>) => stageSharedPrograms(directory, builds, { quickjs: undefined, jsc: undefined }), stageGuestWasm);
+    (directory: string, builds: Record<string, string>) => stageSharedPrograms(directory, builds, { quickjs: undefined, jsc: undefined }), stageGuestWasm, sortedBuilds, async () => {}, settleAll);
   return out;
 }
 
 const digest = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-test("sandbox stages matching QuickJS side gzip and manifest with the core", async () => {
+test("sandbox stages matching QuickJS side Brotli and gzip twins and manifest with the core, without raw guests", async () => {
   const root = await scratch();
   const { core, side } = quickjsPair();
   await mkdir(join(root, "dist"));
@@ -45,6 +49,9 @@ test("sandbox stages matching QuickJS side gzip and manifest with the core", asy
   const out = await stagedAssets(root);
   expect(Bun.gunzipSync(await readFile(join(out, "bun.wasm.gz")))).toEqual(core);
   expect(Bun.gunzipSync(await readFile(join(out, "quickjs.wasm.gz")))).toEqual(side);
+  expect(new Uint8Array(brotliDecompressSync(await readFile(join(out, "bun.wasm.br"))))).toEqual(core);
+  expect(new Uint8Array(brotliDecompressSync(await readFile(join(out, "quickjs.wasm.br"))))).toEqual(side);
+  expect((await readdir(out)).sort()).toEqual(["bun.wasm.br", "bun.wasm.gz", "engine-builds.json", "quickjs.wasm.br", "quickjs.wasm.gz"]);
   expect(JSON.parse(await readFile(join(out, "engine-builds.json"), "utf8"))).toEqual({ "bun.wasm": digest(core), "quickjs.wasm": digest(side) });
   await rm(join(root, "dist/quickjs.wasm"));
   await expect(stagedAssets(root)).rejects.toThrow("matching side module");

@@ -15,7 +15,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { if (directory) await rm(directory, { recursive: true, force: true }); });
 
-function worker(base: string, mount: string, contentType = "text/html", encoding?: string) {
+function worker(base: string, mount: string, contentType = "text/html", encoding?: string, upstream: Record<string, string> = {}) {
   const handlers = new Map<string, (event: any) => void>();
   const cached = new Map<string, Response>();
   const requests: string[] = [];
@@ -45,7 +45,7 @@ function worker(base: string, mount: string, contentType = "text/html", encoding
         async keys() { return []; },
       }; },
     },
-    async fetch(request: Request | string) { requests.push(typeof request === "string" ? request : request.url); return new Response("app chunk"); },
+    async fetch(request: Request | string) { requests.push(typeof request === "string" ? request : request.url); return new Response("app chunk", { headers: upstream }); },
     URL, Response, Request, Headers, ReadableStream, TextEncoder, TextDecoder, MessageChannel, Uint8Array, setTimeout, clearTimeout,
   });
   return {
@@ -108,4 +108,16 @@ test("tools stay out of service-worker precaching and retain their fingerprint q
   expect(response?.status).toBe(200);
   expect(sw.requests).toEqual(["https://example.test/nested/app/bun-tools.wasm.gz?v=expected-fingerprint"]);
   expect(sw.cacheWrites).toEqual([]);
+});
+
+test("module scope drops the native encoding headers of an upstream body fetch already decoded", async () => {
+  const sw = worker("https://example.test/", "__bunwasm", undefined, undefined, { "content-type": "application/wasm", "content-encoding": "br", "content-length": "3", etag: "\"twin\"" });
+  const response = await sw.fetch("__bunwasm/bun-tools.wasm?v=expected-fingerprint");
+  expect(sw.requests).toEqual(["https://example.test/bun-tools.wasm?v=expected-fingerprint"]);
+  expect(response?.headers.get("content-encoding")).toBeNull();
+  expect(response?.headers.get("content-length")).toBeNull();
+  expect(response?.headers.get("content-type")).toBe("application/wasm");
+  expect(response?.headers.get("etag")).toBe("\"twin\"");
+  expect(response?.headers.get("cross-origin-embedder-policy")).toBe("require-corp");
+  expect(await response?.text()).toBe("app chunk");
 });

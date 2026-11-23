@@ -45,9 +45,9 @@ async function preview(isolate = true) {
   }
 }
 
-function get(url: string, encoding: string | undefined) {
+function get(url: string, encoding: string | undefined, method = "GET") {
   return new Promise<{ status: number; headers: import("node:http").IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
-    const req = request(url, { headers: encoding === undefined ? {} : { "accept-encoding": encoding } }, response => {
+    const req = request(url, { method, headers: encoding === undefined ? {} : { "accept-encoding": encoding } }, response => {
       const chunks: Buffer[] = [];
       response.on("data", chunk => chunks.push(chunk));
       response.on("error", reject);
@@ -58,6 +58,30 @@ function get(url: string, encoding: string | undefined) {
     req.end();
   });
 }
+
+test.each(["GET", "HEAD"])("an unreadable gzip twin only drops the decoded size from a Brotli %s", async method => {
+  await Bun.write(join(root, "truncated-twin.wasm.br"), brotli);
+  await Bun.write(join(root, "truncated-twin.wasm.gz"), gzip.subarray(0, 3));
+  await using server = await preview();
+  const response = await get(new URL("truncated-twin.wasm", server.url).href, "br", method);
+  expect(response.status).toBe(200);
+  expect(response.headers["content-encoding"]).toBe("br");
+  expect(response.headers["x-uncompressed-length"]).toBeUndefined();
+  expect(response.body).toEqual(method === "HEAD" ? Buffer.alloc(0) : brotli);
+});
+
+test.each([["TLS_CERT", "cert.pem"], ["TLS_KEY", "key.pem"]])("serving refuses %s without its partner instead of falling back to HTTP", async (variable, file) => {
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "../serve.ts")], {
+    env: { ...process.env, ROOT: root, PORT: "0", TLS_CERT: undefined, TLS_KEY: undefined, [variable]: join(root, file) },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const timeout = setTimeout(() => child.kill("SIGKILL"), 10_000);
+  try {
+    expect(await child.exited).not.toBe(0);
+    expect(await new Response(child.stderr).text()).toContain("TLS_CERT and TLS_KEY must be set together");
+    expect(await new Response(child.stdout).text()).not.toContain("serving");
+  } finally { clearTimeout(timeout); }
+});
 
 test("serves the supplied Brotli representation at the original wasm URL", async () => {
   await using server = await preview();
@@ -96,7 +120,8 @@ test.each(negotiation)("negotiates Accept-Encoding %s without changing the decod
   expect(body).toEqual(wasm);
   expect(response.body).toEqual(expected === "br" ? brotli : expected === "gzip" ? gzip : wasm);
   expect(response.headers["content-length"]).toBe(String(response.body.length));
-  expect(response.headers["x-uncompressed-length"]).toBe(expected === "gzip" ? String(wasm.length) : undefined);
+  // The gzip twin's trailer gives the decoded size for either encoding, for the loader's progress text.
+  expect(response.headers["x-uncompressed-length"]).toBe(expected ? String(wasm.length) : undefined);
 });
 
 test.each(["*;q=0", "br;q=0,gzip;q=0,identity;q=0", "identity;q=0,deflate"])("returns 406 when every representation is refused by %s", async encoding => {
@@ -139,6 +164,8 @@ test.each(availability)("serves only actual variants for %s with %s", async (nam
   if (status !== 200) return;
   expect(response.headers["content-type"]).toBe("application/wasm");
   expect(response.body).toEqual(expected === "br" ? brotli : expected === "gzip" ? gzip : wasm);
+  // Without a gzip twin there is no trailer to read the decoded size from.
+  expect(response.headers["x-uncompressed-length"]).toBe(expected === "gzip" ? String(wasm.length) : undefined);
 });
 
 test("does not read unrelated program bodies or refused compressed variants", async () => {

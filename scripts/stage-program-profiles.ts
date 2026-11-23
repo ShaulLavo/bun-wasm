@@ -7,6 +7,8 @@ import { verifySharedProgramMemory, type BackingPolicy } from "./shared-program-
 import { profileAsset, verifyMemoryProfile } from "../web/src/program-profile";
 import { inputProfile, parseProgramReceipt, record, verifyProgramReceipt, type ProgramInputSnapshot } from "./guest-core-receipt";
 import { assertShippedGuestHasNoNames, keepNamesRequested } from "./wasm-name-sections";
+import { sha256, writeGuestTwins } from "./stage-guest-wasm";
+import { settleAll } from "./stage-wasm-sidecars";
 
 export function sharedProgramReceipts(engine: PairedEngine): string[] {
   return ["bun-core.wasm.core.json", "source.txt"].concat(engine === "spidermonkey"
@@ -26,10 +28,11 @@ export async function stageSharedPrograms(out: string, builds: Record<string, st
   jsc: process.env.SHARED_JSC_PROGRAM,
   spidermonkey: process.env.SHARED_SPIDERMONKEY_PROGRAM,
 }, policy: BackingPolicy = BUN_MEMORY_GROUP_POLICY): Promise<void> {
-  for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) {
+  // Brotli quality 11 takes tens of seconds per guest, so the programs compress concurrently.
+  await settleAll((["quickjs", "jsc", "spidermonkey"] as const).map(async engine => {
     const source = inputs[engine];
     if (source) await stageProgram(engine, source, out, builds, policy);
-  }
+  }));
 }
 
 function verifyIdentity(bytes: Uint8Array, value: unknown): void {
@@ -109,10 +112,12 @@ async function stageProgram(engine: PairedEngine, source: string, out: string, b
   for (const file of files.concat(sideFiles)) {
     await Bun.write(join(receipts, file.name), file.text);
   }
-  for (const file of [{ name: names.core, bytes: core }, { name: names.side, bytes: side }]) {
-    assertShippedGuestHasNoNames(file.name, file.bytes, keepNamesRequested());
+  const guests = [{ name: names.core, bytes: core }, { name: names.side, bytes: side }];
+  for (const guest of guests) assertShippedGuestHasNoNames(guest.name, guest.bytes, keepNamesRequested());
+  await settleAll(guests.map(async file => {
     const name = profileAsset(file.name, "shared-group");
-    builds[name] = new Bun.CryptoHasher("sha256").update(file.bytes).digest("hex");
-    await Bun.write(join(out, `${name}.gz`), Bun.gzipSync(file.bytes, { level: 9 }));
-  }
+    const digest = sha256(file.bytes);
+    await writeGuestTwins(join(out, name), file.bytes, digest);
+    builds[name] = digest;
+  }));
 }

@@ -3,6 +3,7 @@ import { createToolsLoader } from "../web/src/engine-loader";
 
 const wasm = Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0]);
 const build = new Bun.CryptoHasher("sha256").update(wasm).digest("hex");
+const substituted = Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0, 0, 2, 1, 120]);
 
 async function withTools(check: (fixture: {
   load: ReturnType<typeof createToolsLoader>;
@@ -42,7 +43,12 @@ async function withTools(check: (fixture: {
   const values = {
     location: new URL("https://tools-cache.test/"),
     caches: { match: async () => cached?.clone(), open: async () => cache },
-    fetch: async () => { downloads++; return new Response(Bun.gzipSync(valid ? wasm : Uint8Array.of(0))); },
+    // A negotiating host: fetch has already decoded the native Content-Encoding. The invalid payload
+    // is still a WebAssembly module, just not the expected build.
+    fetch: async () => {
+      downloads++;
+      return new Response(valid ? wasm : substituted, { headers: { "content-type": "application/wasm", "content-encoding": "br" } });
+    },
     __bunwasmBuilds: { "bun-tools.wasm": build },
   };
   for (const [name, value] of Object.entries(values)) Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });

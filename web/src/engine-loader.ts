@@ -69,8 +69,8 @@ export async function loadEngineProgram(engine: Engine, profile: ProgramMemoryPr
 }
 
 /**
- * Fetches and compiles a wasm module. Sites ship it gzipped (static hosts cap file sizes, and it is
- * 3-4x smaller) and the page decompresses it; a plain .wasm URL works too. Throws WasmMissing on 404.
+ * Fetches and compiles a wasm module. Sites ship Brotli and gzip twins (static hosts cap file sizes,
+ * and they are 3-4x smaller); see fetchArtifact for how the page picks one. Throws WasmMissing on 404.
  */
 export async function loadWasm(url: string, progress: (text: string) => void, asset = url): Promise<{ module: WebAssembly.Module; size: number; build: string | null }> {
   const requested = new URL(url, location.href);
@@ -93,8 +93,8 @@ export async function loadWasm(url: string, progress: (text: string) => void, as
     streamed = await streamWasm(url, build, progress);
   } catch (error) {
     // A failure anywhere in the download, headers or body, can still be served from build-checked
-    // bytes a first-visit marker skipped. A missing asset stays missing.
-    const stored = build && !(error instanceof WasmMissing) ? await cachedEngine(key, build, true) : null;
+    // bytes a first-visit marker skipped. A missing asset stays missing and a cancelled load cancelled.
+    const stored = build && !(error instanceof WasmMissing) && !cancelled(error) ? await cachedEngine(key, build, true) : null;
     const fallback = stored && build ? await loadCachedWasm(url, key, stored, build, progress) : null;
     if (fallback) return fallback;
     throw error;
@@ -109,27 +109,29 @@ export async function loadWasm(url: string, progress: (text: string) => void, as
 
 /** Downloads and stream-compiles a module, keeping its bytes. */
 async function streamWasm(url: string, build: string | null, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; bytes: Uint8Array<ArrayBuffer> }> {
-  let size = 0;
   progress("downloading bun.wasm…");
   const started = performance.now();
-  const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
-  // The build hash in the query gives every build its own URL, so a CDN edge that still holds the
-  // previous build right after a deploy can't serve it in place of this one.
-  const { response: res, body: downloaded, gzipped } = await fetchArtifact(build ? `${gzUrl}?v=${build}` : gzUrl, url, url);
-  const total = Number(res.headers.get("content-length")) || 0;
+  return fromArtifact(url, build, url, artifact => compileArtifact(artifact, started, progress));
+}
+
+async function compileArtifact({ response: res, body: downloaded, gzipped }: Artifact, started: number, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; bytes: Uint8Array<ArrayBuffer> }> {
+  let size = 0;
+  const total = streamedLength(res, gzipped);
+  const encoding = gzipped ? "gzip-page" : res.headers.get("content-encoding") ?? "identity";
   let received = 0;
-  let lastProgress = 0;
+  // The first chunk always reports, however young the page is.
+  let lastProgress = Number.NEGATIVE_INFINITY;
   const counter = new TransformStream<Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>>({
     transform(chunk, controller) {
       received += chunk.length;
       if (performance.now() - lastProgress >= 50 || received === total) {
-        progress(`downloading bun.wasm… ${mb(received)}${total ? ` / ${mb(total)}` : ""}`);
+        progress(`downloading bun.wasm… ${mb(received)}${total > 0 && total >= received ? ` / ${mb(total)}` : ""}`);
         lastProgress = performance.now();
       }
       controller.enqueue(chunk);
     },
     flush() {
-      measureStartup("download", started, { bytes: received });
+      measureStartup("download", started, { bytes: received, encoding });
       progress("decompressing and compiling bun.wasm…");
     },
   });
@@ -164,15 +166,158 @@ async function streamWasm(url: string, build: string | null, progress: (text: st
   return { module, bytes };
 }
 
-/** The compressed artifact when the host has it, else the raw file. Throws WasmMissing on 404. */
-async function fetchArtifact(compressed: string, raw: string, label: string): Promise<{ response: Response; body: ReadableStream<Uint8Array<ArrayBuffer>>; gzipped: boolean }> {
-  let response = await fetch(compressed);
-  const gzipped = response.ok;
-  if (!gzipped) response = await fetch(raw);
-  if (response.status === 404) throw new WasmMissing(`${label}: HTTP 404`);
-  if (!response.ok) throw new Error(`${label}: HTTP ${response.status}`);
+type Artifact = { response: Response; body: ReadableStream<Uint8Array<ArrayBuffer>>; gzipped: boolean };
+
+/**
+ * Why the logical URL gave way to the `.gz` twin: its HTTP status, the failure that interrupted it,
+ * or a body that does not start like a WebAssembly module, kept in case no twin exists.
+ */
+type Miss = { status: number; error?: unknown; held?: Artifact };
+
+/**
+ * Fetch the logical `.wasm` URL first and pass it to `consume`. Negotiating hosts (site/worker.ts,
+ * web/serve.ts) answer it with the Brotli or gzip twin and a native Content-Encoding, which the
+ * browser decodes as the bytes arrive (Safari has no Brotli DecompressionStream). A plain static host
+ * ships no raw guest; when the logical URL is missing, is not a WebAssembly module (an index page),
+ * or fails in transport or decoding, the `.gz` twin is consumed instead, gunzipped here. A `.gz` URL
+ * is fetched as given. The build hash in the query gives every build its own URL, so a CDN edge that
+ * still holds the previous build right after a deploy can't serve it in place of this one.
+ * Throws WasmMissing when both are missing.
+ */
+async function fromArtifact<T>(url: string, build: string | null, label: string, consume: (artifact: Artifact) => Promise<T>): Promise<T> {
+  const requested = new URL(url, location.href);
+  if (build !== null) requested.searchParams.set("v", build);
+  if (requested.pathname.endsWith(".gz")) return consume(gzipArtifact(await fetch(requested.href), { status: 404 }, label));
+  const logical = await attempt(requested.href, consume);
+  if ("value" in logical) return logical.value;
+  requested.pathname += ".gz";
+  return fallBack(requested.href, logical, label, consume);
+}
+
+async function fallBack<T>(href: string, logical: Miss, label: string, consume: (artifact: Artifact) => Promise<T>): Promise<T> {
+  const { held } = logical;
+  if (!held) return consume(gzipArtifact(await fetch(href), logical, label));
+  const usable = await heldTwin(href, logical, label, consume).catch(async (error: unknown) => {
+    // A cancelled or uncompilable twin is final; the held body is discarded either way.
+    await dispose(held.body);
+    throw error;
+  });
+  if (usable) {
+    void dispose(held.body);
+    return usable.value;
+  }
+  // With no usable twin the logical bytes go on to verification, which names what is wrong with them.
+  return consume(held);
+}
+
+/** The twin beside a held logical body; a failed fetch counts as no twin unless it was cancelled. */
+async function heldTwin<T>(href: string, logical: Miss, label: string, consume: (artifact: Artifact) => Promise<T>): Promise<{ value: T } | undefined> {
+  const twin = await fetch(href).catch((error: unknown) => {
+    if (final(error)) throw error;
+    return undefined;
+  });
+  return consumeTwin(twin, logical, label, consume);
+}
+
+/** The twin consumed, or undefined when it is missing, empty or does not decode. Cancellation stays final. */
+async function consumeTwin<T>(twin: Response | undefined, logical: Miss, label: string, consume: (artifact: Artifact) => Promise<T>): Promise<{ value: T } | undefined> {
+  if (!twin?.ok || !twin.body) {
+    await dispose(twin?.body);
+    return undefined;
+  }
+  try {
+    return { value: await consume(gzipArtifact(twin, logical, label)) };
+  } catch (error) {
+    if (final(error)) throw error;
+    return undefined;
+  }
+}
+
+/** Discarding a body is best-effort: its own late error must not replace the result in hand. */
+async function dispose(body: ReadableStream | null | undefined): Promise<void> {
+  if (body) await body.cancel().catch(() => {});
+}
+
+/** The logical URL consumed, or why the `.gz` twin should be tried. Cancellation and compile errors stay final. */
+async function attempt<T>(href: string, consume: (artifact: Artifact) => Promise<T>): Promise<{ value: T } | Miss> {
+  try {
+    const response = await fetch(href);
+    if (!response.ok || !response.body) {
+      await dispose(response.body);
+      return { status: response.ok ? 404 : response.status };
+    }
+    const { body, wasm } = await replayHead(response.body);
+    const artifact = { response, body, gzipped: false };
+    // A single-page host can answer a missing file with its index page, whatever its content type.
+    if (!wasm) return { status: 404, held: artifact };
+    return { value: await consume(artifact) };
+  } catch (error) {
+    if (final(error)) throw error;
+    return { status: 0, error };
+  }
+}
+
+function final(error: unknown): boolean {
+  return error instanceof WebAssembly.CompileError || cancelled(error);
+}
+
+function cancelled(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
+}
+
+const WASM_MAGIC = [0, 0x61, 0x73, 0x6d];
+
+/** The body with its first bytes read and replayed, and whether they start a WebAssembly module. */
+async function replayHead(body: ReadableStream<Uint8Array<ArrayBuffer>>): Promise<{ body: ReadableStream<Uint8Array<ArrayBuffer>>; wasm: boolean }> {
+  const reader = body.getReader();
+  const head: Uint8Array<ArrayBuffer>[] = [];
+  let length = 0;
+  while (length < WASM_MAGIC.length) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    head.push(value);
+    length += value.length;
+  }
+  const prefix = head.flatMap(chunk => Array.from(chunk.subarray(0, WASM_MAGIC.length))).slice(0, WASM_MAGIC.length);
+  const replayed = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    start(controller) { for (const chunk of head) controller.enqueue(chunk); },
+    async pull(controller) {
+      const { value, done } = await reader.read();
+      if (done) controller.close();
+      else controller.enqueue(value);
+    },
+    cancel(reason) { return reader.cancel(reason); },
+  });
+  return { body: replayed, wasm: WASM_MAGIC.every((byte, index) => prefix[index] === byte) };
+}
+
+/**
+ * The `.gz` twin. When it is unusable too, the logical URL's interruption or own HTTP failure is the
+ * better report, so a network failure is never mistaken for a missing asset.
+ */
+function gzipArtifact(response: Response, logical: Miss, label: string): Artifact {
+  if (response.ok) return { response, body: requireBody(response, label), gzipped: true };
+  if (logical.error !== undefined) throw logical.error;
+  const status = response.status === 404 && logical.status !== 406 ? logical.status : response.status;
+  if (status === 404) throw new WasmMissing(`${label}: HTTP 404`);
+  throw new Error(`${label}: HTTP ${status}`);
+}
+
+function requireBody(response: Response, label: string): ReadableStream<Uint8Array<ArrayBuffer>> {
   if (!response.body) throw new Error(`${label}: empty response body`);
-  return { response, body: response.body, gzipped };
+  return response.body;
+}
+
+/**
+ * The byte count the progress counter will reach, or 0 when unknown. With a native Content-Encoding
+ * the body yields decoded bytes while Content-Length counts the encoded ones, so only the host's
+ * decoded size (web/serve.ts) is usable. The page counts a `.gz` twin before gunzipping it.
+ */
+function streamedLength(response: Response, gzipped: boolean): number {
+  const decoded = Number(response.headers.get("x-uncompressed-length"));
+  if (!gzipped && decoded > 0) return decoded;
+  if (!gzipped && response.headers.get("content-encoding")) return 0;
+  return Number(response.headers.get("content-length")) || 0;
 }
 
 /** Compiles a build-checked cache entry; null (and evicted) when its bytes do not compile. */
@@ -249,16 +394,14 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
   if (cached && build !== null) return readVerifiedCache(key, name, cached, build, progress);
   const downloading = performance.now();
   progress(`downloading ${name}…`);
-  const compressed = new URL(requested);
-  if (!compressed.pathname.endsWith(".gz")) compressed.pathname += ".gz";
-  if (build !== null) compressed.searchParams.set("v", build);
   let downloaded: Awaited<ReturnType<typeof downloadBytes>>;
   try {
-    downloaded = await downloadBytes(compressed.href, requested.href, url);
+    downloaded = await downloadBytes(requested.href, build, url);
   } catch (error) {
     // Headers or body failed: build-checked cached bytes still serve. A missing asset stays missing,
-    // and verification below stays outside, so an integrity mismatch is never masked.
-    const stored = build === null || error instanceof WasmMissing ? null : await cachedEngine(key, build, true);
+    // a cancelled load stays cancelled, and verification below stays outside, so an integrity
+    // mismatch is never masked.
+    const stored = build === null || error instanceof WasmMissing || cancelled(error) ? null : await cachedEngine(key, build, true);
     if (stored && build !== null) return readVerifiedCache(key, name, stored, build, progress);
     throw error;
   }
@@ -277,11 +420,12 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
   return { bytes, build };
 }
 
-/** The whole artifact, decompressed when the host served the gzip twin. */
-async function downloadBytes(compressed: string, raw: string, label: string): Promise<{ bytes: Uint8Array<ArrayBuffer>; gzipped: boolean }> {
-  const { body, gzipped } = await fetchArtifact(compressed, raw, label);
-  const decoded = gzipped ? body.pipeThrough(new DecompressionStream("gzip")) : body;
-  return { bytes: new Uint8Array(await new Response(decoded).arrayBuffer()), gzipped };
+/** The whole artifact, gunzipped here when the host only had the `.gz` twin. */
+async function downloadBytes(url: string, build: string | null, label: string): Promise<{ bytes: Uint8Array<ArrayBuffer>; gzipped: boolean }> {
+  return fromArtifact(url, build, label, async ({ body, gzipped }) => {
+    const decoded = gzipped ? body.pipeThrough(new DecompressionStream("gzip")) : body;
+    return { bytes: new Uint8Array(await new Response(decoded).arrayBuffer()), gzipped };
+  });
 }
 
 /** Cached bytes count only after the same digest check as a download; a mismatch is evicted. */

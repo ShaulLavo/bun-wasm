@@ -1,6 +1,7 @@
 {
   // bun.sprockt.dev: the sandbox at /, the terminal playground at /playground/.
-  // Only program requests (shell, env and base programs) enter the encoding adapter; other assets keep native routing.
+  // Only WASM requests (Bun guests, shell, env and base programs) enter the encoding adapter; other assets keep native routing.
+  // Waffle's network.wasm ships raw without twins, so it stays on native routing.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "bun-wasm",
   "compatibility_date": "2026-10-15",
@@ -8,7 +9,7 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "run_worker_first": ["/programs/*", "/playground/programs/*"]
+    "run_worker_first": ["/*.wasm", "!/network.wasm", "!/*/network.wasm"]
   },
   "routes": [{ "pattern": "bun.sprockt.dev", "custom_domain": true }]
 }

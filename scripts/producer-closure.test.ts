@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launcherReceipt, producerArtifactPaths, producerEngines, producerScopes, producerSelection, requireClosureFiles, verifyLauncher, verifyWorkerProof, workerProofLabels } from "./producer-closure.ts";
+import { launcherReceipt, producerArtifactPaths, producerEngines, producerScopes, producerSelection, publicationAssets, requireClosureFiles, verifyLauncher, verifyWorkerProof, workerProofLabels } from "./producer-closure.ts";
 
 test("one registry includes both supported split engines and only QuickJS for shared-group", () => {
   expect(producerEngines("split")).toEqual(["quickjs", "jsc"]);
@@ -16,7 +16,7 @@ test("closure manifests require both paired receipts, JSC embedding, smoke and e
   const paths = producerArtifactPaths("split");
   expect(paths.some(path => /hermes/i.test(path))).toBe(false);
   expect(() => requireClosureFiles("split", paths.map(path => ({ path })))).not.toThrow();
-  for (const omitted of ["quickjs/engine.wasm.engine.json", "dist/bun-jsc.wasm.build.json", "dist/jsc-engine.wasm.engine.json", "dist/bun-jsc.wasm.embedding.json", "jsc-smoke.log", "jsc-node-smoke.log", "launcher/bun-wasm.launcher.json"]) {
+  for (const omitted of ["quickjs/engine.wasm.engine.json", "dist/bun-jsc.wasm.build.json", "dist/jsc-engine.wasm.engine.json", "dist/bun-jsc.wasm.embedding.json", "jsc-smoke.log", "jsc-node-smoke.log", "launcher/bun-wasm.launcher.json", "web/bun-browser.wasm.gz"]) {
     expect(() => requireClosureFiles("split", paths.filter(path => path !== omitted).map(path => ({ path })))).toThrow(omitted);
   }
   const shared = producerArtifactPaths("shared-group");
@@ -39,6 +39,8 @@ test("split closure retains the verified shell, network and program-family WASM 
   for (const family of ["coreutils", "findutils", "grep", "ripgrep", "sed"]) {
     for (const suffix of ["", ".gz", ".br"]) dependencies.push(`web/programs/base/waffle-${family}/dist/${family}.wasm${suffix}`);
   }
+  // Each required gzip guest may carry the Brotli twin web/build.ts writes beside it.
+  for (const name of publicationAssets) dependencies.push(`web/${name}.br`);
   const files = producerArtifactPaths("split").concat(dependencies).map(path => ({ path }));
   expect(() => requireClosureFiles("split", files)).not.toThrow();
   expect(() => requireClosureFiles("split", files.concat([{ path: "web/network.wasm" }]))).toThrow("Repeated");
@@ -46,7 +48,7 @@ test("split closure retains the verified shell, network and program-family WASM 
 });
 
 test("dependency WASM does not admit extra engine payloads or unknown dependency families", () => {
-  for (const path of ["web/bun-spidermonkey.wasm.gz", "web/unknown-engine.wasm", "web/quickjs.wasm", "web/quickjs.wasm.br", "web/programs/unknown.wasm", "web/programs/shell-engine.wasm.zst", "web/programs/base/waffle-unknown/dist/unknown.wasm.gz", "web/__bunwasm/bun-spidermonkey.wasm.gz"]) {
+  for (const path of ["web/bun-spidermonkey.wasm.gz", "web/unknown-engine.wasm", "web/quickjs.wasm", "web/quickjs.wasm.zst", "web/unknown-engine.wasm.br", "web/programs/unknown.wasm", "web/programs/shell-engine.wasm.zst", "web/programs/base/waffle-unknown/dist/unknown.wasm.gz", "web/__bunwasm/bun-spidermonkey.wasm.gz"]) {
     expect(() => requireClosureFiles("split", producerArtifactPaths("split").concat([path]).map(path => ({ path })))).toThrow(`Unexpected producer manifest artifact: ${path}`);
   }
 });

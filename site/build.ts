@@ -1,10 +1,12 @@
 // Builds the public site into site/dist: the sandbox at the root and the playground under
 // /playground/. Both apps use relative URLs (wasm, workers, service-worker scopes), so they
 // work unchanged in either place.
-import { appendFileSync, cpSync, rmSync } from "node:fs";
+import { appendFileSync, cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveSiteSpiderMonkey, verifySiteGuests } from "../scripts/site-guest-preflight";
 import { requireSharedProgramInputs } from "../scripts/stage-program-profiles";
+import { brotliQuality } from "../scripts/stage-guest-wasm";
 import { templates } from "../sandbox/src/template-catalog";
 
 const root = resolve(import.meta.dir, "..");
@@ -21,6 +23,12 @@ async function build(app: string): Promise<void> {
   await run(app, ["bun", "run", "build"]);
 }
 
+// Deployed guests ship Brotli quality 11 unless overridden; an invalid override fails before any build starts.
+process.env.BUN_WASM_BROTLI_QUALITY ??= "11";
+brotliQuality();
+// The site copies sandbox/dist and web/dist, so the app builds must write there. An explicit empty
+// value, not a deleted one, so an app's own .env file cannot set it again (scripts/app-output.ts).
+process.env.BUN_WASM_APP_OUT = "";
 const spiderMonkey = resolveSiteSpiderMonkey(root);
 await verifySiteGuests(root, process.env, spiderMonkey);
 // The public site never ships a guest with debug names. Set the profiling override to "0"
@@ -34,8 +42,16 @@ if (spiderMonkey) process.env.SPIDERMONKEY_WASM = spiderMonkey;
 const guests = Bun.spawn(["bash", "scripts/build-bash-web-shell.sh"], { cwd: root, stdout: "inherit", stderr: "inherit" });
 if ((await guests.exited) !== 0) throw new Error("scripts/build-bash-web-shell.sh failed");
 process.env.BASH_WEB_GUESTS = "required";
-await build("sandbox");
-await build("web");
+// Quality 11 is about 13% smaller than the quick default (scripts/stage-guest-wasm.ts). Both apps
+// stage the same guests, so they share one cache.
+const compressionCache = mkdtempSync(join(tmpdir(), "bun-wasm-site-brotli-"));
+process.env.BUN_WASM_COMPRESSION_CACHE = compressionCache;
+try {
+  await build("sandbox");
+  await build("web");
+} finally {
+  rmSync(compressionCache, { recursive: true, force: true });
+}
 rmSync(out, { recursive: true, force: true });
 cpSync(join(root, "sandbox/dist"), out, { recursive: true });
 cpSync(join(root, "web/dist"), join(out, "playground"), { recursive: true });

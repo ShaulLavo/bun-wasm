@@ -63,6 +63,11 @@ async function moduleScope(request: Request, rest: string): Promise<Response> {
   const upstream = await fetch(target.href);
   // The page is cross-origin isolated: a worker script needs COEP of its own.
   const headers = new Headers(upstream.headers);
+  // The body is already decoded, so a native Content-Encoding and its encoded length no longer describe it.
+  if (headers.has("content-encoding")) {
+    headers.delete("content-encoding");
+    headers.delete("content-length");
+  }
   headers.set("cross-origin-embedder-policy", "require-corp");
   headers.set("cross-origin-resource-policy", "same-origin");
   return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers });

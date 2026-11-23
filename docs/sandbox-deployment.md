@@ -91,6 +91,15 @@ base programs) ship with `.br` and `.gz` twins. The Worker (`site/worker.ts`) an
 `web/serve.ts` pick one by `Accept-Encoding` and send it with a native
 `Content-Encoding`, so the browser downloads the smaller file at the ordinary URL.
 
+The Bun guests (`bun.wasm`, `quickjs.wasm`, `bun-jsc.wasm`, `jsc-engine.wasm`,
+`bun-browser.wasm`, `bun-tools.wasm` and the shared-group pairs) ship only their twins:
+`jsc-engine.wasm` is 34 MB raw, over Cloudflare's 25 MiB asset limit. The page fetches the
+logical `.wasm` URL, which the Worker answers the same way, so the browser decodes Brotli
+natively (Safari has no Brotli `DecompressionStream`). On a host without negotiation that URL
+is missing and the page falls back to the `.gz` twin, which it decompresses itself.
+`site/build.ts` compresses the twins at Brotli quality 11, which takes about 45 s for all guests
+at once; other builds default to quality 5 (`BUN_WASM_BROTLI_QUALITY` overrides it).
+
 To inspect the current deployment or restore a previous version:
 
 ```sh
