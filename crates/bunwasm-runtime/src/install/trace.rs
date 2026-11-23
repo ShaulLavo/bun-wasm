@@ -42,19 +42,21 @@ fn record(name: &'static str, time: Duration, bytes: u64) {
 
 /// Times `step` under `name` when tracing is on.
 pub fn time<T>(name: &'static str, step: impl FnOnce() -> T) -> T {
-    if !enabled() {
-        return step();
-    }
-    let start = Instant::now();
+    let started = start_time();
     let result = step();
-    record(name, start.elapsed(), 0);
+    finish(name, started, 0);
     result
 }
 
-/// Adds a byte count to `name` without timing anything.
-pub fn bytes(name: &'static str, bytes: usize) {
-    if enabled() {
-        record(name, Duration::ZERO, bytes as u64);
+/// The start of a step that `finish` records, or `None` when tracing is off.
+pub fn start_time() -> Option<Instant> {
+    enabled().then(Instant::now)
+}
+
+/// Records one call of `name` that started at `started` and moved `bytes`.
+pub fn finish(name: &'static str, started: Option<Instant>, bytes: usize) {
+    if let Some(started) = started {
+        record(name, started.elapsed(), bytes as u64);
     }
 }
 
@@ -71,5 +73,20 @@ pub fn report(total: Duration) {
             row.count,
             row.bytes / 1024
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_download_with_bytes_counts_as_one_call() {
+        ROWS.with(|rows| *rows.borrow_mut() = Some(BTreeMap::new()));
+        let started = start_time();
+        finish("download", started, 2048);
+        time("download", || ());
+        let row = ROWS.with(|rows| rows.borrow_mut().take().unwrap()["download"]);
+        assert_eq!((row.count, row.bytes), (2, 2048));
     }
 }

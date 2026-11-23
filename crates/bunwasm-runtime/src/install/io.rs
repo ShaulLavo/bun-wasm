@@ -323,6 +323,9 @@ pub struct Downloads {
     limit: usize,
     pending: Vec<(String, Result<Download>)>,
     pumped: Option<Instant>,
+    /// One read buffer for every response: a read that finds nothing allocates nothing,
+    /// and bodies grow only by the bytes that arrived.
+    scratch: Vec<u8>,
 }
 
 impl Downloads {
@@ -332,7 +335,13 @@ impl Downloads {
             limit,
             pending: Vec::new(),
             pumped: None,
+            scratch: Vec::new(),
         }
+    }
+
+    fn scratch(&mut self) -> &mut [u8] {
+        self.scratch.resize(READ_CAP, 0);
+        &mut self.scratch
     }
 
     pub fn is_full(&self) -> bool {
@@ -418,6 +427,7 @@ impl Downloads {
             .filter_map(|(_, download)| download.as_ref().ok())
             .map(|download| download.body.len())
             .sum();
+        self.scratch();
         for (_, download) in &mut self.pending {
             let Ok(download) = download else {
                 continue;
@@ -426,9 +436,56 @@ impl Downloads {
                 return;
             }
             let before = download.body.len();
-            download.advance(PREFETCH_BUFFER - buffered, registry);
-            buffered += download.body.len() - before;
+            download.advance(PREFETCH_BUFFER - buffered, &mut self.scratch, registry);
+            // A failed download dropped its body, so it may have shrunk.
+            buffered = (buffered + download.body.len()).saturating_sub(before);
         }
+    }
+}
+
+/// How a body read stopped.
+#[derive(Debug, PartialEq)]
+enum BodyRead {
+    /// `budget` bytes arrived; the rest waits for a later read.
+    Paused,
+    /// The body ended.
+    Ended,
+    /// The body passed `limit`; the extra bytes were not kept.
+    TooLarge,
+    /// The reader returned this negative code (`host::AGAIN` when nothing has arrived yet).
+    Stopped(i32),
+}
+
+/// Appends what `read` yields until it would block, the body ends, or `budget` bytes
+/// arrived. Each read asks for at most the scratch size, the rest of the budget, and one
+/// byte past `limit` (enough to tell a body of exactly `limit` bytes from a larger one).
+/// The body grows only by bytes that arrived.
+fn read_body(
+    body: &mut Vec<u8>,
+    scratch: &mut [u8],
+    budget: usize,
+    limit: usize,
+    mut read: impl FnMut(&mut [u8]) -> std::result::Result<usize, i32>,
+) -> BodyRead {
+    let start = body.len();
+    loop {
+        let read_so_far = body.len() - start;
+        let cap = scratch
+            .len()
+            .min(budget - read_so_far)
+            .min((limit + 1).saturating_sub(body.len()));
+        if cap == 0 {
+            return BodyRead::Paused;
+        }
+        let count = match read(&mut scratch[..cap]) {
+            Ok(0) => return BodyRead::Ended,
+            Ok(count) => count.min(cap),
+            Err(code) => return BodyRead::Stopped(code),
+        };
+        if body.len() + count > limit {
+            return BodyRead::TooLarge;
+        }
+        body.extend_from_slice(&scratch[..count]);
     }
 }
 
@@ -464,9 +521,10 @@ impl Download {
         } else {
             ("metadata-download", "metadata-cache-write")
         };
-        trace::time(download, || self.complete(others, registry))?;
+        let started = trace::start_time();
+        self.complete(others, registry)?;
         let bytes = std::mem::take(&mut self.body);
-        trace::bytes(download, bytes.len());
+        trace::finish(download, started, bytes.len());
         trace::time(store, || {
             store_cache(&self.url, &bytes, self.tarball, registry)
         });
@@ -480,7 +538,7 @@ impl Download {
             // Others first: a notification for this response that arrives after its read
             // below still ends the wait.
             others.pump(registry);
-            if self.advance(usize::MAX, registry) {
+            if self.advance(usize::MAX, others.scratch(), registry) {
                 pending.progressed(Instant::now());
             }
             match &self.state {
@@ -491,26 +549,34 @@ impl Download {
         }
     }
 
-    /// Moves the response forward without blocking, reading about `budget` body bytes at
-    /// most. Returns whether anything changed.
-    fn advance(&mut self, budget: usize, registry: &Registry) -> bool {
+    /// Moves the response forward without blocking, reading at most `budget` body bytes.
+    /// Returns whether anything changed. Only a head, body bytes or the end of the body
+    /// count: an unanswered request must still reach its idle timeout.
+    fn advance(&mut self, budget: usize, scratch: &mut [u8], registry: &Registry) -> bool {
         let head = matches!(self.state, Body::Head) && self.read_head(registry);
-        let reading = matches!(self.state, Body::Reading);
-        let start = self.body.len();
-        while matches!(self.state, Body::Reading) && self.body.len() - start < budget {
-            match host::read_into(self.handle, &mut self.body, READ_CAP) {
-                Ok(0) => self.state = Body::Done,
-                Ok(_) if self.body.len() > LIMIT => {
-                    self.state = Body::Failed("Download exceeds 256 MiB limit".into())
-                }
-                Ok(_) => {}
-                Err(host::AGAIN) => break,
-                Err(_) => self.state = Body::Failed(network_error(self.handle, registry)),
-            }
+        if !matches!(self.state, Body::Reading) {
+            return head;
         }
-        // Only a head, body bytes or the end of the body count as progress: an unanswered
-        // request must still reach its idle timeout.
-        head || self.body.len() > start || (reading && !matches!(self.state, Body::Reading))
+        let start = self.body.len();
+        let handle = self.handle;
+        let outcome = read_body(&mut self.body, scratch, budget, LIMIT, |buf| {
+            host::read_to(handle, buf)
+        });
+        match outcome {
+            BodyRead::Paused | BodyRead::Stopped(host::AGAIN) => {
+                return head || self.body.len() > start;
+            }
+            BodyRead::Ended => self.state = Body::Done,
+            BodyRead::TooLarge => self.fail("Download exceeds 256 MiB limit".into()),
+            BodyRead::Stopped(_) => self.fail(network_error(handle, registry)),
+        }
+        true
+    }
+
+    /// Records the error and frees the buffered body now, not when the request is consumed.
+    fn fail(&mut self, error: String) {
+        self.body = Vec::new();
+        self.state = Body::Failed(error);
     }
 
     /// Reads the response head if it arrived. Returns whether it did (or failed).
@@ -519,15 +585,15 @@ impl Download {
             Ok(head) => head,
             Err(host::AGAIN) => return false,
             Err(_) => {
-                self.state = Body::Failed(network_error(self.handle, registry));
+                self.fail(network_error(self.handle, registry));
                 return true;
             }
         };
-        self.state = match response_status(&head) {
-            Ok(status) if (200..300).contains(&status) => Body::Reading,
-            Ok(status) => Body::Failed(format!("GET {} - {status}", self.url)),
-            Err(error) => Body::Failed(error),
-        };
+        match response_status(&head) {
+            Ok(status) if (200..300).contains(&status) => self.state = Body::Reading,
+            Ok(status) => self.fail(format!("GET {} - {status}", self.url)),
+            Err(error) => self.fail(error),
+        }
         true
     }
 }
@@ -743,7 +809,7 @@ pub fn extract(
     tick: &mut dyn FnMut(),
 ) -> Result<Option<Vec<u8>>> {
     let mut directories = BTreeSet::new();
-    let mut data = Vec::new();
+    let mut buffer = Vec::new();
     let mut manifest = None;
     visit_archive(bytes, |entry, path| {
         tick();
@@ -752,18 +818,64 @@ pub fn extract(
             return create_directory(&target);
         }
         ensure_parent(&mut directories, &target)?;
-        // One write per file: each write is a host filesystem call in the browser.
-        data.clear();
-        data.reserve(entry.size() as usize);
-        trace::time("extract-inflate", || entry.read_to_end(&mut data))
-            .map_err(|e| e.to_string())?;
-        trace::time("extract-write", || fs::write(&target, &data)).map_err(|e| e.to_string())?;
-        if path == Path::new("package.json") {
-            manifest = Some(data.clone());
+        // Grows to the largest file seen, at most `EXTRACT_CHUNK`.
+        let wanted = (entry.size() as usize).clamp(1, EXTRACT_CHUNK);
+        if buffer.len() < wanted {
+            buffer.resize(wanted, 0);
+        }
+        let keep = path == Path::new("package.json");
+        let kept = write_entry(entry, &target, &mut buffer, keep)?;
+        if keep {
+            manifest = kept;
         }
         Ok(())
     })?;
     Ok(manifest)
+}
+
+/// Each write is a host filesystem call in the browser, so files up to this size are
+/// written with one call. Larger files stream through in chunks of this size.
+const EXTRACT_CHUNK: usize = 256 * 1024;
+
+/// Streams one archive file to `target` through `buffer`. Returns its bytes when `keep`.
+fn write_entry(
+    entry: &mut impl Read,
+    target: &Path,
+    buffer: &mut [u8],
+    keep: bool,
+) -> Result<Option<Vec<u8>>> {
+    let mut file =
+        trace::time("extract-write", || fs::File::create(target)).map_err(|e| e.to_string())?;
+    let mut kept = keep.then(Vec::new);
+    loop {
+        let count =
+            trace::time("extract-inflate", || fill(entry, buffer)).map_err(|e| e.to_string())?;
+        if count == 0 {
+            return Ok(kept);
+        }
+        if let Some(kept) = kept.as_mut() {
+            kept.extend_from_slice(&buffer[..count]);
+        }
+        trace::time("extract-write", || file.write_all(&buffer[..count]))
+            .map_err(|e| e.to_string())?;
+        if count < buffer.len() {
+            return Ok(kept);
+        }
+    }
+}
+
+/// Reads until `buffer` is full or the entry ends.
+fn fill(entry: &mut impl Read, buffer: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match entry.read(&mut buffer[filled..]) {
+            Ok(0) => break,
+            Ok(count) => filled += count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(filled)
 }
 
 fn create_directory(path: &Path) -> Result<()> {
@@ -809,6 +921,98 @@ mod tests {
             assert!(!cacheable(&bytes, false, &registry));
         }
         assert!(!cacheable(b"{", false, &registry));
+    }
+
+    /// A reader that offers `available` bytes in total, then reports `then`.
+    fn offering(
+        available: usize,
+        then: i32,
+        caps: &mut Vec<usize>,
+    ) -> impl FnMut(&mut [u8]) -> std::result::Result<usize, i32> + '_ {
+        let mut left = available;
+        move |buf| {
+            caps.push(buf.len());
+            if left == 0 {
+                return if then == 0 { Ok(0) } else { Err(then) };
+            }
+            let count = buf.len().min(left);
+            left -= count;
+            buf[..count].fill(7);
+            Ok(count)
+        }
+    }
+
+    #[test]
+    fn body_reads_stop_at_the_prefetch_budget() {
+        let (mut body, mut scratch, mut caps) = (vec![1; 10], vec![0; 8], Vec::new());
+        let outcome = read_body(
+            &mut body,
+            &mut scratch,
+            20,
+            1000,
+            offering(100, 0, &mut caps),
+        );
+        assert_eq!(outcome, BodyRead::Paused);
+        assert_eq!(body.len(), 30, "exactly the budget arrived");
+        assert_eq!(
+            caps,
+            [8, 8, 4],
+            "the last read asks only for the rest of the budget"
+        );
+    }
+
+    #[test]
+    fn a_body_read_that_finds_nothing_allocates_nothing() {
+        let (mut body, mut scratch, mut caps) = (Vec::new(), vec![0; 8], Vec::new());
+        let outcome = read_body(
+            &mut body,
+            &mut scratch,
+            usize::MAX,
+            1000,
+            offering(0, host::AGAIN, &mut caps),
+        );
+        assert_eq!(outcome, BodyRead::Stopped(host::AGAIN));
+        assert_eq!(body.capacity(), 0);
+    }
+
+    #[test]
+    fn a_body_at_the_limit_probes_one_byte() {
+        let (mut body, mut scratch, mut caps) = (Vec::new(), vec![0; 8], Vec::new());
+        let outcome = read_body(
+            &mut body,
+            &mut scratch,
+            usize::MAX,
+            12,
+            offering(12, 0, &mut caps),
+        );
+        assert_eq!(outcome, BodyRead::Ended);
+        assert_eq!((body.len(), caps.as_slice()), (12, [8, 5, 1].as_slice()));
+        let (mut body, mut caps) = (Vec::new(), Vec::new());
+        let outcome = read_body(
+            &mut body,
+            &mut scratch,
+            usize::MAX,
+            12,
+            offering(13, 0, &mut caps),
+        );
+        assert_eq!(outcome, BodyRead::TooLarge);
+        assert!(body.len() <= 12, "bytes past the limit are not kept");
+    }
+
+    #[test]
+    fn a_failed_download_drops_its_buffered_body() {
+        let registry = Registry::new("https://registry.invalid").unwrap();
+        let mut download = Download {
+            handle: 1,
+            url: "https://registry.invalid/package".into(),
+            tarball: true,
+            body: vec![0; 4096],
+            state: Body::Reading,
+        };
+        // Off wasm, every host read fails, as a dropped connection would.
+        assert!(download.advance(usize::MAX, &mut [0; 8], &registry));
+        assert!(matches!(download.state, Body::Failed(_)));
+        assert_eq!(download.body.capacity(), 0);
     }
 }
 

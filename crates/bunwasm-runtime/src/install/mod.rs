@@ -437,8 +437,8 @@ fn forget_installed_source(path: &Path) -> Result<()> {
     }
 }
 
-/// Installs missing packages. Returns the installed count and the manifests extraction read,
-/// so linking binaries need not read them back.
+/// Installs missing packages. Returns the installed count and, for each package extracted
+/// here, the manifest fields that name its binaries, so linking need not read them back.
 fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, Value>)> {
     let mut installed = 0;
     let mut manifests = BTreeMap::new();
@@ -533,8 +533,10 @@ fn install_package(
     let result = trace::time("extract", || io::extract(&bytes, &staging, &mut tick))
         .and_then(|manifest| validate_package(manifest.as_deref(), package))
         .and_then(|manifest| {
-            trace::time("publish", || publish_package(&staging, &path, package))?;
-            Ok(Some(manifest))
+            trace::time("publish", || {
+                publish_package(&staging, &path, package, io::write)
+            })?;
+            Ok(Some(bin_fields(&manifest)))
         });
     if result.is_err() {
         let _ = fs::remove_dir_all(staging);
@@ -555,18 +557,34 @@ fn empty_directory(path: &Path) -> Result<()> {
     fs::create_dir_all(path).map_err(|e| e.to_string())
 }
 
-/// Moves the extracted package into place, then records where it came from. A fresh install
-/// is one rename; replacing an existing package first drops its record and its directory.
-/// A stale record left beside a fresh directory only matches the same package identity.
-fn publish_package(staging: &Path, path: &Path, package: &Package) -> Result<()> {
+/// Moves the extracted package into place, then records where it came from. The old record
+/// goes first, so new bytes never sit beside an older record: if writing the new record
+/// fails, the package simply reads as missing. A fresh install is one rename; only a failed
+/// rename (an existing package) removes the old directory.
+fn publish_package(
+    staging: &Path,
+    path: &Path,
+    package: &Package,
+    write_record: impl FnOnce(&Path, &[u8]) -> Result<()>,
+) -> Result<()> {
+    forget_installed_source(path)?;
     if fs::rename(staging, path).is_err() {
-        forget_installed_source(path)?;
         if path.exists() {
             fs::remove_dir_all(path).map_err(|e| e.to_string())?;
         }
         fs::rename(staging, path).map_err(|e| e.to_string())?;
     }
-    io::write(&installed_source_path(path), &installed_source(package))
+    write_record(&installed_source_path(path), &installed_source(package))
+}
+
+/// The manifest fields `binary_entries` reads, kept instead of the whole manifest until
+/// binaries are linked.
+fn bin_fields(manifest: &Value) -> Value {
+    let mut fields = json!({"name": manifest["name"], "bin": manifest["bin"]});
+    if !manifest["directories"]["bin"].is_null() {
+        fields["directories"] = json!({"bin": manifest["directories"]["bin"]});
+    }
+    fields
 }
 
 /// Checks the extracted root `package.json`, from the bytes extraction just wrote.
@@ -1245,3 +1263,5 @@ fn package_binary(
 
 #[cfg(test)]
 mod lockfile_tests;
+#[cfg(test)]
+mod publish_tests;
