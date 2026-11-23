@@ -201,6 +201,8 @@ const GROUP_ADDRESS_SPACE_INPUTS = ["crates/bunwasm-cli/group-address-space.txt"
 
 function scopedRepositoryPaths(scope: ProgramInputScope, sharedGroup: boolean): string[] {
   const common = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "scripts/guest-source-manifest.ts", "scripts/rustc-cache.sh", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/src/program-profile.ts", "src/engine-kind.ts",
+    // Every core and side producer ships its module without the name section.
+    "scripts/wasm-name-sections.ts",
     // The guest memory maximum: a split core links at it and JSC's helpers size their heap from it.
     "crates/bunwasm-cli/max-memory.txt", "crates/bunwasm-cli/max_memory.rs", "crates/bunwasm-runtime/build/program_profile.rs"]
     .concat(sharedGroup ? GROUP_ADDRESS_SPACE_INPUTS : []);

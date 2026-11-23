@@ -263,7 +263,7 @@ def command(opts, wasm, work, preloads, path):
         tests += [part for preload in preloads for part in ["--preload", GUEST_TESTS + preload.removeprefix("./")]]
         tests += [GUEST_TESTS + path]
     if opts.engine == "browser":
-        return ["node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm), "--net"] + dirs + flags + ["--"] + tests
+        return ["node", "--expose-gc-as=__bunwasm_v8_gc", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm), "--net"] + dirs + flags + ["--"] + tests
     return [str(opts.launcher), "--wasm", str(wasm)] + dirs + flags + tests
 
 

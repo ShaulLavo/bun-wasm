@@ -148,6 +148,9 @@ struct Inner {
     rejections: RefCell<RejectionQueue<(V, V)>>,
     /// Promises that got their first handler after they left `rejections`.
     late_handled: RefCell<Vec<V>>,
+    /// The live heap size at the end of the most recent explicit collection, as JavaScriptCore
+    /// keeps one for `Bun.gc()` and `process.memoryUsage().heapUsed`.
+    collected_heap: Cell<Option<f64>>,
 }
 
 impl Drop for Inner {
@@ -207,6 +210,15 @@ impl QuickJs {
 
     fn raw(&self) -> *mut qjs::JSContext {
         self.0.ctx.as_raw().as_ptr()
+    }
+
+    fn compute_memory_usage(&self) -> qjs::JSMemoryUsage {
+        let mut usage = std::mem::MaybeUninit::<qjs::JSMemoryUsage>::zeroed();
+        // SAFETY: the runtime pointer is live for the duration of this call.
+        unsafe {
+            qjs::JS_ComputeMemoryUsage(qjs::JS_GetRuntime(self.raw()), usage.as_mut_ptr());
+            usage.assume_init()
+        }
     }
 
     /// The pending exception (after `Error::Exception`) or an Error for any
@@ -337,6 +349,7 @@ impl Engine for QuickJs {
             host,
             rejections: RefCell::new(RejectionQueue::new()),
             late_handled: RefCell::new(Vec::new()),
+            collected_heap: Cell::new(None),
         }));
         if has_interrupt_handler {
             let weak = Rc::downgrade(&engine.0);
@@ -684,6 +697,13 @@ impl Engine for QuickJs {
 
     fn gc(&self) {
         self.ctx().run_gc();
+        self.0
+            .collected_heap
+            .set(Some(self.compute_memory_usage().memory_used_size as f64));
+    }
+
+    fn heap_size_after_collection(&self) -> Option<f64> {
+        self.0.collected_heap.get()
     }
 
     fn set_local_time_offsets(&self, zone: Option<(&[i64], &[i32])>) -> bool {
@@ -701,16 +721,18 @@ impl Engine for QuickJs {
     }
 
     fn memory_usage(&self) -> Val {
-        let mut usage = std::mem::MaybeUninit::<qjs::JSMemoryUsage>::zeroed();
-        // SAFETY: the runtime pointer is live for the duration of this call.
-        let usage = unsafe {
-            qjs::JS_ComputeMemoryUsage(qjs::JS_GetRuntime(self.raw()), usage.as_mut_ptr());
-            usage.assume_init()
-        };
+        let usage = self.compute_memory_usage();
+        // QuickJS counts live bytes at every allocation. Bun reports what the last collection
+        // measured, and the whole heap before there was one.
+        let heap_used = self
+            .0
+            .collected_heap
+            .get()
+            .unwrap_or(usage.malloc_size as f64);
         crate::engine::Record::new()
             .set("rss", Val::Null)
             .set("heapTotal", usage.malloc_size as f64)
-            .set("heapUsed", usage.memory_used_size as f64)
+            .set("heapUsed", heap_used)
             .set("external", Val::Null)
             .set("arrayBuffers", usage.array_buffer_size as f64)
             .set("arrayBufferCount", usage.array_buffer_count as f64)
