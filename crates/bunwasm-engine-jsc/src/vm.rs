@@ -934,6 +934,15 @@ impl Engine for Jsc {
         Some(JsVal::new(unsafe { bunjsc_object_type_counts(ctx()) }))
     }
 
+    fn string_is_8bit(&self, value: &JsVal) -> Option<Result<bool, ()>> {
+        // SAFETY: valid context and value.
+        match unsafe { bunjsc_string_is_8bit(ctx(), value.raw()) } {
+            1 => Some(Ok(true)),
+            0 => Some(Ok(false)),
+            _ => Some(Err(())),
+        }
+    }
+
     fn heap_size_after_collection(&self) -> Option<f64> {
         // SAFETY: valid context.
         Some(unsafe { bunjsc_heap_size_after_collection(ctx()) } as f64)
