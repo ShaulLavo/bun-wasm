@@ -32,6 +32,7 @@ test("split core guest omits unreachable bun_react_compiler and retains wasmi fo
   expect(hasCrate(tree, "bun_react_compiler")).toBe(false);
   expect(hasCrate(tree, "wasmi")).toBe(true);
   expect(hasCrate(tree, "wasmparser")).toBe(true);
+  expect(hasCrate(tree, "bunwasm-nested")).toBe(true);
 });
 
 test("host-engine browser guest omits unreachable bun_react_compiler, wasmi, wasmparser and bunwasm-nested", () => {
