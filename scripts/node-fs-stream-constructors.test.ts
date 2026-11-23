@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inherits } from "node:util";
 import { runInNewContext } from "node:vm";
+import { loadFileHandleModule } from "./fs-file-handle-source";
 
 const require = createRequire(import.meta.url);
 const runtimeSource = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
@@ -14,14 +15,17 @@ const fsSource = hostFs.readFileSync(new URL("node_fs.js", runtimeSource), "utf8
 const streamSource = hostFs.readFileSync(new URL("node_stream_core.js", runtimeSource), "utf8");
 const optionsSource = hostFs.readFileSync(new URL("fs_options.ts", runtimeSource), "utf8");
 const helperSource = hostFs.readFileSync(new URL("fs_stream_constructors.ts", runtimeSource), "utf8");
+const buffersReaddirSource = hostFs.readFileSync(new URL("fs_buffers_readdir.ts", runtimeSource), "utf8");
 type Filesystem = typeof import("node:fs");
 type Streams = typeof import("node:stream");
 
-function productionFilesystem(root: string) {
+function productionFilesystem(root: string, options?: { failFsync?: Error; failWriteAfter?: { calls: number; error: Error } }) {
   const descriptors = new Set<number>();
   const destinations: number[] = [];
   const readBuffers: Uint8Array[] = [];
   const requests: number[] = [];
+  const fdOps: string[] = [];
+  let writeCalls = 0;
   const buffers = new Proxy(Buffer, {
     get(target, key) {
       if (key !== "allocUnsafe") return Reflect.get(target, key);
@@ -38,6 +42,7 @@ function productionFilesystem(root: string) {
   assert.ok(core && typeof core === "object" && "Stream" in core);
   const optionsFactory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${optionsSource}`));
   const helperFactory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${helperSource}`));
+  const buffersReaddirFactory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${buffersReaddirSource}`), context);
   const factory: unknown = runInNewContext(fsSource, context);
   assert.ok(typeof factory === "function");
   const runtime: unknown = factory({
@@ -48,7 +53,12 @@ function productionFilesystem(root: string) {
         descriptors.add(fd);
         return fd;
       },
-      close(fd: number) { hostFs.closeSync(fd); descriptors.delete(fd); },
+      close(fd: number) { fdOps.push(`close:${fd}`); hostFs.closeSync(fd); descriptors.delete(fd); },
+      fsync(fd: number) {
+        fdOps.push(`fsync:${fd}`);
+        if (options?.failFsync) throw options.failFsync;
+        hostFs.fsyncSync(fd);
+      },
       read(fd: number, length: number, position: number) {
         requests.push(length);
         const bytes = Buffer.alloc(length);
@@ -56,15 +66,23 @@ function productionFilesystem(root: string) {
         readBuffers.push(chunk);
         return chunk;
       },
-      write: (fd: number, bytes: Uint8Array, position: number) => hostFs.writeSync(fd, bytes, 0, Math.min(bytes.length, 2), position < 0 ? null : position),
+      write(fd: number, bytes: Uint8Array, position: number) {
+        writeCalls++;
+        if (options?.failWriteAfter && writeCalls > options.failWriteAfter.calls) throw options.failWriteAfter.error;
+        return hostFs.writeSync(fd, bytes, 0, Math.min(bytes.length, 2), position < 0 ? null : position);
+      },
+      writev: (fd: number, chunks: Uint8Array[], position: number) => hostFs.writevSync(fd, chunks, position < 0 ? undefined : position),
       readFile: hostFs.readFileSync,
       fstat: hostFs.fstatSync,
     },
     require(name: string): unknown {
       if (name === "buffer") return { Buffer: buffers };
       if (name === "fs_watch") return () => ({});
+      if (name === "fs_buffer_pins") return { pin: () => () => {} };
+      if (name === "fs_file_handle") return loadFileHandleModule();
       if (name === "fs_options") return optionsFactory({});
       if (name === "fs_stream_constructors") return helperFactory();
+      if (name === "fs_buffers_readdir") return buffersReaddirFactory();
       return require(name);
     },
     builtin: (name: string) => name === "node:stream" ? core.Stream : require(name),
@@ -76,7 +94,7 @@ function productionFilesystem(root: string) {
   const fs = runtime.fs as Filesystem;
   const streams = core.Stream as Streams;
   return {
-    fs, streams, destinations, readBuffers, requests,
+    fs, streams, destinations, readBuffers, requests, fdOps,
     cleanup() {
       for (const fd of descriptors) hostFs.closeSync(fd);
       hostFs.rmSync(root, { recursive: true, force: true });
@@ -309,6 +327,11 @@ async function errorAndDestroy(fs: Filesystem, path: string, root: string) {
   reader.close();
   await readerClosed;
   assert.equal(descriptor(reader), null);
+  const prematureReader = fs.createReadStream(path);
+  const prematureErr = await new Promise<unknown>(resolve => { prematureReader.close(resolve); });
+  assert.ok(prematureErr && typeof prematureErr === "object" && "message" in prematureErr && "code" in prematureErr);
+  assert.equal(prematureErr.code, "ERR_STREAM_PREMATURE_CLOSE");
+  assert.ok(String(prematureErr.message).includes("Premature close"));
   assert.throws(() => fs.createReadStream(path, { start: 4, end: 2 }), { code: "ERR_OUT_OF_RANGE" });
   const append = fs.createWriteStream(path, { flags: "a" });
   const appended = once(append, "close");
@@ -316,3 +339,227 @@ async function errorAndDestroy(fs: Filesystem, path: string, root: string) {
   await appended;
   assert.equal(fs.readFileSync(path, "utf8"), "abcdé!");
 }
+
+test("WriteStream options.fs defers _destroy until in-flight _write/_writev finishes and retries short writes cleanly", async () => {
+  const root = hostFs.mkdtempSync(join(tmpdir(), "bun-wasm-fsstream-customfs-"));
+  const runtime = productionFilesystem(root);
+  const { fs } = runtime;
+  try {
+    // 1. _destroy waits for in-flight _write.
+    {
+      const events: string[] = [];
+      let finishWrite!: () => void;
+      let started!: () => void;
+      const writeStarted = new Promise<void>(resolve => { started = resolve; });
+      const stream = Reflect.apply(fs.createWriteStream, fs, [join(root, "w.txt"), {
+        fs: {
+          open: fs.open,
+          write(_fd: number, buf: Buffer, _off: number, len: number, _pos: unknown, cb: Function) {
+            events.push("write-start");
+            started();
+            finishWrite = () => { events.push("write-cb"); cb(null, len, buf); };
+          },
+          close(fd: number, cb: Function) { events.push("close"); fs.close(fd, cb as () => void); },
+        },
+      }]) as import("node:fs").WriteStream;
+      stream.on("error", (error: Error & { code?: string }) => events.push(`error:${error.code}`));
+      const done = closed(stream);
+      stream.on("close", () => events.push("close-event"));
+      stream.write(Buffer.from("hello"));
+      await writeStarted;
+      stream.destroy();
+      await new Promise<void>(resolve => setImmediate(() => setImmediate(resolve)));
+      finishWrite();
+      await done;
+      expect(events).toEqual(["write-start", "write-cb", "close", "error:ERR_STREAM_DESTROYED", "close-event"]);
+    }
+
+    // 2. _destroy waits for in-flight _writev.
+    {
+      const events: string[] = [];
+      let finishWritev!: () => void;
+      let started!: () => void;
+      const writevStarted = new Promise<void>(resolve => { started = resolve; });
+      const stream = Reflect.apply(fs.createWriteStream, fs, [join(root, "wv.txt"), {
+        fs: {
+          open: fs.open,
+          write: fs.write,
+          writev(_fd: number, buffers: Buffer[], _pos: unknown, cb: Function) {
+            events.push("writev-start");
+            started();
+            const total = buffers.reduce((sum, buf) => sum + buf.length, 0);
+            finishWritev = () => { events.push("writev-cb"); cb(null, total, buffers); };
+          },
+          close(fd: number, cb: Function) { events.push("close"); fs.close(fd, cb as () => void); },
+        },
+      }]) as import("node:fs").WriteStream;
+      stream.on("error", (error: Error & { code?: string }) => events.push(`error:${error.code}`));
+      await once(stream, "ready");
+      const done = closed(stream);
+      stream.on("close", () => events.push("close-event"));
+      stream.cork();
+      stream.write(Buffer.from("aa"));
+      stream.write(Buffer.from("bb"));
+      stream.uncork();
+      await writevStarted;
+      stream.destroy();
+      await new Promise<void>(resolve => setImmediate(() => setImmediate(resolve)));
+      finishWritev();
+      await done;
+      expect(events).toEqual(["writev-start", "writev-cb", "close", "error:ERR_STREAM_DESTROYED", "close-event"]);
+    }
+
+    // 3. options.fs without writev sets _writev = null and retries short writes with position undefined.
+    {
+      const target = join(root, "short.txt");
+      const writes: Array<{ length: number; position: unknown }> = [];
+      const stream = Reflect.apply(fs.createWriteStream, fs, [target, {
+        fs: {
+          open: fs.open,
+          close: fs.close,
+          write(fd: number, buf: Buffer, off: number, len: number, pos: unknown, cb: Function) {
+            writes.push({ length: len, position: pos });
+            const take = writes.length === 1 ? 4 : len;
+            return Reflect.apply(hostFs.write, hostFs, [fd, buf, off, take, pos, cb]);
+          },
+        },
+      }]) as import("node:fs").WriteStream;
+      expect(Reflect.get(stream, "_writev")).toBeNull();
+      const done = closed(stream);
+      stream.end(Buffer.from("AAAABBBBCCCCDDDD"));
+      await done;
+      expect(stream.bytesWritten).toBe(16);
+      expect(hostFs.readFileSync(target, "utf8")).toBe("AAAABBBBCCCCDDDD");
+      expect(writes).toEqual([
+        { length: 16, position: undefined },
+        { length: 12, position: undefined },
+      ]);
+    }
+  } finally { runtime.cleanup(); }
+});
+
+test("rejected stream options leave a FileHandle usable and closable", async () => {
+  const root = hostFs.mkdtempSync(join(tmpdir(), "bun-wasm-fsstream-fh-reject-"));
+  const runtime = productionFilesystem(root);
+  const { fs } = runtime;
+  try {
+    const target = join(root, "fh.txt");
+    const handle = await fs.promises.open(target, "w");
+    expect(() => Reflect.apply(fs.createWriteStream, fs, [target, {
+      fd: handle,
+      fs: { write: fs.write, close: fs.close },
+    }])).toThrow(expect.objectContaining({ code: "ERR_METHOD_NOT_IMPLEMENTED" }));
+    await handle.writeFile("still-works");
+    await handle.close();
+    expect(hostFs.readFileSync(target, "utf8")).toBe("still-works");
+
+    const handle2 = await fs.promises.open(target, "r");
+    expect(() => Reflect.apply(fs.createReadStream, fs, [target, {
+      fd: handle2,
+      start: 4,
+      end: 2,
+    }])).toThrow(expect.objectContaining({ code: "ERR_OUT_OF_RANGE" }));
+    await handle2.close();
+  } finally { runtime.cleanup(); }
+});
+
+test("options.fs accepts null write with writev and null writev with write, and rejects invalid hooks", async () => {
+  const root = hostFs.mkdtempSync(join(tmpdir(), "bun-wasm-fsstream-nullhooks-"));
+  const runtime = productionFilesystem(root);
+  const { fs } = runtime;
+  try {
+    const vectored = join(root, "vectored.txt");
+    const vstream = Reflect.apply(fs.createWriteStream, fs, [vectored, {
+      fs: { open: fs.open, close: fs.close, write: null, writev: fs.writev },
+    }]) as import("node:fs").WriteStream;
+    expect(Reflect.get(vstream, "_write")).toBeNull();
+    expect(typeof Reflect.get(vstream, "_writev")).toBe("function");
+    const vdone = closed(vstream);
+    vstream.cork();
+    vstream.write(Buffer.from("hello "));
+    vstream.write(Buffer.from("world"));
+    vstream.uncork();
+    vstream.end();
+    await vdone;
+    expect(hostFs.readFileSync(vectored, "utf8")).toBe("hello world");
+
+    const scalar = join(root, "scalar.txt");
+    const sstream = Reflect.apply(fs.createWriteStream, fs, [scalar, {
+      fs: { open: fs.open, close: fs.close, write: fs.write, writev: null },
+    }]) as import("node:fs").WriteStream;
+    expect(Reflect.get(sstream, "_writev")).toBeNull();
+    const sdone = closed(sstream);
+    sstream.cork();
+    sstream.write(Buffer.from("aa"));
+    sstream.write(Buffer.from("bb"));
+    sstream.uncork();
+    sstream.end();
+    await sdone;
+    expect(hostFs.readFileSync(scalar, "utf8")).toBe("aabb");
+
+    expect(() => Reflect.apply(fs.createWriteStream, fs, [join(root, "bad1.txt"), {
+      fs: { open: fs.open, close: fs.close, write: null, writev: null },
+    }])).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }));
+    expect(() => Reflect.apply(fs.createWriteStream, fs, [join(root, "bad2.txt"), {
+      fs: { open: fs.open, close: fs.close, write: 123, writev: fs.writev },
+    }])).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }));
+  } finally { runtime.cleanup(); }
+});
+
+test("default WriteStream flush: true fsyncs before closing and surfaces fsync errors", async () => {
+  const root = hostFs.mkdtempSync(join(tmpdir(), "bun-wasm-fsstream-flush-"));
+  const runtime = productionFilesystem(root);
+  try {
+    const target = join(root, "flushed.txt");
+    const stream = runtime.fs.createWriteStream(target, { flush: true });
+    let fd: number | undefined;
+    stream.once("open", opened => { fd = opened; });
+    const done = closed(stream);
+    stream.end("durable");
+    await done;
+    expect(hostFs.readFileSync(target, "utf8")).toBe("durable");
+    expect(typeof fd).toBe("number");
+    expect(runtime.fdOps).toEqual([`fsync:${fd}`, `close:${fd}`]);
+  } finally { runtime.cleanup(); }
+
+  const failRoot = hostFs.mkdtempSync(join(tmpdir(), "bun-wasm-fsstream-flush-err-"));
+  const syncError = Object.assign(new Error("fsync failed"), { code: "EIO", syscall: "fsync" });
+  const failRuntime = productionFilesystem(failRoot, { failFsync: syncError });
+  try {
+    const target = join(failRoot, "flushed-err.txt");
+    const stream = failRuntime.fs.createWriteStream(target, { flush: true });
+    let fd: number | undefined;
+    const events: string[] = [];
+    stream.once("open", opened => { fd = opened; });
+    stream.on("error", (error: Error & { code?: string }) => events.push(`error:${error.code}`));
+    const done = closed(stream);
+    stream.on("close", () => events.push("close-event"));
+    stream.end("durable");
+    await done;
+    expect(failRuntime.fdOps).toEqual([`fsync:${fd}`, `close:${fd}`]);
+    expect(events).toEqual(["error:EIO", "close-event"]);
+  } finally { failRuntime.cleanup(); }
+});
+
+test("numeric-fd writeFileSync loops across short writes and propagates mid-write errors", () => {
+  const root = hostFs.mkdtempSync(join(tmpdir(), "bun-wasm-writefile-short-"));
+  const runtime = productionFilesystem(root);
+  try {
+    const target = join(root, "full.txt");
+    const fd = runtime.fs.openSync(target, "w");
+    runtime.fs.writeFileSync(fd, "abcdef");
+    runtime.fs.closeSync(fd);
+    expect(hostFs.readFileSync(target, "utf8")).toBe("abcdef");
+  } finally { runtime.cleanup(); }
+
+  const errRoot = hostFs.mkdtempSync(join(tmpdir(), "bun-wasm-writefile-efbig-"));
+  const efbig = Object.assign(new Error("file too large"), { code: "EFBIG", syscall: "write" });
+  const errRuntime = productionFilesystem(errRoot, { failWriteAfter: { calls: 1, error: efbig } });
+  try {
+    const target = join(errRoot, "partial.txt");
+    const fd = errRuntime.fs.openSync(target, "w");
+    expect(() => errRuntime.fs.writeFileSync(fd, "abcdef")).toThrow(expect.objectContaining({ code: "EFBIG" }));
+    errRuntime.fs.closeSync(fd);
+    expect(hostFs.readFileSync(target, "utf8")).toBe("ab");
+  } finally { errRuntime.cleanup(); }
+});

@@ -151,6 +151,8 @@ pub(crate) struct State {
     deferred_signals: RefCell<host::DeferredSignals>,
     tick_pending: Cell<bool>,
     fds: RefCell<natives::FdTable>,
+    #[cfg(target_os = "wasi")]
+    modes: RefCell<HashMap<(u64, u64), u32>>,
     directories: Rc<RefCell<directory::Directories>>,
     tls: tls::SharedRegistry,
     start: Instant,
@@ -190,6 +192,8 @@ impl State {
             deferred_signals: RefCell::new(host::DeferredSignals::default()),
             tick_pending: Cell::new(false),
             fds: RefCell::new(natives::FdTable::default()),
+            #[cfg(target_os = "wasi")]
+            modes: RefCell::new(HashMap::new()),
             directories: Rc::new(RefCell::new(directory::Directories::default())),
             tls: tls::new_shared_registry(tls::snapshot_startup_extras()),
             start: Instant::now(),

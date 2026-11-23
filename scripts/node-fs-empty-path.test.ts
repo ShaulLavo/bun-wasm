@@ -12,7 +12,10 @@ test("filesystem paths preserve empty input at the native boundary", () => {
     const options = readFileSync(new URL("../crates/bunwasm-runtime/src/js/fs_options.ts", import.meta.url), "utf8");
     const generated = join(scratch, "fs-options.js");
     writeFileSync(generated, new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${options}`));
-    const result = Bun.spawnSync(["node", new URL("./node-fs-empty-path-source.ts", import.meta.url).pathname, generated], {
+    const buffersReaddir = readFileSync(new URL("../crates/bunwasm-runtime/src/js/fs_buffers_readdir.ts", import.meta.url), "utf8");
+    const generatedBuffers = join(scratch, "fs-buffers-readdir.js");
+    writeFileSync(generatedBuffers, new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${buffersReaddir}`));
+    const result = Bun.spawnSync(["node", new URL("./node-fs-empty-path-source.ts", import.meta.url).pathname, generated, generatedBuffers], {
       cwd: scratch, stdout: "pipe", stderr: "pipe", timeout: 15_000,
     });
     expect(result.stderr.toString()).toBe("");

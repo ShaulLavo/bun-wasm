@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/node-crypto-rsa-pss-keygen",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

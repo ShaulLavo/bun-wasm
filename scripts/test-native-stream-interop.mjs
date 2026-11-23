@@ -15,7 +15,7 @@ function inputs() {
   sources.events = stripTypeScriptTypes(readFileSync(join(sourceRoot, "events.ts"), "utf8"));
   sources.streams = stripTypeScriptTypes(readFileSync(join(sourceRoot, "streams.ts"), "utf8"));
   sources.compression_streams = stripTypeScriptTypes(readFileSync(join(sourceRoot, "compression_streams.ts"), "utf8"));
-  for (const name of ["buffer_concat_length", "text_decoder", "url_search_params", "url_pairs", "url_errors", "body_streams", "web_brand", "async_local_storage"]) {
+  for (const name of ["buffer_concat_length", "buffer_fill_args", "buffer_source", "text_decoder", "url_search_params", "url_pairs", "url_errors", "body_streams", "web_brand", "async_local_storage"]) {
     sources[name] = stripTypeScriptTypes(readFileSync(join(sourceRoot, name + ".ts"), "utf8"));
   }
   const builtins = readFileSync(join(sourceRoot, "builtins.js"), "utf8");

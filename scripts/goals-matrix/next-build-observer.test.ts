@@ -26,7 +26,24 @@ const diagnosticsPath = nextBuildFiles[0].path;
 function span(traceId: string, id: number, startTime: number, name = "node-file-trace-build") { return { traceId, id, name, startTime, duration: 10, timestamp: 42, tags: { secret: "DO NOT RETAIN" } }; }
 function read(path: FileRead["path"], text: string, offset = 0): Extract<FileRead, { status: "read" }> { return { path, status: "read", text, bytes: text.length, size: text.length + offset, offset, truncated: offset > 0 }; }
 
-async function fixture<T>(action: (value: { fs: ReturnType<typeof nextBuildFilesystem>; transport: Transport; events: NextBuildObservation[] }) => Promise<T>, buildDelayMs = 350) {
+// A read's own time limit only catches a hang. A read that must be cut short is cut by the fixture
+// (`expire`) once it has seen what it wanted to wait for (`until`), never by a short real clock.
+const hangCapMs = 25_000;
+async function until(condition: () => boolean, what: string): Promise<void> {
+  const limit = Date.now() + hangCapMs;
+  while (!condition()) {
+    if (Date.now() > limit) throw new Error(`Timed out waiting for ${what}`);
+    await Bun.sleep(5);
+  }
+}
+/** Ends the read in flight exactly as its deadline timer does. */
+function expire(transport: Transport): Promise<unknown> {
+  return withScoped(transport, page => page.evaluate("globalThis.__goalsNextBuildClose?.();"));
+}
+// The three files the fixture writes are the ones that can be read.
+const readableFiles = 3;
+
+async function fixture<T>(action: (value: { fs: ReturnType<typeof nextBuildFilesystem>; transport: Transport; events: NextBuildObservation[] }) => Promise<T>, buildDelayMs: number | Promise<void> = 350) {
   const fs = nextBuildFilesystem();
   try {
     fs.write({ [manifestPath]: '{"version":1,"files":["dev.js"]}', [tracePath]: JSON.stringify([span("dev", 1, 1)]) + "\n", [diagnosticsPath]: '{"buildStage":"dev"}' });
@@ -84,12 +101,15 @@ test("real service reads enforce exact file bounds and retain only complete batc
 });
 
 test("one snapshot reads real filesystem service while the stock foreground command is pending", async () => {
+  // The build is held open until the snapshot has been captured, so it cannot finish first.
+  const build = Promise.withResolvers<void>();
   await fixture(async ({ fs, transport, events }) => {
     const evaluate = transport.evaluate.bind(transport);
     transport.evaluate = (expression, admission, options) => evaluate(expression.includes("const read = globalThis.__goalsNextBuildRead") ? `(() => { if (globalThis.__goalsCommand?.done) throw Error('Snapshot was not pending'); return (${expression}); })()` : expression, admission, options);
-    const scope = Scope.open(1000);
+    // The snapshot is due 150 ms into the phase; the phase and read limits are only hang caps.
+    const scope = Scope.open(hangCapMs);
     const page = scoped(transport, scope);
-    const observer = new NextBuildObserver(page, scope, 100_850, value => events.push(value), { snapshotMs: 100_000, readBudgetMs: 200 });
+    const observer = new NextBuildObserver(page, scope, 100_000 - 150 + hangCapMs, value => events.push(value), { snapshotMs: 100_000, readBudgetMs: hangCapMs });
     try {
       await observer.prepare();
       const dispatched = observer.dispatched.bind(observer);
@@ -97,7 +117,10 @@ test("one snapshot reads real filesystem service while the stock foreground comm
         dispatched(at);
         fs.write({ [manifestPath]: '{"version":1,"files":["new.js"]}', [tracePath]: JSON.stringify([span("production", 2, at)]) + "\n" });
       };
-      const result = await scope.run(() => command(page, "bun run build", 1000, observer));
+      const running = scope.run(() => command(page, "bun run build", hangCapMs, observer));
+      await until(() => events.some(event => event.kind === "snapshot"), "the snapshot");
+      build.resolve();
+      const result = await running;
       observer.end();
       expect(result).toMatchObject({ done: true, code: 0 });
       expect(events.filter(event => event.kind === "baseline")).toHaveLength(1);
@@ -113,8 +136,8 @@ test("one snapshot reads real filesystem service while the stock foreground comm
       expect(JSON.stringify(events)).not.toContain("PRIVATE");
       expect(await page.evaluate("commands")).toEqual(["bun run build"]);
       expect(await page.evaluate("inputs")).toEqual([]);
-    } finally { scope.close(); await withScoped(transport, closeNextBuildObserver); }
-  });
+    } finally { build.resolve(); scope.close(); await withScoped(transport, closeNextBuildObserver); }
+  }, build.promise);
 });
 
 test.each(["absent", "invalid", "stalled"])("%s memory telemetry stays unavailable, never evidence of headroom", async mode => {
@@ -122,8 +145,11 @@ test.each(["absent", "invalid", "stalled"])("%s memory telemetry stays unavailab
     await withScoped(transport, page => page.evaluate(mode === "absent" ? "delete globalThis.__bunMemorySnapshots" : mode === "invalid" ? "globalThis.__bunMemorySnapshots = async () => ({secret:'SECRET'});" : "globalThis.__bunMemorySnapshots = () => new Promise(resolve => { globalThis.releaseMemory = () => resolve([]); });"));
     try {
       await withAdmission(async admission => {
-        const observer = new NextBuildObserver(scoped(transport, admission), admission, 1000, value => events.push(value), { snapshotMs: 100_000, readBudgetMs: 100 });
-        await observer.prepare();
+        const observer = new NextBuildObserver(scoped(transport, admission), admission, 1000, value => events.push(value), { snapshotMs: 100_000, readBudgetMs: hangCapMs });
+        const prepared = observer.prepare();
+        // The stalled hook never answers: end the read once the files are in, as its deadline would.
+        if (mode === "stalled") { await until(() => fs.readsSettled(readableFiles), "the file reads"); await expire(transport); }
+        await prepared;
       });
       expect(events[0]).toMatchObject({ status: "captured", memory: { status: "unavailable" }, files: expect.arrayContaining([expect.objectContaining({ status: "manifest" })]) });
       expect(JSON.stringify(events)).not.toContain("SECRET");
@@ -138,12 +164,12 @@ test("completion between a foreground poll and capture keeps its nonzero outcome
     await withScoped(transport, page => page.evaluate("playground.shell.submit = async text => { commands.push(text); await new Promise(resolve => { globalThis.completeBuild = () => { playground.shell.lastExit = 17; resolve(); }; }); };"));
     const evaluate = transport.evaluate.bind(transport);
     transport.evaluate = (expression, admission, options) => evaluate(expression.includes("function milestones") ? `(() => { globalThis.completeBuild?.(); return (${expression}); })()` : expression, admission, options);
-    const scope = Scope.open(1000);
-    const observer = new NextBuildObserver(scoped(transport, scope), scope, 101_000, value => events.push(value));
+    const scope = Scope.open(hangCapMs);
+    const observer = new NextBuildObserver(scoped(transport, scope), scope, 100_000 + hangCapMs, value => events.push(value));
     try {
       await observer.prepare();
       const reads = fs.reads.length;
-      await expect(command(scoped(transport, scope), "bun run build", 1000, observer)).rejects.toThrow("exited 17");
+      await expect(command(scoped(transport, scope), "bun run build", hangCapMs, observer)).rejects.toThrow("exited 17");
       expect(events).toContainEqual(expect.objectContaining({ kind: "snapshot", status: "skipped" }));
       expect(fs.reads).toHaveLength(reads);
       expect(await withScoped(transport, page => page.evaluate("commands"))).toEqual(["bun run build"]);
@@ -156,11 +182,23 @@ test.each(["missing", "truncated", "stalled"])("%s files remain explicit without
     if (mode === "missing") fs.fs.remove(manifestPath);
     if (mode === "truncated") fs.write({ [manifestPath]: '{"version":1,"files":["' + "x".repeat(280_000) + '"]}' });
     if (mode === "stalled") fs.stall();
-    const scope = Scope.open(1500);
-    const observer = new NextBuildObserver(scoped(transport, scope), scope, 101_500, value => events.push(value), { snapshotMs: 100_000, readBudgetMs: 150 });
+    // The phase and read limits are hang caps. A stalled read is cut by the fixture once all three
+    // file reads are stuck: once for the baseline and once for the snapshot, if one is attempted.
+    const scope = Scope.open(hangCapMs);
+    const observer = new NextBuildObserver(scoped(transport, scope), scope, 100_000 + hangCapMs, value => events.push(value), { snapshotMs: 100_000, readBudgetMs: hangCapMs });
+    let finished = false;
+    const cut = async (stuck: number) => {
+      if (mode !== "stalled") return;
+      await until(() => fs.stalledReads() >= stuck || finished, "the file reads to stall");
+      if (!finished) await expire(transport);
+    };
     try {
-      await observer.prepare();
-      const result = await command(scoped(transport, scope), "bun run build", 1000, observer);
+      const prepared = observer.prepare();
+      await cut(readableFiles);
+      await prepared;
+      const running = command(scoped(transport, scope), "bun run build", hangCapMs, observer).finally(() => { finished = true; });
+      await cut(2 * readableFiles);
+      const result = await running;
       expect(result).toMatchObject({ code: 0 });
       const baseline = events.find(value => value.kind === "baseline");
       expect(baseline).toMatchObject({ status: "captured", files: expect.arrayContaining([expect.objectContaining({ path: manifestPath, status: mode === "truncated" ? "partial" : "unavailable" })]) });
@@ -171,14 +209,17 @@ test.each(["missing", "truncated", "stalled"])("%s files remain explicit without
 });
 
 test("outer cancellation disposes completions before cleanup and admits no later read or guest input", async () => {
+  // The build is held open and the cancellation comes once the snapshot's file reads are stuck.
+  const build = Promise.withResolvers<void>();
   await fixture(async ({ fs, transport, events }) => {
-    const scope = Scope.open(1000);
-    const observer = new NextBuildObserver(scoped(transport, scope), scope, 101_000, value => events.push(value), { snapshotMs: 100_000, readBudgetMs: 500 });
+    const scope = Scope.open(hangCapMs);
+    const observer = new NextBuildObserver(scoped(transport, scope), scope, 100_000 + hangCapMs, value => events.push(value), { snapshotMs: 100_000, readBudgetMs: hangCapMs });
     await observer.prepare();
     fs.stall();
-    const waiting = scope.run(() => command(scoped(transport, scope), "bun run build", 1000, observer));
-    const abort = setTimeout(() => scope.close(new Error("outer cancellation")), 80);
+    const waiting = scope.run(() => command(scoped(transport, scope), "bun run build", hangCapMs, observer));
     try {
+      await until(() => fs.stalledReads() >= readableFiles, "the snapshot reads to stall");
+      scope.close(new Error("outer cancellation"));
       await expect(waiting).rejects.toThrow("outer cancellation");
       await withScoped(transport, closeNextBuildObserver);
       expect(fs.disposed()).toBe(true);
@@ -189,30 +230,37 @@ test("outer cancellation disposes completions before cleanup and admits no later
       expect(fs.outstanding()).toBe(0);
       expect(await withScoped(transport, page => page.evaluate("commands"))).toEqual(["bun run build"]);
       expect(await withScoped(transport, page => page.evaluate("inputs"))).toEqual([]);
-    } finally { clearTimeout(abort); scope.close(); }
-  }, 250);
+    } finally { build.resolve(); scope.close(); }
+  }, build.promise);
 });
 
 test("a clipped snapshot cannot extend the original phase deadline or start late requests", async () => {
+  // The phase deadline is far off and the read budget farther, so only the clip to the phase
+  // deadline bounds the stalled snapshot read. The test lets the deadline pass itself, in the order
+  // a real one does: the phase expires, then the browser's timer for the read closes it.
+  const build = Promise.withResolvers<void>();
   await fixture(async ({ fs, transport, events }) => {
-    const scope = Scope.open(250);
-    const observer = new NextBuildObserver(scoped(transport, scope), scope, 100_150, value => events.push(value), { snapshotMs: 100_000, readBudgetMs: 2000 });
+    const scope = Scope.open(hangCapMs);
+    const observer = new NextBuildObserver(scoped(transport, scope), scope, 100_000 + hangCapMs, value => events.push(value), { snapshotMs: 100_000, readBudgetMs: 4 * hangCapMs });
     await observer.prepare();
     fs.stall();
-    const started = Date.now();
     try {
-      await expect(scope.run(() => command(scoped(transport, scope), "bun run build", 250, observer))).rejects.toThrow("Phase timed out after 250 ms");
-      expect(Date.now() - started).toBeLessThan(350);
+      const running = scope.run(() => command(scoped(transport, scope), "bun run build", hangCapMs, observer));
+      await until(() => fs.stalledReads() >= readableFiles, "the snapshot reads to stall");
+      scope.close(scope.expiryReason);
+      await expect(running).rejects.toThrow(`Phase timed out after ${hangCapMs} ms`);
+      expect(fs.disposed()).toBe(false);
+      await expire(transport);
+      expect(fs.disposed()).toBe(true);
       expect(events.filter(value => value.kind === "snapshot")).toHaveLength(1);
       const snapshot = events.find(value => value.kind === "snapshot");
       if (!snapshot || !("deadline" in snapshot)) throw new Error("Missing snapshot");
       expect(snapshot.deadline).toBe(scope.deadline);
-      expect(fs.disposed()).toBe(true);
       const count = fs.operations.length;
       await Bun.sleep(50);
       expect(fs.operations).toHaveLength(count);
-    } finally { scope.close(); await withScoped(transport, closeNextBuildObserver); }
-  }, 400);
+    } finally { build.resolve(); scope.close(); await withScoped(transport, closeNextBuildObserver); }
+  }, build.promise);
 });
 
 test.each(["/home", "/home/user", "/home/user/.next", manifestPath])("symlink at %s is never followed", async path => {
@@ -303,7 +351,7 @@ test.each([
     const reader = await buildNextBuildReaderSource();
     const close = finish === "close" ? "setTimeout(() => { globalThis.__explicitClose = true; globalThis.__goalsNextBuildClose?.(); }, 30);" : "";
     try {
-      const capture = await withScoped(transport, page => page.evaluate<NextBuildCapture>(`${reader}\n${close}\n__goalsNextBuildRead(${Date.now() + (finish === "close" ? 1000 : 120)})`));
+      const capture = await withScoped(transport, page => page.evaluate<NextBuildCapture>(`${reader}\n${close}\n__goalsNextBuildRead(Date.now() + ${finish === "close" ? hangCapMs : 120})`));
       expect(target === "processes" ? capture.processes : capture.memory).toMatchObject({ status: "unavailable" });
       expect(fs.disposed()).toBe(true);
       expect(fs.outstanding()).toBe(0);

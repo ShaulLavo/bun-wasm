@@ -1,6 +1,5 @@
 // CryptoKeys sent to a Worker with postMessage and back: the receiving side gets usable
-// keys with the same algorithm, type, extractability and usages, as in Bun. The browser
-// engine delegates WebCrypto to its host, so this fixture skips it.
+// keys with the same algorithm, type, extractability and usages, as in Bun.
 const subtle = crypto.subtle;
 const hex = (b: ArrayBuffer) => Buffer.from(b).toString("hex");
 const material = new Uint8Array(32).fill(9);

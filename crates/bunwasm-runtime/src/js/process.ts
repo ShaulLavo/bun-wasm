@@ -33,11 +33,12 @@
   }
 
   let execveWarned = false;
+  let bindingWarned = false;
   let bindingConstants: object | undefined;
   let bindingLookup: ((name: unknown, own: Record<string, () => unknown>) => unknown) | undefined;
   const ownBindings: Record<string, () => unknown> = {
     constants: () => constantsBinding(),
-    uv: () => internal.require("uv_errors").binding(),
+    uv: () => internal.require("uv_errors").binding(process),
   };
 
   // Bun's constructProcessConfigObject for Linux, with the guest's architecture. Frozen, as in Bun.
@@ -449,6 +450,14 @@
     _getActiveRequests: () => [],
     _getActiveHandles: () => [],
     _linkedBinding() {},
+    // util.format straight to fd 2, bypassing process.stderr. Node's last resort never throws,
+    // even when fd 2 is closed.
+    _rawDebug(...args: unknown[]) {
+      try {
+        const text = (internal.builtin("node:util") as { formatWithOptions(options: object, ...args: unknown[]): string }).formatWithOptions({}, ...args);
+        (internal.builtin("node:fs") as unknown as { writeSync(fd: number, text: string): number }).writeSync(2, text + "\n");
+      } catch {}
+    },
     _tickCallback() {},
     // Main thread only: worker_threads removes these from a worker's process.
     _debugEnd() {},
@@ -503,20 +512,30 @@
     memoryUsage,
     // maxRSS is kilobytes. Linear memory never shrinks, so its current size is the peak.
     resourceUsage: () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: memoryUsage.rss() / 1024 }),
-    cpuUsage: () => ({ user: Math.floor(native.now() * 1000), system: 0 }),
+    cpuUsage: (previous?: unknown) => internal.require("process_args").cpuUsage({ user: Math.floor(native.now() * 1000), system: 0 }, previous),
     uptime: () => native.now() / 1000,
-    umask: () => 0o22,
-    getuid: () => 0,
-    geteuid: () => 0,
-    getgid: () => 0,
-    getegid: () => 0,
-    getgroups: () => [],
-    setuid() {},
-    setgid() {},
+    umask: (mask?: unknown) => internal.require("process_args").umask(mask),
+    // The credentials live in process_ids, which loads on first use.
+    getuid: () => internal.require("process_ids").getuid(),
+    geteuid: () => internal.require("process_ids").geteuid(),
+    getgid: () => internal.require("process_ids").getgid(),
+    getegid: () => internal.require("process_ids").getegid(),
+    getgroups: () => internal.require("process_ids").getgroups(),
+    setuid: (id: unknown) => internal.require("process_ids").setuid(id),
+    seteuid: (id: unknown) => internal.require("process_ids").seteuid(id),
+    setgid: (id: unknown) => internal.require("process_ids").setgid(id),
+    setegid: (id: unknown) => internal.require("process_ids").setegid(id),
+    setgroups: (groups: unknown) => internal.require("process_ids").setgroups(groups),
+    initgroups: (user: unknown, extraGroup: unknown) => internal.require("process_ids").initgroups(user, extraGroup),
     emitWarning(warning: unknown, ...options: unknown[]) {
       internal.require("process_warning").emitWarning(process, warning, options[0], options[1], options[2]);
     },
     binding(name: unknown) {
+      // Node latches DEP0111 once per thread.
+      if (process.pendingDeprecation && !bindingWarned) {
+        bindingWarned = true;
+        process.emitWarning("process.binding() is deprecated. Please use public APIs instead.", "DeprecationWarning", "DEP0111");
+      }
       return (bindingLookup ??= internal.require("process_binding"))(name, ownBindings);
     },
     dlopen() {
@@ -544,14 +563,30 @@
     availableMemory: () => 4294967296 - memoryUsage.rss(),
     stdin: undefined,
   };
-  const process: BunWasm.NodeEmitter & { noDeprecation: boolean; exitCode?: unknown; reallyExit: unknown; pid: number; env: Record<PropertyKey, unknown>; execArgv: string[]; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
+  const process: BunWasm.NodeEmitter & { noDeprecation: boolean; pendingDeprecation?: boolean; exitCode?: unknown; reallyExit: unknown; pid: number; env: Record<PropertyKey, unknown>; execArgv: string[]; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
   delete process.stdin;
 
+  // A stream that is not made yet cannot be made once the global process is not an object
+  // (`process = null`): the failure goes to the uncaught exception handlers, as Bun reports it,
+  // and the read gives undefined. Streams already made are returned without the check.
+  function guardedStdio(): boolean {
+    const current: unknown = globalThis.process;
+    if (current !== null && (current === undefined || typeof current === "object" || typeof current === "function")) return true;
+    const error = new TypeError("process is not an object");
+    // Through this process object: the global no longer reaches it.
+    if (!process.emit("uncaughtException", error, "uncaughtException")) {
+      // Nothing claimed it: the run goes on and ends with exit code 1.
+      exitByte = 1;
+      native.writeStderr(`error: ${error.message}\n`);
+    }
+    return false;
+  }
+
   Object.defineProperties(process, {
-    stdout: { get: () => stdout || (stdout = makeWriter(1)), configurable: true, enumerable: true },
-    stderr: { get: () => stderr || (stderr = makeWriter(2)), configurable: true, enumerable: true },
-    stdin: { get: () => stdin || (stdin = makeReader()), configurable: true, enumerable: true },
-    mainModule: { get: () => internal.getMainModule(), configurable: true, enumerable: false },
+    stdout: { get: () => stdout || (guardedStdio() ? (stdout = makeWriter(1)) : undefined), configurable: true, enumerable: true },
+    stderr: { get: () => stderr || (guardedStdio() ? (stderr = makeWriter(2)) : undefined), configurable: true, enumerable: true },
+    stdin: { get: () => stdin || (guardedStdio() ? (stdin = makeReader()) : undefined), configurable: true, enumerable: true },
+    mainModule: lazyData("mainModule", () => internal.getMainModule()),
     exitCode: { get: () => exitByte, set: setExitCode, configurable: true, enumerable: true },
     finalization: { get: () => finalization ??= createFinalization(), configurable: true, enumerable: false },
     allowedNodeEnvironmentFlags: lazyData("allowedNodeEnvironmentFlags", () => internal.require("process_allowed_flags")),

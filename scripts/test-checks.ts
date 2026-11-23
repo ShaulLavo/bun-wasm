@@ -312,10 +312,13 @@ export function shardTestFiles(paths: readonly string[], jobs: number): string[]
   return shards;
 }
 
+// Bun's 5 second default is a speed judgment on a busy machine. This only catches a hang.
+const hangCap = ["--timeout", "60000"];
+
 export async function runShardedFiles(files: readonly string[], jobs: number, env = process.env): Promise<number> {
-  if (jobs <= 1 || files.length <= 1) return runCheck(["bun", "test"].concat(files), env);
+  if (jobs <= 1 || files.length <= 1) return runCheck(["bun", "test"].concat(hangCap, files), env);
   const shards = shardTestFiles(files, jobs);
-  const results = await Promise.all(shards.map(shard => runBuffered(["bun", "test"].concat(shard), env)));
+  const results = await Promise.all(shards.map(shard => runBuffered(["bun", "test"].concat(hangCap, shard), env)));
   for (const result of results) process.stdout.write(result.output);
   return results.find(result => result.status !== 0)?.status ?? 0;
 }

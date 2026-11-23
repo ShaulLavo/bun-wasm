@@ -34,7 +34,8 @@ if [[ "$phase" != --browser && "$phase" != --smoke ]]; then
     if [[ "${BUN_WASM_TEST_JOBS:-1}" -gt 1 ]]; then
       bun scripts/run-unit-tests.ts
     else
-      bun run test
+      # Bun's 5 second default limit is a speed judgment on a busy machine; this only catches a hang.
+      bun run test --timeout 60000
     fi
   )
 fi

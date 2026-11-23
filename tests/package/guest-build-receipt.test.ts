@@ -237,7 +237,7 @@ for (const build of ["quickjs", "quickjs-minimal", "jsc"] as const) test(`${buil
     expect(() => verifyGuestBuildReceipt(core, { ...receipt, program: { ...receipt.program, side: { artifactSha256: "bad", artifactBytes: 8 } } })).toThrow("artifact identity");
     expect(() => verifyGuestBuildReceipt(core, { ...receipt, engineOrigin: undefined })).toThrow("program build receipt");
     expect(() => verifyGuestBuildReceipt(core, { ...receipt, engineInputSha256: "0".repeat(64) })).toThrow("origin/input");
-    await expect(verifyGuestCompanions(receipt, directory)).resolves.toBeUndefined();
+    expect(await verifyGuestCompanions(receipt, directory)).toEqual(new Uint8Array(side));
     await writeFile(sidePath, new Uint8Array(Array.from(side).concat([0, 2, 1, 120])));
     await expect(verifyGuestCompanions(receipt, directory)).rejects.toThrow("artifact bytes");
     await writeFile(sidePath, "not wasm");

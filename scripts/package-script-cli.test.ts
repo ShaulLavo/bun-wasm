@@ -35,6 +35,10 @@ test("CLI dispatch distinguishes Node files, Bun commands, run aliases and eval 
         assert!(matches!(parse(args(&["build", "app.js", "--outdir", "out"]), "bun"), Command::Build(values) if values == args(&["app.js", "--outdir", "out"])));
         assert!(matches!(parse(args(&["install", "--frozen-lockfile"]), "bun"), Command::Install(command, values) if command == "install" && values == args(&["--frozen-lockfile"])));
         assert!(matches!(parse(args(&["--no-install", "--smol", "run", "-e", "42"]), "bun"), Command::Run(Entry::Eval(code), _, _, _, RunMode::Once) if code == "42"));
+        assert!(matches!(parse(args(&["run", "-e", "bruh", "-b", "entry.ts", "foo", "-a"]), "bun"),
+          Command::Run(Entry::File(file), values, _, exec_argv, RunMode::Once) if file == "entry.ts" && values == args(&["foo", "-a"]) && exec_argv == args(&["-e", "bruh", "-b"])));
+        assert!(matches!(parse(args(&["--bun", "entry.ts"]), "bun"),
+          Command::Run(Entry::File(_), _, _, exec_argv, RunMode::Once) if exec_argv == args(&["--bun"])));
         for mode in ["-e", "-p", "--eval", "--print", "test", "entry.ts"] {
           assert!(matches!(parse(args(&["--conditions=custom", mode, "42"]), "bun"),
             Command::Run(_, _, conditions, exec_argv, RunMode::Once) if conditions == args(&["custom"]) && exec_argv == args(&["--conditions=custom"])));

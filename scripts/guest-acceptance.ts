@@ -56,8 +56,11 @@ export async function verifyPublicationInputs(dist: string, descriptor: GuestDes
   for (const name of artifacts) {
     const candidate = await readFile(join(dist, name));
     const receipt: unknown = JSON.parse(await readFile(`${join(dist, name)}.build.json`, "utf8"));
+    assertShippedGuestHasNoNames(name, candidate);
     verifyGuestBuildReceipt(candidate, receipt);
-    await verifyGuestCompanions(receipt, dist);
+    const side = await verifyGuestCompanions(receipt, dist);
+    const companion = requiredGuestCompanions(receipt)[0];
+    if (side && companion) assertShippedGuestHasNoNames(companion.name, side);
     if (guestBuilds[receipt.sourceManifest.build].artifact !== name) throw new Error(`Guest publication engine mismatch: ${name}`);
     const described = describeGuest(candidate);
     if (described.sha256 === descriptor.core.sha256 && described.bytes === descriptor.core.bytes && matchesProgram(receipt, descriptor)) matched = true;
@@ -88,6 +91,7 @@ export async function snapshotPublicationInputs(dist: string, descriptor: GuestD
   const companions = companionUnion(receipts);
   for (const [name, identity] of companions) {
     const side = await readFile(join(dist, name));
+    assertShippedGuestHasNoNames(name, side);
     const described = describeGuest(side);
     if (described.sha256 !== identity.artifactSha256 || described.bytes !== identity.artifactBytes) throw new Error(`Guest companion changed before snapshot: ${name}`);
     await writeFile(join(directory, name), side, { flag: "wx", mode: 0o400 });
