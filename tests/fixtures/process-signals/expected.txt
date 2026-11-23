@@ -21,3 +21,5 @@ self SIGPIPE true 0 null
 sync maxBuffer selected SIGKILL
 worker signal exit 0
 worker EPIPE exit 1
+busy timers default SIGINT SIGINT
+busy timers default SIGTERM SIGTERM

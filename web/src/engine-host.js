@@ -14,6 +14,7 @@ import { hostCrypto } from "./host-crypto.ts";
 import { reportWasmCallTrap } from "./wasm-call-trap.ts";
 import { installSharedBufferRealm } from "./shared-objects/realm.ts";
 import { createTickScheduler } from "./tick-scheduler.ts";
+import { decodeUtf8, defineField, encodeUtf8, encodeUtf8Into, IN_PLACE_ENCODE } from "./engine-codec.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -131,19 +132,39 @@ const nativeAddEventListener = typeof globalThis.addEventListener === "function"
 
 const utf8 = new NativeTextEncoder();
 const fromUtf8 = new NativeTextDecoder();
-const wireFromUtf8 = new NativeTextDecoder("utf-8", { ignoreBOM: true });
 
 // --- the value encoding (engine_host.rs encode/decode) ------------------------------------
 
 const T = { UNDEFINED: 0, NULL: 1, FALSE: 2, TRUE: 3, NUM: 4, STR: 5, BYTES: 6, ARRAY: 7, OBJECT: 8, BIGINT: 9, BIGUINT: 10 };
 const I64_MIN = -(2n ** 63n);
 const I64_MAX = 2n ** 63n - 1n;
+// The reused writer keeps at most this much buffer between calls.
+const KEPT_WRITER_BYTES = 1 << 20;
 
 class Writer {
   constructor() {
     this.buf = new Uint8Array(256);
     this.view = new DataView(this.buf.buffer);
     this.len = 0;
+  }
+  /** Empty again for the next call, dropping a buffer a large argument grew. */
+  reset() {
+    this.len = 0;
+    if (this.buf.length > KEPT_WRITER_BYTES) {
+      this.buf = new Uint8Array(256);
+      this.view = new DataView(this.buf.buffer);
+    }
+    return this;
+  }
+  /** A length-prefixed UTF-8 string. */
+  string(s) {
+    const n = s.length;
+    if (n > IN_PLACE_ENCODE) return this.bytes(encodeUtf8(s));
+    this.room(4 + n * 3);
+    const end = encodeUtf8Into(s, this.buf, this.len + 4);
+    this.view.setUint32(this.len, end - this.len - 4, true);
+    this.len = end;
+    return undefined;
   }
   room(n) {
     if (this.len + n <= this.buf.length) return;
@@ -183,7 +204,7 @@ class Writer {
         return undefined;
       case "string":
         this.byte(T.STR);
-        return this.bytes(utf8.encode(v));
+        return this.string(v);
       case "bigint":
         return this.bigint(v);
       case "object":
@@ -224,7 +245,7 @@ class Writer {
     this.byte(T.OBJECT);
     this.u32(keys.length);
     for (const k of keys) {
-      this.bytes(utf8.encode(k));
+      this.string(k);
       this.value(v[k]);
     }
     return undefined;
@@ -253,6 +274,13 @@ class Reader {
     const s = this.bytes.subarray(this.pos, this.pos + n);
     this.pos += n;
     return s;
+  }
+  string() {
+    const n = this.u32();
+    this.need(n);
+    const start = this.pos;
+    this.pos += n;
+    return decodeUtf8(this.bytes, start, this.pos);
   }
   value() {
     this.need(1);
@@ -285,7 +313,7 @@ class Reader {
         return n;
       }
       case T.STR:
-        return wireFromUtf8.decode(this.raw().slice());
+        return this.string();
       case T.BYTES:
         // Copied out: wasm memory can grow (and detach) on the next call.
         return this.raw().slice();
@@ -310,10 +338,8 @@ class Reader {
     this.need(n * 5);
     const out = {};
     for (let i = 0; i < n; i++) {
-      const k = wireFromUtf8.decode(this.raw().slice());
-      Object.defineProperty(out, k, {
-        value: this.value(), enumerable: true, writable: true, configurable: true,
-      });
+      const k = this.string();
+      defineField(out, k, this.value());
     }
     return out;
   }
@@ -334,13 +360,23 @@ function wasmCaller(exports, onWasmCallTrap) {
     if (reader.pos !== end) throw new RangeError("corrupt native result");
     return value;
   };
+  // Every call encodes into this writer and copies the bytes out before the wasm runs. A call that
+  // an argument's getter makes while it is still encoding gets a writer of its own.
+  let spare = new Writer();
   function call(index, args) {
-    const w = new Writer();
-    w.value(args);
-    const ptr = exports.bunwasm_alloc(w.len);
-    memory.bytes().set(w.buf.subarray(0, w.len), ptr);
+    const w = spare ?? new Writer();
+    spare = undefined;
+    let ptr, len;
+    try {
+      w.value(args);
+      len = w.len;
+      ptr = exports.bunwasm_alloc(len);
+      memory.bytes().set(w.buf.subarray(0, len), ptr);
+    } finally {
+      spare = w.reset();
+    }
     let status;
-    try { status = exports.bunwasm_call(index, ptr, w.len); }
+    try { status = exports.bunwasm_call(index, ptr, len); }
     catch (error) {
       reportWasmCallTrap(onWasmCallTrap, error, index);
       throw error;

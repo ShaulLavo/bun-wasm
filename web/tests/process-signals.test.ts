@@ -42,6 +42,8 @@ function fixture() {
   let writeError: Error | undefined;
   let cancelIoWaitersCalls = 0;
   let selected: { status: number; signal: number } | undefined;
+  let polls = 0;
+  let fatalChecks = 0;
   const context = createContext({ TextEncoder, TextDecoder, Uint8Array, Error });
   const internal = {
     native: {
@@ -51,7 +53,14 @@ function fixture() {
       tlsDispose() {}, closeAllDirs() {},
       exit(code: number): never { throw new GuestExit(code); },
       hostSignal(signal: number, mode: number) {
+        // Mode 4 reads only the fatal outcome, as Waffle's runtime_proc.signal does.
+        if (signal === 0 && mode === 4) {
+          fatalChecks++;
+          if (selected) throw new GuestExit(selected.status);
+          return 0;
+        }
         if (signal === 0) {
+          polls++;
           const next = pending.values().next();
           if (next.done) return 0;
           pending.delete(next.value);
@@ -98,6 +107,8 @@ function fixture() {
     writeFails(error: Error) { writeError = error; },
     ticks() { while (ticks.length) ticks.shift()!(); },
     selected: () => selected,
+    polls: () => polls,
+    fatalChecks: () => fatalChecks,
     send(signal: number) {
       const mode = dispositions.get(signal) ?? 0;
       if (mode === 2) pending.add(signal);
@@ -170,6 +181,55 @@ for (const [name, signal] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]] a
     expect(f.pending.size).toBe(0);
   });
 }
+
+for (const [name, signal] of [["SIGINT", 2], ["SIGTERM", 15]] as const) {
+  test(`a supervisor's default ${name} stops a guest with no listeners at the next loop turn`, () => {
+    const f = fixture();
+    expect(f.pump()).toBe(false);
+    f.send(signal);
+    expect(f.pump).toThrow(GuestExit);
+    expect(f.selected()).toEqual({ status: 128 + signal, signal });
+    expect(f.polls()).toBe(0);
+    expect(f.fatalChecks()).toBe(2);
+  });
+}
+
+test("a guest-replaced Number does not hide a published handler from the loop", () => {
+  const f = fixture();
+  runInContext("globalThis.Number = () => 0;", f.context);
+  const calls: unknown[] = [];
+  f.process.on("SIGTERM", (name: unknown) => calls.push(name));
+  expect(f.dispositions.get(15)).toBe(2);
+  f.send(15);
+  expect(f.pump()).toBe(true);
+  expect(calls).toEqual(["SIGTERM"]);
+  expect(f.selected()).toBeUndefined();
+});
+
+test("the loop dequeues signals only while one has a handler", () => {
+  const f = fixture();
+  expect(f.pump()).toBe(false);
+  expect(f.process.kill(f.process.pid, "SIGPIPE")).toBe(true);
+  expect(f.pump()).toBe(false);
+  expect(f.polls()).toBe(0);
+  expect(f.fatalChecks()).toBe(2);
+  const calls: unknown[] = [];
+  const first = (name: unknown) => calls.push(`first ${String(name)}`);
+  const second = (name: unknown) => calls.push(`second ${String(name)}`);
+  f.process.on("SIGUSR1", first);
+  f.process.on("SIGUSR2", second);
+  f.send(10);
+  expect(f.pump()).toBe(true);
+  f.process.off("SIGUSR1", first);
+  f.send(12);
+  expect(f.pump()).toBe(true);
+  expect(calls).toEqual(["first SIGUSR1", "second SIGUSR2"]);
+  const polled = f.polls();
+  expect(polled).toBeGreaterThan(0);
+  f.process.off("SIGUSR2", second);
+  expect(f.pump()).toBe(false);
+  expect(f.polls()).toBe(polled);
+});
 
 test("process listener publication precedes removeListener observers", () => {
   const f = fixture();

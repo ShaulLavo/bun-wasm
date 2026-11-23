@@ -8,6 +8,7 @@
     "crates/bunwasm-runtime/src/js/bootstrap.js",
     "crates/bunwasm-runtime/src/js/bun.js",
     "crates/bunwasm-runtime/src/js/inspect.js",
+    "web/src/engine-codec.ts",
     "web/src/engine-host.js"
   ]
 }

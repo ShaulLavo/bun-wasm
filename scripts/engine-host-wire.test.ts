@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { runtimeTextDecoder } from "./text-decoder-controls";
+import * as codec from "../web/src/engine-codec.ts";
 
 function sourceSection(source: string, start: string, end: string): string {
   const from = source.indexOf(start);
@@ -26,7 +27,7 @@ const host = readFileSync(new URL("../web/src/engine-host.js", import.meta.url),
 const capturedCodecs = sourceSection(host, "const NativeTextEncoder = ", "const NativeBlob = ");
 const wireSource = sourceSection(host, "const utf8 = ", "// --- calling the wasm");
 const errorSource = sourceSection(host, "const ERRORS = ", "// Thrown to unwind after process.exit");
-const globals = { TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, SharedArrayBuffer, DataView, Error, TypeError, RangeError, SyntaxError };
+const globals = { TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, SharedArrayBuffer, DataView, Error, TypeError, RangeError, SyntaxError, ...codec };
 const wire = evaluate(`${capturedCodecs}\n${wireSource}\n${errorSource}\n({
   roundTrip(value, overwrite = false) {
     const writer = new Writer();

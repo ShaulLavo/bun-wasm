@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { memoryViews } from "waffle/core/memory-views";
+import * as codec from "../web/src/engine-codec.ts";
 
 const host = readFileSync(new URL("../web/src/engine-host.js", import.meta.url), "utf8");
 const start = host.indexOf("const utf8 = ");
@@ -29,15 +30,17 @@ const wire: unknown = runInNewContext(`${host.slice(start, end)}
   },
   bridge: wasmCaller,
 })`, {
-  NativeTextEncoder: TextEncoder, NativeTextDecoder: TextDecoder, memoryViews,
+  NativeTextEncoder: TextEncoder, NativeTextDecoder: TextDecoder, memoryViews, ...codec,
   Uint8Array, ArrayBuffer, DataView, Array: ObservedArray, Error, TypeError, RangeError, SyntaxError,
 });
 
+// Captured: one test replaces Reflect.apply while it calls through these helpers.
+const reflectApply = Reflect.apply;
 function method(value: unknown, name: string): (...args: unknown[]) => unknown {
   assert.ok(value && typeof value === "object");
   const fn: unknown = Reflect.get(value, name);
   assert.ok(typeof fn === "function");
-  return (...args) => Reflect.apply(fn, value, args);
+  return (...args) => reflectApply(fn, value, args);
 }
 
 const encodeValue = method(wire, "encode");
@@ -200,6 +203,79 @@ for (const shared of [false, true]) {
       f.packet(encode(scalar));
       assert.equal(f.call(), scalar);
     }
+  });
+  test(`${label} strings round trip at every short, in-place and encoded length`, () => {
+    const f = fixture(shared);
+    const ascii = (n: number) => Array.from({ length: n }, (_, i) => String.fromCharCode(32 + (i % 95))).join("");
+    const strings = [0, 1, 15, 16, 17, 255, 256, 257, 65536, 65537].map(ascii)
+      .concat(["é", "aé", "abcdefghijklmnoé", "😀", "a\ud800b", "\udc00", `${ascii(300)}é`, `é${ascii(70000)}`, "﻿bom"]);
+    for (const text of strings) {
+      f.packet(encode({ [text]: text }));
+      const output = f.call();
+      assert.ok(output && typeof output === "object");
+      const expected = new TextDecoder("utf-8", { ignoreBOM: true }).decode(new TextEncoder().encode(text));
+      assert.deepEqual(Object.keys(output), [expected]);
+      assert.equal(Reflect.get(output, expected), expected);
+    }
+  });
+  test(`${label} a call made while arguments encode keeps both argument lists`, () => {
+    const f = fixture(shared);
+    const caller = method(bridge({
+      memory: f.memory,
+      bunwasm_alloc: () => 33,
+      bunwasm_call: (_index: number, input: number, size: number) => {
+        seen.push(decode(new Uint8Array(f.memory.buffer, input, size)));
+        new Uint8Array(f.memory.buffer).set(encode(undefined), 4099);
+        return 0;
+      },
+      bunwasm_describe: () => 0,
+      bunwasm_result_ptr: () => 4099,
+      bunwasm_result_len: () => 1,
+    }), "call");
+    const seen: unknown[] = [];
+    const outer = { first: "outer-before", get nested() { caller(1, ["inner", "é".repeat(40)]); return "outer-after"; } };
+    caller(2, [outer, "tail"]);
+    caller(3, ["again"]);
+    // The codec's arrays and objects come from its own realm, so compare their JSON.
+    assert.equal(JSON.stringify(seen), JSON.stringify([["inner", "é".repeat(40)], [{ first: "outer-before", nested: "outer-after" }, "tail"], ["again"]]));
+  });
+  test(`${label} guest-replaced string, text and property built-ins leave the codec exact`, () => {
+    const f = fixture(shared);
+    const value = { short: "ab", long: "x".repeat(300), path: "/home/user/node_modules/pkg/index.js", "ké": "é😀", nested: { a: "b" } };
+    const saved = {
+      charCodeAt: String.prototype.charCodeAt, slice: String.prototype.slice, fromCharCode: String.fromCharCode,
+      encodeInto: TextEncoder.prototype.encodeInto, encode: TextEncoder.prototype.encode, decode: TextDecoder.prototype.decode,
+      defineProperty: Object.defineProperty, apply: Reflect.apply,
+    };
+    let wrapped = 0;
+    const sabotage = () => { throw new Error("guest replacement called"); };
+    Object.assign(String.prototype, { charCodeAt: sabotage, slice: sabotage });
+    Object.assign(TextEncoder.prototype, { encodeInto: sabotage, encode: sabotage });
+    TextDecoder.prototype.decode = sabotage;
+    String.fromCharCode = sabotage;
+    Reflect.apply = sabotage;
+    // A wrapper that decodes again in the middle of a field must neither run nor corrupt fields.
+    Object.defineProperty = ((target: object, key: PropertyKey, descriptor: PropertyDescriptor) => {
+      wrapped++;
+      f.packet(encode({ inner: "reentered" }));
+      f.call();
+      return saved.defineProperty(target, key, descriptor);
+    }) as typeof Object.defineProperty;
+    let output: unknown;
+    try {
+      // Both directions run replaced: this encodes the result and the call encodes its arguments.
+      f.packet(encode(value));
+      output = f.call();
+    } finally {
+      Object.assign(String.prototype, { charCodeAt: saved.charCodeAt, slice: saved.slice });
+      Object.assign(TextEncoder.prototype, { encodeInto: saved.encodeInto, encode: saved.encode });
+      TextDecoder.prototype.decode = saved.decode;
+      String.fromCharCode = saved.fromCharCode;
+      Object.defineProperty = saved.defineProperty;
+      Reflect.apply = saved.apply;
+    }
+    assert.equal(wrapped, 0);
+    assert.equal(JSON.stringify(output), JSON.stringify(value));
   });
   test(`${label} object keys remain own data properties without changing the prototype`, () => {
     const f = fixture(shared);

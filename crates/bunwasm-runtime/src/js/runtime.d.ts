@@ -582,7 +582,7 @@ declare namespace BunWasm {
     getMainModule(): unknown;
     listenerChanged?: (target: object, name?: string | symbol) => void;
     require(name: "process_stdin"): () => ProcessReader;
-    require(name: "process_signals"): (process: NodeEmitter, names: ReadonlyMap<number, readonly string[]>) => () => boolean;
+    require(name: "process_signals"): (process: NodeEmitter, names: ReadonlyMap<number, readonly string[]>, handled?: () => boolean) => () => boolean;
     /** Loading it installs the default 'warning' listener on the process global. */
     require(name: "process_warning"): {
       configure(process: WarningProcess, argv: readonly string[]): void;

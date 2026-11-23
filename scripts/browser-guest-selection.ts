@@ -60,6 +60,7 @@ const commonInputs = [
   "web/src/content-modules.ts",
   "web/src/default-signal.ts",
   "web/src/early-instance.ts",
+  "web/src/engine-codec.ts",
   "web/src/engine-host.js",
   "web/src/engine-loader.ts",
   "web/src/engine-stack-budget.ts",
