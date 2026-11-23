@@ -61,10 +61,28 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   private message: Status = { text: "", kind: "" };
   private disposePreviewLinks?: () => void;
   private startupFailed = false;
+  /** Cleanups for work startup has done so far; they run the moment startup is abandoned. */
+  private readonly abandonHooks = new Set<() => void>();
 
   /** Startup failed or another tab took the workspace: no late branch may publish or register. */
   private get abandoned(): boolean {
     return this.startupFailed || this.fs?.ownershipLost === true;
+  }
+
+  /** Runs `cleanup` when startup is abandoned, or at once if it already was. */
+  private onAbandon(cleanup: () => void): void {
+    if (this.abandoned) cleanup();
+    else this.abandonHooks.add(cleanup);
+  }
+
+  private runAbandonHooks(): void {
+    for (const cleanup of Array.from(this.abandonHooks)) cleanup();
+    this.abandonHooks.clear();
+  }
+
+  private abandonStartup(): void {
+    this.startupFailed = true;
+    this.runAbandonHooks();
   }
 
   constructor(search: string) {
@@ -101,7 +119,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     try {
       await this.boot();
     } catch (error) {
-      this.startupFailed = true;
+      this.abandonStartup();
       console.error(error);
       this.unreadable = this.fast && !this.fs?.ownershipLost && unreadableWorkspace(error, this.fs?.state);
       this.message = this.unreadable
@@ -229,7 +247,10 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     fs.onOwnershipLost = () => {
       this.failure = "ownership";
       input.close();
-      if (!this.ready) void retireShell();
+      if (!this.ready) {
+        void retireShell();
+        this.runAbandonHooks();
+      }
       this.changed();
     };
     // Network work that reads no workspace runs while the workspace storage opens.
@@ -329,7 +350,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       // Both branches are observed from here, so whichever fails first ends startup at once.
       [shell, { registration, size }] = await Promise.race([Promise.all([shellReady, registering]), shellEnded.promise]);
     } catch (error) {
-      this.startupFailed = true;
+      this.abandonStartup();
       void retireShell();
       void registering.then(registered => registered.registration.dispose()).catch(() => {});
       // A takeover is reported as such, not as the startup failure it caused.
@@ -353,6 +374,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     });
 
     Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews, sharedObjects, engine, profile: registration.profile } });
+    // Startup is complete: its cleanups no longer apply (a later takeover keeps Bun registered).
+    this.abandonHooks.clear();
     this.ready = !fs.ownershipLost;
     this.setStatus(`bun.wasm ready · ${ENGINES[engine].name} · ${mb(size)}`, "ok");
     if (this.ready) whenIdle(warmFirstCommand);
@@ -378,6 +401,9 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       // Abandonment during any registration step rolls back its programs and markers.
       abandoned: () => this.abandoned,
     });
+    // From here, abandoning startup removes Bun at once, without waiting for the checkpoint.
+    // Disposing twice is harmless: the registration removes each program only once.
+    this.onAbandon(() => registration.dispose());
     stage("bun-registered");
     try {
       // Mutations are already visible to every worker; the checkpoint only makes them durable.

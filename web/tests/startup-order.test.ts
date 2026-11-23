@@ -251,13 +251,17 @@ test("a shell that fails while the engine downloads fails startup, and nothing l
   expect(page.fixture.files.has(PACKAGE_CONTINUATION)).toBe(false);
 });
 
-test("a shell that fails during Bun registration leaves no registrations or markers behind", async () => {
+/**
+ * A playground started with a held engine. It counts live program registrations and exposes
+ * the shell's state callback, so a test can fail the shell at a chosen startup step.
+ */
+async function registrationStartup() {
   const fixture = filesystemFixture();
   const engine = deferred<ReturnType<typeof engineModule>>();
   const page = await models(fixture, undefined, () => engine.promise);
   cleanups.push(page.cleanup);
-  let active = 0;
-  Object.assign(page.runtime, { registerProgram: () => { active++; return () => { active--; }; } });
+  const programs = { active: 0 };
+  Object.assign(page.runtime, { registerProgram: () => { programs.active++; return () => { programs.active--; }; } });
   let reportState: ((state: string, detail?: string) => void) | undefined;
   const create = page.boundary.BrowserSession.create;
   Object.assign(page.boundary.BrowserSession, {
@@ -270,19 +274,40 @@ test("a shell that fails during Bun registration leaves no registrations or mark
   method<() => void>(playground, "terminalOpened")();
   const started = playground.start();
   await until(() => reportState !== undefined);
+  return { fixture, engine, playground, started, programs, failShell: (detail: string) => reportState?.("failed", detail) };
+}
+
+test("a shell that fails during Bun registration leaves no registrations or markers behind", async () => {
+  const { fixture, engine, playground, started, programs, failShell } = await registrationStartup();
   // Registration starts, then waits on its first executable marker write.
   fixture.control.holdWrites = true;
   engine.resolve(engineModule());
   await until(() => fixture.writes.length === 1);
-  const registeredBeforeFailure = active;
-  reportState?.("failed", "shell worker crashed");
+  const registeredBeforeFailure = programs.active;
+  failShell("shell worker crashed");
   releaseWrites(fixture);
   await started;
   expect(playground.failure).toBe("startup");
   const markers = () => Array.from(fixture.files.keys()).filter(path => path === PACKAGE_CONTINUATION
     || Object.values(ENGINE_BIN).some(bin => ["bun", "bunx", "node", "nodejs"].some(name => path === `${bin}/${name}`)));
-  await until(() => active === 0 && markers().length === 0);
+  await until(() => programs.active === 0 && markers().length === 0);
   expect(registeredBeforeFailure).toBeGreaterThan(0);
+});
+
+test("abandoning startup during the final checkpoint removes Bun without waiting for it", async () => {
+  const { fixture, engine, playground, started, programs, failShell } = await registrationStartup();
+  // Seeding is done; the next checkpoint is the one after Bun's registration. Hold it.
+  const checkpoint = deferred<void>();
+  fixture.checkpoints.push(checkpoint);
+  const before = fixture.control.checkpoints;
+  engine.resolve(engineModule());
+  await until(() => fixture.control.checkpoints > before && programs.active > 0);
+  failShell("shell worker crashed");
+  await until(() => programs.active === 0);
+  checkpoint.resolve();
+  await started;
+  expect(playground.failure).toBe("startup");
+  expect(programs.active).toBe(0);
 });
 
 test("input the shell rejects during replay is reported and startup still finishes", async () => {

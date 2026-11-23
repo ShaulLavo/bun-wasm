@@ -54,6 +54,7 @@ export async function registerPlaygroundBun(options: {
     let loading: Promise<WebAssembly.Module> | undefined;
     const load = provider === engine ? () => module : () => loading ??= options.loadModule(provider, memoryProfile);
     await filesystem.asyncCall("mkdirp", [directory]);
+    // The loop checks again before each program and marker write.
     for (const name of ["bun", "bunx", "node", "nodejs"]) {
       proceed();
       const path = `${directory}/${name}`;
@@ -62,12 +63,15 @@ export async function registerPlaygroundBun(options: {
     }
   }
   try {
+    // Checked after every await, so no registration or write starts once startup is abandoned.
+    proceed();
     packages = packageService(runtime);
     const providers: readonly Engine[] = pairedEngines;
     for (const provider of providers.concat(["browser"], engine === "spidermonkey" ? [engine] : [])) await register(provider);
     proceed();
     // A continuation marker this call creates is rolled back with the executables.
     const continuationExisted = await filesystem.asyncCall("lookup", [PACKAGE_CONTINUATION]) !== undefined;
+    proceed();
     await preparePackageContinuation(runtime);
     if (!continuationExisted) created.push(PACKAGE_CONTINUATION);
     proceed();

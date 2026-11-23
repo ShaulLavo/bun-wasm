@@ -77,42 +77,46 @@ async function stopChild({ child, ended, done }: Tracked, graceMs: number): Prom
 export class ContextGroup<Context extends { close(): Promise<void> }> {
   private readonly launches = new Set<Promise<Context>>();
   private readonly lifetimes = new Set<Promise<void>>();
+  /** One close per launch, shared by its visit and by teardown: `close()` never runs twice. */
+  private readonly closes = new Map<Promise<Context>, Promise<void>>();
   private closing: Promise<void> | undefined;
 
   open<T>(launch: () => Promise<Context>, use: (context: Context) => Promise<T>): Promise<T> {
     if (this.closing) return Promise.reject(new Error("Browser contexts are closing; no new launch"));
     const launching = launch();
     this.launches.add(launching);
-    const lifetime = visit(launching, use);
+    const lifetime = this.visit(launching, use);
     const settled = lifetime.then(() => {}, () => {});
     this.lifetimes.add(settled);
-    void settled.then(() => { this.launches.delete(launching); this.lifetimes.delete(settled); });
+    void settled.then(() => { this.launches.delete(launching); this.lifetimes.delete(settled); this.closes.delete(launching); });
     return lifetime;
   }
 
   closeAll(): Promise<void> {
     return this.closing ??= (async () => {
-      try { await runAll(Array.from(this.launches, launching => () => closeLaunched(launching))); }
+      try { await runAll(Array.from(this.launches, launching => () => this.close(launching))); }
       finally { await Promise.allSettled(this.lifetimes); }
     })();
   }
-}
 
-/** Uses a context, then closes it. A close failure fails the visit unless the visit failed first. */
-async function visit<Context extends { close(): Promise<void> }, T>(launching: Promise<Context>, use: (context: Context) => Promise<T>): Promise<T> {
-  let result: T;
-  try {
-    result = await use(await launching);
-  } catch (error) {
-    await closeLaunched(launching).catch(() => {});
-    throw error;
+  /** Uses a context, then closes it. A close failure fails the visit unless the visit failed first. */
+  private async visit<T>(launching: Promise<Context>, use: (context: Context) => Promise<T>): Promise<T> {
+    let result: T;
+    try {
+      result = await use(await launching);
+    } catch (error) {
+      await this.close(launching).catch(() => {});
+      throw error;
+    }
+    await this.close(launching);
+    return result;
   }
-  await closeLaunched(launching);
-  return result;
-}
 
-function closeLaunched<Context extends { close(): Promise<void> }>(launching: Promise<Context>): Promise<void> {
-  return launching.then(context => context.close(), () => {});
+  private close(launching: Promise<Context>): Promise<void> {
+    let closing = this.closes.get(launching);
+    if (!closing) this.closes.set(launching, closing = launching.then(context => context.close(), () => {}));
+    return closing;
+  }
 }
 
 /** Runs every step in order even when one fails, then reports the failures together. */

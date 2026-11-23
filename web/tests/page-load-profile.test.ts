@@ -90,6 +90,19 @@ test("teardown closes every context, then reports a close that failed", async ()
   expect(await outcome(healthy)).not.toThrow();
 });
 
+test("a visit's close and teardown share one context.close(), and both see it fail", async () => {
+  const group = new ContextGroup<{ close(): Promise<void> }>();
+  const closing = Promise.withResolvers<void>();
+  let calls = 0;
+  const visited = group.open(async () => ({ close: () => { calls++; return closing.promise; } }), async () => "visited");
+  await Bun.sleep(1);
+  const teardown = outcome(group.closeAll());
+  closing.reject(new Error("close failed"));
+  expect(await teardown).toThrow("Teardown failed");
+  expect(await outcome(visited)).toThrow("close failed");
+  expect(calls).toBe(1);
+});
+
 test("each teardown step runs even when an earlier one fails", async () => {
   const steps: string[] = [];
   const result = await outcome(runAll([
