@@ -1,9 +1,11 @@
-// Bun internal modules that the generated thirdparty builtins (node-fetch,
-// undici) require, implemented over bun-wasm's own node:stream so their
-// streams are the same classes user code sees. Adapted from Bun's
-// src/js/internal/webstreams_adapters.ts (ReadableFromWeb) and
-// src/js/internal/tls.ts (nodeClientTlsToNative); see
-// docs/bun-patches/bun-thirdparty-fetch-builtins.md.
+// Bun internal modules that generated builtins (node-fetch, undici,
+// fast-utf8-stream) require, implemented over bun-wasm's own node:stream and
+// error helpers so their classes match what user code sees. Adapted from Bun's
+// src/js/internal/webstreams_adapters.ts (ReadableFromWeb),
+// src/js/internal/tls.ts (nodeClientTlsToNative), and
+// src/js/internal/validators.ts; see
+// docs/bun-patches/bun-thirdparty-fetch-builtins.md and
+// docs/bun-patches/bun-fast-utf8-stream.md.
 (function (internal: BunWasm.Internal) {
   "use strict";
   type ReadableOptions = { objectMode?: boolean; highWaterMark?: number; encoding?: string; signal?: AbortSignal; responseBody?: boolean };
@@ -154,12 +156,7 @@
     return Object.assign(err, { code: "ABORT_ERR" });
   }
 
-  function makeErrorWithCode(
-    code: string,
-    previousCode: string | undefined,
-    previousPreviousCode: string | undefined,
-    args: unknown[],
-  ): Error | undefined {
+  function makeBuiltinError(code: string, variant: number, args: readonly unknown[]): Error | undefined {
     if (code === "ERR_INVALID_ARG_TYPE") {
       const [name, expected, actual] = args;
       const kind = String(name).includes(".") ? "property" : "argument";
@@ -168,7 +165,7 @@
     if (code === "ERR_INVALID_ARG_VALUE") {
       const [name, value, reason = "is invalid"] = args;
       const kind = String(name).includes(".") ? "property" : "argument";
-      const Ctor = previousCode === "ERR_INVALID_ARG_VALUE" ? RangeError : TypeError;
+      const Ctor = variant === 1 ? RangeError : TypeError;
       return Object.assign(new Ctor(`The ${kind} '${name}' ${reason}. Received ${inspectArg(value)}`), { code });
     }
     if (code === "ERR_OUT_OF_RANGE") {
@@ -180,14 +177,10 @@
       return Object.assign(new TypeError(`Expected ${input} to be returned from the "${name}" function but got ${internal.describe(value)}.`), { code });
     }
     if (code === "ERR_INVALID_STATE") {
-      const Ctor = previousPreviousCode === "ERR_INVALID_STATE"
-        ? RangeError
-        : previousCode === "ERR_INVALID_STATE"
-          ? TypeError
-          : Error;
-      return Object.assign(new Ctor(`Invalid state: ${args[0]}`), { code });
+      const Ctor = variant === 2 ? RangeError : variant === 1 ? TypeError : Error;
+      return Object.assign(new Ctor(`Invalid state: ${String(args[0] ?? "")}`), { code });
     }
-    if (code === "ERR_OPERATION_FAILED") return Object.assign(new Error(`Operation failed: ${args[0]}`), { code });
+    if (code === "ERR_OPERATION_FAILED") return Object.assign(new Error(`Operation failed: ${String(args[0] ?? "")}`), { code });
     if (code === "ERR_STREAM_WRITE_AFTER_END") return Object.assign(new Error("write after end"), { code });
     return undefined;
   }
@@ -203,18 +196,28 @@
     Writable: unknown;
     addAbortSignal: unknown;
   };
+  let cachedValidators: Record<string, unknown> | undefined;
+  function streamValidators() {
+    return (cachedValidators ??= {
+      kValidateObjectNone: 0,
+      kValidateObjectAllowNullable: 1,
+      kValidateObjectAllowArray: 2,
+      kValidateObjectAllowFunction: 4,
+      ...streamCore().validators,
+    });
+  }
 
   return {
     "internal:webstreams_adapters": { _ReadableFromWeb: ReadableFromWeb },
     "internal:tls": { nodeClientTlsToNative },
     "internal:errors": { aggregateTwoErrors },
-    get "internal:validators"() { return streamCore().validators; },
+    get "internal:validators"() { return streamValidators(); },
     get "internal:streams/readable"() { return nodeStream().Readable; },
     get "internal:streams/writable"() { return nodeStream().Writable; },
     get "internal:streams/end-of-stream"() { return streamCore().eos; },
     get "internal:streams/add-abort-signal"() { return { addAbortSignal: nodeStream().addAbortSignal }; },
     get "internal:streams/destroy"() { return { destroyer: streamCore().Stream.destroy }; },
     makeAbortError,
-    makeErrorWithCode,
+    makeBuiltinError,
   } as Record<string, unknown>;
 })

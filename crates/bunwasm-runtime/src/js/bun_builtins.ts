@@ -124,12 +124,10 @@
     makeErrorWithCode(id: number, ...args: unknown[]) {
       const code = native.bunBuiltinErrorCode(id);
       if (code === "ERR_INVALID_URI") return Object.assign(new URIError("URI malformed"), { code });
-      const prev = id > 0 ? native.bunBuiltinErrorCode(id - 1) : undefined;
-      const prev2 = id > 1 ? native.bunBuiltinErrorCode(id - 2) : undefined;
-      const make = internal.require("bun_provided_internals").makeErrorWithCode as
-        (c: string, p: string | undefined, p2: string | undefined, a: unknown[]) => Error | undefined;
-      const built = make(code, prev, prev2, args);
-      if (built) return built;
+      const variant = (id > 0 && native.bunBuiltinErrorCode(id - 1) === code ? 1 : 0) + (id > 1 && native.bunBuiltinErrorCode(id - 2) === code ? 1 : 0);
+      const make = internal.require("bun_provided_internals").makeBuiltinError as ((code: string, variant: number, args: unknown[]) => Error | undefined) | undefined;
+      const error = make?.(code, variant, args);
+      if (error) return error;
       throw unsupported(`error constructor ${code}`);
     },
   };

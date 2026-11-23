@@ -163,9 +163,9 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
 // without the runtime's own frames (docs/bun-patches/runtime-stack-frames.md).
 const originalTokens = {
   stack_trace: "498778015efc8fb62977d849e0e7802dfebfa0cfb7598f74d0c9207f6ed3e34d",
-  // Re-pinned for the thirdparty fetch modules' internal loader and binding hooks (node-fetch, undici)
-  // and node:stream/iter's runtime-provided stream/error/validator internals and AbortError helpers.
-  bun_builtins: "ddf1997406716fb8e430fc2b14d39a76f6dc4cea5534254f493ed3dc45d94293",
+  // Re-pinned for the thirdparty fetch modules, fast-utf8-stream, and node:stream/iter's
+  // runtime-provided stream/error/validator internals and AbortError/makeErrorWithCode delegation.
+  bun_builtins: "341a3728030e1f67d86136785317e332213bab8e0ba90b35f0cb65c74c7bc6fa",
 };
 // Allow the JSC formatter registration, host adapter dispatch, JSC default text rewrite with
 // its frame caches, hidden runtime frames and QuickJS's stack limit headroom (8193 bytes).

@@ -3,6 +3,7 @@
     "internal:fixed_queue",
     "internal:freelist",
     "internal:streams/duplexpair",
+    "internal:streams/fast-utf8-stream",
     "node:querystring",
     "node:punycode",
     "node:stream/iter",

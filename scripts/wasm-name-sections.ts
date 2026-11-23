@@ -1,11 +1,11 @@
 // The Wasm `name` custom section holds debug names for functions and locals. It is useful to
 // profilers and symbolizers and useless to users, who download it: about 2.2 MB raw, 8% of the
-// gzipped guest. The shipped browser guest drops it; `build-bun-browser.sh` keeps a named copy
-// for tools. CLI: `strip IN OUT` and `check FILE...`.
+// gzipped guest. Every shipped guest, core and engine side drops it; each producer keeps a named
+// copy (`*.named.wasm`) for tools. CLI: `strip IN OUT` and `check FILE...`.
 import { readFileSync, writeFileSync } from "node:fs";
 
-/** Guests that ship to browsers and must stay free of debug names. */
-export const nameFreeGuests: readonly string[] = ["bun-browser.wasm"];
+/** Guests, cores and engine sides that ship to users and must stay free of debug names. */
+export const nameFreeGuests: readonly string[] = ["bun-browser.wasm", "bun.wasm", "quickjs.wasm", "bun-jsc.wasm", "jsc-engine.wasm", "bun-tools.wasm"];
 
 interface Section { readonly id: number; readonly start: number; readonly end: number; readonly name: string | undefined }
 
@@ -71,6 +71,21 @@ export function assertShippedGuestHasNoNames(name: string, bytes: Uint8Array, ke
 
 export const keepNamesRequested = (): boolean => process.env.BUN_WASM_KEEP_NAMES === "1";
 
+/** Fail unless `stripped` is name free and is exactly `named` without its name section. */
+export function assertNamedCopyMatches(named: Uint8Array, stripped: Uint8Array, label: string): void {
+  assertNoNameSection(stripped, label);
+  if (Buffer.compare(stripNameSection(named), stripped) !== 0) throw new Error(`${label} is not its named copy without names; rebuild it in a fresh build directory`);
+}
+
+function readNamedCopy(path: string): Uint8Array {
+  try {
+    return readFileSync(path);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") throw new Error(`Missing named copy ${path}; rebuild in a fresh build directory`);
+    throw error;
+  }
+}
+
 if (import.meta.main) {
   const [command, ...paths] = process.argv.slice(2);
   if (command === "strip" && paths.length === 2) {
@@ -79,7 +94,9 @@ if (import.meta.main) {
     console.log(`${paths[1]}: ${stripped.byteLength} bytes, no name section`);
   } else if (command === "check" && paths.length > 0) {
     for (const path of paths) assertNoNameSection(readFileSync(path), path);
+  } else if (command === "matches" && paths.length === 2) {
+    assertNamedCopyMatches(readNamedCopy(paths[0]!), readFileSync(paths[1]!), paths[1]!);
   } else {
-    throw new Error("Usage: wasm-name-sections.ts strip IN OUT | check FILE...");
+    throw new Error("Usage: wasm-name-sections.ts strip IN OUT | check FILE... | matches NAMED STRIPPED");
   }
 }
