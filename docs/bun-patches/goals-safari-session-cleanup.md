@@ -113,11 +113,34 @@ navigation first shows a service-worker loading document whose CSP allows inline
 script but refuses string evaluation. The desktop frame's first render read then
 failed with `EvalError` instead of waiting for the guest page.
 
+The transport matches the loading document by its exact reserved route,
+`<app>/__preview/.loading/<UUID>`. It derives `<app>/__preview/` from the preview URL
+`<app>/__preview/<port>/...`, so an application route that merely contains
+`.loading` is not mistaken for it. The terminal state is the loading document's
+`[role="status"]` text `The preview request failed. Reload to try again.`, copied
+from `web/src/preview-navigation.ts` without changing that file, so prepared sites
+stay valid.
+
 After presenting its frame, the transport polls from the host document, within
 the open-preview phase admission, until the frame's same-origin location has left
-both its initial `about:blank` and the `/.loading/` document. Only then does it
-select the frame. A cross-origin document, whose location throws `SecurityError`,
-counts as left. Other read errors still fail the phase. The HTTP fixture shows
-the frame passing through `about:blank` and a loading document that refuses
-evaluation before the guest page. Chrome and Firefox evaluate through their
-debugging protocols, and iPhone Safari uses its observer bus, so neither changes.
+both its initial `about:blank` and the loading document. A failed loading document
+fails the phase at once with its message. A cross-origin document, whose location
+throws `SecurityError`, counts as left. Other read errors still fail the phase.
+
+The frame can return to the loading document after that poll, for example when
+it reloads during development startup or a full hot reload. Each evaluation
+therefore checks first, inside WebDriver's script and before `eval`, whether its
+document is on the loading route. While it is pending, the evaluation is retried
+within the caller's admission. A failed loading document is reported at once.
+Any other result is returned unchanged, so an application's own CSP `EvalError`
+or script error still fails immediately and is never retried.
+
+HTTP fixtures cover each case:
+- the frame passing through `about:blank` and a refusing loading document;
+- an application route containing `.loading`;
+- an immediate terminal failure, both at open and at evaluation;
+- a reload back to the loading document that waits and then evaluates;
+- an application CSP refusal that fails without retry.
+
+Chrome and Firefox evaluate through their debugging protocols, and iPhone Safari
+uses its observer bus, so neither changes.

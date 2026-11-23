@@ -12,11 +12,11 @@ the stop deadline, or turn failed cleanup into a pass.
 `scripts/goals-matrix/native.ts` and `native-safari.ts` adapt the installed macOS
 `launchctl`, `osascript`, `ps`, and SafariDriver commands for the goals campaign.
 The existing Mac lock, owner availability check, and unlocked-console check run
-first. Desktop Safari starts through LaunchServices: `launchctl asuser <uid>
-osascript -l JavaScript` calls `NSWorkspace launchApplicationAtURL` for
-`/Applications/Safari.app` and prints the PID of the returned
-`NSRunningApplication`. There is no environment or argument marker: LaunchServices
-ignores launch modifiers when it revives an existing record.
+first. Desktop Safari starts through LaunchServices. A helper, `launchctl asuser
+<uid> osascript -l JavaScript`, calls `NSWorkspace launchApplicationAtURL` for
+`/Applications/Safari.app`, prints the PID of the returned `NSRunningApplication`,
+and keeps that object for the rest of the run. There is no environment or argument
+marker: LaunchServices ignores launch modifiers when it revives an existing record.
 
 SafariDriver's HTTP service finds its Safari through LaunchServices, not through
 the process table. On November 23, 2026 LaunchServices still held a record for a
@@ -29,19 +29,44 @@ not used.
 
 The finite five-second GUI startup allowance, driver readiness bound and product
 phase deadlines are unchanged. Simulator-only runs do not launch desktop Safari.
-An already-running Safari is neither relaunched nor owned. Ownership needs both
-the PID LaunchServices reported for this request and a live desktop Safari row
-for that PID that started no earlier than the request's second (`ps lstart`
-precision). An instance LaunchServices returns that started before the request
-is never owned. A second Safari after the startup allowance blocks driver startup.
+An already-running Safari is neither relaunched nor owned.
 
-Cleanup signals only the owned PID after re-checking its captured start time, and
-waits a finite time for it to exit before escalating once. A launch request whose
-PID was never attributed gets a finite settle period; any Safari started since the
-request then leaves cleanup unproved, preserving the application and lock. The
-application stops only after driver exit is proved. Failed driver shutdown
-preserves both its dependent application and lock. No preferences, automation
-settings, login state, or credentials change.
+Ownership needs the PID that LaunchServices reported to this request's helper and
+a kernel birth for that PID at or after the request. The birth comes from
+`proc_pidinfo(PROC_PIDTBSDINFO)` with microsecond precision, not one-second
+`ps lstart`, so an owner Safari started earlier in the same second is refused.
+`launchApplicationAtURL` returns an existing instance unchanged, so a refused
+instance is never terminated; its helper is told to exit and leaves it alone.
+The PID must keep that birth through the startup allowance, and a second Safari
+after the allowance blocks driver startup. One case cannot be told apart: an owner
+launch that reaches LaunchServices after this request but before it starts the
+process is merged into the same new instance. That instance is still the one this
+request started, and it is terminated with the run.
+
+Cleanup never signals a PID. It asks the helper to call `forceTerminate` on the
+retained `NSRunningApplication`, which identifies the instance rather than a
+number that can be reused. `forceTerminate` sends no Apple Event, so it needs no
+automation consent. The helper reports only that instance's termination. Cleanup
+also requires the original PID and birth to be gone; a reused PID with a new birth
+does not count as the instance.
+
+The helper runs in the workload's process group. The installed Mac queue
+(`mac-queue-run.ts`, `monitor` and `workRemains`) keeps its lock until that group
+has no live members or the queue's own workload timeout stops the group. The
+LaunchServices Safari itself is not in the group. On proved termination the helper
+exits. On unproved termination, or when the launch request has not reported
+within ten seconds, cleanup throws, the receipt records `safariExited: false`, and
+the helper keeps waiting for its instance to end. The queue lock therefore stays
+held until that Safari ends or the queue's workload timeout stops the group; after
+that timeout the queue releases the lock even if Safari is still running. A helper
+that reported no launch has already exited and owns nothing. No preferences,
+automation settings, login state, or credentials change.
+
+In the ordinary path the application stops only after driver exit is proved, and a
+failed driver shutdown leaves the application running. With the opt-in Safari
+exit capture (`safari-exit-observer.ts`), each teardown step is attempted on its
+own: the application step still runs after a failed driver step, and the first
+error is kept.
 
 `fleet.ts` validates the collected native report before copying its artifacts.
 Only a report with zero attempted cells may omit the terminal logs directory.
