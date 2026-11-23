@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { loadWasm } from "../src/engine-loader";
+import { loadEngineProgram, loadWasm } from "../src/engine-loader";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const build = new Bun.CryptoHasher("sha256").update(wasm).digest("hex");
@@ -69,3 +69,45 @@ test("optional cache storage failure preserves the prepared module", () => withC
   expect(loaded.module).toBeInstanceOf(WebAssembly.Module);
   expect(loaded.build).toBe(build);
 }));
+
+test("the Browser engine's second page load compiles from the engine cache", async () => {
+  const names = ["location", "caches", "fetch", "__bunwasmBuilds"];
+  const previous = names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+  const entries = new Map<string, { headers: Headers; bytes: Uint8Array }>();
+  const stored = Promise.withResolvers<void>();
+  const fetched: string[] = [];
+  const values = {
+    location: new URL("https://engine-cache.test/app/"),
+    caches: {
+      async match(url: string) {
+        const entry = entries.get(url);
+        return entry && new Response(entry.bytes.slice(), { headers: entry.headers });
+      },
+      async open() {
+        return {
+          async put(url: string, response: Response) {
+            entries.set(url, { headers: response.headers, bytes: new Uint8Array(await response.arrayBuffer()) });
+            stored.resolve();
+          },
+          async delete(url: string) { return entries.delete(url); },
+        };
+      },
+    },
+    fetch: async (url: string) => { fetched.push(String(url)); return new Response(Bun.gzipSync(wasm)); },
+    __bunwasmBuilds: { "bun-browser.wasm": build },
+  };
+  for (const [name, value] of Object.entries(values)) Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
+  try {
+    const first = await loadEngineProgram("browser", "split", () => {});
+    expect(first.build).toBe(build);
+    expect(fetched.map(url => new URL(url, location.href).href)).toEqual([`https://engine-cache.test/app/bun-browser.wasm.gz?v=${build}`]);
+    await stored.promise;
+    expect(entries.get("https://engine-cache.test/app/bun-browser.wasm")?.headers.get("x-bunwasm-build")).toBe(build);
+    const second = await loadEngineProgram("browser", "split", () => {});
+    expect(second.module).toBeInstanceOf(WebAssembly.Module);
+    expect(second.size).toBe(wasm.length);
+    expect(fetched).toHaveLength(1);
+  } finally {
+    for (const [name, descriptor] of previous) restore(name, descriptor);
+  }
+});

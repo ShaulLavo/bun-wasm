@@ -163,7 +163,8 @@
       "entry": [
         "src/main.ts",
         "tests/*.{test.ts,mjs,js}",
-        "tests/next-dev.ts"
+        "tests/next-dev.ts",
+        "tests/page-load-profile.ts"
       ],
       "project": [
         "src/**/*.{ts,tsx}",

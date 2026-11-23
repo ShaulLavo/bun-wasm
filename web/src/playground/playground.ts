@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { createRuntime, type Runtime } from "waffle";
 import { memoryGroupPolicy } from "../host-memory-policy";
 import { playgroundProfile, registerPlaygroundBun, templateProfile, type PlaygroundProfile } from "./program-profile";
+import { ENGINE_BIN } from "../../../src/executable-paths";
 import { BrowserPrograms } from "../browser-programs";
 import { ENGINES, type Engine, WasmMissing, createToolsLoader, engineBuildHint, engineUnavailable, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../engine-loader";
 import { installCompileObserver, measurementEnvironment } from "../compile-observer";
@@ -145,7 +146,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
 
   async run(): Promise<void> {
     const { editor, shell } = this;
-    if (!editor || !shell || shell.running || this.runPending) return;
+    // The shell starts before Bun is registered; Run waits for the finished startup.
+    if (!this.ready || !editor || !shell || shell.running || this.runPending) return;
     this.runPending = true;
     this.changed();
     try {
@@ -180,6 +182,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   }
 
   private setStatus(text: string, kind: Status["kind"] = ""): void {
+    performance.mark("bunwasm:status", { detail: text });
     this.message = { text, kind };
     this.changed();
   }
@@ -211,20 +214,27 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       this.failure = "ownership";
       this.changed();
     };
+    // None of these read the workspace, so they run while its storage opens and seeds.
+    const wasmReady = this.loadEngine().then(value => { stage("engine-ready"); return value; });
+    // Browser-engine children need the module scope even when their parent uses QuickJS or JSC.
+    const moduleScope = registerModuleScope().then(value => { stage("module-scope-ready"); return value; });
+    const programsReady = browserPrograms.ready().then(value => { stage("programs-ready"); return value; });
+    const sessionModule = import("bash-web/session");
+    const promptModule = this.params.get("prompt") === "off" ? Promise.resolve(undefined) : import("bash-web/prompt");
+    // Awaited below; a startup that fails first must not also report these as unhandled.
+    for (const pending of [programsReady, sessionModule, promptModule]) pending.catch(() => {});
     await fs.mkdirp("/tmp");
+    stage("filesystem-open");
     if (this.template) {
       const { loadTemplate } = await import("../../../sandbox/src/template");
       await loadTemplate(fs, HOME, this.template.file);
     } else await seedExamples(fs);
+    stage("workspace-ready");
     addEventListener("pagehide", (event: PageTransitionEvent) => {
       if (event.persisted) return;
       void Promise.all([runtime.dispose(), browserPrograms.dispose()]).catch(console.error);
     });
 
-    const wasmReady = this.loadEngine();
-    const promptModule = this.params.get("prompt") === "off" ? undefined : import("bash-web/prompt");
-    // Browser-engine children need the module scope even when their parent uses QuickJS or JSC.
-    const moduleScope: Promise<boolean> = registerModuleScope();
     // Networking needs SharedArrayBuffer: without cross-origin isolation bun.wasm gets no fetch slots.
     const previews = this.params.has("root-previews") ? new HostedPreviews(() => runtime) : new Previews();
     const term = this.term = createTerminal();
@@ -250,44 +260,62 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       "",
     ]) term.writeln(line);
 
-    const [programs, scoped, wasm] = await Promise.all([browserPrograms.ready(), moduleScope, wasmReady]);
-    if (wasm instanceof Error) throw wasm;
-    const module = wasm.module;
+    // The shell starts while the engine downloads. Its PATH names Bun's static bin directory,
+    // and typing waits for Bun's registration below, so no command can run before Bun exists.
+    const input = new InputGate();
+    term.onData(data => input.write(data));
+    const shellReady = (async () => {
+      const [programs, { BrowserSession }, prompts] = await Promise.all([programsReady, sessionModule, promptModule]);
+      const prompt = prompts?.createPrompt({
+        filesystem: runtime.filesystem,
+        versions: HOST_VERSIONS,
+        file: true,
+        logger: (message: string, error?: unknown) => console.warn(`[prompt] ${message}`, error ?? ""),
+      });
+      const shell = this.shell = await BrowserSession.create({
+        runtime, cwd: HOME,
+        env: { ...engineEnv, HOME, USER: "user", PATH: `${ENGINE_BIN[this.engine]}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
+        cols: term.cols, rows: term.rows,
+        wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
+        workerUrl: new URL("./shell-worker.js", location.href),
+        lineEditor: { mode: "zsh" },
+        prompt,
+        onOutput: bytes => term.write(bytes),
+        onState: (state, detail) => this.shellChanged(state, detail),
+      });
+      stage("shell-created");
+      term.onResize(({ cols, rows }) => shell.resize(cols, rows));
+      return shell;
+    })();
     const engine = this.engine;
-    const loadTools = createToolsLoader();
-    const registration = await registerPlaygroundBun({ runtime, engine, module, profile: this.profile,
-      loadModule: (provider, profile) => loadEngineProgram(provider, profile, () => {}).then(loaded => loaded.module),
-      launcher: provider => async (context, service) => {
-        const { bunLauncher } = await import("../bun-launcher");
-        return bunLauncher(provider, {
-          runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
-          // web/build.ts emits the notification helper at the page root in both modes.
-          notificationWorkerUrl: new URL("./notification-worker.js", location.href).href,
-          loadTools,
-        })(context, service);
-      },
-    });
-    await fs.flush();
-    const { BrowserSession } = await import("bash-web/session");
-    const prompt = (await promptModule)?.createPrompt({
-      filesystem: runtime.filesystem,
-      versions: HOST_VERSIONS,
-      file: true,
-      logger: (message: string, error?: unknown) => console.warn(`[prompt] ${message}`, error ?? ""),
-    });
-    const shell = this.shell = await BrowserSession.create({
-      runtime, cwd: HOME,
-      env: { ...engineEnv, HOME, USER: "user", PATH: `${registration.bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
-      cols: term.cols, rows: term.rows,
-      wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
-      workerUrl: new URL("./shell-worker.js", location.href),
-      lineEditor: { mode: "zsh" },
-      prompt,
-      onOutput: bytes => term.write(bytes),
-      onState: (state, detail) => this.shellChanged(state, detail),
-    });
-    term.onData(data => shell.input(data));
-    term.onResize(({ cols, rows }) => shell.resize(cols, rows));
+    let registration: Awaited<ReturnType<typeof registerPlaygroundBun>>;
+    let size: number;
+    try {
+      const [scoped, wasm] = await Promise.all([moduleScope, wasmReady]);
+      if (wasm instanceof Error) throw wasm;
+      size = wasm.size;
+      const loadTools = createToolsLoader();
+      registration = await registerPlaygroundBun({ runtime, engine, module: wasm.module, profile: this.profile,
+        loadModule: (provider, profile) => loadEngineProgram(provider, profile, () => {}).then(loaded => loaded.module),
+        launcher: provider => async (context, service) => {
+          const { bunLauncher } = await import("../bun-launcher");
+          return bunLauncher(provider, {
+            runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
+            // web/build.ts emits the notification helper at the page root in both modes.
+            notificationWorkerUrl: new URL("./notification-worker.js", location.href).href,
+            loadTools,
+          })(context, service);
+        },
+      });
+      stage("bun-registered");
+      // Mutations are already visible to every worker; the checkpoint only makes them durable.
+      await Promise.all([shellReady, fs.flush().then(() => stage("flushed"))]);
+    } catch (error) {
+      void shellReady.then(shell => shell.dispose()).catch(() => {});
+      throw error;
+    }
+    const shell = await shellReady;
+    input.open(data => shell.input(data));
     addEventListener("pagehide", (event: PageTransitionEvent) => {
       if (event.persisted) return;
       void shell.dispose().finally(registration.dispose).catch(console.error);
@@ -295,7 +323,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
 
     Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews, sharedObjects, engine, profile: registration.profile } });
     this.ready = !fs.ownershipLost;
-    this.setStatus(`bun.wasm ready · ${ENGINES[engine].name} · ${mb(wasm.size)}`, "ok");
+    this.setStatus(`bun.wasm ready · ${ENGINES[engine].name} · ${mb(size)}`, "ok");
     if (this.ready) whenIdle(warmFirstCommand);
   }
 
@@ -312,6 +340,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   }
 
   private shellChanged(state: SessionState, detail?: string): void {
+    if (state !== this.shellState) stage(`shell-${state}`);
     this.shellState = state;
     if (state === "ready") void this.editor?.syncFromFs().catch(this.report);
     if (state === "failed" || state === "exited") {
@@ -335,6 +364,27 @@ async function seedExamples(fs: Filesystem): Promise<void> {
   for (const [name, source] of Object.entries(examples)) await fs.writeFile(`${HOME}/${name}`, source);
   await fs.mkdirp(initialized);
   await fs.flush();
+}
+
+/** Holds terminal input until its consumer opens, then delivers it in order. */
+export class InputGate {
+  private readonly queued: string[] = [];
+  private consumer: ((data: string) => void) | undefined;
+
+  write(data: string): void {
+    if (this.consumer) this.consumer(data);
+    else this.queued.push(data);
+  }
+
+  open(consumer: (data: string) => void): void {
+    this.consumer = consumer;
+    for (const data of this.queued.splice(0)) consumer(data);
+  }
+}
+
+/** Boot waterfall marks on the navigation clock, read by sandbox/tests/page-load-profile.ts. */
+function stage(name: string): void {
+  performance.mark(`bunwasm:stage:${name}`);
 }
 
 function createTerminal(): Terminal {

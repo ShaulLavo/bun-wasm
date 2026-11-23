@@ -57,8 +57,10 @@ export async function loadEngineProgram(engine: Engine, profile: ProgramMemoryPr
   requireProfileEngine(engine, profile);
   const unavailable = engineUnavailable(engine, profile);
   if (unavailable) throw new Error(unavailable);
-  const url = new URL(override ?? profileAsset(ENGINES[engine].wasm, profile), location.href).href;
-  const loaded = engine === "browser" ? await loadWasm(url, progress)
+  const asset = override ?? profileAsset(ENGINES[engine].wasm, profile);
+  const url = new URL(asset, location.href).href;
+  // loadWasm finds the build fingerprint (and so its engine cache) by the page-relative name.
+  const loaded = engine === "browser" ? await loadWasm(asset, progress)
     : await loadPaired(url, engine, progress, profile);
   const expected = engine === "browser" ? "single" : engine;
   if (programKind(loaded.module) !== expected) throw new TypeError(`Bun engine mismatch: selected ${engine}`);
@@ -81,7 +83,9 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   progress("loading bun.wasm…");
   const build = assetBuild(url);
   const key = new URL(url, location.href).href;
+  const lookup = performance.now();
   const cached = build ? await cachedEngine(key, build) : null;
+  measureStartup("cache-lookup", lookup, { name, hit: cached !== null });
   let size = 0;
   if (cached) {
     progress("compiling cached bun.wasm…");
@@ -163,8 +167,12 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
 
 async function compileCached(response: Response, key: string) {
   try {
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    const module = await observeCompile("core", () => WebAssembly.compile(bytes));
+    // Streaming compiles while the stored bytes are still being read.
+    const copy = response.clone();
+    const [module, bytes] = await Promise.all([
+      observeCompile("core", () => WebAssembly.compileStreaming(new Response(copy.body, { headers: { "content-type": "application/wasm" } }))),
+      response.arrayBuffer().then(buffer => new Uint8Array(buffer)),
+    ]);
     recordProgramMemory(module, bytes);
     return { bytes, module };
   } catch {
@@ -193,7 +201,9 @@ async function loadProgramSide(url: string, kind: PairedEngine, core: Awaited<Re
   }
   const sideUrl = new URL(profile.side, new URL(url, location.href));
   const [loadedCore, side] = await Promise.all([core, loadVerifiedFile(sideUrl.href, profileAsset(profile.side, memoryProfile ?? "split"), progress, verifyBuild, memoryProfile)]);
+  const preparing = performance.now();
   const module = await withoutCompileSpans(() => prepareProgram({ kind, core: loadedCore.bytes, side: side.bytes }));
+  measureStartup("prepare", preparing, { kind });
   return { module, size: loadedCore.bytes.length + side.bytes.length, build: loadedCore.build };
 }
 
@@ -209,14 +219,21 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
   const requested = new URL(url, location.href);
   if (memoryProfile === "shared-group") requested.searchParams.set("profile", memoryProfile);
   const key = requested.href;
+  const lookup = performance.now();
   const cached = build === null ? null : await cachedEngine(key, build);
+  measureStartup("cache-lookup", lookup, { name, hit: cached !== null });
   if (cached && build !== null) {
+    const reading = performance.now();
     const bytes = new Uint8Array(await cached.arrayBuffer());
+    measureStartup("cache-read", reading, { name, bytes: bytes.length });
+    const verifying = performance.now();
     try { await verifyArtifact(name, bytes, build); }
     catch (error) { await evictEngine(key); throw error; }
+    measureStartup("verify", verifying, { name, cached: true });
     progress(`verified cached ${name} (${mb(bytes.length)})…`);
     return { bytes, build };
   }
+  const downloading = performance.now();
   progress(`downloading ${name}…`);
   const compressed = new URL(requested);
   if (!compressed.pathname.endsWith(".gz")) compressed.pathname += ".gz";
@@ -229,8 +246,11 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
   if (!response.body) throw new Error(`${url}: empty response body`);
   const body = gzipped ? response.body.pipeThrough(new DecompressionStream("gzip")) : response.body;
   const bytes = new Uint8Array(await new Response(body).arrayBuffer());
+  measureStartup("download", downloading, { name, bytes: bytes.length, gzipped });
+  const verifying = performance.now();
   if (build !== null) await verifyArtifact(name, bytes, build);
   else verifyWasm(name, bytes);
+  measureStartup("verify", verifying, { name, cached: false });
   progress(`verified ${name} (${mb(bytes.length)})…`);
   if (build !== null) {
     void cacheEngine(key, build, new Response(bytes, { headers: { "content-type": "application/wasm", "content-length": String(bytes.length) } })).then(stored => {
