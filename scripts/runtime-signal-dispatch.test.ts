@@ -31,8 +31,10 @@ function runtime(pending: number[], reject: Record<number, number> = {}, guestEv
   return { internal, process, signals, dequeues: () => dequeues };
 }
 
+// Pending deliveries need published handlers: the runtime's own EventEmitter publishes them, and
+// the pump polls the host only while some signal is handled.
 test("every signal pump serializes handlers, including a nested broken-pipe pump", () => {
-  const { internal, process, dequeues } = runtime([2, 15]);
+  const { internal, process, dequeues } = runtime([2, 15], {}, true);
   const calls: string[] = [];
   process.on("SIGINT", () => {
     calls.push("first-start");
@@ -46,7 +48,7 @@ test("every signal pump serializes handlers, including a nested broken-pipe pump
 });
 
 test("ordinary event-loop pump still dequeues and consumes once before callback", () => {
-  const { internal, process, dequeues } = runtime([2]);
+  const { internal, process, dequeues } = runtime([2], {}, true);
   const calls: string[] = [];
   process.once("SIGINT", () => {
     expect(process.listenerCount("SIGINT")).toBe(0);
@@ -55,11 +57,12 @@ test("ordinary event-loop pump still dequeues and consumes once before callback"
   expect(internal.pumpSignals()).toBe(true);
   expect(internal.pumpSignals()).toBe(false);
   expect(calls).toEqual(["handled"]);
-  expect(dequeues()).toBe(3);
+  // The first pump drains the queue; once its handler is gone, the second never asks the host.
+  expect(dequeues()).toBe(2);
 });
 
 test("throwing handler propagates to the runtime's ordinary uncaught-error path", () => {
-  const { internal, process } = runtime([2, 15]);
+  const { internal, process } = runtime([2, 15], {}, true);
   const expected = new Error("signal callback");
   process.on("SIGINT", () => { throw expected; });
   const calls: string[] = [];
