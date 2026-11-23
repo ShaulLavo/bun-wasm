@@ -435,6 +435,7 @@ class EngineHost {
       )
       : null;
     this.gcYield = false;
+    this.postGcTimer = null;
     // Module graph: key (path or builtin) -> URL; URL -> path for stack traces.
     this.urls = new Map();
     // promise -> {state, value}, for console.log and Bun.peek.
@@ -656,6 +657,7 @@ class EngineHost {
         if (!runGc) return;
         runGc();
         if (host.o.yieldAfterGc) host.gcYield = true;
+        host.schedulePostTurnGc(runGc);
       },
       memoryUsage() {
         const mem = typeof performance === "object" && performance.memory;
@@ -1179,6 +1181,20 @@ class EngineHost {
     return promise;
   }
 
+  schedulePostTurnGc(runGc) {
+    if (this.exited || this.postGcTimer !== null) return;
+    // WeakRef.prototype.deref() pins targets in V8's KeepDuringJob set for the current turn,
+    // so a synchronous Bun.gc(true) in that turn promotes rather than collects them. Schedule
+    // one unref'd follow-up collection after the turn ends (once KeepDuringJob is cleared) so
+    // WeakRef and FinalizationRegistry assertions observe collection before later timers run.
+    const timer = nativeSetTimeout(() => {
+      this.postGcTimer = null;
+      if (!this.exited) runGc();
+    }, 0);
+    timer?.unref?.();
+    this.postGcTimer = timer;
+  }
+
   schedule(ms) {
     if (this.exited) return;
     if (ms <= 0) {
@@ -1373,6 +1389,10 @@ class EngineHost {
       try { this.flush(); }
       catch (error) { recordCleanupError(error); }
       if (this.timer !== null) nativeClearTimeout(this.timer);
+      if (this.postGcTimer !== null) {
+        nativeClearTimeout(this.postGcTimer);
+        this.postGcTimer = null;
+      }
       try { "code" in result && this.o.onExit?.(result.code); }
       catch (error) { recordCleanupError(error); }
       try {
