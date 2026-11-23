@@ -37,8 +37,11 @@
 
   // Kept segments as [start, end) offsets into the normalized path; a kept `..`
   // above the root has start -1. A typed array has no inherited index
-  // accessors, and reusing it avoids an allocation per call.
-  let bounds = new Int32Array(64);
+  // accessors. Ordinary paths reuse one small buffer; a longer path gets its
+  // own, so one huge path does not keep a large buffer alive. Capacity is
+  // tracked here because `length` is an inherited, replaceable accessor.
+  const SHARED_CAPACITY = 1024;
+  const sharedBounds = new Int32Array(SHARED_CAPACITY);
 
   function isDotSegment(path: string, start: number, length: number): boolean {
     if (length === 1) return charCodeAt(path, start) === DOT;
@@ -52,7 +55,7 @@
   // is itself a kept `..`.
   function normalizeSegments(path: string, allowAboveRoot: boolean): string {
     // Kept segments are nonempty and separated, so at most length / 2 + 1.
-    if (bounds.length < path.length + 2) bounds = new Int32Array(path.length + 2);
+    const bounds = path.length + 2 <= SHARED_CAPACITY ? sharedBounds : new Int32Array(path.length + 2);
     let count = 0;
     for (let start = 0; start <= path.length;) {
       const separator = indexOf(path, "/", start);
@@ -73,12 +76,36 @@
         count++;
       }
     }
+    return joinSegments(path, bounds, count);
+  }
+
+  // Kept segments that sit next to each other in `path`, separated by one `/`,
+  // are copied as one slice, so a mostly normal path costs a few slices.
+  function joinSegments(path: string, bounds: Int32Array, count: number): string {
     let result = "";
+    let runStart = 0;
+    // Segments are nonempty, so a run's end is at least 1; -1 means no run.
+    let runEnd = -1;
     for (let i = 0; i < count; i++) {
-      const segment = bounds[2 * i] === -1 ? ".." : slice(path, bounds[2 * i]!, bounds[2 * i + 1]!);
-      result = i === 0 ? segment : result + "/" + segment;
+      const start = bounds[2 * i]!;
+      if (runEnd !== -1 && start === runEnd + 1) {
+        runEnd = bounds[2 * i + 1]!;
+        continue;
+      }
+      if (runEnd !== -1) result = appendSegment(result, slice(path, runStart, runEnd));
+      runEnd = -1;
+      if (start === -1) {
+        result = appendSegment(result, "..");
+        continue;
+      }
+      runStart = start;
+      runEnd = bounds[2 * i + 1]!;
     }
-    return result;
+    return runEnd === -1 ? result : appendSegment(result, slice(path, runStart, runEnd));
+  }
+
+  function appendSegment(result: string, segment: string): string {
+    return result.length > 0 ? result + "/" + segment : segment;
   }
 
   // Without `//`, a leading `.` or `/.`, no segment is empty, `.` or `..`, so

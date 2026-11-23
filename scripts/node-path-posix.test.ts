@@ -45,6 +45,8 @@ function corpus(): string[] {
     "日本/é/é.txt", "😀/𐀀.😀", "a\0b.txt", "﻿a/﻿b.﻿c", "a".repeat(5000) + "/b.c",
     "dir/".repeat(2000) + "x/../".repeat(2000), "../".repeat(500) + "a/".repeat(500) + "../".repeat(700),
     "/" + "a/b/../".repeat(1000) + "..",
+    // Around the 1024-entry shared offset buffer.
+    "./" + "a/".repeat(509), "./" + "a/".repeat(510) + "b", "../" + "a/".repeat(511), "./" + "x".repeat(1030) + "/./y",
   ]);
 }
 
@@ -116,6 +118,7 @@ test("replacing public string and array methods does not change results", () => 
     ["isAbsolute", ["/a"]], ["normalize", ["a/../b/./c//"]], ["normalize", ["/x/y"]], ["join", ["/a", "../b", "c/"]],
     ["dirname", ["/a/b//"]], ["basename", ["/a/b.txt", ".txt"]], ["basename", ["/a/b/"]], ["extname", ["/a/b.c"]],
     ["parse", ["/a/b.c"]], ["resolve", ["/a", "b", "../c"]], ["relative", ["/a/b/c", "/a/d"]],
+    ["normalize", ["./" + "a/".repeat(40) + "z"]], ["normalize", ["./" + "a/".repeat(600) + "z"]],
   ];
   const call = (entry: [keyof PathModule, unknown[]]) => Reflect.apply(Reflect.get(guest, entry[0]) as Function, guest, entry[1]);
   const expected = cases.map(call);
@@ -129,13 +132,18 @@ test("replacing public string and array methods does not change results", () => 
   const broken = { value: () => { throw new Error("replaced"); }, configurable: true, writable: true };
   // Inherited index accessors intercept writes into new arrays.
   const inherited = { get: () => "inherited", set() {}, configurable: true };
+  // The typed array prototype owns `length`, an accessor user code can replace.
+  const typedArray = Object.getPrototypeOf(Int32Array.prototype) as object;
+  const typedLength = Object.getOwnPropertyDescriptor(typedArray, "length")!;
   // Indexed loops only: destructuring and for-of need the replaced iterator.
   let actual: unknown[] = [];
   try {
     for (let i = 0; i < replaced.length; i++) Object.defineProperty(replaced[i]![0], replaced[i]![1], broken);
     for (let i = 0; i < 4; i++) Object.defineProperty(Array.prototype, i, inherited);
+    Object.defineProperty(typedArray, "length", { get: () => 10_000, configurable: true });
     actual = cases.map(call);
   } finally {
+    Object.defineProperty(typedArray, "length", typedLength);
     for (let i = 0; i < 4; i++) delete (Array.prototype as unknown as Record<number, unknown>)[i];
     for (let i = 0; i < replaced.length; i++) Object.defineProperty(replaced[i]![0], replaced[i]![1], saved[i]!);
   }
