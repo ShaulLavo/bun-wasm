@@ -142,17 +142,23 @@ test("the append-only sink preserves document evidence before outer cancellation
   const writes: Promise<void>[] = [];
   const abort = new AbortController();
   const save = (text: string) => {
-    const write = appendFile(path, text);
+    const row = object(JSON.parse(text));
+    // Force an earlier append to finish after the document observation.
+    const write = row.stage === "presentation" ? observed.promise.then(() => appendFile(path, text)) : appendFile(path, text);
     writes.push(write);
-    if (object(JSON.parse(text)).observation) void write.then(() => observed.resolve());
+    if (row.stage === "document" && row.observation && row.outcome === undefined)
+      void write.then(observed.resolve, observed.reject);
     return write;
   };
   try {
     await withControl({ states: [configured], loads: [complete], focuses: [focusedFrame] }, 30000, async transport => {
       const opening = withAdmission(admission => transport.openPreview(url, { ...admission, signal: abort.signal })).catch((error: unknown) => error);
       await observed.promise;
+      await Promise.all(writes);
       const saved = (await readFile(path, "utf8")).trim().split("\n").map(text => object(JSON.parse(text)));
-      expect(saved.at(-1)).toMatchObject({ stage: "document", observation: { attached: false } });
+      expect(saved).toContainEqual(expect.objectContaining({
+        stage: "document", observation: expect.objectContaining({ attached: false }),
+      }));
       const reason = new Error("outer cancellation");
       abort.abort(reason);
       expect(await opening).toBe(reason);
@@ -160,7 +166,11 @@ test("the append-only sink preserves document evidence before outer cancellation
       await Promise.all(writes);
       expect(await readFile(path, "utf8")).toContain('"outcome":"cancelled"');
     }, save);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally {
+    observed.resolve();
+    await Promise.allSettled(writes);
+    await rm(root, { recursive: true, force: true });
+  }
 }, 30000);
 
 for (const mode of ["reject", "stall"] as const) {

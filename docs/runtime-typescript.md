@@ -5,16 +5,32 @@ expression-factory convention and its own `"use strict"` directive. Use type-onl
 declarations and imports for types; the loader does not link ESM imports in these
 factories. Declaration files belong in `src/js/*.d.ts` and are never embedded.
 
-Cargo's runtime build script calls Node.js 24+ through `scripts/transpile-runtime.ts`
-for each `.ts` source. The built-in `stripTypeScriptTypes` API runs in `strip` mode.
-It replaces types with whitespace and preserves JavaScript tokens, constructor calls,
-class fields, directives, and line/column positions. It does not print, optimize,
-bundle or downlevel code. `erasableSyntaxOnly` rejects TypeScript constructs requiring
-runtime generation, such as enums and parameter properties.
+Cargo's runtime build script runs `scripts/transpile-runtime.ts` in two steps. First
+Node.js 24+ erases the types of each `.ts` source with the built-in
+`stripTypeScriptTypes` API in `strip` mode. It replaces types with whitespace and
+preserves JavaScript tokens, constructor calls, class fields and directives. It does
+not print, optimize, bundle or downlevel code. `erasableSyntaxOnly` rejects TypeScript
+constructs requiring runtime generation, such as enums and parameter properties.
 
-Existing `.js` sources are embedded byte-for-byte. A `.js` and `.ts` file with the
-same stem is a build error. `BUNWASM_JS_OVERRIDE_DIR` replaces sources by filename,
-including their extension; TypeScript overrides use the same position-preserving strip.
+Second, Bun's transpiler (`--minify-whitespace`) removes whitespace and comments from
+every module, `.js` ones included, except `intl.js` and `tz_data.js`. That step changes
+no names: identifiers, function names and messages keep their source spelling. Bun
+reprints the code, so `Function.prototype.toString()` returns the reprinted text (string
+escapes may be normalized). Dead-code elimination is off, and `process.env.NODE_ENV`,
+`process.browser`, `process.env.BUN_ENV` and `require` are mapped to themselves, so Bun
+neither bakes the build host's values into the guest nor folds `typeof require`. Bun also
+drops `"use strict"` directives, so the script swaps each directive statement for a
+random marker and back. Leading comments that mention a copyright, license or permission
+stay, as do `/*!` comments. The build rejects a module that is not one function or arrow
+expression with a block body, and a parenthesized string statement (Bun would print it
+bare). A module whose reprinted output would not be smaller is kept as it was. The generated `bun_wrap`, `direct_stream` and `dev_html_client` modules
+go through the same step.
+
+A `.js` and `.ts` file with the same stem is a build error. `BUNWASM_JS_OVERRIDE_DIR`
+replaces sources by filename, including their extension; overrides take the same two
+steps. Set `BUNWASM_JS_PRESERVE_POSITIONS=1` to skip the second step for a debugging
+build: each token then keeps its source line and column, and `.js` files are embedded
+as written.
 
 Install host tools with `source env.sh` and `bun install --cwd web --frozen-lockfile`.
 Run `scripts/check-runtime.sh` for strict checking, embedding integration tests,
@@ -31,17 +47,17 @@ the required cwd and positional boolean parameters of its native declaration.
 
 ## Error locations
 
-Runtime frames keep the existing `bun-wasm:<module>` filename. Their line and column
-coordinates identify the same tokens in the `.ts` source because emission adds no
-wrapper, directive or reformatted line. Each engine retains its usual constructor
-column convention. The runtime fixture checks constructor, match and scan errors
-against the source constructor tokens on all three engines. A host test also checks
-that its expected fixture locations agree with the current source.
+Runtime frames keep the existing `bun-wasm:<module>` filename. The shipped modules are
+minified, so a frame's line and column point into compacted code, not into the `.ts`
+source. The runtime fixture checks that constructor, match and scan errors still carry a
+`bun-wasm:glob:<line>:<column>` frame on all three engines. A host test checks that type
+erasure alone keeps every token at its source position.
 
+To read a frame against the source, rebuild with `BUNWASM_JS_PRESERVE_POSITIONS=1`.
 Cargo keeps the exact embedded code at
 `$CARGO_TARGET_DIR/<target>/<profile>/build/bunwasm-runtime-*/out/runtime-js/<module>.js`.
 For JSC and browser builds, use their configured Cargo target directory instead.
-To regenerate it for inspection:
+To regenerate one module for inspection:
 
 ```sh
 source env.sh

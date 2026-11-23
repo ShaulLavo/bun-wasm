@@ -1,7 +1,8 @@
 import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import ts from "typescript-api";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -97,7 +98,7 @@ test("converted Glob preserves replacement error classes and their stacks", asyn
   }
 });
 
-test("embedded source positions and fixture locations agree with TypeScript", () => {
+test("type erasure keeps every source position", () => {
   const path = join(root, "crates/bunwasm-runtime/src/js/glob.ts");
   const text = readFileSync(path, "utf8");
   const generated = emit(path);
@@ -110,20 +111,334 @@ test("embedded source positions and fixture locations agree with TypeScript", ()
       cursor = text.indexOf(token, cursor + token.length);
     }
   }
-  const locations = JSON.parse(readFileSync(join(root, "tests/fixtures/runtime-typescript/locations.json"), "utf8"));
-  const messages = {
-    constructor: "Glob.constructor: expected 1 arguments, got 0",
-    match: "Glob.matchString: expected 1 arguments, got 0",
-    scan: "Expected options to be an object",
-  };
-  const lines = text.split("\n");
-  for (const [key, message] of Object.entries(messages)) {
-    const line = lines.findIndex(value => value.includes(message));
-    const sourceLine = lines[line];
-    if (sourceLine === undefined) throw new Error(`Missing source throw for ${key}`);
-    const start = sourceLine.indexOf("new TypeError(");
-    expect(locations[key]).toEqual({ line: line + 1, columns: [start + 1, start + 5, start + 14] });
+});
+
+function compact(text: string) {
+  const input = join(source, "compact-input.js");
+  const output = join(source, "compact-output.js");
+  writeFileSync(input, text);
+  const result = Bun.spawnSync(["bun", join(root, "scripts/transpile-runtime.ts"), "--minify-whitespace", input, output], { stdout: "pipe", stderr: "pipe" });
+  return { exitCode: result.exitCode, output: result.exitCode === 0 ? readFileSync(output, "utf8") : "" };
+}
+
+test("minifying drops whitespace and comments but keeps names, directives and the factory form", () => {
+  const { exitCode, output } = compact([
+    "// Leading comment.",
+    "(function (internal) {",
+    '  "use strict";',
+    "  /* Block comment. */",
+    "  function namedHelper(value) {",
+    '    "use strict";',
+    "    return value + internal.offset;",
+    "  }",
+    '  const text = "keeps  spacing // and use strict text";',
+    "  return { namedHelper, text };",
+    "})",
+    "",
+  ].join("\n"));
+  expect(exitCode).toBe(0);
+  expect(output).toBe('(function(internal){"use strict";function namedHelper(value){"use strict";return value+internal.offset}const text="keeps  spacing // and use strict text";return{namedHelper,text}})\n');
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  const { namedHelper, text } = (0, eval)(output)({ offset: 2 });
+  expect(namedHelper.name).toBe("namedHelper");
+  expect(namedHelper(1)).toBe(3);
+  expect(text).toBe("keeps  spacing // and use strict text");
+});
+
+test("minifying keeps a module that is not strict, and strict mode where it is declared", () => {
+  const { output } = compact("(function () { function sloppy() { return this; } function strict() { 'use strict'; return this; } return [sloppy, strict]; })\n");
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  const [sloppy, strict] = (0, eval)(output)();
+  expect(sloppy()).toBe(globalThis);
+  expect(strict()).toBeUndefined();
+});
+
+test("minifying skips erased declarations and keeps notices, including ordinary comments", () => {
+  const { exitCode, output } = compact([
+    "/* Nothing special here. */",
+    ";",
+    "/*! Copyright (c) Example. Keep this notice. */",
+    "/*",
+    " * Permission is hereby granted. Portions Copyright Someone Else.",
+    " */",
+    "// MIT-licensed port, one line.",
+    "(function () { return 1; })",
+    "/*! Trailing notice. */",
+    "",
+  ].join("\n"));
+  expect(exitCode).toBe(0);
+  expect(output).toBe([
+    "/*! Copyright (c) Example. Keep this notice. */",
+    "/*\n * Permission is hereby granted. Portions Copyright Someone Else.\n */",
+    "// MIT-licensed port, one line.",
+    "(function(){return 1})",
+    "/*! Trailing notice. */",
+    "",
+  ].join("\n"));
+});
+
+test("minifying keeps the notices of the shipped modules that carry them", () => {
+  for (const name of ["http2_request", "http2_response", "tls_identity"]) {
+    const output = join(source, `${name}.min.js`);
+    const result = Bun.spawnSync(["bun", join(root, "scripts/transpile-runtime.ts"), "--minify-whitespace", join(root, `crates/bunwasm-runtime/src/js/${name}.ts`), output], { stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(readFileSync(output, "utf8")).toMatch(/Copyright (Node\.js contributors|Joyent)/);
   }
+});
+
+test("minifying leaves an escaped string that looks like a directive alone and refuses a parenthesized one", () => {
+  const { exitCode, output } = compact('(function () { const text = "\\x75se strict"; return [this === globalThis, text]; })\n');
+  expect(exitCode).toBe(0);
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  const [sloppy, text] = (0, eval)(output).call(undefined);
+  expect(sloppy).toBe(true);
+  expect(text).toBe("use strict");
+  // Bun prints a parenthesized string statement bare, which can make it a directive.
+  expect(compact('(function () { ("other"); "use strict"; return this; })\n').exitCode).not.toBe(0);
+  expect(compact('(function () { ("use strict"); return this; })\n').exitCode).not.toBe(0);
+});
+
+test("minifying finds directives exactly: comments, line breaks, templates and parentheses", () => {
+  const lineSeparator = String.fromCharCode(0x2028);
+  const cases: [string, unknown][] = [
+    ['// Keep strict!\n"use strict";\nreturn this;', undefined],
+    ['/* c */ "use strict" /* d */\nreturn this;', undefined],
+    [`"use strict"\rreturn this;`, undefined],
+    [`"use strict"${lineSeparator}return this;`, undefined],
+    ["'use strict'\nreturn this;", undefined],
+    ['"use strict"\n!0; return this;', undefined],
+    ['"use strict"\n++n; var n = 0; return this;', undefined],
+    ['"custom"\n"use strict"\nreturn this;', undefined],
+    ['let n = 1; n++ / 2; return this === globalThis && ({ return: 4 }).return / 2 === 2;', true],
+    ['return typeof "use strict" === "string" ? this === globalThis : false;', true],
+    ['return `a ${"x"} \'use strict\'; b`;', "a x 'use strict'; b"],
+    ['const re = /"use strict"[\'/]/; return [re.test(\'"use strict"/\'), "/*"];', [true, "/*"]],
+    ['"use strict"; return (function () { return this; })();', undefined],
+  ];
+  for (const [body, expected] of cases) {
+    const { exitCode, output } = compact(`(function () {\n${body}\n})\n`);
+    expect(exitCode, body).toBe(0);
+    // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+    expect((0, eval)(output).call(undefined), body).toEqual(expected);
+  }
+});
+
+test("minifying accepts a trailing notice after a factory that holds comment-like strings", () => {
+  const { exitCode, output } = compact('(function () { return "/*"; })\n/*! Notice */\n');
+  expect(exitCode).toBe(0);
+  expect(output).toBe('(function(){return"/*"})\n/*! Notice */\n');
+});
+
+test("minifying keeps the lookups Bun would otherwise bake in at build time", () => {
+  const { exitCode, output } = compact("(function () { return [process.env.NODE_ENV, process.browser, process.env.BUN_ENV]; })\n");
+  expect(exitCode).toBe(0);
+  for (const name of ["process.env.NODE_ENV", "process.browser", "process.env.BUN_ENV"]) expect(output).toContain(name);
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  const seen = (0, eval)(`(function (process) { return ${output.trim()}.call(undefined); })`)({ env: { NODE_ENV: "guest", BUN_ENV: "bun" }, browser: "guest-browser" });
+  expect(seen).toEqual(["guest", "guest-browser", "bun"]);
+});
+
+test("minifying keeps typeof require, optional require calls and void 0 as written", () => {
+  for (const [expression, kept] of [
+    ["typeof require", "typeof require"], ["typeof (require)", "typeof require"], ["typeof /* g */ require", "typeof require"],
+    ['require?.("x")', 'require?.("x")'], ['require?.resolve("x")', 'require?.resolve("x")'], ["[void 0]", "[void 0]"],
+  ] as const) {
+    const { exitCode, output } = compact(`(function (undefined) { return ${expression}; })\n`);
+    expect(exitCode, expression).toBe(0);
+    expect(output, expression).toContain(kept);
+  }
+  // In a guest with no `require` the check must still say so, and `void 0` must ignore a shadowing name.
+  const { output } = compact("(function (undefined) { return [typeof require, void 0, undefined]; })\n");
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  expect((0, eval)(output)(17)).toEqual(["undefined", undefined, 17]);
+});
+
+test("minifying parses the factory but never runs it, and refuses what is not a function", () => {
+  const { exitCode, output } = compact("(function () { return guestOnlyGlobal.make(); })\n");
+  expect(exitCode).toBe(0);
+  expect(output).toContain("guestOnlyGlobal");
+  // A call of a function is not a factory, and neither is a value.
+  expect(compact("(function () { return 7; })()\n").exitCode).not.toBe(0);
+  expect(compact("((1 + 2) * 3)\n").exitCode).not.toBe(0);
+});
+
+test("minifying runs side by side in one output directory", async () => {
+  const names = ["first", "second"];
+  for (const name of names) writeFileSync(join(source, `${name}.ts`), `(function (value: number) { return value + "${name}".length; })\n`);
+  const children = names.map(name => Bun.spawn(["bun", join(root, "scripts/transpile-runtime.ts"), "--minify-whitespace", join(source, `${name}.ts`), join(source, `${name}.out.js`)], { stdout: "pipe", stderr: "pipe" }));
+  expect(await Promise.all(children.map(child => child.exited))).toEqual([0, 0]);
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  expect((0, eval)(readFileSync(join(source, "second.out.js"), "utf8"))(1)).toBe(7);
+});
+
+test("minifying accepts comments at the end of a directive and a bare-CR line comment", () => {
+  const { exitCode, output } = compact('// first\r(function () {\n  "use strict" // keep\n  return this;\n})\n');
+  expect(exitCode).toBe(0);
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  expect((0, eval)(output).call(undefined)).toBeUndefined();
+});
+
+/** Every directive prologue in `code`, in source order, one entry per function body or block that has one. */
+function directivePrologues(code: string): string[][] {
+  const file = ts.createSourceFile("module.js", code, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const found: string[][] = [];
+  const visit = (node: ts.Node) => {
+    const statements = ts.isSourceFile(node) || ts.isBlock(node) ? node.statements : undefined;
+    if (statements) {
+      const directives = [];
+      for (const statement of statements) {
+        if (!ts.isExpressionStatement(statement) || !ts.isStringLiteral(statement.expression) || statement.expression.parent !== statement) break;
+        directives.push(statement.expression.text);
+      }
+      if (directives.length > 0) found.push(directives);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
+test("minifying keeps every directive prologue of every runtime module, as a real parser sees them", () => {
+  const sources = readdirSync(join(root, "crates/bunwasm-runtime/src/js"))
+    .filter(name => /\.(js|ts)$/.test(name) && !name.endsWith(".d.ts") && !/^(intl|tz_data)\./.test(name));
+  expect(sources.length).toBeGreaterThan(150);
+  const pairs = sources.flatMap(name => [join(root, "crates/bunwasm-runtime/src/js", name), join(source, `all-${name}.js`)]);
+  const result = Bun.spawnSync(["bun", join(root, "scripts/transpile-runtime.ts"), "--batch", ...pairs, "--minify-whitespace"], { stdout: "pipe", stderr: "pipe" });
+  expect(result.exitCode, result.stderr.toString().slice(-2000)).toBe(0);
+  let directives = 0;
+  for (const name of sources) {
+    const original = join(source, `erased-${name}.js`);
+    const erased = name.endsWith(".ts")
+      ? Bun.spawnSync(["node", join(root, "scripts/transpile-runtime.ts"), join(root, "crates/bunwasm-runtime/src/js", name), original], { stdout: "pipe", stderr: "pipe" })
+      : undefined;
+    const before = erased ? readFileSync(original, "utf8") : readFileSync(join(root, "crates/bunwasm-runtime/src/js", name), "utf8");
+    const after = readFileSync(join(source, `all-${name}.js`), "utf8");
+    const expected = directivePrologues(before);
+    expect(directivePrologues(after), name).toEqual(expected);
+    // Bun substitutes some environment lookups while printing; the guest must still read them when it runs.
+    for (const lookup of ["process.env.NODE_ENV", "process.browser", "process.env.BUN_ENV", "__dirname", "__filename"]) {
+      expect(after.split(lookup).length, `${name} ${lookup}`).toBeGreaterThanOrEqual(before.split(lookup).length);
+    }
+    directives += expected.flat().length;
+  }
+  expect(directives).toBeGreaterThan(100);
+});
+
+/** Whether `node` sits in code that a "use strict" directive of an enclosing function or the script makes strict. */
+function inStrictCode(node: ts.Node): boolean {
+  for (let scope: ts.Node | undefined = node.parent; scope; scope = scope.parent) {
+    const body = ts.isFunctionLike(scope) ? (scope as ts.FunctionLikeDeclaration).body : ts.isSourceFile(scope) ? scope : undefined;
+    const statements = body && (ts.isBlock(body) || ts.isSourceFile(body)) ? body.statements : [];
+    const first = statements[0];
+    if (first && ts.isExpressionStatement(first) && ts.isStringLiteral(first.expression) && first.expression.text === "use strict") return true;
+  }
+  return false;
+}
+
+const isWrapper = (node: ts.Expression): node is ts.Expression & { expression: ts.Expression } =>
+  ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isNonNullExpression(node)
+  || ts.isTypeAssertionExpression(node) || ts.isExpressionWithTypeArguments(node);
+
+/** `node` without the wrappers that erasure or the printer drops: parentheses, `as`, `satisfies`, `!`, `<T>` casts and `f<T>` instantiations. */
+function unwrapped(node: ts.Expression): ts.Expression {
+  let current = node;
+  while (isWrapper(current)) current = current.expression;
+  return current;
+}
+
+/** Whether the object literal is the target of a destructuring assignment, where `{ __proto__ }` reads the same property. */
+function isDestructuringTarget(literal: ts.Node): boolean {
+  let child: ts.Node = literal;
+  for (let parent = child.parent; parent; child = parent, parent = parent.parent) {
+    if (ts.isBinaryExpression(parent)) return parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && parent.left === child;
+    if (ts.isForOfStatement(parent) || ts.isForInStatement(parent)) return parent.initializer === child;
+    const pattern = ts.isObjectLiteralExpression(parent) || ts.isArrayLiteralExpression(parent) || ts.isPropertyAssignment(parent)
+      || ts.isSpreadAssignment(parent) || ts.isSpreadElement(parent) || ts.isParenthesizedExpression(parent);
+    if (!pattern) return false;
+  }
+  return false;
+}
+
+/**
+ * The object-literal properties `__proto__: __proto__`, however the key is written (name or string, any
+ * spacing or comments) and however the value is wrapped. `.js` text parses as JavaScript, because
+ * TypeScript would read some valid JavaScript (`a < { ... } > (0)`) as a type.
+ */
+function protoSelfAssignments(code: string, kind: "js" | "ts"): number {
+  const file = ts.createSourceFile(`module.${kind}`, code, ts.ScriptTarget.Latest, true, kind === "ts" ? ts.ScriptKind.TS : ts.ScriptKind.JS);
+  let found = 0;
+  const visit = (node: ts.Node) => {
+    if (ts.isPropertyAssignment(node) && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) && node.name.text === "__proto__") {
+      const value = unwrapped(node.initializer);
+      if (ts.isIdentifier(value) && value.text === "__proto__" && !isDestructuringTarget(node.parent)) found++;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
+test("the `__proto__: __proto__` finder sees every spelling that Bun reprints as a shorthand", () => {
+  for (const spelling of ["{ __proto__: __proto__ }", '{ "__proto__": __proto__ }', "{ '__proto__' : __proto__ }", "{ __proto__: /* comment */ __proto__ }", "{ a: 1, __proto__ // note\n: __proto__ }"]) {
+    expect(protoSelfAssignments(`const o = ${spelling};`, "js"), spelling).toBe(1);
+    expect(protoSelfAssignments(`const o = ${spelling};`, "ts"), spelling).toBe(1);
+    // The hazard is real: the reprint becomes a shorthand, which defines an own property instead of setting the prototype.
+    expect(compact(`(function (__proto__) { return ${spelling}; })\n`).output, spelling).toMatch(/[{,]__proto__\}/);
+  }
+  // Wrappers the printer or the type eraser drops, and braces that TypeScript would read as a type.
+  for (const wrapped of ["{ __proto__: (__proto__) }", "{ __proto__: ((__proto__)) }", "{ __proto__: /* c */ (/* d */ __proto__) }"]) {
+    expect(protoSelfAssignments(`const o = ${wrapped};`, "js"), wrapped).toBe(1);
+    expect(compact(`(function (__proto__) { return ${wrapped}; })\n`).output, wrapped).toMatch(/[{,]__proto__\}/);
+  }
+  for (const wrapped of ["{ __proto__: __proto__ as object }", "{ __proto__: __proto__ satisfies object }", "{ __proto__: __proto__! }", "{ __proto__: <object>__proto__ }", "{ __proto__: __proto__<string> }"]) {
+    expect(protoSelfAssignments(`const o = ${wrapped};`, "ts"), wrapped).toBe(1);
+  }
+  // Through the real pipeline: type erasure leaves a bare `__proto__`, and the reprint collapses it.
+  const typed = join(source, "proto-typed.ts");
+  writeFileSync(typed, "(function (__proto__: <T>() => T) { return { __proto__: __proto__<string> }; })\n");
+  expect(compact(emit(typed)).output).toMatch(/[{,]__proto__\}/);
+  expect(protoSelfAssignments("const o = other < { __proto__: __proto__ } > (0);", "js")).toBe(1);
+  for (const harmless of ["{ __proto__: null }", "{ __proto__: base }", "{ ['__proto__']: __proto__ }", "{ other: __proto__ }"]) {
+    expect(protoSelfAssignments(`const o = ${harmless};`, "js"), harmless).toBe(0);
+  }
+  // Destructuring reads the same property either way, so it is not a hazard.
+  for (const target of ["({ __proto__: __proto__ } = source);", "for ({ __proto__: __proto__ } of list) {}", "[{ __proto__: __proto__ }] = list;"]) {
+    expect(protoSelfAssignments(target, "js"), target).toBe(0);
+  }
+});
+
+test("no runtime module writes `__proto__: __proto__`, which Bun reprints as a shorthand that no longer sets the prototype", () => {
+  const directory = join(root, "crates/bunwasm-runtime/src/js");
+  for (const name of readdirSync(directory).filter(entry => /\.(js|ts)$/.test(entry) && !entry.endsWith(".d.ts") && !/^(intl|tz_data)\./.test(entry))) {
+    expect(protoSelfAssignments(readFileSync(join(directory, name), "utf8"), name.endsWith(".ts") ? "ts" : "js"), name).toBe(0);
+  }
+});
+
+test("no sloppy runtime module declares a function inside a nested block, where Bun's reprint scopes it differently", () => {
+  const directory = join(root, "crates/bunwasm-runtime/src/js");
+  for (const name of readdirSync(directory).filter(entry => /\.(js|ts)$/.test(entry) && !entry.endsWith(".d.ts") && !/^(intl|tz_data)\./.test(entry))) {
+    const file = ts.createSourceFile(name, readFileSync(join(directory, name), "utf8"), ts.ScriptTarget.Latest, true, name.endsWith(".ts") ? ts.ScriptKind.TS : ts.ScriptKind.JS);
+    const nested: string[] = [];
+    const visit = (node: ts.Node) => {
+      const parent = node.parent;
+      // A declaration is at function or script level, or it sits in a nested block, a switch clause or an unbraced `if`.
+      const topLevel = parent && (ts.isSourceFile(parent) || (ts.isBlock(parent) && ts.isFunctionLike(parent.parent)));
+      const inBlock = ts.isFunctionDeclaration(node) && !topLevel;
+      // In strict code a block-scoped function is the same after Bun's reprint, except in a switch clause,
+      // where the declaration is hoisted to the whole switch block and Bun's `let` is not.
+      const inSwitchClause = ts.isFunctionDeclaration(node) && parent && (ts.isCaseClause(parent) || ts.isDefaultClause(parent));
+      if ((inBlock && !inStrictCode(node)) || inSwitchClause) nested.push(node.name?.text ?? "default");
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    expect(nested, name).toEqual([]);
+  }
+});
+
+test("minifying rejects a module that does not start with its factory", () => {
+  expect(compact("const first = 1;\n(function () { return first; })\n").exitCode).not.toBe(0);
+  expect(compact("(function () { return 1; })\n;trailing();\n").exitCode).not.toBe(0);
+  expect(compact("(42)\n").exitCode).not.toBe(0);
 });
 
 test("builtin helper prepares runnable globals from the TypeScript factory", async () => {

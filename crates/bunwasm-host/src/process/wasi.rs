@@ -485,7 +485,7 @@ impl Namespace {
         Ok(())
     }
     fn available(&self, host: &Host) -> Option<i32> {
-        (3..i32::MAX).find(|fd| !self.files.contains_key(fd) && !host.processes.owns(*fd))
+        (0..i32::MAX).find(|fd| !self.files.contains_key(fd) && !host.processes.owns(*fd))
     }
     fn remove(&mut self, fd: i32) {
         self.files.remove(&fd);
