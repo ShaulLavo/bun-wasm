@@ -211,6 +211,17 @@ pub(crate) fn value_natives<E: Engine>(
         }),
     ));
     list.push((
+        "stringIs8Bit",
+        Rc::new(|e: &E, args: &[E::Value]| {
+            let value = arg(e, args, 0);
+            match e.string_is_8bit(&value) {
+                Some(Ok(is_8bit)) => Ok(e.value_from(Val::Bool(is_8bit))),
+                Some(Err(())) => Err(e.error_value(&NativeError::type_error("Expected a string"))),
+                None => Ok(e.undefined()),
+            }
+        }),
+    ));
+    list.push((
         "setTimeZone",
         Rc::new(|e: &E, args: &[E::Value]| {
             let zone = args.first().cloned().unwrap_or_else(|| e.undefined());
