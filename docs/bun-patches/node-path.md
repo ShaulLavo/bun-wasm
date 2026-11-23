@@ -35,12 +35,13 @@ native Bun). Local changes:
   the adapter's own code below, unchanged.
 - The POSIX code calls `charCodeAt`, `slice`, `indexOf` and `lastIndexOf`
   through intrinsics that `src/js/bootstrap.js` captures before user code
-  runs, and builds no arrays: `normalize` keeps its segment stack as a string
-  (popped with `lastIndexOf`, like Node), and `join` and `resolve` validate
-  their arguments while they walk them. Replacing a public `String.prototype`
-  or `Array.prototype` method, or adding inherited index accessors, therefore
+  runs, and builds no ordinary arrays: `normalize` keeps its segment stack as
+  offsets in a reused `Int32Array`, which stays linear for long runs of `..`
+  and has no inherited index accessors, and `join` and `resolve` validate their
+  arguments while they walk them. Replacing a public `String.prototype` or
+  `Array.prototype` method, or adding inherited index accessors, therefore
   cannot change a result, as with the native code it replaces. The Windows
-  wrappers keep their previous array code.
+  wrappers keep their previous code exactly.
 - A replaced `process.cwd` that returns a non-string keeps the previous
   adapter's handling: a falsy value is skipped, and other values get the same
   `startsWith` and `slice` calls, so a number still throws `TypeError`.
