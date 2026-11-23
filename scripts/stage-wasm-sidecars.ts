@@ -38,7 +38,7 @@ export async function writeWasmWithSidecars(path: string, bytes: Uint8Array, wri
 
 /** Wait for every write, so none can recreate a temporary file after cleanup, then report the first failure. */
 async function writeAll(outputs: readonly [string, Uint8Array][], suffix: string, write: Writer): Promise<void> {
-  const settled = await Promise.allSettled(outputs.map(([target, data]) => write(target + suffix, data)));
+  const settled = await Promise.allSettled(outputs.map(async ([target, data]) => write(target + suffix, data)));
   const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failure) throw failure.reason;
 }

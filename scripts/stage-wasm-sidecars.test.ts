@@ -63,6 +63,24 @@ test("cleanup waits for slower writes, so none recreates a temporary file after 
   }
 });
 
+test("a writer that throws synchronously still waits for the earlier writes before cleanup", async () => {
+  const directory = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bw-sidecars-"));
+  try {
+    const path = join(directory, "env.wasm");
+    // Outputs are written raw, .gz, .br: the third write throws before returning a promise.
+    const failing = (target: string, bytes: Uint8Array): Promise<void> => {
+      if (target.startsWith(`${path}.br.`)) throw new Error("sync failure");
+      return Bun.sleep(50).then(() => writeFile(target, bytes));
+    };
+    await expect(writeWasmWithSidecars(path, new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]), failing)).rejects.toThrow("sync failure");
+    // A write still in flight at rejection would land within its 50 ms delay; give it longer than that.
+    await Bun.sleep(150);
+    expect(await readdir(directory)).toEqual([]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a directory in a target's place is refused before any file is replaced", async () => {
   const directory = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bw-sidecars-"));
   try {
