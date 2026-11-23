@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 // Two modes. The default (Node.js 24+) erases TypeScript types and keeps every token's line and column.
 // `--minify-whitespace` (Bun) erases types the same way, then removes whitespace and comments only:
@@ -18,51 +18,172 @@ const { stripTypeScriptTypes } = compact ? { stripTypeScriptTypes: undefined } :
 if (compact && typeof Bun === "undefined") throw new Error("--minify-whitespace requires Bun");
 const transpiler = compact ? new Bun.Transpiler({ loader: "js", minifyWhitespace: true }) : undefined;
 
-// Bun treats its input as an ES module and drops every "use strict" directive, but the runtime evaluates
-// these files as classic scripts, where the directive decides the semantics. Each directive's text is
-// swapped for a marker that Bun keeps as an ordinary directive and swapped back afterwards.
-const directive = "use strict";
-
+const isLineEnd = (char: string) => char === "\n" || char === "\r" || char.charCodeAt(0) === 0x2028 || char.charCodeAt(0) === 0x2029;
 const noticeWords = /copyright|licen[sc]e|permission/i;
 const notice = (comment: string) => comment.startsWith("/*!") || noticeWords.test(comment);
 
 /**
- * Where the factory expression starts: after whitespace, comments and the stray semicolons that erased
- * type declarations leave. Any other leading statement is an error. Leading comments that carry a
- * copyright, license or permission notice are returned so they stay at the top of the output.
+ * Skips whitespace, comments and semicolons from `from`. Returns where it stopped and the comments on
+ * the way that carry a copyright, license or permission notice. Used before the factory and after it,
+ * where nothing else can appear.
  */
-function factoryStart(input: string): { start: number; legal: string } {
+function skipFiller(text: string, from: number): { end: number; notices: string } {
   const lineEnds = String.fromCharCode(0x0a, 0x0d, 0x2028, 0x2029);
-  const skip = new RegExp(`\\s+|;|//[^${lineEnds}]*|/\\*[\\s\\S]*?\\*/`, "y");
-  let start = 0, legal = "";
-  for (let match = skip.exec(input); match; match = (skip.lastIndex = start, skip.exec(input))) {
-    if (match[0].startsWith("/") && notice(match[0])) legal += `${match[0]}\n`;
-    start += match[0].length;
+  const filler = new RegExp(`\\s+|;|//[^${lineEnds}]*|/\\*[\\s\\S]*?\\*/`, "y");
+  let end = from, notices = "";
+  filler.lastIndex = from;
+  for (let match = filler.exec(text); match; match = (filler.lastIndex = end, filler.exec(text))) {
+    if (match[0].startsWith("/") && notice(match[0])) notices += `${match[0]}\n`;
+    end += match[0].length;
   }
-  if (input[start] !== "(") throw new Error("Runtime module must start with its factory expression");
-  return { start, legal };
+  return { end, notices };
 }
 
-// Only a string statement can be a directive: it follows `{`, `;`, `}` or a comment, never an operator or
-// a parenthesis (`("use strict")` is an expression and must stay one). Comments between are allowed.
-const directiveStatement = /(?<![([,=:?&|!+\-<>~^]\s*)(["'])use strict\1(?=\s*(?:[;}\n/]|$))/g;
+const regexAfterWord = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
+const regexAfterPunctuation = "(,=:[!&|?{};+-*%<>~^";
+const continuesStatement = "([.+-*/%<>=!&|^?,:`";
+
+/**
+ * Finds the string statements of `text` that can be directives, as [start, end) ranges, and where its
+ * last token ends. It tracks strings, templates, comments and regular expressions, so a quote or `/*` in
+ * one of them is never read as code. A string is a directive candidate when it is a whole statement:
+ * it follows `{`, `;` or `}` and is followed by `;`, `}`, the end, or a line break that does not
+ * continue the expression. `("use strict")` and `x = "use strict"` are not.
+ */
+function scanDirectives(text: string, from: number): { ranges: [number, number][]; codeEnd: number } {
+  const ranges: [number, number][] = [];
+  let pos = from, codeEnd = from, previous = "";
+  const trivia = (): boolean => {
+    let newline = false;
+    for (;;) {
+      const char = text[pos];
+      if (char === undefined) return newline;
+      if (isLineEnd(char)) { newline = true; pos++; continue; }
+      if (/\s/.test(char)) { pos++; continue; }
+      if (char === "/" && text[pos + 1] === "/") {
+        while (pos < text.length && !isLineEnd(text[pos]!)) pos++;
+        continue;
+      }
+      if (char !== "/" || text[pos + 1] !== "*") return newline;
+      const close = text.indexOf("*/", pos + 2), stop = close < 0 ? text.length : close + 2;
+      for (let index = pos; index < stop; index++) if (isLineEnd(text[index]!)) newline = true;
+      pos = stop;
+    }
+  };
+  const string = (quote: string) => {
+    pos++;
+    while (pos < text.length) {
+      const char = text[pos++];
+      if (char === "\\") pos++;
+      else if (char === quote) return;
+    }
+  };
+  const regex = () => {
+    let inClass = false;
+    pos++;
+    while (pos < text.length) {
+      const char = text[pos++]!;
+      if (char === "\\") pos++;
+      else if (char === "[") inClass = true;
+      else if (char === "]") inClass = false;
+      else if (char === "/" && !inClass) break;
+      else if (isLineEnd(char)) return;
+    }
+    while (pos < text.length && /[\w$]/.test(text[pos]!)) pos++;
+  };
+  const template = () => {
+    pos++;
+    while (pos < text.length) {
+      const char = text[pos]!;
+      if (char === "\\") pos += 2;
+      else if (char === "`") { pos++; return; }
+      else if (char === "$" && text[pos + 1] === "{") { pos += 2; code(true); }
+      else pos++;
+    }
+  };
+  // A string token; records it when it is a whole statement, which makes it a directive candidate.
+  const stringToken = (quote: string, start: number) => {
+    const statement = previous === "{" || previous === ";" || previous === "}";
+    string(quote);
+    const end = pos;
+    if (!statement) return;
+    const newline = trivia(), next = text[pos];
+    pos = end;
+    const terminated = next === undefined || next === ";" || next === "}" || (newline && !continuesStatement.includes(next));
+    if (terminated) ranges.push([start, end]);
+  };
+  const code = (inTemplate: boolean) => {
+    let braces = 0;
+    for (;;) {
+      trivia();
+      const char = text[pos];
+      if (char === undefined) return;
+      const start = pos;
+      if (char === '"' || char === "'") {
+        stringToken(char, start);
+        previous = "string";
+        codeEnd = pos;
+      } else if (char === "`") {
+        template();
+        previous = "template";
+        codeEnd = pos;
+      } else if (char === "/") {
+        if (previous === "" || regexAfterWord.has(previous) || (previous.length === 1 && regexAfterPunctuation.includes(previous))) {
+          regex();
+          previous = "regex";
+        } else {
+          pos++;
+          previous = "/";
+        }
+        codeEnd = pos;
+      } else if (/[\w$]/.test(char) || char.charCodeAt(0) > 0x7f) {
+        while (pos < text.length && (/[\w$]/.test(text[pos]!) || text.charCodeAt(pos) > 0x7f)) pos++;
+        previous = text.slice(start, pos);
+        codeEnd = pos;
+      } else {
+        pos++;
+        if (char === "}" && inTemplate && braces === 0) return;
+        if (char === "{") braces++;
+        if (char === "}") braces--;
+        previous = char;
+        if (char !== ";") codeEnd = pos;
+      }
+    }
+  };
+  code(false);
+  return { ranges, codeEnd };
+}
+
+// Bun treats its input as an ES module and drops every "use strict" directive, but the runtime evaluates
+// these files as classic scripts, where the directive decides the semantics. Each directive candidate is
+// swapped for a marker string that Bun keeps as an ordinary directive, and swapped back afterwards.
+const directive = "use strict";
 
 function minify(input: string): string {
   if (!transpiler) throw new Error("Missing runtime transpiler");
+  const leading = skipFiller(input, 0);
+  if (input[leading.end] !== "(") throw new Error("Runtime module must start with its factory expression");
+  const { ranges, codeEnd } = scanDirectives(input, leading.end);
+  const trailing = skipFiller(input, codeEnd);
+  if (trailing.end !== input.length) {
+    throw new Error(`Runtime module has code after its factory expression, at offset ${trailing.end}: ${JSON.stringify(input.slice(trailing.end - 40, trailing.end + 40))}`);
+  }
   // A random token that no source can spell, even with escapes, marks the swapped directives.
-  const marker = `use strict ${crypto.randomUUID()}`;
-  const { start, legal } = factoryStart(input);
+  const marker = `${directive} ${crypto.randomUUID()}`;
+  let factory = input.slice(leading.end, codeEnd), offset = leading.end;
+  for (const [start, end] of ranges.toReversed()) {
+    const text = input.slice(start, end);
+    if (text.slice(1, -1) === directive) factory = `${factory.slice(0, start - offset)}"${marker}"${factory.slice(end - offset)}`;
+  }
   // A bare factory expression is dead code to the transpiler, so it is assigned and read back.
   const prefix = "globalThis.factory=";
-  const output = transpiler.transformSync(`globalThis.factory = ${input.slice(start).replace(directiveStatement, `"${marker}"`)}`);
-  // Legal comments Bun keeps may land after the expression; they move to the end of the output.
-  const trailing = /(?:\s*\/\*[\s\S]*?\*\/)+\s*$/.exec(output)?.[0] ?? "";
-  const code = output.slice(0, output.length - trailing.length);
-  if (!code.startsWith(prefix) || !code.endsWith(";")) throw new Error("Unexpected compact runtime output");
-  const factory = code.slice(prefix.length, -1).replaceAll(marker, directive);
-  // The factory must be one expression that evaluates to a function, as the loader calls it.
-  if (typeof new Function(`return (${factory}\n)`)() !== "function") throw new Error("Runtime module is not a factory function");
-  const text = `${legal}(${factory})\n${trailing.trim() ? `${trailing.trim()}\n` : ""}`;
+  const output = transpiler.transformSync(`globalThis.factory = ${factory}`);
+  if (!output.startsWith(prefix) || !output.endsWith(";")) throw new Error("Unexpected compact runtime output");
+  const body = output.slice(prefix.length, -1).replaceAll(marker, directive);
+  // The loader calls the result, so it must be a function or arrow expression; it is parsed here, never run.
+  if (!/^(async\b|function\b|\(|[\w$]+\s*=>)/.test(body)) throw new Error("Runtime module must be a function expression");
+  new Function(`return (${body}\n)`);
+  const text = `${leading.notices}(${body})\n${trailing.notices}`;
   // Already-compact vendored bundles can grow when reprinted.
   return text.length < input.length ? text : input;
 }
@@ -98,10 +219,9 @@ function eraseTypes(sources: string[], scratch: string): string[] {
 
 function run(): void {
   const sources = paths.filter((_, index) => index % 2 === 0);
-  // Beside the first output, so a build killed mid-way leaves a few files in its own output directory
-  // (reused and overwritten by the next run) and never in a shared temporary directory.
-  const scratch = compact ? join(dirname(paths[1] ?? "."), ".runtime-strip") : undefined;
-  if (scratch) mkdirSync(scratch, { recursive: true });
+  // Beside the first output, one directory per run, so a build killed mid-way leaves a few files in its
+  // own output directory and never in a shared temporary directory or in another run's way.
+  const scratch = compact ? mkdtempSync(join(dirname(paths[1] ?? "."), ".runtime-strip-")) : undefined;
   try {
     const inputs = scratch ? eraseTypes(sources, scratch) : sources;
     sources.forEach((source, index) => {

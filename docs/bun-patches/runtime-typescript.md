@@ -10,7 +10,7 @@ section above records their original role; neither file is an upstream fork.
 
 The host stripper blanks erasable TypeScript during Cargo's build, preserving JavaScript
 constructor calls, class fields and source coordinates. The loader still
-looks up the same extension-free names. Existing `.js` sources remain raw. No TypeScript parser
+looks up the same extension-free names. Type erasure leaves existing `.js` sources untouched (minifying, below, is a separate step). No TypeScript parser
 or typecheck is added to the wasm runtime.
 
 The same script then minifies every embedded runtime module except `intl.js` and `tz_data.js`
@@ -20,7 +20,7 @@ This is an original adapter around that API; no Bun source is copied or changed.
 license or permission notice, and it fails the build if a module does not start with a factory
 expression that evaluates to a function. Existing `.js` sources are minified too, so they are no
 longer embedded byte for byte.
-It removes about 725 KB raw, 140 KB gzip and 100 KB brotli from each guest.
+It removes about 722 KB raw, 140 KB gzip and 100 KB brotli from each guest.
 Shipped stack frames therefore carry positions in the compacted code; `BUNWASM_JS_PRESERVE_POSITIONS=1`
 builds the position-preserving form.
 

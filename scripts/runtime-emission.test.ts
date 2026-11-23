@@ -195,6 +195,49 @@ test("minifying leaves a parenthesized or escaped string that looks like a direc
   expect(output).not.toMatch(/^\(function\(\)\{"use strict"/);
 });
 
+test("minifying finds directives exactly: comments, line breaks, templates and parentheses", () => {
+  const lineSeparator = String.fromCharCode(0x2028);
+  const cases: [string, unknown][] = [
+    ['// Keep strict!\n"use strict";\nreturn this;', undefined],
+    ['/* c */ "use strict" /* d */\nreturn this;', undefined],
+    [`"use strict"\rreturn this;`, undefined],
+    [`"use strict"${lineSeparator}return this;`, undefined],
+    ["'use strict'\nreturn this;", undefined],
+    ['("use strict"); return this === globalThis;', true],
+    ['(/* before */ "use strict" /* after */); return this === globalThis;', true],
+    ['return `a ${"x"} \'use strict\'; b`;', "a x 'use strict'; b"],
+    ['const re = /"use strict"[\'/]/; return [re.test(\'"use strict"/\'), "/*"];', [true, "/*"]],
+    ['"use strict"; return (function () { return this; })();', undefined],
+  ];
+  for (const [body, expected] of cases) {
+    const { exitCode, output } = compact(`(function () {\n${body}\n})\n`);
+    expect(exitCode, body).toBe(0);
+    // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+    expect((0, eval)(output).call(undefined), body).toEqual(expected);
+  }
+});
+
+test("minifying accepts a trailing notice after a factory that holds comment-like strings", () => {
+  const { exitCode, output } = compact('(function () { return "/*"; })\n/*! Notice */\n');
+  expect(exitCode).toBe(0);
+  expect(output).toBe('(function(){return"/*"})\n/*! Notice */\n');
+});
+
+test("minifying parses the factory but never runs it", () => {
+  const { exitCode, output } = compact("(function () { return guestOnlyGlobal.make(); })()\n");
+  expect(exitCode).toBe(0);
+  expect(output).toContain("guestOnlyGlobal");
+});
+
+test("minifying runs side by side in one output directory", async () => {
+  const names = ["first", "second"];
+  for (const name of names) writeFileSync(join(source, `${name}.ts`), `(function (value: number) { return value + "${name}".length; })\n`);
+  const children = names.map(name => Bun.spawn(["bun", join(root, "scripts/transpile-runtime.ts"), "--minify-whitespace", join(source, `${name}.ts`), join(source, `${name}.out.js`)], { stdout: "pipe", stderr: "pipe" }));
+  expect(await Promise.all(children.map(child => child.exited))).toEqual([0, 0]);
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  expect((0, eval)(readFileSync(join(source, "second.out.js"), "utf8"))(1)).toBe(7);
+});
+
 test("minifying accepts comments at the end of a directive and a bare-CR line comment", () => {
   const { exitCode, output } = compact('// first\r(function () {\n  "use strict" // keep\n  return this;\n})\n');
   expect(exitCode).toBe(0);
