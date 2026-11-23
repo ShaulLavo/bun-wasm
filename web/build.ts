@@ -11,11 +11,12 @@ import { buildBrowserEntries, buildClassicWorker, buildShellAssets } from "../sc
 import { dirname, join, resolve } from "node:path";
 import { stageSharedPrograms } from "../scripts/stage-program-profiles";
 import { brotliQuality, sortedBuilds, stageGuestWasm } from "../scripts/stage-guest-wasm";
+import { appOutput } from "../scripts/app-output";
 import { settleAll } from "../scripts/stage-wasm-sidecars";
 
 const here = import.meta.dir;
 // BUN_WASM_APP_OUT builds somewhere disposable instead of web/dist (tests, side-by-side builds).
-const out = process.env.BUN_WASM_APP_OUT ? resolve(process.env.BUN_WASM_APP_OUT) : join(here, "dist");
+const out = appOutput(here);
 const wasmSource = resolve(here, process.env.BUN_WASM ?? "../dist/bun.wasm");
 
 // An invalid setting fails before the previous build is removed.

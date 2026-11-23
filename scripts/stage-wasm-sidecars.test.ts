@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import { replaceFiles, writeWasmWithSidecars } from "./stage-wasm-sidecars";
+import { ReplaceFilesError, replaceFiles, writeWasmWithSidecars } from "./stage-wasm-sidecars";
 import { writeShellGuests } from "./browser-build";
 
 test("program staging writes the raw WASM with smaller Brotli and gzip twins of the same bytes", async () => {
@@ -59,7 +59,7 @@ test("a failed second rename on a clean build leaves no lone first file", async 
   try {
     const path = join(directory, "bun.wasm");
     const outputs: [string, Uint8Array][] = [[`${path}.gz`, new TextEncoder().encode("new gzip")], [`${path}.br`, new TextEncoder().encode("new br")]];
-    await expect(replaceFiles(outputs, writeFile, failingSecondRename(path))).rejects.toThrow("rename failed");
+    await expect(replaceFiles(outputs, writeFile, { move: failingSecondRename(path) })).rejects.toThrow("rename failed");
     expect(await readdir(directory)).toEqual([]);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -73,7 +73,7 @@ test("a failed second rename over an existing pair restores the whole previous p
     await Bun.write(`${path}.gz`, "old gzip");
     await Bun.write(`${path}.br`, "old br");
     const outputs: [string, Uint8Array][] = [[`${path}.gz`, new TextEncoder().encode("new gzip")], [`${path}.br`, new TextEncoder().encode("new br")]];
-    await expect(replaceFiles(outputs, writeFile, failingSecondRename(path))).rejects.toThrow("rename failed");
+    await expect(replaceFiles(outputs, writeFile, { move: failingSecondRename(path) })).rejects.toThrow("rename failed");
     expect(await Bun.file(`${path}.gz`).text()).toBe("old gzip");
     expect(await Bun.file(`${path}.br`).text()).toBe("old br");
     expect((await readdir(directory)).sort()).toEqual(["bun.wasm.br", "bun.wasm.gz"]);
@@ -87,19 +87,29 @@ test("a failed second rename over an existing pair restores the whole previous p
   }
 });
 
+/**
+ * An existing pair whose replacement fails placing the Brotli file and then fails restoring the
+ * gzip backup, the outputs that replace it, and the mover that injects both failures.
+ */
+async function failingPairSwap(directory: string) {
+  const path = join(directory, "bun.wasm");
+  await Bun.write(`${path}.gz`, "old gzip");
+  await Bun.write(`${path}.br`, "old br");
+  const move = async (from: string, to: string) => {
+    if (to === `${path}.br` && from.endsWith(".tmp")) throw new Error("rename failed");
+    if (to === `${path}.gz` && from.endsWith(".previous")) throw new Error("restore failed");
+    await rename(from, to);
+  };
+  const outputs: [string, Uint8Array][] = [[`${path}.gz`, new TextEncoder().encode("new gzip")], [`${path}.br`, new TextEncoder().encode("new br")]];
+  return { path, move, outputs };
+}
+
 test("a failed restore still restores the sibling, keeps its backup and reports the placement error", async () => {
   const directory = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bw-sidecars-"));
   try {
-    const path = join(directory, "bun.wasm");
-    await Bun.write(`${path}.gz`, "old gzip");
-    await Bun.write(`${path}.br`, "old br");
-    const move = async (from: string, to: string) => {
-      if (to === `${path}.br` && from.endsWith(".tmp")) throw new Error("rename failed");
-      if (to === `${path}.gz` && from.endsWith(".previous")) throw new Error("restore failed");
-      await rename(from, to);
-    };
-    const outputs: [string, Uint8Array][] = [[`${path}.gz`, new TextEncoder().encode("new gzip")], [`${path}.br`, new TextEncoder().encode("new br")]];
-    const error = await replaceFiles(outputs, writeFile, move).then(() => undefined, (failure: unknown) => failure);
+    const { path, move, outputs } = await failingPairSwap(directory);
+    const error = await replaceFiles(outputs, writeFile, { move }).then(() => undefined, (failure: unknown) => failure);
+    expect(error).toBeInstanceOf(ReplaceFilesError);
     expect(error).toBeInstanceOf(AggregateError);
     const { errors, cause } = error as AggregateError;
     expect(String(errors[0])).toContain("rename failed");
@@ -111,6 +121,37 @@ test("a failed restore still restores the sibling, keeps its backup and reports 
     expect(backup).toBeString();
     expect(await Bun.file(join(directory, backup!)).text()).toBe("old gzip");
     expect(files.filter(file => file.endsWith(".tmp"))).toEqual([]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("failed temporary-file cleanup is reported after the placement and rollback failures, never instead of them", async () => {
+  const directory = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bw-sidecars-"));
+  try {
+    const { path, move, outputs } = await failingPairSwap(directory);
+    const remove = async (target: string) => {
+      if (target.endsWith(".tmp")) throw new Error("cleanup failed");
+      await rm(target, { force: true });
+    };
+    const error = await replaceFiles(outputs, writeFile, { move, remove }).then(() => undefined, (failure: unknown) => failure);
+    expect(error).toBeInstanceOf(ReplaceFilesError);
+    const { errors, cause } = error as ReplaceFilesError;
+    expect(errors.map(String)).toEqual(["Error: rename failed", "Error: restore failed", "Error: cleanup failed", "Error: cleanup failed"]);
+    expect(String(cause)).toBe("Error: rename failed");
+    expect(await Bun.file(`${path}.br`).text()).toBe("old br");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a cleanup failure after a successful replacement is still reported", async () => {
+  const directory = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bw-sidecars-"));
+  try {
+    const path = join(directory, "bun.wasm");
+    const remove = async () => { throw new Error("cleanup failed"); };
+    await expect(replaceFiles([[`${path}.gz`, new TextEncoder().encode("new gzip")]], writeFile, { remove })).rejects.toThrow("cleanup failed");
+    expect(await Bun.file(`${path}.gz`).text()).toBe("new gzip");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

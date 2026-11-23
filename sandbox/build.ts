@@ -10,12 +10,13 @@ import { templates } from "./src/template-catalog";
 import { templateFiles } from "./template-files";
 import { stageSharedPrograms } from "../scripts/stage-program-profiles";
 import { brotliQuality, sortedBuilds, stageGuestWasm } from "../scripts/stage-guest-wasm";
+import { appOutput } from "../scripts/app-output";
 import { settleAll } from "../scripts/stage-wasm-sidecars";
 
 const here = import.meta.dir;
 const web = resolve(here, "../web");
 // BUN_WASM_APP_OUT builds somewhere disposable instead of sandbox/dist (tests, side-by-side builds).
-const out = process.env.BUN_WASM_APP_OUT ? resolve(process.env.BUN_WASM_APP_OUT) : join(here, "dist");
+const out = appOutput(here);
 
 // An invalid setting fails before the previous build is removed.
 brotliQuality();

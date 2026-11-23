@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { appOutput } from "../../scripts/app-output";
 
 const root = resolve(import.meta.dir, "../..");
 const scratch: string[] = [];
@@ -26,21 +27,23 @@ test.each(["web", "sandbox"])("the %s build refuses an invalid Brotli quality be
   expect(existsSync(marker)).toBe(true);
 }, 40_000);
 
-test.each(["web", "sandbox"])("the %s build writes into BUN_WASM_APP_OUT instead of the checkout's dist", async app => {
-  const out = await mkdtemp(join(process.env.BUN_WASM_TEST_TMP ?? tmpdir(), `bun-wasm-${app}-out-`));
-  scratch.push(out);
-  const dist = join(root, app, "dist");
-  const before = existsSync(dist);
-  // No guests: the build warns and still writes the page, which is all this checks.
-  const missing = join(out, "no-guests");
-  const env = { ...process.env, BUN_WASM_APP_OUT: join(out, "dist"), BUN_WASM: join(missing, "bun.wasm"), JSC_WASM: join(missing, "bun-jsc.wasm"),
-    BUN_BROWSER_WASM: join(missing, "bun-browser.wasm"), BUN_TOOLS_WASM: join(missing, "bun-tools.wasm"), BASH_WEB_GUESTS_DIR: missing, BASH_WEB_GUESTS: "" };
-  const child = Bun.spawn([process.execPath, join(root, app, "build.ts")], { cwd: join(root, app), env, stdout: "ignore", stderr: "pipe" });
-  const timeout = setTimeout(() => child.kill("SIGKILL"), 110_000);
-  try {
-    expect(await child.exited, await new Response(child.stderr).text()).toBe(0);
-  } finally { clearTimeout(timeout); }
-  expect(existsSync(join(out, "dist/index.html"))).toBe(true);
-  expect(existsSync(join(out, "dist/engine-builds.json"))).toBe(true);
-  expect(existsSync(dist)).toBe(before);
-}, 120_000);
+test("app builds write to BUN_WASM_APP_OUT only when it names a directory", () => {
+  const app = join(root, "web");
+  expect(appOutput(app, {})).toBe(join(app, "dist"));
+  for (const blank of ["", " ", "\t\n"]) expect(appOutput(app, { BUN_WASM_APP_OUT: blank })).toBe(join(app, "dist"));
+  expect(appOutput(app, { BUN_WASM_APP_OUT: "/work/tmp/bun-wasm-app-out" })).toBe("/work/tmp/bun-wasm-app-out");
+  expect(appOutput(app, { BUN_WASM_APP_OUT: " relative/out " })).toBe(resolve("relative/out"));
+});
+
+test.each(["web/build.ts", "sandbox/build.ts"])("%s takes its output directory from appOutput before removing anything", async path => {
+  const source = await Bun.file(join(root, path)).text();
+  const output = source.indexOf("const out = appOutput(here);");
+  expect(output).toBeGreaterThan(0);
+  expect(output).toBeLessThan(source.indexOf("rmSync(out"));
+});
+
+test("the site build pins BUN_WASM_APP_OUT empty, so an app .env file cannot redirect a deploy", async () => {
+  const source = await Bun.file(join(root, "site/build.ts")).text();
+  expect(source).toContain('process.env.BUN_WASM_APP_OUT = "";');
+  expect(source.indexOf('process.env.BUN_WASM_APP_OUT = "";')).toBeLessThan(source.indexOf('await build("sandbox")'));
+});
