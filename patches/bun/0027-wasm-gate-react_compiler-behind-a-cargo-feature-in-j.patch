@@ -1,0 +1,396 @@
+From 4f713197bcd1aefc6159067db0a1b8706f9b6261 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Sun, 22 Nov 2026 23:29:45 +0200
+Subject: [PATCH 27/27] wasm: gate react_compiler behind a cargo feature in
+ js_parser
+
+---
+ src/js_parser/Cargo.toml           |  6 +++++-
+ src/js_parser/lib.rs               |  1 +
+ src/js_parser/p.rs                 | 18 +++++++++++++++-
+ src/js_parser/parse/parse_entry.rs |  2 ++
+ src/js_parser/parser.rs            |  1 +
+ src/js_parser/visit/mod.rs         | 33 ++++++++++++++++++++++--------
+ src/js_parser/visit/visit_expr.rs  | 27 ++++++++++++++++--------
+ src/js_parser/visit/visit_stmt.rs  | 28 +++++++++++++++++++------
+ 8 files changed, 90 insertions(+), 26 deletions(-)
+
+diff --git a/src/js_parser/Cargo.toml b/src/js_parser/Cargo.toml
+index fc595f92..203e585d 100644
+--- a/src/js_parser/Cargo.toml
++++ b/src/js_parser/Cargo.toml
+@@ -9,6 +9,10 @@ path = "lib.rs"
+ [lints]
+ workspace = true
+ 
++[features]
++default = []
++react-compiler = ["dep:bun_react_compiler"]
++
+ [dependencies]
+ thiserror.workspace = true
+ bytemuck = "1"
+@@ -26,7 +30,7 @@ bun_collections.workspace = true
+ bun_crash_handler.workspace = true
+ bun_highway.workspace = true
+ bun_ast.workspace = true
+-bun_react_compiler = { path = "../react_compiler" }
++bun_react_compiler = { path = "../react_compiler", optional = true }
+ bun_options_types.workspace = true
+ bun_paths.workspace = true
+ bun_url.workspace = true
+diff --git a/src/js_parser/lib.rs b/src/js_parser/lib.rs
+index 2bc9d006..b647a8a8 100644
+--- a/src/js_parser/lib.rs
++++ b/src/js_parser/lib.rs
+@@ -20,6 +20,7 @@ pub(crate) mod fold;
+ pub mod lower;
+ pub mod p;
+ pub mod parse;
++#[cfg(feature = "react-compiler")]
+ pub mod react_compiler_host;
+ pub(crate) mod repl_transforms;
+ pub mod scan;
+diff --git a/src/js_parser/p.rs b/src/js_parser/p.rs
+index 800a50f9..7d328a8b 100644
+--- a/src/js_parser/p.rs
++++ b/src/js_parser/p.rs
+@@ -469,21 +469,27 @@ pub struct P<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> {
+     /// only applicable when `.options.features.react_compiler` is set.
+     /// populated before visit pass starts; `take()`n at each post-visit
+     /// hook site so a `ReactCompilerHost(&mut P)` can borrow alongside it.
++    #[cfg(feature = "react-compiler")]
+     pub(crate) react_compiler: Option<Box<bun_react_compiler::ReactCompilerState>>,
+     /// Binding name from the `S::Function` / `S::Local` / `S::ExportDefault`
+     /// statement currently being visited. Set in `visit_stmt`, consumed by
+     /// `visit_func` / arrow-visit one frame down.
++    #[cfg(feature = "react-compiler")]
+     pub(crate) react_compiler_candidate_name: Option<js_ast::Ref>,
+     /// Set alongside `react_compiler_candidate_name` when the candidate
+     /// expression is a `memo(...)` / `forwardRef(...)` call.
++    #[cfg(feature = "react-compiler")]
+     pub(crate) react_compiler_in_react_hoc: bool,
+     /// See [`bun_react_compiler::PendingCompile`]. Set by `visit_func` /
+     /// arrow-visit, consumed inside `visit_stmts` between visit and mangle.
++    #[cfg(feature = "react-compiler")]
+     pub(crate) react_compiler_pending: Option<bun_react_compiler::PendingCompile>,
+     /// Compiled args/flags written by the `visit_stmts` hook for `visit_func` /
+     /// arrow-visit to apply to the original `G::Fn` / `E::Arrow`.
++    #[cfg(feature = "react-compiler")]
+     pub(crate) react_compiler_result: Option<bun_react_compiler::CompileResult>,
+     /// Visiting a function that is handed to the React Compiler, which re-declares its locals as new symbols.
++    #[cfg(feature = "react-compiler")]
+     pub(crate) react_compiler_may_replace_body: bool,
+ 
+     /// only applicable when `.options.features.server_components` is
+@@ -1202,9 +1208,12 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+     pub(crate) fn note_destructured_locals(&mut self, properties: &[bun_ast::B::Property]) {
+         // The dev server does not link, so nothing would bind them. A bound
+         // name leaves the pattern, and `...rest` would then collect it.
++        #[cfg(feature = "react-compiler")]
++        if self.react_compiler_may_replace_body {
++            return;
++        }
+         if !self.options.bundle
+             || self.options.output_format == options::Format::InternalBakeDev
+-            || self.react_compiler_may_replace_body
+             || properties
+                 .iter()
+                 .any(|p| p.flags.contains(bun_ast::flags::Property::IsSpread))
+@@ -1269,6 +1278,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             .insert(local, ImportItemForNamespaceMap::default());
+         self.dynamic_import_namespace_locals
+             .insert(local, records.to_vec());
++        #[cfg(feature = "react-compiler")]
+         if self.react_compiler_may_replace_body {
+             self.dynamic_import_copied_locals.insert(local, ());
+         }
+@@ -9904,11 +9914,17 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             enclosing_namespace_arg_ref: None,
+             jsx_imports: crate::JSXImportSymbols::default(),
+             react_refresh: ReactRefresh::default(),
++            #[cfg(feature = "react-compiler")]
+             react_compiler: None,
++            #[cfg(feature = "react-compiler")]
+             react_compiler_candidate_name: None,
++            #[cfg(feature = "react-compiler")]
+             react_compiler_in_react_hoc: false,
++            #[cfg(feature = "react-compiler")]
+             react_compiler_pending: None,
++            #[cfg(feature = "react-compiler")]
+             react_compiler_result: None,
++            #[cfg(feature = "react-compiler")]
+             react_compiler_may_replace_body: false,
+             server_components_wrap_ref: Ref::NONE,
+             jest: Jest::default(),
+diff --git a/src/js_parser/parse/parse_entry.rs b/src/js_parser/parse/parse_entry.rs
+index 3b1a9107..92a62c97 100644
+--- a/src/js_parser/parse/parse_entry.rs
++++ b/src/js_parser/parse/parse_entry.rs
+@@ -963,6 +963,7 @@ impl<'a> Parser<'a> {
+         let mut visit_tracer = bun_core::perf::trace("JSParser::visit");
+         p.prepare_for_visit_pass()?;
+ 
++        #[cfg(feature = "react-compiler")]
+         if p.options.features.react_compiler.is_enabled() {
+             let rc_options = bun_react_compiler::ReactCompilerOptions {
+                 enabled: true,
+@@ -2334,6 +2335,7 @@ impl<'a> Parser<'a> {
+             )?;
+         }
+ 
++        #[cfg(feature = "react-compiler")]
+         if let Some(rc_state) = p.react_compiler.take() {
+             let mut rc_stmts: Vec<Stmt> = Vec::new();
+             let result = bun_react_compiler::finish(
+diff --git a/src/js_parser/parser.rs b/src/js_parser/parser.rs
+index 455c70b2..6a3c28cd 100644
+--- a/src/js_parser/parser.rs
++++ b/src/js_parser/parser.rs
+@@ -540,6 +540,7 @@ impl JSXImportSymbols {
+         }
+     }
+ 
++    #[cfg(feature = "react-compiler")]
+     pub(crate) fn tag_of(&self, ref_: Ref) -> Option<JSXImport> {
+         [
+             JSXImport::Jsx,
+diff --git a/src/js_parser/visit/mod.rs b/src/js_parser/visit/mod.rs
+index ddd948af..f5d77803 100644
+--- a/src/js_parser/visit/mod.rs
++++ b/src/js_parser/visit/mod.rs
+@@ -115,6 +115,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+ 
+         let body_loc = func.body.loc;
+         let body_stmts: &'a [Stmt] = func.body.stmts.slice();
++        #[cfg(feature = "react-compiler")]
+         let prev_may_replace_body = self.enter_react_compiler_candidate(
+             func.name.map(|n| n.ref_),
+             func.flags
+@@ -142,7 +143,9 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         let mut temp_opts = PrependTempRefsOpts {
+             kind: StmtsKind::FnBody,
+         };
++        #[cfg(feature = "react-compiler")]
+         let rc_binding = self.react_compiler_candidate_name.take();
++        #[cfg(feature = "react-compiler")]
+         if rc_binding.is_some() {
+             self.react_compiler_pending = Some(bun_react_compiler::PendingCompile {
+                 args: func.args,
+@@ -159,12 +162,15 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         }
+         self.visit_stmts_and_prepend_temp_refs(&mut stmts, &mut temp_opts)
+             .expect("unreachable");
+-        self.react_compiler_pending = None;
+-        if let Some(result) = self.react_compiler_result.take() {
+-            func.args = result.args;
+-            func.flags = result.flags;
+-            if let Some(b) = rc_binding.filter(|r| *r != js_ast::Ref::NONE) {
+-                self.record_usage(b);
++        #[cfg(feature = "react-compiler")]
++        {
++            self.react_compiler_pending = None;
++            if let Some(result) = self.react_compiler_result.take() {
++                func.args = result.args;
++                func.flags = result.flags;
++                if let Some(b) = rc_binding.filter(|r| *r != js_ast::Ref::NONE) {
++                    self.record_usage(b);
++                }
+             }
+         }
+ 
+@@ -211,7 +217,10 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         self.pop_scope();
+         self.pop_scope();
+ 
+-        self.react_compiler_may_replace_body = prev_may_replace_body;
++        #[cfg(feature = "react-compiler")]
++        {
++            self.react_compiler_may_replace_body = prev_may_replace_body;
++        }
+         self.fn_or_arrow_data_visit = old_fn_or_arrow_data;
+         self.fn_only_data_visit = old_fn_only_data;
+ 
+@@ -345,6 +354,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                         }
+                     }
+                 }
++                #[cfg(feature = "react-compiler")]
+                 if self.react_compiler.is_some()
+                     && self.current_scope == self.module_scope
+                     && let BData::BIdentifier(id) = decl.binding.data
+@@ -362,8 +372,11 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                         ..Default::default()
+                     },
+                 );
+-                self.react_compiler_candidate_name = None;
+-                self.react_compiler_in_react_hoc = false;
++                #[cfg(feature = "react-compiler")]
++                {
++                    self.react_compiler_candidate_name = None;
++                    self.react_compiler_in_react_hoc = false;
++                }
+                 decl.value = Some(val);
+                 self.decorator_class_name = prev_decorator_class_name;
+ 
+@@ -1499,6 +1512,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+ 
+         // Consume before recursing so a nested function body's `visit_stmts`
+         // doesn't compile the wrong target.
++        #[cfg(feature = "react-compiler")]
+         let rc_pending = if kind == StmtsKind::FnBody {
+             p.react_compiler_pending.take()
+         } else {
+@@ -1773,6 +1787,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         // if this fails it means that scope pushing/popping is not balanced
+         debug_assert!(p.current_scope == initial_scope);
+ 
++        #[cfg(feature = "react-compiler")]
+         if let Some(pending) = rc_pending
+             && p.react_compiler_may_replace_body
+             && let Some(mut rc) = p.react_compiler.take()
+diff --git a/src/js_parser/visit/visit_expr.rs b/src/js_parser/visit/visit_expr.rs
+index 71abb524..a13b9481 100644
+--- a/src/js_parser/visit/visit_expr.rs
++++ b/src/js_parser/visit/visit_expr.rs
+@@ -2610,6 +2610,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         p.push_scope_for_visit_pass(js_ast::scope::Kind::FunctionArgs, expr.loc)
+             .expect("unreachable");
+         let dupe: &'a mut [Stmt] = p.arena.alloc_slice_copy(e_.body.stmts.slice());
++        #[cfg(feature = "react-compiler")]
+         let prev_may_replace_body =
+             p.enter_react_compiler_candidate(None, e_.has_react_hooks_suppression, dupe);
+ 
+@@ -2638,7 +2639,9 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             kind: crate::parser::StmtsKind::FnBody,
+             ..Default::default()
+         };
++        #[cfg(feature = "react-compiler")]
+         let rc_binding = p.react_compiler_candidate_name.take();
++        #[cfg(feature = "react-compiler")]
+         if rc_binding.is_some() {
+             let mut flags = bun_ast::flags::FUNCTION_NONE;
+             if e_.is_async {
+@@ -2661,20 +2664,26 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         }
+         p.visit_stmts_and_prepend_temp_refs(&mut stmts_list, &mut temp_opts)
+             .expect("unreachable");
+-        p.react_compiler_pending = None;
+-        if let Some(result) = p.react_compiler_result.take() {
+-            e_.args = result.args;
+-            e_.is_async = result.flags.contains(bun_ast::flags::Function::IsAsync);
+-            e_.has_rest_arg = result.flags.contains(bun_ast::flags::Function::HasRestArg);
+-            e_.prefer_expr = false;
+-            if let Some(b) = rc_binding.filter(|r| *r != js_ast::Ref::NONE) {
+-                p.record_usage(b);
++        #[cfg(feature = "react-compiler")]
++        {
++            p.react_compiler_pending = None;
++            if let Some(result) = p.react_compiler_result.take() {
++                e_.args = result.args;
++                e_.is_async = result.flags.contains(bun_ast::flags::Function::IsAsync);
++                e_.has_rest_arg = result.flags.contains(bun_ast::flags::Function::HasRestArg);
++                e_.prefer_expr = false;
++                if let Some(b) = rc_binding.filter(|r| *r != js_ast::Ref::NONE) {
++                    p.record_usage(b);
++                }
+             }
+         }
+         p.pop_scope();
+         p.pop_scope();
+ 
+-        p.react_compiler_may_replace_body = prev_may_replace_body;
++        #[cfg(feature = "react-compiler")]
++        {
++            p.react_compiler_may_replace_body = prev_may_replace_body;
++        }
+         p.fn_or_arrow_data_visit = old_fn_or_arrow_data;
+ 
+         // Restore before any further `p.*` call so the stack-local pointer
+diff --git a/src/js_parser/visit/visit_stmt.rs b/src/js_parser/visit/visit_stmt.rs
+index 03ee9f4b..092c1722 100644
+--- a/src/js_parser/visit/visit_stmt.rs
++++ b/src/js_parser/visit/visit_stmt.rs
+@@ -414,6 +414,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                 {
+                     p.decorator_class_name = Some(js_ast::ClauseItem::DEFAULT_ALIAS);
+                 }
++                #[cfg(feature = "react-compiler")]
+                 if p.react_compiler.is_some()
+                     && let Some(in_hoc) = p.react_compiler_candidate_expr(expr)
+                 {
+@@ -421,8 +422,11 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                     p.react_compiler_in_react_hoc = in_hoc;
+                 }
+                 p.visit_expr(expr);
+-                p.react_compiler_candidate_name = None;
+-                p.react_compiler_in_react_hoc = false;
++                #[cfg(feature = "react-compiler")]
++                {
++                    p.react_compiler_candidate_name = None;
++                    p.react_compiler_in_react_hoc = false;
++                }
+                 p.decorator_class_name = prev_decorator_class_name;
+ 
+                 if p.is_control_flow_dead {
+@@ -596,6 +600,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                         p.react_refresh.hook_ctx_storage =
+                             Some(core::ptr::NonNull::from(&mut react_hook_data));
+ 
++                        #[cfg(feature = "react-compiler")]
+                         if p.react_compiler.is_some() {
+                             p.react_compiler_candidate_name = Some(
+                                 func.func
+@@ -608,7 +613,10 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                         let open_parens_loc = func.func.open_parens_loc;
+                         func.func =
+                             p.visit_func(core::mem::take(&mut func.func), open_parens_loc, false);
+-                        p.react_compiler_candidate_name = None;
++                        #[cfg(feature = "react-compiler")]
++                        {
++                            p.react_compiler_candidate_name = None;
++                        }
+ 
+                         if p.is_control_flow_dead {
+                             p.react_refresh.hook_ctx_storage = prev;
+@@ -906,13 +914,17 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         let prev_hook_storage = p.react_refresh.hook_ctx_storage;
+         p.react_refresh.hook_ctx_storage = Some(core::ptr::NonNull::from(&mut react_hook_data));
+ 
++        #[cfg(feature = "react-compiler")]
+         if p.react_compiler.is_some() && p.current_scope == p.module_scope {
+             p.react_compiler_candidate_name = data.func.name.map(|n| n.ref_);
+         }
+         let open_parens_loc = data.func.open_parens_loc;
+         let this_expr_count_before = p.this_expr_count;
+         data.func = p.visit_func(core::mem::take(&mut data.func), open_parens_loc, false);
+-        p.react_compiler_candidate_name = None;
++        #[cfg(feature = "react-compiler")]
++        {
++            p.react_compiler_candidate_name = None;
++        }
+ 
+         let name_ref = data.func.name.expect("infallible: name checked").ref_;
+         debug_assert!(name_ref.is_symbol());
+@@ -1378,6 +1390,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             };
+         }
+ 
++        #[cfg(feature = "react-compiler")]
+         if is_top_level
+             && p.react_compiler.is_some()
+             && let Some(in_hoc) = p.react_compiler_candidate_expr(&data.value)
+@@ -1387,8 +1400,11 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         }
+         let this_expr_count_before = p.this_expr_count;
+         p.visit_expr(&mut data.value);
+-        p.react_compiler_candidate_name = None;
+-        p.react_compiler_in_react_hoc = false;
++        #[cfg(feature = "react-compiler")]
++        {
++            p.react_compiler_candidate_name = None;
++            p.react_compiler_in_react_hoc = false;
++        }
+ 
+         // `import(x);` / `await import(x);` / `[await] import(x).catch(..);` /
+         // `require(x);` / `await require(x);` as a statement: the namespace is

@@ -741,6 +741,7 @@ pub fn table(state: &Rc<State>) -> Table {
     crate::intl::install(&mut t);
     install_host(&mut t, state);
     crate::sqlite::install(&mut t);
+    #[cfg(feature = "engine-split")]
     crate::wasm::install(&mut t);
     t.constants.push(("platformInfo", platform_info()));
     t

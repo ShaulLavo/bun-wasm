@@ -62,11 +62,12 @@ mod streams;
 mod time_zone;
 mod tls;
 pub mod transpiler;
+#[cfg(feature = "engine-split")]
 mod wasm;
 // Declared here and not in `wasm.rs`: `scripts/wasm-tables.test.ts` builds `wasm.rs` into a
 // crate of its own, and that crate has no `compression` module, whose test allocator this
 // test counts with.
-#[cfg(test)]
+#[cfg(all(test, feature = "engine-split"))]
 #[path = "wasm/lane_allocation_tests.rs"]
 mod lane_allocation_tests;
 mod x509;
