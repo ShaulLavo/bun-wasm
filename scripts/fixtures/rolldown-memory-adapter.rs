@@ -1,3 +1,5 @@
+#[path = "../../crates/bunwasm-runtime/src/binary_digest.rs"]
+mod binary_digest;
 #[path = "../../crates/bunwasm-runtime/src/rolldown_memory.rs"]
 mod rolldown_memory;
 

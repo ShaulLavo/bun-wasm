@@ -1,18 +1,11 @@
 use std::borrow::Cow;
-use std::fs::File;
-use std::io;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-const WASM: &str = "006b1889047c7e437732104a61d92f15967516a84d7bc738f043e870ac5d0679";
+use super::binary_digest::file_sha256;
 
-fn file_digest(path: &Path) -> io::Result<String> {
-    let mut file = File::open(path)?;
-    let mut digest = Sha256::new();
-    io::copy(&mut file, &mut digest)?;
-    Ok(format!("{:x}", digest.finalize()))
-}
+const WASM: &str = "006b1889047c7e437732104a61d92f15967516a84d7bc738f043e870ac5d0679";
 
 fn source_digest(path: &str) -> Option<&'static str> {
     let filename = path
@@ -50,7 +43,7 @@ pub(super) fn adapt<'a>(source: &'a str, path: &str) -> Cow<'a, str> {
         return Cow::Borrowed(source);
     }
     let wasm = directory.join("rolldown-binding.wasm32-wasi.wasm");
-    if file_digest(&wasm).ok().as_deref() != Some(WASM) {
+    if file_sha256(&wasm).ok().as_deref() != Some(WASM) {
         return Cow::Borrowed(source);
     }
     // The import needs 1001 pages; its 65536-page maximum is an upper bound.

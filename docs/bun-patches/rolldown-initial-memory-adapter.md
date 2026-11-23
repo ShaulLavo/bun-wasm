@@ -52,8 +52,16 @@ these workloads; larger projects may exhaust the iPhone limit.
 Only the exact loader path and matching loader/binary hashes qualify. Changed
 or missing binaries, changed loaders, swapped loader types, unrelated paths,
 and the presence of the debug binary leave the source borrowed and unchanged.
-Binary hashing streams through `std::io::copy`; it does not copy the whole
-binary. A successful adaptation allocates only the replacement loader string.
+Binary hashing streams the file through `modules::binary_digest::file_sha256`
+in 64 KiB reads, retrying interrupted reads as `std::io::copy` did; it does not
+copy the whole binary. 64 KiB is Waffle's largest single read and
+its persistent chunk size. In a reopened `fast` workspace the binary is not in
+memory, and each read fetches and verifies one stored chunk from IndexedDB.
+`std::io::copy`'s 8 KiB reads fetched every chunk eight times: about 2,950
+requests for the two loads in one Vite start, which made a returning visit's
+dev server about twice as slow as a fresh one. Hashing holds one transient
+64 KiB heap buffer, freed when the digest returns. A successful adaptation
+also allocates the replacement loader string, the only allocation it keeps.
 
 Module preparation runs the adapter before transpilation. `depends_on_binary`
 excludes both paths from prepared-source reuse, while preserving the Oxc

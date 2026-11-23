@@ -5,7 +5,8 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChildGroup, ContextGroup, requireUniqueNames, runAll } from "../../sandbox/tests/page-load-support";
+import type { Worker as PlaywrightWorker } from "playwright";
+import { ChildGroup, ContextGroup, requireUniqueNames, runAll, StorageReadObserver, storagePhases, type StoragePhase, type StorageRead } from "../../sandbox/tests/page-load-support";
 
 test("variants with the same name are refused before anything starts", () => {
   expect(() => requireUniqueNames(["before", "after"])).not.toThrow();
@@ -155,3 +156,95 @@ setInterval(() => {}, 1000);
     await rm(scratch, { recursive: true, force: true });
   }
 }, 30_000);
+
+const origin = 1_000_000;
+const read = (start: number, kind: StorageRead["kind"] = "get", extra: Partial<StorageRead> = {}): StorageRead =>
+  ({ kind, start: origin + start, end: origin + start + 2, bytes: 10, ...extra });
+const summary = (phases: readonly StoragePhase[]) => phases.map(({ phase, reads, digests, bytes, files }) => ({ phase, reads, digests, bytes, files }));
+
+test("storage reads land in the stage they started in, and digests are counted apart", () => {
+  const stages = [{ name: "bunwasm:stage:workspace-ready", end: 100 }, { name: "bunwasm:dev-server", end: 300 }, { name: "bunwasm:other", end: 50 }];
+  const phases = storagePhases(stages, 300, origin, [read(10, "get", { file: 70_000 }), read(150), read(160, "sha256"), read(400)]);
+  expect(summary(phases)).toEqual([
+    { phase: "workspace-ready", reads: 1, digests: 0, bytes: 10, files: { 70000: 1 } },
+    { phase: "dev-server", reads: 1, digests: 1, bytes: 10, files: {} },
+    { phase: "after-ready", reads: 1, digests: 0, bytes: 10, files: {} },
+  ]);
+});
+
+test("work after readiness is after-ready even when a later stage is marked", () => {
+  const stages = [{ name: "bunwasm:stage:workspace-ready", end: 50 }, { name: "bunwasm:stage:shell-exited", end: 200 }];
+  const phases = storagePhases(stages, 100, origin, [read(40), read(80), read(150), read(250)]);
+  expect(summary(phases).map(({ phase, reads }) => ({ phase, reads }))).toEqual([
+    { phase: "workspace-ready", reads: 1 }, { phase: "ready", reads: 1 }, { phase: "after-ready", reads: 2 },
+  ]);
+});
+
+test("readiness bounds startup for builds without stage marks", () => {
+  const phases = storagePhases([], 500, origin, [read(10), read(499), read(600)]);
+  expect(summary(phases).map(({ phase, reads }) => ({ phase, reads }))).toEqual([{ phase: "ready", reads: 2 }, { phase: "after-ready", reads: 1 }]);
+});
+
+/** A stand-in for Playwright's Worker: each evaluation is answered by `answer`, in call order. */
+function fakeWorker(url: string, answer: (call: number) => Promise<unknown>) {
+  const closeListeners: (() => void)[] = [];
+  let calls = 0;
+  const worker = {
+    url: () => url,
+    evaluate: () => answer(calls++),
+    on: (event: string, listener: () => void) => { if (event === "close") closeListeners.push(listener); },
+  };
+  return { worker: worker as unknown as PlaywrightWorker, close: () => { for (const listener of closeListeners) listener(); } };
+}
+
+test("workers that block, fail or close are reported with their reason, and their reads are not counted", async () => {
+  const observer = new StorageReadObserver();
+  const reads: StorageRead[] = [read(1, "sha256")];
+  observer.watch(fakeWorker("http://x/observed.js", call => Promise.resolve(call === 0 ? origin + 5 : reads)).worker);
+  observer.watch(fakeWorker("http://x/blocked.js", () => new Promise(() => {})).worker);
+  observer.watch(fakeWorker("http://x/failed.js", () => Promise.reject(new Error("Target closed\nstack"))).worker);
+  const closing = fakeWorker("http://x/closing.js", call => Promise.resolve(call === 0 ? origin : reads));
+  observer.watch(closing.worker);
+  closing.close();
+  const closedEarly = fakeWorker("http://x/closed-early.js", () => new Promise(() => {}));
+  observer.watch(closedEarly.worker);
+  closedEarly.close();
+  const collected = await observer.collect(50);
+  expect(collected.reads).toEqual(reads);
+  expect(collected.workers.map(({ url, status, reason, reads: count, installedAt }) => ({ url, status, reason, reads: count, installedAt }))).toEqual([
+    { url: "http://x/observed.js", status: "observed", reason: undefined, reads: 1, installedAt: origin + 5 },
+    { url: "http://x/blocked.js", status: "unavailable", reason: "counter not installed within 50 ms", reads: 0, installedAt: undefined },
+    { url: "http://x/failed.js", status: "unavailable", reason: "counter not installed: Target closed", reads: 0, installedAt: undefined },
+    // Installed, then closed before collection: no readback, but its install time is kept.
+    { url: "http://x/closing.js", status: "unavailable", reason: "closed before collection", reads: 0, installedAt: origin },
+    // Closed before its counter was installed: no install time to report.
+    { url: "http://x/closed-early.js", status: "unavailable", reason: "closed before collection", reads: 0, installedAt: undefined },
+  ]);
+});
+
+test("a worker whose reads cannot be read back is reported with its install time, not counted as idle", async () => {
+  const observer = new StorageReadObserver();
+  const installed = (later: () => Promise<unknown>) => (call: number) => call === 0 ? Promise.resolve(origin + 7) : later();
+  observer.watch(fakeWorker("http://x/stuck.js", installed(() => new Promise(() => {}))).worker);
+  observer.watch(fakeWorker("http://x/rejected.js", installed(() => Promise.reject(new Error("Execution context was destroyed")))).worker);
+  observer.watch(fakeWorker("http://x/missing.js", installed(() => Promise.resolve(null))).worker);
+  // Closes while its reads are being read back, after the counter was installed.
+  const closing = fakeWorker("http://x/closed-late.js", installed(() => {
+    closing.close();
+    return Promise.reject(new Error("Target closed"));
+  }));
+  observer.watch(closing.worker);
+  const collected = await observer.collect(50);
+  expect(collected.reads).toEqual([]);
+  expect(collected.workers.map(({ url, status, reason, reads: count, installedAt }) => ({ url, status, reason, reads: count, installedAt }))).toEqual([
+    { url: "http://x/stuck.js", status: "unavailable", reason: "reads not collected within 50 ms", reads: 0, installedAt: origin + 7 },
+    { url: "http://x/rejected.js", status: "unavailable", reason: "reads not collected: Execution context was destroyed", reads: 0, installedAt: origin + 7 },
+    { url: "http://x/missing.js", status: "unavailable", reason: "counter buffer missing", reads: 0, installedAt: origin + 7 },
+    { url: "http://x/closed-late.js", status: "unavailable", reason: "closed before collection", reads: 0, installedAt: origin + 7 },
+  ]);
+});
+
+test("a visit that never became ready keeps later reads after its last stage, not after readiness", () => {
+  const phases = storagePhases([{ name: "bunwasm:stage:install-start", end: 100 }], null, origin, [read(50), read(5_000)]);
+  expect(summary(phases).map(({ phase, reads }) => ({ phase, reads }))).toEqual([{ phase: "install-start", reads: 1 }, { phase: "after-last-stage", reads: 1 }]);
+});

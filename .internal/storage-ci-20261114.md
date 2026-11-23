@@ -89,3 +89,33 @@ Routing retention is separate from filesystem causal history. The ordinary
 entry-absent hosted validation gate remains blocking. PR 840's page-load stall is
 separate and unchanged. Parent owns the single full-source review and normal CI;
 no separate diagnostic campaign or full local preservation replay is added.
+
+## Where the preservation scenario's time goes (2026-11-23)
+
+Local PC, headless, `sandbox/dist` from `origin/main` `fc53b0cc4` with a local
+`bun-browser.wasm`, browser profiles in the OS temp dir. Each of the 13 template
+opens split by the sandbox's own stage marks (summed over the scenario):
+
+| Run | Total | Cold `bun install` | Vite dev start | First preview | Storage open and eviction |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Chromium | 91.7 s | 54.1 s | 21.5 s | 9.8 s | 5.2 s |
+| Firefox | 85.6 s | 35.3 s | 25.5 s | 9.6 s | 9.7 s |
+
+Nine of the opens are cold installs: `IDLE_INSTALLS_KEPT = 1` evicts the other
+Vite template on almost every switch, so vite-react and vite-vue are installed
+from scratch three times each and vanilla twice more. A CI runner 2 to 4 times
+slower than this PC lands at the reported 218 to 420 s. Eviction itself
+(`readSource`, preservation and database delete) costs 0.2 to 0.6 s per open.
+The lever is cold install speed (PR 1048's area), not sandbox storage code.
+
+**Open hang (not slowness).** One of four local runs (Chromium, `origin/main`
+`fc53b0cc4` build) stopped at `Storage readiness deadline: vanilla` after 180 s, at the
+`unsupportedData` restart: `symlink.edit-config` writes `vite.config.ts` while
+Vite runs, the old Vite logs `vite.config.ts changed, restarting server...`,
+the Restart click kills it, and the new `vite` (pid 10) logs `ready in 1236 ms`.
+The preview frame never gets an accepted document: every preview request
+answers 502 and Vite logs `Failed to reload /src/main.ts`. `Previews.unregister`
+is identity-checked (`web/src/hosted-previews.ts:63`), so a late `stopped` from
+the killed run does not drop the new registration. Next step: rerun
+`scripts/sandbox-storage-browser.test.ts` with routing observation and read the
+`/@vite/client` and `/src/main.ts` hops for the 502's origin.

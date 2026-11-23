@@ -6,7 +6,14 @@
 //
 //   bun sandbox/tests/page-load-profile.ts --out /work/tmp/bun-wasm-page-load \
 //     [--browsers chromium,firefox] [--targets web:browser,web:quickjs,sandbox:browser] [--runs 1] \
+//     [--template vite-react] \
 //     [--variant before=<web dist>,<sandbox dist> --variant after=<web dist>,<sandbox dist>]
+//
+// It also counts each page worker's IndexedDB reads and SHA-256 digests per boot stage
+// (`installStorageReadCounter`), which shows where a reopened workspace reads stored files.
+// The counter lands in a worker shortly after it starts (routing the scripts to inject it
+// earlier would turn off the HTTP cache), so each run reports per worker when its counter was
+// installed, and names every worker whose reads could not be collected.
 //
 // Build web/dist and sandbox/dist first. Variants run interleaved, so host load affects each
 // alike. Results: <out>/<run>.json and <out>/SUMMARY.md, with per-stage medians.
@@ -14,7 +21,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium, firefox, type BrowserContext, type BrowserType, type Page } from "playwright";
-import { ChildGroup, ContextGroup, installPageLoadObserver, onInterrupt, requireUniqueNames, runAll, type PageLoadState } from "./page-load-support";
+import { ChildGroup, ContextGroup, installPageLoadObserver, onInterrupt, requireUniqueNames, runAll, StorageReadObserver, storagePhases, type PageLoadState, type StoragePhase, type WorkerCoverage } from "./page-load-support";
 
 const args = process.argv.slice(2);
 const option = (name: string, fallback: string) => args.includes(`--${name}`) ? args[args.indexOf(`--${name}`) + 1]! : fallback;
@@ -24,6 +31,7 @@ const browsers = option("browsers", "chromium,firefox").split(",");
 const targets = option("targets", "web:browser,web:quickjs,web:jsc,sandbox:browser").split(",").map(parseTarget);
 const runs = Number(option("runs", "1"));
 const timeout = Number(option("timeout", "300000"));
+const template = args.includes("--template") ? option("template", "") : undefined;
 const variants = args.flatMap((arg, index) => arg === "--variant" ? [parseVariant(args[index + 1] ?? "")] : []);
 if (!variants.length) variants.push({ name: "", roots: { web: join(repo, "web/dist"), sandbox: join(repo, "sandbox/dist") } });
 requireUniqueNames(variants.map(variant => variant.name));
@@ -34,7 +42,8 @@ interface Target { app: App; engine: string }
 interface Variant { name: string; roots: Record<App, string> }
 interface Entry { name: string; type: string; start: number; end: number; detail?: unknown }
 interface Resource { name: string; start: number; end: number; transfer: number; encoded: number; decoded: number }
-interface Visit { run: string; ready: number | null; error: string | null; entries: Entry[]; resources: Resource[]; navigation: Record<string, number> }
+/** `storage` buckets every observed worker's reads by stage; `storageWorkers` says which workers were observed, and from when. */
+interface Visit { run: string; ready: number | null; error: string | null; entries: Entry[]; resources: Resource[]; navigation: Record<string, number>; storage: StoragePhase[]; storageWorkers: WorkerCoverage[] }
 
 const columns: Record<App, string[]> = {
   web: ["domContentLoaded", "filesystem-open", "workspace-ready", "module-scope-ready", "engine-ready", "programs-ready", "bun-registered", "shell-created", "ready"],
@@ -132,9 +141,12 @@ async function load(context: BrowserContext, run: string, target: Target, base: 
   const page = context.pages()[0] ?? await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(String(error)));
+  const observer = new StorageReadObserver();
+  page.on("worker", worker => observer.watch(worker));
   const url = new URL(base);
   url.pathname = "/";
   url.searchParams.set("engine", target.engine);
+  if (template && target.app === "sandbox") url.searchParams.set("template", template);
   await page.goto(url.href);
   let error: string | null = null;
   try {
@@ -143,6 +155,11 @@ async function load(context: BrowserContext, run: string, target: Target, base: 
     error = String(caught).split("\n")[0]!;
   }
   const visit = await snapshot(page, run, target.app);
+  const origin = await page.evaluate(() => performance.timeOrigin);
+  const { reads, workers } = await observer.collect();
+  visit.storage = storagePhases(visit.entries, visit.ready, origin, reads);
+  visit.storageWorkers = workers.map(worker => ({ ...worker, createdAt: worker.createdAt - origin, installedAt: worker.installedAt === undefined ? undefined : worker.installedAt - origin }));
+  await writeFile(join(out, `${run}.reads.json`), JSON.stringify(reads.map(read => ({ ...read, start: read.start - origin, end: read.end - origin }))));
   visit.error ??= error ?? (errors.length ? errors.join("; ") : null);
   await writeFile(join(out, `${run}.json`), `${JSON.stringify(visit, null, 2)}\n`);
   console.log(`${run}: ${visit.ready === null ? `not ready (${visit.error})` : `ready at ${visit.ready.toFixed(0)} ms`}`);
@@ -173,7 +190,7 @@ async function snapshot(page: Page, run: string, app: App): Promise<Visit> {
       navigation: (navigation ? { responseEnd: navigation.responseEnd, domContentLoaded: navigation.domContentLoadedEventEnd, load: navigation.loadEventEnd } : {}) as Record<string, number>,
     };
   }, app);
-  return { run, ...data };
+  return { run, ...data, storage: [], storageWorkers: [] };
 }
 
 function stageTime(visit: Visit, column: string): string {
@@ -201,8 +218,31 @@ function summary(all: Visit[]): string {
       const spans = visit.entries.filter(entry => entry.type === "measure" && /cache-lookup|cache-read|download|verify|prepare|compile|decompress/.test(entry.name));
       text += `- ${visit.run}: ${spans.map(span => `${span.name.slice(8)}${nameOf(span.detail)} ${span.start.toFixed(0)}–${span.end.toFixed(0)}`).join(", ")}\n`;
     }
+    text += "\nIndexedDB reads per stage (reads / MB / summed request ms; SHA-256 digests / ms), each counted in the stage it started in:\n\n";
+    for (const visit of rows) text += storageSummary(visit);
   }
   return text;
+}
+
+function storageSummary(visit: Visit): string {
+  const phases = visit.storage.filter(phase => phase.reads || phase.digests);
+  let text = `- ${visit.run}: ${phases.map(phase => `${phase.phase} ${phase.reads}/${(phase.bytes / 1048576).toFixed(1)}/${phase.readMs.toFixed(0)}; ${phase.digests}/${phase.digestMs.toFixed(0)}`).join(" · ")}\n`;
+  text += `  - ${coverageSummary(visit.storageWorkers)}\n`;
+  // Files are named by their size; a file read as ranges shows one manifest read per range.
+  for (const phase of phases) {
+    const top = Object.entries(phase.files).sort((a, b) => b[1] - a[1]).slice(0, 4);
+    if (top.length && top[0]![1] > 20) text += `  - ${phase.phase} most-read files (bytes × manifest reads): ${top.map(([size, count]) => `${size} × ${count}`).join(", ")}\n`;
+  }
+  return text;
+}
+
+/** Late counters miss a worker's first reads, and unavailable workers report none: both are named. */
+function coverageSummary(workers: readonly WorkerCoverage[]): string {
+  const observed = workers.filter(worker => worker.status === "observed");
+  const latest = Math.max(0, ...observed.map(worker => worker.installedAt! - worker.createdAt));
+  const missing = Map.groupBy(workers.filter(worker => worker.status === "unavailable"), worker => `${worker.url.split("/").pop()} (${worker.reason})`);
+  const named = Array.from(missing, ([name, group]) => group.length > 1 ? `${group.length} × ${name}` : name);
+  return `workers observed ${observed.length}/${workers.length}, counters installed up to ${latest.toFixed(0)} ms after the worker appeared${named.length ? `; unavailable: ${named.join(", ")}` : ""}`;
 }
 
 function median(values: number[]): string {
