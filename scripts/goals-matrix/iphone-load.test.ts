@@ -141,8 +141,12 @@ test("the append-only sink preserves document evidence before outer cancellation
   const observed = Promise.withResolvers<void>();
   const writes: Promise<void>[] = [];
   const abort = new AbortController();
+  // Append in call order, as the matrix's own sink does; concurrent appendFile calls can land
+  // out of order and leave the presentation record after the document observation.
+  let tail: Promise<unknown> = Promise.resolve();
   const save = (text: string) => {
-    const write = appendFile(path, text);
+    const write = tail.then(() => appendFile(path, text));
+    tail = write.catch(() => undefined);
     writes.push(write);
     if (object(JSON.parse(text)).observation) void write.then(() => observed.resolve());
     return write;

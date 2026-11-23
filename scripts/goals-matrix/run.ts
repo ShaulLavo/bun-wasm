@@ -103,11 +103,20 @@ function nativeAdmissionOptions(values: Map<string, string>): NativeAdmission | 
   };
   return { lane: values.get("mac-lane") ?? "", thread: values.get("mac-thread") ?? "", expectedSeconds: seconds("mac-expected-seconds", 600), waitSeconds: seconds("mac-wait-seconds", 3600), timeoutSeconds: seconds("mac-timeout-seconds", 900) };
 }
+/** Append evidence records in call order: concurrent appendFile calls can land out of order. */
+function orderedAppender(path: string): (text: string) => Promise<void> {
+  let tail: Promise<unknown> = Promise.resolve();
+  return text => {
+    const write = tail.then(() => appendFile(path, text));
+    tail = write.catch(() => undefined);
+    return write;
+  };
+}
 async function nativeTransport(box: Cell, config: Options, timeoutMs: number, report: Report, capture?: SafariCausalCapture, exit?: ExitOwner): Promise<Transport> {
   if (box.browser === "iphone-safari" && config.iphoneControlUrl && config.iphoneAgentCommand && config.deviceUDID) return createIphoneTransport({
     control: config.iphoneControlUrl, agent: config.iphoneAgentCommand, deviceUDID: config.deviceUDID, timeoutMs,
     cleanupTimeoutMs: report.deadlines.cleanupTimeoutMs,
-    saveNative: text => appendFile(join(config.output, "logs", boxId(box).replaceAll("/", "-") + ".native.jsonl"), text),
+    saveNative: orderedAppender(join(config.output, "logs", boxId(box).replaceAll("/", "-") + ".native.jsonl")),
   });
   if (box.browser !== "safari" && box.browser !== "iphone-safari") throw new Error("Not a native Safari box");
   const endpoint = box.browser === "safari" ? config.safariEndpoint : config.iphoneEndpoint;
