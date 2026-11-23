@@ -1,9 +1,7 @@
 //! Allocation-checked physical frame transport. No slice covers raw linear memory.
 
 use std::alloc::{Layout, alloc_zeroed, dealloc};
-#[cfg(not(target_arch = "wasm32"))]
-use std::cell::Cell;
-use std::cell::RefCell;
+use std::cell::{Cell, Ref, RefCell};
 use std::ptr::NonNull;
 
 use super::{Dispatcher, Frame, Reply, Status, WordFrame, error_status};
@@ -90,17 +88,27 @@ fn word(dispatcher: &Dispatcher, frame: &Span) -> Result<Status, Status> {
     Ok(Status::Ok)
 }
 
-/// Unpins what one data call pinned when the call returns. Calls nest, so pins unwind in order.
-struct Pins<'a> {
-    pinned: &'a RefCell<Vec<u32>>,
-    count: usize,
+/// One live allocation. `pins` counts the running calls that use it as their frame or request:
+/// a pinned allocation cannot be freed, and a pinned frame cannot be entered again.
+struct Slot {
+    offset: u32,
+    span: Span,
+    pins: Cell<u32>,
 }
 
-impl Drop for Pins<'_> {
+/// Unpins one allocation when its call returns, including when a native unwinds. It only
+/// counts, so pinning never allocates.
+struct Pin<'a> {
+    transport: &'a Transport,
+    offset: u32,
+}
+
+impl Drop for Pin<'_> {
     fn drop(&mut self) {
-        let mut pinned = self.pinned.borrow_mut();
-        let len = pinned.len() - self.count;
-        pinned.truncate(len);
+        // A pinned allocation cannot be freed, so its slot is still listed.
+        if let Some(slot) = self.transport.slot(self.offset) {
+            slot.pins.set(slot.pins.get() - 1);
+        }
     }
 }
 
@@ -108,19 +116,16 @@ impl Drop for Pins<'_> {
 /// Native tests assign synthetic linear offsets; wasm uses the actual wasm32 pointers.
 #[derive(Default)]
 pub(crate) struct Transport {
-    /// Live allocations by offset, oldest first. A call's own frame, request and reply are the
-    /// newest, so lookups search from the end.
-    allocations: RefCell<Vec<(u32, Span)>>,
-    /// The frames and requests of the data calls running now. None can be freed, and a running
-    /// frame cannot be entered again.
-    pinned: RefCell<Vec<u32>>,
+    /// Live allocations, oldest first. A call's own frame, request and reply are the newest, so
+    /// lookups search from the end.
+    allocations: RefCell<Vec<Slot>>,
     #[cfg(not(target_arch = "wasm32"))]
     next_offset: Cell<u32>,
 }
 
 impl Drop for Transport {
     fn drop(&mut self) {
-        for (_, span) in self.allocations.get_mut().drain(..) {
+        for Slot { span, .. } in self.allocations.get_mut().drain(..) {
             // SAFETY: each live span was obtained with alloc_zeroed and this exact layout.
             unsafe { dealloc(span.pointer.as_ptr(), span.layout) };
         }
@@ -146,7 +151,11 @@ impl Transport {
             unsafe { dealloc(pointer.as_ptr(), layout) };
             return None;
         };
-        allocations.push((offset, span));
+        allocations.push(Slot {
+            offset,
+            span,
+            pins: Cell::new(0),
+        });
         Some((offset, span))
     }
 
@@ -164,16 +173,17 @@ impl Transport {
     }
 
     pub fn free(&self, pointer: u32, bytes: u32, align: u32) -> Result<(), Status> {
-        if self.pinned.borrow().contains(&pointer) {
-            return Err(Status::BadCall);
-        }
         let mut allocations = self.allocations.borrow_mut();
         let index = allocations
             .iter()
-            .rposition(|(p, _)| *p == pointer)
+            .rposition(|slot| slot.offset == pointer)
             .ok_or(Status::BadCall)?;
-        let span = allocations[index].1;
+        let slot = &allocations[index];
+        let span = slot.span;
         if span.layout.size() != bytes as usize || span.layout.align() != align as usize {
+            return Err(Status::BadCall);
+        }
+        if slot.pins.get() != 0 {
             return Err(Status::BadCall);
         }
         // `remove` keeps the oldest-first order; the freed span is usually among the newest.
@@ -185,38 +195,39 @@ impl Transport {
         Ok(())
     }
 
-    /// The live frame-aligned allocation at `pointer`, whatever its size.
-    fn owned(&self, pointer: u32) -> Result<Span, Status> {
+    /// The live allocation at `pointer`, borrowed from the list.
+    fn slot(&self, pointer: u32) -> Option<Ref<'_, Slot>> {
         let allocations = self.allocations.borrow();
-        let (_, span) = allocations
+        let index = allocations
             .iter()
-            .rev()
-            .find(|(p, _)| *p == pointer)
-            .ok_or(Status::BadCall)?;
-        if span.layout.align() < Frame::ALIGN as usize {
+            .rposition(|slot| slot.offset == pointer)?;
+        Some(Ref::map(allocations, |allocations| &allocations[index]))
+    }
+
+    /// Pins the live frame-aligned allocation at `pointer` until the guard drops. A frame
+    /// (`idle`) must not be in use by a running call already.
+    fn pin(&self, pointer: u32, idle: bool) -> Result<(Span, Pin<'_>), Status> {
+        let slot = self.slot(pointer).ok_or(Status::BadCall)?;
+        if slot.span.layout.align() < Frame::ALIGN as usize || (idle && slot.pins.get() != 0) {
             return Err(Status::BadCall);
         }
-        Ok(*span)
+        slot.pins.set(slot.pins.get() + 1);
+        let pin = Pin {
+            transport: self,
+            offset: pointer,
+        };
+        Ok((slot.span, pin))
     }
 
     #[cfg(any(test, not(feature = "engine-split"), bun_wasm_shared_group))]
+    /// The live frame-aligned allocation at `pointer` of exactly `bytes` bytes.
     fn allocation(&self, pointer: u32, bytes: u32) -> Result<Span, Status> {
-        let span = self.owned(pointer)?;
-        if span.layout.size() != bytes as usize {
+        let slot = self.slot(pointer).ok_or(Status::BadCall)?;
+        let layout = slot.span.layout;
+        if layout.align() < Frame::ALIGN as usize || layout.size() != bytes as usize {
             return Err(Status::BadCall);
         }
-        Ok(span)
-    }
-
-    /// Pins a data call's frame and request until the returned guard drops.
-    fn pin(&self, frame: u32, request: u32) -> Result<Pins<'_>, Status> {
-        let mut pinned = self.pinned.borrow_mut();
-        pinned.try_reserve(2).map_err(|_| Status::ResourceLimit)?;
-        pinned.extend([frame, request]);
-        Ok(Pins {
-            pinned: &self.pinned,
-            count: 2,
-        })
+        Ok(slot.span)
     }
 
     /// Encodes `value` into one allocation of exactly its encoded length, the only copy of the
@@ -273,11 +284,9 @@ impl Transport {
     }
 
     fn call(&self, dispatcher: &Dispatcher, frame_ptr: u32) -> Result<Status, Status> {
-        let frame_span = self.owned(frame_ptr)?;
-        // A running call pins its frame, rejecting free/reuse and recursive entry of that frame.
-        if self.pinned.borrow().contains(&frame_ptr) {
-            return Err(Status::BadCall);
-        }
+        // A running call pins its frame, word or data, rejecting free/reuse and recursive entry
+        // of that frame until it returns.
+        let (frame_span, _frame_pin) = self.pin(frame_ptr, true)?;
         if frame_span.layout.size() == WordFrame::SIZE {
             return word(dispatcher, &frame_span);
         }
@@ -289,15 +298,14 @@ impl Transport {
         let frame = Frame::decode(&frame_bytes)?;
         frame.request(frame_ptr, memory_len())?;
         // The engine may reuse one request buffer, so the request is a prefix of its allocation.
-        let request = self.owned(frame.request_ptr)?;
+        let (request, request_pin) = self.pin(frame.request_ptr, false)?;
         let request_len = frame.request_len as usize;
         if request_len > request.layout.size() {
             return Err(Status::BadCall);
         }
-        let pins = self.pin(frame_ptr, frame.request_ptr)?;
         // Decode the request where the engine wrote it; a copy would hold the payload twice.
         let reply = dispatcher.dispatch(frame.op, frame.session, &request.bytes()[..request_len]);
-        drop(pins);
+        drop(request_pin);
         let status = reply.status();
         let encoded = match reply {
             Reply::Value(value) => {

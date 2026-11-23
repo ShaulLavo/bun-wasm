@@ -36,12 +36,7 @@
     return value.addresses.map(parseAddress);
   }
 
-  // The networking module loads on the first lookup, not with every process.
-  function net(): BunWasm.NetWaiterModule {
-    return internal.require("net");
-  }
-
-  function installLookup(): void {
+  function installLookup(net: BunWasm.NetWaiterModule): void {
     const native = internal.native;
     if (typeof native.hostLookup === "function") return;
     const required = ["poll", "lookup_start", "lookup_head", "error", "close"];
@@ -66,7 +61,7 @@
 
       function remove(): void {
         if (!waiter) return;
-        net().removeWaiter(waiter);
+        net.removeWaiter(waiter);
         waiter = undefined;
       }
 
@@ -90,7 +85,7 @@
         const result = readHead(handle);
         if (result === AGAIN) return false;
         if (typeof result === "number") {
-          fail(net().hostError(handle, "hostname lookup failed"));
+          fail(net.hostError(handle, "hostname lookup failed"));
           return true;
         }
         try {
@@ -112,10 +107,10 @@
       try {
         handle = startLookup(hostname, family, hints);
         if (handle < 0) {
-          reject(net().hostError(0, "hostname lookup failed"));
+          reject(net.hostError(0, "hostname lookup failed"));
           return;
         }
-        waiter = net().addWaiter({ ref: true, step, fail, cancel });
+        waiter = net.addWaiter({ ref: true, step, fail, cancel });
       } catch (error) {
         close();
         reject(error);
@@ -124,5 +119,9 @@
     native.hostLookup = lookup;
   }
 
-  return { install: installLookup, cancel: () => net().cancelIoWaiters() };
+  function install(): void {
+    installLookup(internal.require("net"));
+  }
+
+  return { install, cancel: () => internal.require("net").cancelIoWaiters() };
 })

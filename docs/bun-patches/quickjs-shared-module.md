@@ -90,9 +90,11 @@ between calls. A call that runs while another holds them, such as a nested callb
 allocates its own. A request encodes in one pass into the kept buffer and may be a
 prefix of it; only a request that does not fit is measured first. Requests over
 64 KiB get an exact buffer that is freed after the call. Core looks up live
-allocations newest first, without a reference count per allocation. A running call
-pins its frame and request in a small stack, so neither can be freed or entered
-again. Data operations dispatch by index. Taking the nextTick flag and flushing
+allocations newest first, without a reference-counted box per allocation. A running
+call, word or data, counts a pin on its frame (and a data call on its request) in the
+allocation's own slot, so pinning allocates nothing. A pinned allocation cannot be
+freed, a pinned frame cannot be entered again, and the pin is released when the call
+returns or unwinds. Data operations dispatch by index. Taking the nextTick flag and flushing
 stdout are split API word calls (`split_api::WORD_TAKE_TICK`, `WORD_FLUSH`)
 because every job drain makes them. Core hands its description over once, and
 the engine keeps its native table until the bootstrap installs it.
