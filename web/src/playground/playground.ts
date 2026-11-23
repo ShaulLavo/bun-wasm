@@ -214,17 +214,20 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       this.failure = "ownership";
       this.changed();
     };
-    // None of these read the workspace, so they run while its storage opens and seeds.
+    // Network work that reads no workspace runs while the workspace storage opens.
     const wasmReady = this.loadEngine().then(value => { stage("engine-ready"); return value; });
-    // Browser-engine children need the module scope even when their parent uses QuickJS or JSC.
-    const moduleScope = registerModuleScope().then(value => { stage("module-scope-ready"); return value; });
-    const programsReady = browserPrograms.ready().then(value => { stage("programs-ready"); return value; });
     const sessionModule = import("bash-web/session");
     const promptModule = this.params.get("prompt") === "off" ? Promise.resolve(undefined) : import("bash-web/prompt");
     // Awaited below; a startup that fails first must not also report these as unhandled.
-    for (const pending of [programsReady, sessionModule, promptModule]) pending.catch(() => {});
+    for (const pending of [sessionModule, promptModule]) pending.catch(() => {});
     await fs.mkdirp("/tmp");
     stage("filesystem-open");
+    // These write browser storage too, so they start once it is open (a fresh Firefox profile
+    // opened the workspace slower with them alongside) and overlap seeding and the download.
+    // Browser-engine children need the module scope even when their parent uses QuickJS or JSC.
+    const moduleScope = registerModuleScope().then(value => { stage("module-scope-ready"); return value; });
+    const programsReady = browserPrograms.ready().then(value => { stage("programs-ready"); return value; });
+    programsReady.catch(() => {});
     if (this.template) {
       const { loadTemplate } = await import("../../../sandbox/src/template");
       await loadTemplate(fs, HOME, this.template.file);
