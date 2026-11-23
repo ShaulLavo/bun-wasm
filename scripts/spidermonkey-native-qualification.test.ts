@@ -89,7 +89,12 @@ test('Browser hang caps preserve page, driver and sequential-tier supervision', 
   expect(clock).toEqual({ pageMs: 480_000, driverMs: 540_000, consumerSeconds: 1320 });
   expect(clock.driverMs).toBeGreaterThan(clock.pageMs);
   expect(clock.consumerSeconds * 1000).toBeGreaterThan(clock.driverMs * 2);
-  for (const kind of ['quickjs', 'jsc']) expect(sharedBrowserClocks(kind)).toEqual({ pageMs: 240_000, driverMs: 300_000, consumerSeconds: 420 });
+  for (const kind of ['quickjs', 'jsc']) {
+    const engine = sharedBrowserClocks(kind);
+    expect(engine).toEqual({ pageMs: 480_000, driverMs: 540_000, consumerSeconds: 1200 });
+    expect(engine.consumerSeconds * 1000).toBeGreaterThan(engine.driverMs * 2);
+    expect(sharedBrowserClocks(kind, 'failed-stop.ts').pageMs).toBe(240_000);
+  }
   for (const entry of ['spidermonkey-canary.ts', 'spidermonkey-recursion.ts', 'spidermonkey-reentry.ts', 'parser-reserve-ownership.ts', 'failed-stop.ts', 'address-space/guest.ts']) {
     expect(sharedBrowserClocks('spidermonkey', entry).pageMs).toBe(240_000);
   }

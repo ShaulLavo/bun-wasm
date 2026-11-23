@@ -3,13 +3,17 @@ import assert from 'node:assert/strict';
 export const spiderMonkeyTiers = ['interp', 'pbl'] as const;
 export type SpiderMonkeyTier = typeof spiderMonkeyTiers[number];
 
-/** Generous hang caps; correctness is determined by the fixture output and ownership checks. */
+/**
+ * Generous hang caps; correctness is determined by the fixture output and ownership checks.
+ * The full browser-guest entry spawns a few hundred group members: on hosted runners it took
+ * about 190 s on QuickJS and passed 240 s on JSC, so every engine gets the same wide cap for it.
+ */
 export function sharedBrowserClocks(kind: string, entry = "browser-guest.ts") {
   const spiderMonkey = kind === "spidermonkey";
   return {
-    pageMs: spiderMonkey && entry === "browser-guest.ts" ? 480_000 : 240_000,
-    driverMs: spiderMonkey ? 540_000 : 300_000,
-    consumerSeconds: spiderMonkey ? 1320 : 420,
+    pageMs: entry === "browser-guest.ts" ? 480_000 : 240_000,
+    driverMs: 540_000,
+    consumerSeconds: spiderMonkey ? 1320 : 1200,
   };
 }
 
