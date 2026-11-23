@@ -70,16 +70,24 @@ test("optional cache storage failure preserves the prepared module", () => withC
   expect(loaded.build).toBe(build);
 }));
 
-test("the Browser engine's second page load compiles from the engine cache", async () => {
-  const names = ["location", "caches", "fetch", "__bunwasmBuilds"];
+for (const storage of ["without", "with"] as const) test(`the Browser engine's second page load compiles from the engine cache ${storage} localStorage`, async () => {
+  const names = ["location", "caches", "fetch", "__bunwasmBuilds", "localStorage"];
   const previous = names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
   const entries = new Map<string, { headers: Headers; bytes: Uint8Array }>();
   const stored = Promise.withResolvers<void>();
   const fetched: string[] = [];
+  const lookups: string[] = [];
+  const marks = new Map<string, string>();
   const values = {
     location: new URL("https://engine-cache.test/app/"),
+    localStorage: storage === "with" ? {
+      getItem: (key: string) => marks.get(key) ?? null,
+      setItem: (key: string, value: string) => { marks.set(key, value); },
+      removeItem: (key: string) => { marks.delete(key); },
+    } : undefined,
     caches: {
       async match(url: string) {
+        lookups.push(url);
         const entry = entries.get(url);
         return entry && new Response(entry.bytes.slice(), { headers: entry.headers });
       },
@@ -98,15 +106,22 @@ test("the Browser engine's second page load compiles from the engine cache", asy
   };
   for (const [name, value] of Object.entries(values)) Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
   try {
+    const key = "https://engine-cache.test/app/bun-browser.wasm";
     const first = await loadEngineProgram("browser", "split", () => {});
     expect(first.build).toBe(build);
     expect(fetched.map(url => new URL(url, location.href).href)).toEqual([`https://engine-cache.test/app/bun-browser.wasm.gz?v=${build}`]);
+    // A first visit with a usable marker store never waits on CacheStorage before downloading.
+    expect(lookups).toEqual(storage === "with" ? [] : [key]);
     await stored.promise;
-    expect(entries.get("https://engine-cache.test/app/bun-browser.wasm")?.headers.get("x-bunwasm-build")).toBe(build);
+    // The marker is written once the fake put returns to the loader.
+    await Bun.sleep(1);
+    expect(entries.get(key)?.headers.get("x-bunwasm-build")).toBe(build);
+    if (storage === "with") expect(marks.get(`bunwasm-engine-cache:${key}`)).toBe(build);
     const second = await loadEngineProgram("browser", "split", () => {});
     expect(second.module).toBeInstanceOf(WebAssembly.Module);
     expect(second.size).toBe(wasm.length);
     expect(fetched).toHaveLength(1);
+    expect(lookups.at(-1)).toBe(key);
   } finally {
     for (const [name, descriptor] of previous) restore(name, descriptor);
   }

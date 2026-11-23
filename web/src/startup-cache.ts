@@ -15,8 +15,34 @@ export function commandChunks(): string[] {
 }
 
 const CACHE = "bunwasm-engines";
+const MARKER = "bunwasm-engine-cache:";
+
+/**
+ * Which build this origin last stored for `url`, read synchronously. A first visit then skips
+ * CacheStorage, whose first use can take seconds in Firefox, and downloads at once. Null where
+ * the page has no usable localStorage (workers, blocked storage): those keep the lookup.
+ */
+function storedBuild(url: string): string | null | undefined {
+  try {
+    const storage: Storage | undefined = globalThis.localStorage;
+    return storage ? storage.getItem(MARKER + url) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function mark(url: string, build: string | null): void {
+  try {
+    if (build === null) globalThis.localStorage?.removeItem(MARKER + url);
+    else globalThis.localStorage?.setItem(MARKER + url, build);
+  } catch {
+    // The marker only saves a lookup; without it the next visit asks CacheStorage.
+  }
+}
 
 export async function cachedEngine(url: string, build: string): Promise<Response | null> {
+  const stored = storedBuild(url);
+  if (stored !== undefined && stored !== build) return null;
   try {
     const response = await caches.match(url, { cacheName: CACHE });
     return response?.headers.get("x-bunwasm-build") === build ? response : null;
@@ -30,6 +56,7 @@ export async function cacheEngine(url: string, build: string, response: Response
     const headers = new Headers(response.headers);
     headers.set("x-bunwasm-build", build);
     await (await caches.open(CACHE)).put(url, new Response(response.body, { headers }));
+    mark(url, build);
     return true;
   } catch {
     // Disabled or full storage must not stop a working engine.
@@ -38,6 +65,7 @@ export async function cacheEngine(url: string, build: string, response: Response
 }
 
 export async function evictEngine(url: string): Promise<void> {
+  mark(url, null);
   try {
     await (await caches.open(CACHE)).delete(url);
   } catch {
