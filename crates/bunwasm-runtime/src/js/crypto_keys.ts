@@ -36,8 +36,13 @@ declare namespace CryptoKeys {
     crypto: Crypto;
     native: BunWasm.Native & {
       randomBytes(size: number): Uint8Array;
-      // node_cipher.rs: Bun's getCipherByName, undefined for an unknown cipher.
-      nodeCrypto: { cipherInfo(name: string): unknown };
+      nodeCrypto: {
+        // node_rsa.rs: op 0 publicEncrypt, 1 privateDecrypt, 2 privateEncrypt, 3 publicDecrypt.
+        rsaCipher(op: number, jwk: string, padding: number, oaepHash: string | undefined, label: Uint8Array, input: Uint8Array): Uint8Array;
+        keyEncoding(mode: number, data: Uint8Array, password: Uint8Array, cipher: string): Uint8Array;
+        // node_cipher.rs: Bun's getCipherByName, undefined for an unknown cipher.
+        cipherInfo(name: string): unknown;
+      };
     };
     nodeCryptoIsKeyObject(value: unknown): boolean;
     builtin(name: "node:stream"): { Writable: WritableConstructor };
@@ -463,74 +468,98 @@ declare namespace CryptoKeys {
         throw Object.assign(new RangeError("Passphrase is too long"), {
           code: "ERR_OUT_OF_RANGE",
         });
+      let encoded: Uint8Array;
       try {
-        return Buffer.from(
-          c.decode(
-            c.backend(
-              "keyEncoding",
-              {},
-              { mode, data: c.encode(data), password: c.encode(pass), cipher },
-            ).data,
-          ),
-        );
+        encoded = internal.native.nodeCrypto.keyEncoding(mode, inputBytes(data), pass, cipher);
       } catch (error) {
-        throw Object.assign(
-          new Error(
-            mode <= 1
-              ? "Failed to decrypt private key"
-              : "Failed to encrypt private key",
-          ),
-          {
-            code:
-              mode <= 1 ? "ERR_OSSL_BAD_DECRYPT" : "ERR_CRYPTO_UNKNOWN_CIPHER",
-            cause: error,
-          },
-        );
+        // Reading a key reports BoringSSL's error, as Bun does (BAD_DECRYPT for a wrong
+        // passphrase).
+        if (mode <= 1) throw error;
+        throw Object.assign(new Error("Failed to encrypt private key"), { code: "ERR_CRYPTO_UNKNOWN_CIPHER", cause: error });
       }
+      return Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength);
     }
-    function readPem(key: unknown, password?: CryptoKeys.Input): CryptoKeys.PemData {
-      const pem = typeof key === "string" ? key : Buffer.from(key).toString();
-      if (
-        pem.includes("ENCRYPTED") ||
-        (password !== undefined && pem.includes("PRIVATE KEY"))
-      ) {
-        if (password === undefined && pem.includes("ENCRYPTED"))
-          throw Object.assign(
-            new Error("Passphrase required for encrypted key"),
-            { code: "ERR_MISSING_PASSPHRASE" },
-          );
-        return {
-          format: "pkcs8",
-          bytes: keyEncoding(0, Buffer.from(pem), password),
-          private: true,
-        };
-      }
-      const match =
-        /-----BEGIN (RSA PRIVATE KEY|RSA PUBLIC KEY|EC PRIVATE KEY|PRIVATE KEY|PUBLIC KEY)-----([\s\S]*?)-----END \1-----/.exec(
-          pem,
-        );
-      if (!match) throw error("Invalid PEM key");
-      const format =
-        match[1] === "RSA PRIVATE KEY" || match[1] === "RSA PUBLIC KEY"
-          ? "pkcs1"
-          : match[1] === "EC PRIVATE KEY"
-            ? "sec1"
-            : match[1] === "PRIVATE KEY"
-              ? "pkcs8"
-              : "spki";
-      return {
-        format,
-        bytes: Buffer.from(match[2].replace(/\s/g, ""), "base64"),
-        private: match[1].endsWith("PRIVATE KEY"),
-      };
+    // The PEM blocks of a key input, in order: label, base64 body (with any RFC 1421 headers)
+    // and the whole block text.
+    function pemBlocks(key: unknown): { label: string; body: string; text: string }[] {
+      const bytes = ArrayBuffer.isView(key) || key instanceof ArrayBuffer ? inputBytes(key) : key;
+      const pem = typeof key === "string" ? key : Buffer.from(bytes).toString();
+      return Array.from(pem.matchAll(/-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----/g), match => ({
+        label: match[1],
+        body: match[2],
+        text: match[0],
+      }));
+    }
+    const pemBase64 = (body: string) => Buffer.from(body.replace(/\s/g, ""), "base64");
+    const privateLabels: Partial<Record<string, CryptoKeys.ExportType>> = {
+      "PRIVATE KEY": "pkcs8",
+      "ENCRYPTED PRIVATE KEY": "pkcs8",
+      "RSA PRIVATE KEY": "pkcs1",
+      "EC PRIVATE KEY": "sec1",
+    };
+    const noStartLine = () => args().opensslError("0900006e", "PEM routines", "NO_START_LINE", "ERR_OSSL_PEM_NO_START_LINE");
+    // BoringSSL's PEM_read_bio_PrivateKey: the first private key block, decrypted with the
+    // passphrase when it is encrypted.
+    function readPrivatePem(blocks: ReturnType<typeof pemBlocks>, password?: CryptoKeys.Input): CryptoKeys.PemData {
+      const block = blocks.find(candidate => privateLabels[candidate.label] !== undefined);
+      if (!block) throw noStartLine();
+      const encrypted = block.label === "ENCRYPTED PRIVATE KEY" || /^Proc-Type: *4, *ENCRYPTED/m.test(block.body);
+      if (!encrypted) return { format: privateLabels[block.label]!, bytes: pemBase64(block.body), private: true };
+      if (password === undefined)
+        throw Object.assign(new TypeError("Passphrase required for encrypted key"), { code: "ERR_MISSING_PASSPHRASE" });
+      return { format: "pkcs8", bytes: keyEncoding(0, Buffer.from(block.text), password), private: true };
+    }
+    // ncrypto's ParsePublicKeyPEM tries SubjectPublicKeyInfo, then PKCS#1 RSAPublicKey, then a
+    // certificate's subject public key, each anywhere in the input; a public operation then
+    // falls back to a private key. A private operation reads only private keys.
+    function readPem(key: unknown, password: CryptoKeys.Input | undefined, wantPrivate: boolean): CryptoKeys.PemData {
+      const blocks = pemBlocks(key);
+      if (wantPrivate) return readPrivatePem(blocks, password);
+      const find = (label: string) => blocks.find(block => block.label === label);
+      const spki = find("PUBLIC KEY");
+      if (spki) return { format: "spki", bytes: pemBase64(spki.body), private: false };
+      const pkcs1 = find("RSA PUBLIC KEY");
+      if (pkcs1) return { format: "pkcs1", bytes: pemBase64(pkcs1.body), private: false };
+      const certificate = find("CERTIFICATE");
+      if (certificate)
+        return { format: "spki", bytes: Buffer.from(internal.native.x509("publicKey", pemBase64(certificate.body))), private: false };
+      return readPrivatePem(blocks, password);
+    }
+    const keyObjectType = (type: string, expected: string) =>
+      Object.assign(new TypeError(`Invalid key object type ${type}, expected ${expected}.`), { code: "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE" });
+    // ncrypto's IsRSAPrivateKey: an RSAPrivateKey SEQUENCE opens with the one-byte version
+    // INTEGER 0 or 1, an RSAPublicKey with the modulus.
+    function pkcs1Private(der: Uint8Array): boolean {
+      if (der.length < 2 || der[0] !== 0x30) return false;
+      const long = der[1] & 0x80 ? der[1] & 0x7f : 0;
+      if (long > 4) return false;
+      const offset = 2 + long;
+      let length = long ? 0 : der[1];
+      for (let i = 2; i < offset; i++) length = length * 256 + der[i];
+      return length >= 3 && offset + 3 <= der.length && der[offset] === 2 && der[offset + 1] === 1 && (der[offset + 2] & 0xfe) === 0;
+    }
+    // Node's prepareAsymmetricKey decodes a string key with options.encoding.
+    function keyMaterial(options: CryptoKeys.KeyOptions): CryptoKeys.KeyOptions["key"] {
+      const { key, encoding } = options;
+      if (typeof key !== "string" || options.format === "jwk" || encoding === undefined) return key;
+      return cipherBytes(key, "key", encoding);
+    }
+    // DER key bytes: encrypted PKCS#8 is decrypted first, and a PKCS#1 key read as a public
+    // key may hold a private key.
+    function readDer(key: CryptoKeys.Input, options: CryptoKeys.KeyOptions, format: CryptoKeys.ExportType, wantPrivate: boolean): CryptoKeys.PemData {
+      const bytes = inputBytes(key);
+      if (options.passphrase !== undefined && (options.type === undefined || options.type === "pkcs8"))
+        return { format: "pkcs8", bytes: keyEncoding(1, bytes, options.passphrase), private: true };
+      const isPrivate = wantPrivate || (format === "pkcs1" && pkcs1Private(bytes));
+      return { format, bytes: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), private: isPrivate };
     }
     function importAsymmetric(input: CryptoKeys.KeyInput, wantPrivate: boolean): KeyObject {
-      const options = parseInput(input),
-        key = options.key;
+      const options = parseInput(input);
+      const key = keyMaterial(options);
       if (key instanceof KeyObject || c.isKey(key)) {
         const r = key instanceof KeyObject ? nodeRecord(key) : c.record(key);
         if (r.type === "secret" || (wantPrivate && r.type !== "private"))
-          throw error("Invalid key object type");
+          throw keyObjectType(r.type, wantPrivate ? "private" : "private or public");
         if (wantPrivate) return make({ ...r });
         return publicPart(r);
       }
@@ -541,20 +570,15 @@ declare namespace CryptoKeys {
         isPrivateEncoding = wantPrivate;
       if (jwk) bytes = key as JsonWebKey;
       else if (typeof key === "string" || options.format !== "der") {
-        const decoded = readPem(key, options.passphrase);
+        const decoded = readPem(key, options.passphrase, wantPrivate);
         format = decoded.format;
         bytes = decoded.bytes;
         isPrivateEncoding = decoded.private;
       } else {
-        bytes = inputBytes(key as CryptoKeys.Input);
-        if (
-          options.passphrase !== undefined &&
-          (options.type === undefined || options.type === "pkcs8")
-        ) {
-          bytes = keyEncoding(1, bytes, options.passphrase);
-          format = "pkcs8";
-          isPrivateEncoding = true;
-        }
+        const decoded = readDer(key as CryptoKeys.Input, options, format, wantPrivate);
+        format = decoded.format;
+        bytes = decoded.bytes;
+        isPrivateEncoding = decoded.private;
       }
       const attempts = [
         { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
@@ -620,11 +644,7 @@ declare namespace CryptoKeys {
           : c.isKey(key)
             ? c.record(key).type
             : undefined;
-      if (type === "public")
-        throw Object.assign(
-          new TypeError("Invalid key object type public, expected private."),
-          { code: "ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE" },
-        );
+      if (type === "public" || type === "secret") throw keyObjectType(type, "private");
       return importAsymmetric(options, false);
     }
     function generateKeySync(type: "hmac" | "aes", options: { length: number }): KeyObject {
@@ -892,33 +912,52 @@ declare namespace CryptoKeys {
       });
       return verify ? result.verified! : Buffer.from(c.decode(result.data));
     }
-    function rsaCrypt(decrypt: boolean, inputKey: CryptoKeys.KeyInput, data: CryptoKeys.Input): CryptoKeys.Buffer {
-      // Bun's JSCipher reads padding, oaepHash, encoding and oaepLabel before the key, and
-      // copies the label: parsing the key runs option getters that may detach its buffer.
-      const given = isOptions(inputKey) ? inputKey : undefined;
-      const padding = given?.padding;
-      const oaepHash = given?.oaepHash;
-      const encoding = given?.encoding;
-      const oaepLabel = given?.oaepLabel;
-      const label = oaepLabel === undefined ? "" : c.encode(inputBytes(oaepLabel, encoding));
-      if (padding !== undefined && padding !== constants.RSA_PKCS1_OAEP_PADDING)
-        throw Object.assign(
-          new Error("Only RSA-OAEP encryption is implemented"),
-          { code: "ERR_NOT_SUPPORTED_IN_WASM" },
-        );
-      const digest = hash(oaepHash || "sha1");
-      const key = importAsymmetric(parseInput(inputKey), decrypt);
-      const r = nodeRecord(key);
-      if (r.key.kty !== "RSA") throw error("Expected an RSA key");
-      const algorithm = { name: "RSA-OAEP", hash: { name: digest }, label };
-      return Buffer.from(
-        c.decode(
-          c.backend(decrypt ? "decrypt" : "encrypt", algorithm, {
-            key: r.key,
-            data: c.encode(inputBytes(data)),
-          }).data,
-        ),
-      );
+    // Bun's getArrayBufferOrView2: a string in the given encoding (UTF-8 when it is unknown
+    // or "buffer"), an ArrayBuffer or a view.
+    function cipherBytes(value: unknown, name: string, encoding: unknown): Uint8Array {
+      if (typeof value === "string") {
+        const known = typeof encoding === "string" && encoding !== "buffer" && Buffer.isEncoding(encoding);
+        return Buffer.from(value, known ? encoding : "utf8");
+      }
+      if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return inputBytes(value);
+      throw args().argType(name, "string or an instance of ArrayBuffer, Buffer, TypedArray, or DataView", value);
+    }
+    // publicEncrypt (op 0), privateDecrypt (1), privateEncrypt (2) and publicDecrypt (3), in the
+    // order of Bun's rsaFunction (JSCipher.cpp): padding, oaepHash, encoding and oaepLabel, then
+    // the key, then the data. The label is copied: parsing the key runs option getters that may
+    // detach its buffer.
+    function rsaCipher(op: number, inputKey: CryptoKeys.KeyInput, data: unknown): CryptoKeys.Buffer {
+      const options = inputKey !== null && typeof inputKey === "object" ? (inputKey as CryptoKeys.KeyOptions) : undefined;
+      let padding = op <= 1 ? constants.RSA_PKCS1_OAEP_PADDING : constants.RSA_PKCS1_PADDING;
+      let oaepHash: string | undefined;
+      let encoding: unknown;
+      let label = new Uint8Array(0);
+      if (options) {
+        const paddingValue: unknown = options.padding;
+        // JSValue::toInt32: ToNumber, which throws for a BigInt or a Symbol, then int32.
+        if (paddingValue !== undefined) padding = +(paddingValue as number) | 0;
+        const hashValue: unknown = options.oaepHash;
+        if (hashValue !== undefined) {
+          if (typeof hashValue !== "string") throw args().argType("options.oaepHash", "string", hashValue);
+          // ncrypto's Digest::FromName, which createHmac shares.
+          oaepHash = internal.require("node_digest").hmacName(hashValue);
+          if (oaepHash === undefined)
+            throw Object.assign(new Error("Invalid digest used"), { code: "ERR_OSSL_EVP_INVALID_DIGEST" });
+        }
+        encoding = options.encoding;
+        const labelValue: unknown = options.oaepLabel;
+        if (labelValue !== undefined) label = Uint8Array.from(cipherBytes(labelValue, "options.oaepLabel", encoding));
+      }
+      const r = nodeRecord(importAsymmetric(parseInput(inputKey), op === 1 || op === 2));
+      const bytes = cipherBytes(data, "buffer", encoding);
+      if (r.key.kty !== "RSA")
+        throw args().opensslError("0600007d", "public key routines", "OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE", "ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE");
+      if (op === 1 && padding === constants.RSA_PKCS1_PADDING)
+        throw Object.assign(new TypeError("RSA_PKCS1_PADDING is no longer supported for private decryption"), {
+          code: "ERR_INVALID_ARG_VALUE",
+        });
+      const result = internal.native.nodeCrypto.rsaCipher(op, JSON.stringify(r.key), padding, oaepHash, label, bytes);
+      return Buffer.from(result.buffer, result.byteOffset, result.byteLength);
     }
     function sign(algorithm: string | null | undefined, data: CryptoKeys.Input, key: CryptoKeys.KeyInput, callback?: null): CryptoKeys.Buffer;
     function sign(algorithm: string | null | undefined, data: CryptoKeys.Input, key: CryptoKeys.KeyInput, callback: CryptoKeys.SignCallback): void;
@@ -1089,8 +1128,10 @@ declare namespace CryptoKeys {
       generateKey,
       generateKeyPairSync,
       generateKeyPair,
-      publicEncrypt: (key: CryptoKeys.KeyInput, data: CryptoKeys.Input) => rsaCrypt(false, key, data),
-      privateDecrypt: (key: CryptoKeys.KeyInput, data: CryptoKeys.Input) => rsaCrypt(true, key, data),
+      publicEncrypt: (key: CryptoKeys.KeyInput, data: CryptoKeys.Input) => rsaCipher(0, key, data),
+      privateDecrypt: (key: CryptoKeys.KeyInput, data: CryptoKeys.Input) => rsaCipher(1, key, data),
+      privateEncrypt: (key: CryptoKeys.KeyInput, data: CryptoKeys.Input) => rsaCipher(2, key, data),
+      publicDecrypt: (key: CryptoKeys.KeyInput, data: CryptoKeys.Input) => rsaCipher(3, key, data),
       sign,
       verify,
       Sign,

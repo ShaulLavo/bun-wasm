@@ -1,5 +1,6 @@
 #include <string.h>
 #include <limits.h>
+#include <stdint.h>
 #include <openssl/bio.h>
 #include <openssl/bytestring.h>
 #include <openssl/err.h>
@@ -24,58 +25,92 @@ static const EVP_MD *digest(int bits) {
   }
 }
 
+static EVP_PKEY *rsa_key(const unsigned char *der, size_t der_len, int private_key) {
+  RSA *rsa = private_key ? RSA_private_key_from_bytes(der, der_len)
+                         : RSA_public_key_from_bytes(der, der_len);
+  EVP_PKEY *key = EVP_PKEY_new();
+  if (rsa && key && EVP_PKEY_assign_RSA(key, rsa)) return key;
+  RSA_free(rsa);
+  EVP_PKEY_free(key);
+  return NULL;
+}
+
+static int cipher_init(EVP_PKEY_CTX *ctx, int op) {
+  switch (op) {
+    case 0: return EVP_PKEY_encrypt_init(ctx);
+    case 1: return EVP_PKEY_decrypt_init(ctx);
+    case 2: return EVP_PKEY_sign_init(ctx);
+    default: return EVP_PKEY_verify_recover_init(ctx);
+  }
+}
+
+static int cipher_run(EVP_PKEY_CTX *ctx, int op, const unsigned char *input, size_t input_len,
+                      unsigned char *output, size_t *output_len) {
+  switch (op) {
+    case 0: return EVP_PKEY_encrypt(ctx, output, output_len, input, input_len);
+    case 1: return EVP_PKEY_decrypt(ctx, output, output_len, input, input_len);
+    case 2: return EVP_PKEY_sign(ctx, output, output_len, input, input_len);
+    default: return EVP_PKEY_verify_recover(ctx, output, output_len, input, input_len);
+  }
+}
+
+// ncrypto's Cipher::encrypt, decrypt, sign and recover: the padding first, then any OAEP
+// digest and nonempty label exactly as given, so BoringSSL refuses them under another padding
+// as it does in Bun. `md` NULL keeps the default OAEP digest (SHA-1).
+static int rsa_cipher(int op, const unsigned char *der, size_t der_len, int padding,
+                      const EVP_MD *md, const unsigned char *label, size_t label_len,
+                      const unsigned char *input, size_t input_len,
+                      unsigned char *output, size_t *output_len) {
+  EVP_PKEY *key = rsa_key(der, der_len, op == 1 || op == 2);
+  EVP_PKEY_CTX *ctx = key ? EVP_PKEY_CTX_new(key, NULL) : NULL;
+  int ok = ctx && cipher_init(ctx, op) && EVP_PKEY_CTX_set_rsa_padding(ctx, padding);
+  if (ok && md) ok = EVP_PKEY_CTX_set_rsa_oaep_md(ctx, md);
+  if (ok && label_len) {
+    unsigned char *owned = OPENSSL_memdup(label, label_len);
+    ok = owned && EVP_PKEY_CTX_set0_rsa_oaep_label(ctx, owned, label_len);
+    if (!ok) OPENSSL_free(owned);
+  }
+  if (ok) ok = cipher_run(ctx, op, input, input_len, output, output_len);
+  EVP_PKEY_CTX_free(ctx);
+  EVP_PKEY_free(key);
+  return ok;
+}
+
+// Node's publicEncrypt (op 0), privateDecrypt (1), privateEncrypt (2) and publicDecrypt (3).
+// `der` is a PKCS#1 private key for ops 1 and 2 and a PKCS#1 public key otherwise. `hash` is
+// a BoringSSL digest name (EVP_get_digestbyname) or NULL; `output` holds at least the modulus
+// size. Failures leave BoringSSL's error queue for the caller.
+int bunwasm_rsa_cipher(int op, const unsigned char *der, size_t der_len, int padding,
+                       const char *hash, const unsigned char *label, size_t label_len,
+                       const unsigned char *input, size_t input_len,
+                       unsigned char *output, size_t *output_len) {
+  const EVP_MD *md = hash ? EVP_get_digestbyname(hash) : NULL;
+  if (hash && !md) return 0;
+  return rsa_cipher(op, der, der_len, padding, md, label, label_len, input, input_len,
+                    output, output_len);
+}
+
 int bunwasm_rsa(int op, const unsigned char *der, size_t der_len, int hash,
                 int pss, int salt, const unsigned char *label, size_t label_len,
                 const unsigned char *input, size_t input_len,
                 unsigned char *output, size_t *output_len) {
-  RSA *rsa = (op == 0 || op == 3) ? RSA_private_key_from_bytes(der, der_len)
-                                  : RSA_public_key_from_bytes(der, der_len);
-  EVP_PKEY *key = EVP_PKEY_new();
-  if (!rsa || !key || !digest(hash)) {
-    RSA_free(rsa);
-    EVP_PKEY_free(key);
-    return -1;
+  if (op >= 2) {
+    if (!digest(hash)) return -1;
+    return rsa_cipher(op == 2 ? 0 : 1, der, der_len, RSA_PKCS1_OAEP_PADDING, digest(hash),
+                      label, label_len, input, input_len, output, output_len);
   }
-  if (!EVP_PKEY_assign_RSA(key, rsa)) {
-    RSA_free(rsa);
-    EVP_PKEY_free(key);
-    return -1;
-  }
-  EVP_MD_CTX *md = NULL;
+  EVP_PKEY *key = digest(hash) ? rsa_key(der, der_len, op == 0) : NULL;
+  if (!key) return -1;
   EVP_PKEY_CTX *ctx = NULL;
-  int ok = 0;
-  if (op == 0 || op == 1) {
-    md = EVP_MD_CTX_new();
-    if (!md) goto done;
-    ok = op == 0 ? EVP_DigestSignInit(md, &ctx, digest(hash), NULL, key)
-                 : EVP_DigestVerifyInit(md, &ctx, digest(hash), NULL, key);
-    if (!ok) goto done;
-    ok = EVP_PKEY_CTX_set_rsa_padding(ctx, pss ? RSA_PKCS1_PSS_PADDING : RSA_PKCS1_PADDING);
-    if (!ok) goto done;
-    if (pss && !EVP_PKEY_CTX_set_rsa_pss_saltlen(ctx, salt)) { ok = 0; goto done; }
-    if (op == 0) ok = EVP_DigestSign(md, output, output_len, input, input_len);
-    else ok = EVP_DigestVerify(md, output, *output_len, input, input_len);
-    goto done;
-  }
-  ctx = EVP_PKEY_CTX_new(key, NULL);
-  if (!ctx) goto done;
-  ok = op == 2 ? EVP_PKEY_encrypt_init(ctx) : EVP_PKEY_decrypt_init(ctx);
-  if (!ok) goto done;
-  if (!EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) ||
-      !EVP_PKEY_CTX_set_rsa_oaep_md(ctx, digest(hash)) ||
-      !EVP_PKEY_CTX_set_rsa_mgf1_md(ctx, digest(hash))) { ok = 0; goto done; }
-  if (label_len) {
-    unsigned char *owned = OPENSSL_memdup(label, label_len);
-    if (!owned) { ok = 0; goto done; }
-    if (!EVP_PKEY_CTX_set0_rsa_oaep_label(ctx, owned, label_len)) {
-      OPENSSL_free(owned); ok = 0; goto done;
-    }
-  }
-  ok = op == 2 ? EVP_PKEY_encrypt(ctx, output, output_len, input, input_len)
-               : EVP_PKEY_decrypt(ctx, output, output_len, input, input_len);
-done:
-  if (md) EVP_MD_CTX_free(md);
-  else EVP_PKEY_CTX_free(ctx);
+  EVP_MD_CTX *md = EVP_MD_CTX_new();
+  int ok = md != NULL;
+  if (ok) ok = op == 0 ? EVP_DigestSignInit(md, &ctx, digest(hash), NULL, key)
+                       : EVP_DigestVerifyInit(md, &ctx, digest(hash), NULL, key);
+  if (ok) ok = EVP_PKEY_CTX_set_rsa_padding(ctx, pss ? RSA_PKCS1_PSS_PADDING : RSA_PKCS1_PADDING);
+  if (ok && pss) ok = EVP_PKEY_CTX_set_rsa_pss_saltlen(ctx, salt);
+  if (ok && op == 0) ok = EVP_DigestSign(md, output, output_len, input, input_len);
+  else if (ok) ok = EVP_DigestVerify(md, output, *output_len, input, input_len);
+  EVP_MD_CTX_free(md);
   EVP_PKEY_free(key);
   return ok;
 }
@@ -152,7 +187,7 @@ static int key_password(char *out, int capacity, int writing, void *context) {
 size_t bunwasm_key_encoding(int op, const unsigned char *input, size_t input_len,
                            const unsigned char *password, size_t password_len,
                            const char *cipher_name, unsigned char *output,
-                           size_t capacity) {
+                           size_t capacity, uint32_t *error) {
   struct key_password pass = {password, password_len};
   BIO *source = NULL, *dest = NULL;
   EVP_PKEY *key = NULL;
@@ -203,6 +238,9 @@ done:
   EVP_PKEY_free(key);
   BIO_free(source);
   BIO_free(dest);
+  // The oldest queued error, which Bun reports for a failed key read (for example
+  // BAD_DECRYPT for a wrong passphrase), or 0.
+  *error = ok ? 0 : (uint32_t)ERR_peek_error();
   ERR_clear_error();
   return ok ? size : 0;
 }

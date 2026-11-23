@@ -43,6 +43,7 @@ mod node_cipher;
 mod node_dh;
 mod node_digest;
 mod node_path;
+mod node_rsa;
 #[cfg(any(feature = "engine-split", not(feature = "engine-host")))]
 pub(crate) mod ops;
 mod parse_env;

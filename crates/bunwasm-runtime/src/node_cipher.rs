@@ -61,7 +61,7 @@ fn c_text(text: *const c_char) -> Option<String> {
 
 /// Bun's createCryptoError: the packed OpenSSL error's text and its library, function,
 /// reason and code, or `fallback` with no code when nothing is queued.
-fn crypto_error(packed: u32, fallback: &str) -> NativeError {
+pub(crate) fn crypto_error(packed: u32, fallback: &str) -> NativeError {
     if packed == 0 {
         return NativeError::error(fallback);
     }
@@ -578,6 +578,7 @@ pub fn install(t: &mut Table) {
     t.add("nodeCrypto.cipherInfo", |a| cipher_info(&a));
     install_cipher_state(t, &Shared::default());
     crate::node_dh::install(t);
+    crate::node_rsa::install(t);
 }
 
 #[cfg(test)]
