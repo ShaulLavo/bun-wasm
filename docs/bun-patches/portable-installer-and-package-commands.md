@@ -246,11 +246,11 @@ Each browser filesystem call crosses to the filesystem worker, so extraction and
 publication keep the call count low without changing what lands on disk. Each
 archive file streams through one reusable buffer, reserved exactly and never past
 256 KiB, so files up to that size take one write instead of 8 KiB writes and larger
-ones stay bounded. The root `package.json` is checked against the registry name and
-version from the bytes extraction wrote. A root entry that differs from
-`package.json` only in case is rejected, because on a case-insensitive filesystem
-it would replace the checked file. Binary linking keeps only the valid string
-`bin` entries (or `directories.bin`) instead of reading the manifest back. Staging
+ones stay bounded. The staged root `package.json` is read back once and checked
+against the registry name and version, so the checked bytes are the ones published
+under every filesystem's case and normalization rules. Only its valid string `bin`
+entries (or `directories.bin`) are kept for binary linking, which then needs no
+second read. Staging
 starts with one `mkdir`; a leftover staging directory is removed only when that
 fails. Publication first drops the old source record, so new bytes never sit
 beside an older record if writing the new one fails. A fresh package then takes one

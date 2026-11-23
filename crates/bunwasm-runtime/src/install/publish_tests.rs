@@ -2,7 +2,37 @@ use std::{fs, path::PathBuf};
 
 use serde_json::json;
 
-use super::{Package, bin_fields, installed_source, installed_source_path, publish_package};
+use super::{
+    Package, bin_fields, installed_source, installed_source_path, publish_package, validate_package,
+};
+
+#[test]
+fn validation_reads_the_staged_manifest_and_keeps_only_binary_fields() {
+    let package = package();
+    let (root, staging, _) = modules("validate", b"");
+    assert_eq!(
+        validate_package(&staging, &package).unwrap_err(),
+        "Tarball has no package.json"
+    );
+    let manifest =
+        json!({"name": "tool", "version": "1.0.0", "bin": {"tool": "cli.js"}, "readme": "x"});
+    fs::write(staging.join("package.json"), manifest.to_string()).unwrap();
+    assert_eq!(
+        validate_package(&staging, &package).unwrap(),
+        json!({"bin": {"tool": "cli.js"}})
+    );
+    fs::write(
+        staging.join("package.json"),
+        r#"{"name":"tool","version":"2.0.0"}"#,
+    )
+    .unwrap();
+    assert!(
+        validate_package(&staging, &package)
+            .unwrap_err()
+            .contains("does not match")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
 
 fn package() -> Package {
     Package {

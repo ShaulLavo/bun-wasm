@@ -531,12 +531,12 @@ fn install_package(
     empty_directory(&staging)?;
     let mut tick = || downloads.tick(registry);
     let result = trace::time("extract", || io::extract(&bytes, &staging, &mut tick))
-        .and_then(|manifest| validate_package(manifest.as_deref(), package))
-        .and_then(|manifest| {
+        .and_then(|()| validate_package(&staging, package))
+        .and_then(|bins| {
             trace::time("publish", || {
                 publish_package(&staging, &path, package, io::write)
             })?;
-            Ok(Some(bin_fields(&manifest)))
+            Ok(Some(bins))
         });
     if result.is_err() {
         let _ = fs::remove_dir_all(staging);
@@ -610,14 +610,17 @@ fn bin_fields(manifest: &Value) -> Value {
     }
 }
 
-/// Checks the extracted root `package.json`, from the bytes extraction just wrote.
-fn validate_package(manifest: Option<&[u8]>, package: &Package) -> Result<Value> {
-    let bytes = manifest.ok_or("Tarball has no package.json")?;
-    let manifest: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+/// Checks the staged root `package.json`, read from disk so the checked bytes are the ones
+/// that will be published under every filesystem's case and normalization rules. Returns
+/// the fields binary linking needs, so it need not read the manifest again.
+fn validate_package(staging: &Path, package: &Package) -> Result<Value> {
+    let bytes =
+        fs::read(staging.join("package.json")).map_err(|_| "Tarball has no package.json")?;
+    let manifest: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if manifest["name"] != package.name || manifest["version"] != package.version {
         return Err("Tarball name/version does not match registry metadata".into());
     }
-    Ok(manifest)
+    Ok(bin_fields(&manifest))
 }
 
 fn prune(locked: &Value, resolver: &Resolver) -> Result<()> {

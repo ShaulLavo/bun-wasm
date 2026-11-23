@@ -42,31 +42,23 @@ fn repeated_parents(root: &Path) {
     assert_eq!(fs::read(root.join("a/last")).unwrap(), b"last");
     assert!(fs::read(root.join("b/empty")).unwrap().is_empty());
     let manifest = archive(&[("package/package.json", file, b"{\"name\":\"fixture\"}")]);
-    // Extraction hands back the root package.json it wrote last, and ticks once per entry.
+    // Extraction ticks once per entry, the last duplicate wins on disk, and files larger
+    // than one write chunk stream through intact.
+    let large: Vec<u8> = (0..600 * 1024).map(|index| (index % 251) as u8).collect();
     let manifests = archive(&[
         ("package/package.json", file, b"first"),
         ("package/nested/package.json", file, b"nested"),
         ("package/package.json", file, b"last"),
+        ("package/large.wasm", file, large.as_slice()),
     ]);
     let mut ticks = 0;
-    let written = extraction::extract(&manifests, &root.join("manifest"), &mut || ticks += 1)
-        .unwrap()
-        .unwrap();
-    assert_eq!(written, b"last");
+    extraction::extract(&manifests, &root.join("manifest"), &mut || ticks += 1).unwrap();
     assert_eq!(
         fs::read(root.join("manifest/package.json")).unwrap(),
         b"last"
     );
-    assert_eq!(ticks, 3);
-    assert_eq!(
-        extraction::extract(
-            &archive(&[("package/a", file, b"")]),
-            &root.join("bare"),
-            &mut || {}
-        )
-        .unwrap(),
-        None
-    );
+    assert_eq!(fs::read(root.join("manifest/large.wasm")).unwrap(), large);
+    assert_eq!(ticks, 4);
     assert_eq!(
         extraction::archive_manifest(&manifest).unwrap()["name"],
         "fixture"

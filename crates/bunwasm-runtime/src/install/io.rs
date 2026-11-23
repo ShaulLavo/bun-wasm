@@ -813,20 +813,13 @@ pub fn archive_manifest(bytes: &[u8]) -> Result<Value> {
     manifest.ok_or_else(|| "Tarball has no package.json".into())
 }
 
-/// Extracts into `destination` and returns the bytes of the archive's root `package.json`
-/// (the last one written, as on disk), so callers can validate it without reading it back.
-/// `tick` runs once per entry so other downloads keep moving during long extractions.
-pub fn extract(
-    bytes: &[u8],
-    destination: &Path,
-    tick: &mut dyn FnMut(),
-) -> Result<Option<Vec<u8>>> {
+/// Extracts into `destination`. `tick` runs once per entry so other downloads keep moving
+/// during long extractions.
+pub fn extract(bytes: &[u8], destination: &Path, tick: &mut dyn FnMut()) -> Result<()> {
     let mut directories = BTreeSet::new();
     let mut buffer = Vec::new();
-    let mut manifest = None;
     visit_archive(bytes, |entry, path| {
         tick();
-        let keep = root_manifest(path)?;
         let target = destination.join(path);
         if entry.header().entry_type().is_dir() {
             return create_directory(&target);
@@ -838,60 +831,28 @@ pub fn extract(
             buffer.reserve_exact(wanted - buffer.len());
             buffer.resize(wanted, 0);
         }
-        let kept = write_entry(entry, &target, &mut buffer, keep)?;
-        if keep {
-            manifest = kept;
-        }
-        Ok(())
-    })?;
-    Ok(manifest)
-}
-
-/// Whether `path` is the root `package.json` whose bytes extraction keeps. A root entry
-/// that only differs in case is rejected: on a case-insensitive filesystem it would replace
-/// the file on disk while the kept bytes stayed those of the other entry.
-fn root_manifest(path: &Path) -> Result<bool> {
-    let Some(name) = path.to_str() else {
-        return Ok(false);
-    };
-    if !name.eq_ignore_ascii_case("package.json") {
-        return Ok(false);
-    }
-    if name != "package.json" {
-        return Err(format!(
-            "Tarball entry {name} differs from package.json only in case"
-        ));
-    }
-    Ok(true)
+        write_entry(entry, &target, &mut buffer)
+    })
 }
 
 /// Each write is a host filesystem call in the browser, so files up to this size are
 /// written with one call. Larger files stream through in chunks of this size.
 const EXTRACT_CHUNK: usize = 256 * 1024;
 
-/// Streams one archive file to `target` through `buffer`. Returns its bytes when `keep`.
-fn write_entry(
-    entry: &mut impl Read,
-    target: &Path,
-    buffer: &mut [u8],
-    keep: bool,
-) -> Result<Option<Vec<u8>>> {
+/// Streams one archive file to `target` through `buffer`.
+fn write_entry(entry: &mut impl Read, target: &Path, buffer: &mut [u8]) -> Result<()> {
     let mut file =
         trace::time("extract-write", || fs::File::create(target)).map_err(|e| e.to_string())?;
-    let mut kept = keep.then(Vec::new);
     loop {
         let count =
             trace::time("extract-inflate", || fill(entry, buffer)).map_err(|e| e.to_string())?;
         if count == 0 {
-            return Ok(kept);
-        }
-        if let Some(kept) = kept.as_mut() {
-            kept.extend_from_slice(&buffer[..count]);
+            return Ok(());
         }
         trace::time("extract-write", || file.write_all(&buffer[..count]))
             .map_err(|e| e.to_string())?;
         if count < buffer.len() {
-            return Ok(kept);
+            return Ok(());
         }
     }
 }
@@ -1152,34 +1113,5 @@ mod archive_tests {
                 .contains("Unsafe tarball path")
         );
         assert!(archive_manifest(b"not a gzip archive").is_err());
-    }
-
-    #[test]
-    fn extraction_rejects_manifests_that_differ_only_in_case() {
-        let root = std::env::temp_dir().join(format!("bun-wasm-case-{}", std::process::id()));
-        let exact = (
-            "package/package.json",
-            tar::EntryType::Regular,
-            b"{}".as_slice(),
-        );
-        let folded = (
-            "package/Package.json",
-            tar::EntryType::Regular,
-            b"{}".as_slice(),
-        );
-        for entries in [[exact, folded], [folded, exact]] {
-            let _ = fs::remove_dir_all(&root);
-            let error = extract(&archive(&entries), &root, &mut || {}).unwrap_err();
-            assert!(error.contains("only in case"), "{error}");
-        }
-        let nested = (
-            "package/lib/Package.json",
-            tar::EntryType::Regular,
-            b"x".as_slice(),
-        );
-        let _ = fs::remove_dir_all(&root);
-        let kept = extract(&archive(&[exact, nested]), &root, &mut || {}).unwrap();
-        assert_eq!(kept.as_deref(), Some(b"{}".as_slice()));
-        fs::remove_dir_all(&root).unwrap();
     }
 }
