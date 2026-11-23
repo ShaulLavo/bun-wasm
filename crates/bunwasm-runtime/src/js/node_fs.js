@@ -309,13 +309,23 @@
     return internal.concatBytes(chunks);
   }
 
+  function writeAllFd(fd, data) {
+    const bytes = typeof data === "string" ? Buffer.from(data, "utf8") : data;
+    let offset = 0;
+    while (offset < bytes.length) {
+      const written = native.write(fd, bytes.subarray(offset), -1);
+      if (written <= 0) throw Object.assign(new Error("write made no progress"), { code: "EIO", syscall: "write" });
+      offset += written;
+    }
+  }
+
   function writeFileSync(path, data, options) {
     if (typeof path !== "number" && typeof path !== "string") path = toPath(path);
     const encoding = encodingOf(options);
     const flag = (options && typeof options === "object" ? options.flag : undefined) ?? "w";
     const bytes = toBytes(data, encoding);
     if (typeof path === "number") {
-      native.write(path, bytes, -1);
+      writeAllFd(path, bytes);
       return;
     }
     withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), parseFileMode(options && typeof options === "object" ? options.mode : undefined, "mode", 0o666)));
@@ -831,7 +841,10 @@
       validateFd(fd);
       native.futimes(fd, ...timeSpec(atime, "atime"), ...timeSpec(mtime, "mtime"));
     },
-    fsyncSync: () => {},
+    fsyncSync: (fd) => {
+      validateFd(fd);
+      native.fsync(fd);
+    },
     fdatasyncSync: () => {},
   };
 
@@ -1116,9 +1129,12 @@
   let fileStreamAdapter;
   function fileStreams() {
     fileStreamAdapter ??= internal.require("fs_stream_constructors")({
-      read: native.read, asBuffer, openSync, closeSync, writeSync, toPath, validateFd, readRange, invalidArg,
+      read: native.read, asBuffer, concatBuffers: (buffers) => Buffer.concat(buffers),
+      openSync, closeSync, writeSync, fsyncSync: sync.fsyncSync, toPath, validateFd, readRange, invalidArg,
       isEncoding: (encoding) => Buffer.isEncoding(encoding), inspect: (value) => internal.require("inspect").nodeInspect(value),
-      readPieceSize: kReadPiece, isRegularReadFd, later, linkHandle: (value, onClose) => fileHandleModule?.linkStream(value, onClose),
+      readPieceSize: kReadPiece, isRegularReadFd, later,
+      isHandle: (value) => Boolean(fileHandleModule?.isFileHandle(value)),
+      linkHandle: (value, onClose) => fileHandleModule?.linkStream(value, onClose),
       loadStreams: () => internal.builtin("node:stream"),
     });
     return fileStreamAdapter;
@@ -1142,6 +1158,10 @@
     const adapter = fileStreams();
     adapter.initializeFileStreams();
     return adapter.WriteStream;
+  }
+
+  function utf8StreamConstructor() {
+    return internal.require("bun_builtins").require("internal:streams/fast-utf8-stream");
   }
 
   function watchUnsupported() {
@@ -1178,6 +1198,7 @@
     WriteStream: { get: writeStreamConstructor, enumerable: true, configurable: true },
     FileReadStream: { get: readStreamConstructor, enumerable: true, configurable: true },
     FileWriteStream: { get: writeStreamConstructor, enumerable: true, configurable: true },
+    Utf8Stream: { get: utf8StreamConstructor, enumerable: true, configurable: true },
     // Bun's `get promises()`: node:fs/promises, read through a getter.
     promises: { get: function promises() { return promisesApi; }, enumerable: true, configurable: true },
   });

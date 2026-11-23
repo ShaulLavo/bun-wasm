@@ -3,6 +3,7 @@
     "internal:fixed_queue",
     "internal:freelist",
     "internal:streams/duplexpair",
+    "internal:streams/fast-utf8-stream",
     "node:querystring",
     "node:punycode",
     "node:wasi",
@@ -14,6 +15,7 @@
   "runtimeProvided": [
     "internal:streams/duplex",
     "internal:tls",
+    "internal:validators",
     "internal:webstreams_adapters"
   ]
 }
