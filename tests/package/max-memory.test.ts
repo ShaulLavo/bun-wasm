@@ -125,8 +125,10 @@ test("every consumer reads the authority", () => {
 
 test("no consumer keeps its own capacity number", () => {
   // Separate programs with their own smaller memory, not Bun guests: the bash-web shell, the
-  // shared sysroot's synthetic C proof member and the allocator telemetry test's C object.
-  expect(tracked("--max-memory=[0-9]")).toEqual(["scripts/build-bash-web-shell.sh", "scripts/test-shared-sysroot.sh", "tests/memory-telemetry.test.ts"]);
+  // shared sysroot's synthetic C proof member, the allocator telemetry test's C object and the
+  // frozen 16 MiB interrupt workload, whose comment records its exact compile flags.
+  expect(tracked("--max-memory=[0-9]")).toEqual(["scripts/build-bash-web-shell.sh", "scripts/test-shared-sysroot.sh", "tests/memory-telemetry.test.ts",
+    "web/tests/fixtures/interrupt/interrupt-browser-workload.ts"]);
   expect(tracked("forceRAMSize\\(\\) = [0-9]")).toEqual([]);
   const capacity = /536870912|512 << 20|MAX_PAGES: u64 = [0-9]|SHARED_GROUP_MAX_PAGES/;
   const nativeOracles = ["scripts/fixtures/quickjs-frame-stack.c", "scripts/fixtures/quickjs-parser-stack.c"];
