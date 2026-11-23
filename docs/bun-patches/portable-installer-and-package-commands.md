@@ -230,11 +230,13 @@ requests. Cached bytes still pass the existing safety validation before use.
 Each request owns its handle and closes it on consumption or cancellation. While
 the installer waits for one response or extracts a package, it also reads what the
 host already holds for the other open requests, in consumption order, until those
-unconsumed bodies fill 32 MiB of guest memory; past that they wait under host
-backpressure. Each read goes through one shared 256 KiB scratch buffer and asks for
-no more than the rest of that budget and one byte past the 256 MiB size limit, so
-an empty read allocates nothing and bodies grow only by bytes that arrived. A
-failed request frees its body at once. Their idle timers still start only on
+unconsumed bodies reserve 32 MiB of guest memory, counted by capacity; past that
+they wait under host backpressure. Each read goes through one shared 256 KiB
+scratch buffer, so an empty read allocates nothing. Bodies grow by doubling, but
+with exact reservations clamped to the remaining prefetch budget and to the
+256 MiB size limit, and at the limit a read asks for one byte to tell an exact fit
+from an oversized body. A failed request frees its body at once and still counts
+once in the install trace. Their idle timers still start only on
 consumption. No parsed packument cache is added.
 `install-metadata.test.ts` uses real delayed registry I/O, including responses
 larger than the host body window, to check overlap, bounds, cancellation and
@@ -242,17 +244,20 @@ request-free locked, local and no-op installs. No upstream code is copied.
 
 Each browser filesystem call crosses to the filesystem worker, so extraction and
 publication keep the call count low without changing what lands on disk. Each
-archive file streams through one reusable buffer of at most 256 KiB, so files up
-to that size take one write instead of 8 KiB writes and larger ones stay bounded.
-The root `package.json` is checked against the registry name and version from the
-bytes extraction wrote, and only its `name`, `bin` and `directories.bin` fields are
-kept for binary linking instead of reading it back. Staging starts with one
-`mkdir`; a leftover staging directory is removed only when that fails.
-Publication first drops the old source record, so new bytes never sit beside an
-older record if writing the new one fails. A fresh package then takes one rename;
-only a failed rename (an existing package) removes the old directory first. Lookahead remembers packages it found missing so the install loop
-does not stat them again; packages it found present are checked again, because
-reinstalling a parent can remove a nested package. Original adapter change.
+archive file streams through one reusable buffer, reserved exactly and never past
+256 KiB, so files up to that size take one write instead of 8 KiB writes and larger
+ones stay bounded. The root `package.json` is checked against the registry name and
+version from the bytes extraction wrote. A root entry that differs from
+`package.json` only in case is rejected, because on a case-insensitive filesystem
+it would replace the checked file. Binary linking keeps only the valid string
+`bin` entries (or `directories.bin`) instead of reading the manifest back. Staging
+starts with one `mkdir`; a leftover staging directory is removed only when that
+fails. Publication first drops the old source record, so new bytes never sit
+beside an older record if writing the new one fails. A fresh package then takes one
+rename; only a failed rename (an existing package) removes the old directory first.
+Lookahead remembers packages it found missing so the install loop does not stat
+them again; packages it found present are checked again, because reinstalling a
+parent can remove a nested package. Original adapter change.
 
 Metadata lookahead also fills unused handles from required edges of already
 selected queued parents. It examines at most 63 queued parents and retains only

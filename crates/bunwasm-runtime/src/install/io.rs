@@ -420,25 +420,27 @@ impl Downloads {
     }
 
     /// Reads what the host already holds for pending responses, in consumption order.
+    /// Buffered bodies are counted by capacity, so `PREFETCH_BUFFER` bounds what they reserve.
     fn pump(&mut self, registry: &Registry) {
         let mut buffered: usize = self
             .pending
             .iter()
             .filter_map(|(_, download)| download.as_ref().ok())
-            .map(|download| download.body.len())
+            .map(|download| download.body.capacity())
             .sum();
         self.scratch();
         for (_, download) in &mut self.pending {
             let Ok(download) = download else {
                 continue;
             };
-            if buffered >= PREFETCH_BUFFER {
-                return;
-            }
-            let before = download.body.len();
-            download.advance(PREFETCH_BUFFER - buffered, &mut self.scratch, registry);
+            let before = download.body.capacity();
+            download.advance(
+                PREFETCH_BUFFER.saturating_sub(buffered),
+                &mut self.scratch,
+                registry,
+            );
             // A failed download dropped its body, so it may have shrunk.
-            buffered = (buffered + download.body.len()).saturating_sub(before);
+            buffered = (buffered + download.body.capacity()).saturating_sub(before);
         }
     }
 }
@@ -446,7 +448,7 @@ impl Downloads {
 /// How a body read stopped.
 #[derive(Debug, PartialEq)]
 enum BodyRead {
-    /// `budget` bytes arrived; the rest waits for a later read.
+    /// The body's capacity reached its ceiling; the rest waits for a later read.
     Paused,
     /// The body ended.
     Ended,
@@ -456,10 +458,11 @@ enum BodyRead {
     Stopped(i32),
 }
 
-/// Appends what `read` yields until it would block, the body ends, or `budget` bytes
-/// arrived. Each read asks for at most the scratch size, the rest of the budget, and one
-/// byte past `limit` (enough to tell a body of exactly `limit` bytes from a larger one).
-/// The body grows only by bytes that arrived.
+/// Appends what `read` yields until it would block or the body ends. The body's capacity
+/// grows by at most `budget` bytes and never past `limit`: growth doubles like `Vec` but
+/// is clamped to that ceiling with `reserve_exact`. Each read asks for at most the scratch
+/// size and the room left under the ceiling; at `limit` it asks for one byte, enough to
+/// tell a body of exactly `limit` bytes from a larger one.
 fn read_body(
     body: &mut Vec<u8>,
     scratch: &mut [u8],
@@ -467,13 +470,10 @@ fn read_body(
     limit: usize,
     mut read: impl FnMut(&mut [u8]) -> std::result::Result<usize, i32>,
 ) -> BodyRead {
-    let start = body.len();
+    let ceiling = limit.min(body.capacity().saturating_add(budget));
     loop {
-        let read_so_far = body.len() - start;
-        let cap = scratch
-            .len()
-            .min(budget - read_so_far)
-            .min((limit + 1).saturating_sub(body.len()));
+        let probe = usize::from(ceiling == limit);
+        let cap = scratch.len().min(ceiling - body.len() + probe);
         if cap == 0 {
             return BodyRead::Paused;
         }
@@ -485,8 +485,19 @@ fn read_body(
         if body.len() + count > limit {
             return BodyRead::TooLarge;
         }
+        grow_within(body, count, ceiling);
         body.extend_from_slice(&scratch[..count]);
     }
+}
+
+/// Makes room for `count` more bytes, doubling the capacity but never past `ceiling`.
+fn grow_within(body: &mut Vec<u8>, count: usize, ceiling: usize) {
+    let needed = body.len() + count;
+    if body.capacity() >= needed {
+        return;
+    }
+    let target = (body.capacity() * 2).max(needed).min(ceiling);
+    body.reserve_exact(target - body.len());
 }
 
 enum Body {
@@ -522,9 +533,11 @@ impl Download {
             ("metadata-download", "metadata-cache-write")
         };
         let started = trace::start_time();
-        self.complete(others, registry)?;
+        let completed = self.complete(others, registry);
+        // Failed attempts count too, with whatever arrived (a failure frees the body).
+        trace::finish(download, started, self.body.len());
+        completed?;
         let bytes = std::mem::take(&mut self.body);
-        trace::finish(download, started, bytes.len());
         trace::time(store, || {
             store_cache(&self.url, &bytes, self.tarball, registry)
         });
@@ -813,17 +826,18 @@ pub fn extract(
     let mut manifest = None;
     visit_archive(bytes, |entry, path| {
         tick();
+        let keep = root_manifest(path)?;
         let target = destination.join(path);
         if entry.header().entry_type().is_dir() {
             return create_directory(&target);
         }
         ensure_parent(&mut directories, &target)?;
-        // Grows to the largest file seen, at most `EXTRACT_CHUNK`.
+        // Grows to the largest file seen, exactly, and never past `EXTRACT_CHUNK`.
         let wanted = (entry.size() as usize).clamp(1, EXTRACT_CHUNK);
         if buffer.len() < wanted {
+            buffer.reserve_exact(wanted - buffer.len());
             buffer.resize(wanted, 0);
         }
-        let keep = path == Path::new("package.json");
         let kept = write_entry(entry, &target, &mut buffer, keep)?;
         if keep {
             manifest = kept;
@@ -831,6 +845,24 @@ pub fn extract(
         Ok(())
     })?;
     Ok(manifest)
+}
+
+/// Whether `path` is the root `package.json` whose bytes extraction keeps. A root entry
+/// that only differs in case is rejected: on a case-insensitive filesystem it would replace
+/// the file on disk while the kept bytes stayed those of the other entry.
+fn root_manifest(path: &Path) -> Result<bool> {
+    let Some(name) = path.to_str() else {
+        return Ok(false);
+    };
+    if !name.eq_ignore_ascii_case("package.json") {
+        return Ok(false);
+    }
+    if name != "package.json" {
+        return Err(format!(
+            "Tarball entry {name} differs from package.json only in case"
+        ));
+    }
+    Ok(true)
 }
 
 /// Each write is a host filesystem call in the browser, so files up to this size are
@@ -954,11 +986,59 @@ mod tests {
         );
         assert_eq!(outcome, BodyRead::Paused);
         assert_eq!(body.len(), 30, "exactly the budget arrived");
+        assert_eq!(body.capacity(), 30);
         assert_eq!(
             caps,
             [8, 8, 4],
             "the last read asks only for the rest of the budget"
         );
+    }
+
+    /// A reader that hands out `available` bytes `piece` at a time, then ends.
+    fn pieces(
+        available: usize,
+        piece: usize,
+    ) -> impl FnMut(&mut [u8]) -> std::result::Result<usize, i32> {
+        let mut left = available;
+        move |buf| {
+            let count = buf.len().min(piece).min(left);
+            left -= count;
+            Ok(count)
+        }
+    }
+
+    #[test]
+    fn a_body_never_reserves_past_the_size_limit() {
+        // Doubling from many small reads would reserve far past the limit.
+        let (mut body, mut scratch) = (Vec::new(), vec![0; 64]);
+        let outcome = read_body(&mut body, &mut scratch, usize::MAX, 1000, pieces(1000, 3));
+        assert_eq!(outcome, BodyRead::Ended);
+        assert_eq!(body.len(), 1000);
+        assert!(body.capacity() <= 1000, "capacity {}", body.capacity());
+    }
+
+    #[test]
+    fn prefetched_bodies_never_reserve_past_the_shared_budget() {
+        // As `Downloads::pump` does: each body may grow by what the others left.
+        let budget = 1000;
+        let mut scratch = vec![0; 64];
+        let mut bodies: Vec<Vec<u8>> = vec![Vec::new(), Vec::new(), Vec::new()];
+        let mut reserved = 0;
+        for body in &mut bodies {
+            let before = body.capacity();
+            read_body(
+                body,
+                &mut scratch,
+                budget - reserved,
+                usize::MAX - 1,
+                pieces(700, 3),
+            );
+            reserved += body.capacity() - before;
+        }
+        let total: usize = bodies.iter().map(Vec::capacity).sum();
+        assert!(total <= budget, "prefetched bodies reserved {total} bytes");
+        assert_eq!(bodies[0].len(), 700);
+        assert!(bodies[1].len() >= 200, "the second body used what was left");
     }
 
     #[test]
@@ -1072,5 +1152,34 @@ mod archive_tests {
                 .contains("Unsafe tarball path")
         );
         assert!(archive_manifest(b"not a gzip archive").is_err());
+    }
+
+    #[test]
+    fn extraction_rejects_manifests_that_differ_only_in_case() {
+        let root = std::env::temp_dir().join(format!("bun-wasm-case-{}", std::process::id()));
+        let exact = (
+            "package/package.json",
+            tar::EntryType::Regular,
+            b"{}".as_slice(),
+        );
+        let folded = (
+            "package/Package.json",
+            tar::EntryType::Regular,
+            b"{}".as_slice(),
+        );
+        for entries in [[exact, folded], [folded, exact]] {
+            let _ = fs::remove_dir_all(&root);
+            let error = extract(&archive(&entries), &root, &mut || {}).unwrap_err();
+            assert!(error.contains("only in case"), "{error}");
+        }
+        let nested = (
+            "package/lib/Package.json",
+            tar::EntryType::Regular,
+            b"x".as_slice(),
+        );
+        let _ = fs::remove_dir_all(&root);
+        let kept = extract(&archive(&[exact, nested]), &root, &mut || {}).unwrap();
+        assert_eq!(kept.as_deref(), Some(b"{}".as_slice()));
+        fs::remove_dir_all(&root).unwrap();
     }
 }

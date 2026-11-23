@@ -75,12 +75,43 @@ fn only_binary_fields_outlive_extraction() {
         "dependencies": {"other": "1.0.0"},
         "description": "x".repeat(1024),
     });
-    assert_eq!(
-        bin_fields(&manifest),
-        json!({"name": "tool", "bin": {"tool": "cli.js"}, "directories": {"bin": "bin"}})
-    );
+    assert_eq!(bin_fields(&manifest), json!({"bin": {"tool": "cli.js"}}));
     assert_eq!(
         bin_fields(&json!({"name": "plain", "version": "1.0.0"})),
-        json!({"name": "plain", "bin": null})
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        bin_fields(&json!({"name": "@scope/tool", "bin": "cli.js", "readme": "x"})),
+        json!({"name": "@scope/tool", "bin": "cli.js"})
+    );
+    assert_eq!(
+        bin_fields(&json!({"directories": {"bin": "bin", "man": "man"}})),
+        json!({"directories": {"bin": "bin"}})
+    );
+}
+
+#[test]
+fn invalid_binary_values_are_dropped_at_extraction() {
+    let large = "x".repeat(2 * 1024 * 1024);
+    let manifest = json!({
+        "name": "tool",
+        "bin": {
+            "ok": "cli.js",
+            "nested": {"payload": large},
+            "list": [large],
+            "../escape": "cli.js",
+            "absolute": "/etc/passwd",
+            "parent": "../outside.js",
+        },
+    });
+    assert_eq!(bin_fields(&manifest), json!({"bin": {"ok": "cli.js"}}));
+    assert_eq!(
+        bin_fields(&json!({"name": "tool", "bin": "../outside.js"})),
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        bin_fields(&json!({"bin": {"a": 1}, "directories": {"bin": "bin"}})),
+        json!({"bin": {}}),
+        "a bin object still wins over directories.bin, as in binary_entries"
     );
 }

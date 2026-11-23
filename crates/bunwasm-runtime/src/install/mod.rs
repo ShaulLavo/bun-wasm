@@ -577,14 +577,37 @@ fn publish_package(
     write_record(&installed_source_path(path), &installed_source(package))
 }
 
-/// The manifest fields `binary_entries` reads, kept instead of the whole manifest until
-/// binaries are linked.
+/// What `binary_entries` would read from `manifest`, reduced to the valid string entries,
+/// kept instead of the whole manifest until binaries are linked. It follows the same
+/// precedence: a `bin` string, else a `bin` object, else `directories.bin`.
 fn bin_fields(manifest: &Value) -> Value {
-    let mut fields = json!({"name": manifest["name"], "bin": manifest["bin"]});
-    if !manifest["directories"]["bin"].is_null() {
-        fields["directories"] = json!({"bin": manifest["directories"]["bin"]});
+    if let Some(file) = manifest["bin"].as_str() {
+        let Some(name) = manifest["name"].as_str() else {
+            // Kept so linking still reports the missing name.
+            return json!({"bin": file});
+        };
+        let link = name.rsplit('/').next().unwrap_or(name);
+        return match binary_entry(link, file) {
+            Some(_) => json!({"name": name, "bin": file}),
+            None => Value::Null,
+        };
     }
-    fields
+    if let Some(bins) = manifest["bin"].as_object() {
+        let valid: serde_json::Map<String, Value> = bins
+            .iter()
+            .filter(|(name, file)| {
+                file.as_str()
+                    .and_then(|file| binary_entry(name, file))
+                    .is_some()
+            })
+            .map(|(name, file)| (name.clone(), file.clone()))
+            .collect();
+        return json!({"bin": valid});
+    }
+    match manifest["directories"]["bin"].as_str() {
+        Some(directory) => json!({"directories": {"bin": directory}}),
+        None => Value::Null,
+    }
 }
 
 /// Checks the extracted root `package.json`, from the bytes extraction just wrote.
