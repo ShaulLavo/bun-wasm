@@ -544,3 +544,38 @@ fn custom_conditions_precede_builtin_defaults_for_exports_and_imports() {
         );
     }
 }
+
+#[test]
+fn require_keeps_found_targets_and_retries_failures() {
+    let fixture = Fixture::new();
+    fixture.file("lib/a.js");
+    let resolver = Resolver::new();
+    let from = fixture.path("index.js");
+    assert_eq!(
+        resolver.resolve("./lib/a", &from, Kind::Require),
+        Ok(Resolved::File(fixture.path("lib/a.js")))
+    );
+    assert!(resolver.resolve("./lib/b", &from, Kind::Require).is_err());
+
+    // Like Node's Module._pathCache: a found require() target stays; a failure is probed again.
+    fixture.file("lib/a.ts");
+    fs::remove_file(fixture.path("lib/a.js")).unwrap();
+    fixture.file("lib/b.js");
+    assert_eq!(
+        resolver.resolve("./lib/a", &from, Kind::Require),
+        Ok(Resolved::File(fixture.path("lib/a.js")))
+    );
+    assert_eq!(
+        resolver.resolve("./lib/b", &from, Kind::Require),
+        Ok(Resolved::File(fixture.path("lib/b.js")))
+    );
+    // Imports resolve against the current files, and the key includes the importing directory.
+    assert_eq!(
+        resolver.resolve("./lib/a", &from, Kind::Import),
+        Ok(Resolved::File(fixture.path("lib/a.ts")))
+    );
+    assert_eq!(
+        resolver.resolve("./a", &fixture.path("lib/index.js"), Kind::Require),
+        Ok(Resolved::File(fixture.path("lib/a.ts")))
+    );
+}

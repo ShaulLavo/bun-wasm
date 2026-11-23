@@ -201,6 +201,41 @@ for (const shared of [false, true]) {
       assert.equal(f.call(), scalar);
     }
   });
+  test(`${label} strings round trip at every short, in-place and encoded length`, () => {
+    const f = fixture(shared);
+    const ascii = (n: number) => Array.from({ length: n }, (_, i) => String.fromCharCode(32 + (i % 95))).join("");
+    const strings = [0, 1, 15, 16, 17, 255, 256, 257, 65536, 65537].map(ascii)
+      .concat(["é", "aé", "abcdefghijklmnoé", "😀", "a\ud800b", "\udc00", `${ascii(300)}é`, `é${ascii(70000)}`, "﻿bom"]);
+    for (const text of strings) {
+      f.packet(encode({ [text]: text }));
+      const output = f.call();
+      assert.ok(output && typeof output === "object");
+      const expected = new TextDecoder("utf-8", { ignoreBOM: true }).decode(new TextEncoder().encode(text));
+      assert.deepEqual(Object.keys(output), [expected]);
+      assert.equal(Reflect.get(output, expected), expected);
+    }
+  });
+  test(`${label} a call made while arguments encode keeps both argument lists`, () => {
+    const f = fixture(shared);
+    const caller = method(bridge({
+      memory: f.memory,
+      bunwasm_alloc: () => 33,
+      bunwasm_call: (_index: number, input: number, size: number) => {
+        seen.push(decode(new Uint8Array(f.memory.buffer, input, size)));
+        new Uint8Array(f.memory.buffer).set(encode(undefined), 4099);
+        return 0;
+      },
+      bunwasm_describe: () => 0,
+      bunwasm_result_ptr: () => 4099,
+      bunwasm_result_len: () => 1,
+    }), "call");
+    const seen: unknown[] = [];
+    const outer = { first: "outer-before", get nested() { caller(1, ["inner", "é".repeat(40)]); return "outer-after"; } };
+    caller(2, [outer, "tail"]);
+    caller(3, ["again"]);
+    // The codec's arrays and objects come from its own realm, so compare their JSON.
+    assert.equal(JSON.stringify(seen), JSON.stringify([["inner", "é".repeat(40)], [{ first: "outer-before", nested: "outer-after" }, "tail"], ["again"]]));
+  });
   test(`${label} object keys remain own data properties without changing the prototype`, () => {
     const f = fixture(shared);
     f.packet(encode({}));

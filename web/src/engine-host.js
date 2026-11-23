@@ -138,12 +138,65 @@ const wireFromUtf8 = new NativeTextDecoder("utf-8", { ignoreBOM: true });
 const T = { UNDEFINED: 0, NULL: 1, FALSE: 2, TRUE: 3, NUM: 4, STR: 5, BYTES: 6, ARRAY: 7, OBJECT: 8, BIGINT: 9, BIGUINT: 10 };
 const I64_MIN = -(2n ** 63n);
 const I64_MAX = 2n ** 63n - 1n;
+// Most strings that cross are short ASCII paths and keys. Below these lengths a plain loop beats a
+// TextEncoder/TextDecoder call, whose fixed cost is larger than the copy.
+const SHORT_ENCODE = 16;
+const SHORT_DECODE = 256;
+// encodeInto writes in place when three bytes per UTF-16 unit fit; longer strings are encoded once.
+const IN_PLACE_ENCODE = 1 << 16;
+// The reused writer keeps at most this much buffer between calls.
+const KEPT_WRITER_BYTES = 1 << 20;
+const FIELD = { __proto__: null, value: undefined, enumerable: true, writable: true, configurable: true };
+
+/** Short UTF-8 as a string: ASCII without a copy, anything else through the decoder. */
+function wireString(bytes, start, end) {
+  if (end - start > SHORT_DECODE) return wireFromUtf8.decode(bytes.slice(start, end));
+  for (let i = start; i < end; i++) {
+    if (bytes[i] >= 0x80) return wireFromUtf8.decode(bytes.slice(start, end));
+  }
+  if (end - start > SHORT_ENCODE) return String.fromCharCode.apply(null, bytes.subarray(start, end));
+  let text = "";
+  for (let i = start; i < end; i++) text += String.fromCharCode(bytes[i]);
+  return text;
+}
 
 class Writer {
   constructor() {
     this.buf = new Uint8Array(256);
     this.view = new DataView(this.buf.buffer);
     this.len = 0;
+  }
+  /** Empty again for the next call, dropping a buffer a large argument grew. */
+  reset() {
+    this.len = 0;
+    if (this.buf.length > KEPT_WRITER_BYTES) {
+      this.buf = new Uint8Array(256);
+      this.view = new DataView(this.buf.buffer);
+    }
+    return this;
+  }
+  /** A length-prefixed UTF-8 string. */
+  string(s) {
+    const n = s.length;
+    if (n > IN_PLACE_ENCODE) return this.bytes(utf8.encode(s));
+    this.room(4 + n * 3);
+    const at = this.len + 4;
+    let end = at;
+    if (n <= SHORT_ENCODE) end = this.ascii(s, at);
+    if (end - at < n) end += utf8.encodeInto(end === at ? s : s.slice(end - at), this.buf.subarray(end)).written;
+    this.view.setUint32(this.len, end - at, true);
+    this.len = end;
+    return undefined;
+  }
+  /** Copies the leading ASCII of `s` to `at`; returns where it stopped. */
+  ascii(s, at) {
+    const buf = this.buf;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c >= 0x80) return at + i;
+      buf[at + i] = c;
+    }
+    return at + s.length;
   }
   room(n) {
     if (this.len + n <= this.buf.length) return;
@@ -183,7 +236,7 @@ class Writer {
         return undefined;
       case "string":
         this.byte(T.STR);
-        return this.bytes(utf8.encode(v));
+        return this.string(v);
       case "bigint":
         return this.bigint(v);
       case "object":
@@ -224,7 +277,7 @@ class Writer {
     this.byte(T.OBJECT);
     this.u32(keys.length);
     for (const k of keys) {
-      this.bytes(utf8.encode(k));
+      this.string(k);
       this.value(v[k]);
     }
     return undefined;
@@ -253,6 +306,13 @@ class Reader {
     const s = this.bytes.subarray(this.pos, this.pos + n);
     this.pos += n;
     return s;
+  }
+  string() {
+    const n = this.u32();
+    this.need(n);
+    const start = this.pos;
+    this.pos += n;
+    return wireString(this.bytes, start, this.pos);
   }
   value() {
     this.need(1);
@@ -285,7 +345,7 @@ class Reader {
         return n;
       }
       case T.STR:
-        return wireFromUtf8.decode(this.raw().slice());
+        return this.string();
       case T.BYTES:
         // Copied out: wasm memory can grow (and detach) on the next call.
         return this.raw().slice();
@@ -310,11 +370,12 @@ class Reader {
     this.need(n * 5);
     const out = {};
     for (let i = 0; i < n; i++) {
-      const k = wireFromUtf8.decode(this.raw().slice());
-      Object.defineProperty(out, k, {
-        value: this.value(), enumerable: true, writable: true, configurable: true,
-      });
+      const k = this.string();
+      // Defined, not assigned: a "__proto__" key or an inherited setter must not intercept it.
+      FIELD.value = this.value();
+      Object.defineProperty(out, k, FIELD);
     }
+    FIELD.value = undefined;
     return out;
   }
 }
@@ -334,13 +395,23 @@ function wasmCaller(exports, onWasmCallTrap) {
     if (reader.pos !== end) throw new RangeError("corrupt native result");
     return value;
   };
+  // Every call encodes into this writer and copies the bytes out before the wasm runs. A call that
+  // an argument's getter makes while it is still encoding gets a writer of its own.
+  let spare = new Writer();
   function call(index, args) {
-    const w = new Writer();
-    w.value(args);
-    const ptr = exports.bunwasm_alloc(w.len);
-    memory.bytes().set(w.buf.subarray(0, w.len), ptr);
+    const w = spare ?? new Writer();
+    spare = undefined;
+    let ptr, len;
+    try {
+      w.value(args);
+      len = w.len;
+      ptr = exports.bunwasm_alloc(len);
+      memory.bytes().set(w.buf.subarray(0, len), ptr);
+    } finally {
+      spare = w.reset();
+    }
     let status;
-    try { status = exports.bunwasm_call(index, ptr, w.len); }
+    try { status = exports.bunwasm_call(index, ptr, len); }
     catch (error) {
       reportWasmCallTrap(onWasmCallTrap, error, index);
       throw error;

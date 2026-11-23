@@ -198,6 +198,8 @@ pub struct Resolver {
     package_json: RefCell<HashMap<String, Option<Rc<Json>>>>,
     package_errors: RefCell<HashMap<String, ResolveNote>>,
     notes: RefCell<Vec<ResolveNote>>,
+    /// Found require() targets by importing directory and specifier (see `resolve`).
+    required: RefCell<HashMap<String, String>>,
 }
 
 #[derive(Clone)]
@@ -224,6 +226,7 @@ impl Resolver {
             package_json: RefCell::new(HashMap::new()),
             package_errors: RefCell::new(HashMap::new()),
             notes: RefCell::new(Vec::new()),
+            required: RefCell::new(HashMap::new()),
         }
     }
 
@@ -279,7 +282,29 @@ impl Resolver {
             dirname(from)
         };
         let from_dir = if from_dir.is_empty() { "/" } else { from_dir };
+        if kind == Kind::Import {
+            return self.resolve_in(spec, from, from_dir, kind);
+        }
+        // Like Node's Module._pathCache, a found require() target is kept for the process:
+        // callers re-resolve on every require(), and each resolution probes many paths.
+        let key = format!("{from_dir}\0{spec}");
+        if let Some(path) = self.required.borrow().get(&key) {
+            return Ok(Resolved::File(path.clone()));
+        }
+        let resolved = self.resolve_in(spec, from, from_dir, kind);
+        if let Ok(Resolved::File(path)) = &resolved {
+            self.required.borrow_mut().insert(key, path.clone());
+        }
+        resolved
+    }
 
+    fn resolve_in(
+        &self,
+        spec: &str,
+        from: &str,
+        from_dir: &str,
+        kind: Kind,
+    ) -> Result<Resolved, String> {
         if spec.starts_with("file:") {
             let path = file_url_to_path(spec).ok_or_else(|| format!("Invalid file URL: {spec}"))?;
             return self
