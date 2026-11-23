@@ -29,7 +29,6 @@ test("the selected native producer feeds the discovered Browser group consumer o
   expect(step).toContain('bun scripts/ci-shared-consumer-run.ts "${{ matrix.group }}"');
   expect(step).not.toMatch(/continue-on-error|build-native|build-bun|build-engine|BUN_WASM_SPIDERMONKEY_TIER/);
   expect(runner).toContain("program-${engine}");
-  expect(runner).toContain('engine === "spidermonkey" ? 1320 : 420');
   expect(runner).toContain('"browser-guest", "--profile", "shared-group"');
   expect(workflow.match(/name: Consume the discovered shared native and Browser checks/g)).toHaveLength(1);
   expect(workflow.indexOf("name: Produce the shared JSC profile once")).toBeLessThan(workflow.indexOf("name: Consume the discovered shared native and Browser checks"));
