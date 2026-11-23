@@ -1,0 +1,4 @@
+parent execArgv ["-e","console.log(\"eval ran\")","-b"]
+parent argv ["foo","-a"]
+child exit 0
+child ran ["-b"] ["x"]

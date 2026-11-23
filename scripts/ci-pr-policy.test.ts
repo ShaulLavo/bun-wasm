@@ -17,9 +17,7 @@ function admitted(job: Record<string, unknown>, event: string, draft: boolean, r
     .replaceAll("!cancelled()", "true")
     .replaceAll("always()", "true")
     .replaceAll("github.ref", JSON.stringify(ref))
-    .replaceAll("needs.ordinary-web-guests.outputs.shared-proof-inputs == 'success'", "true")
     .replace(/needs\.[\w-]+\.outputs\.[\w-]+/g, '"true"')
-    .replaceAll("needs.browser-production.result", '"skipped"')
     .replace(/needs\.[\w-]+\.result/g, '"success"');
   const result: unknown = new Function(`return (${expression})`)();
   if (typeof result !== "boolean") throw new Error("Expected boolean admission");
@@ -33,9 +31,9 @@ test("draft PRs defer native and browser work until ready without changing push 
     if (id === "update-status") continue;
     const job = record(value);
     expect(admitted(job, "pull_request", true), id).toBe(id === "selection" || id === "quality" || id === "ci-result");
-    expect(admitted(job, "pull_request", false), id).toBe(id !== "browser-production");
-    expect(admitted(job, "push", false), id).toBe(id !== "browser-production");
-    expect(admitted(job, "workflow_dispatch", false), id).toBe(id !== "browser-production");
+    expect(admitted(job, "pull_request", false), id).toBe(true);
+    expect(admitted(job, "push", false), id).toBe(true);
+    expect(admitted(job, "workflow_dispatch", false), id).toBe(true);
   }
 });
 
@@ -72,31 +70,27 @@ test("update statuses run only for manual checks of the standing update branch",
 });
 
 test("no job runs on Boat runners", () => {
-  const formerBoatJobs = ["jsc-prebuild", "native-quality", "rust", "package", "shared-sysroot", "web", "browser-process"];
-  for (const id of formerBoatJobs) expect(record(jobs[id])["runs-on"], id).toBe("ubuntu-latest");
+  for (const [id, value] of Object.entries(jobs)) {
+    expect(record(value)["runs-on"], id).toBe("ubuntu-latest");
+  }
   const boatJobs = Object.entries(jobs).filter(([, value]) => JSON.stringify(record(value)["runs-on"]).includes("boat"));
   expect(boatJobs.map(([id]) => id)).toEqual([]);
 });
 
 test("artifact transport failures release the runner within five minutes and stay blocking", () => {
-  const sharedDownloadBudgets = new Map([
-    ["shared-proof-inputs", "${{ fromJSON(steps.shared-download-budget.outputs.minutes) }}"],
-    ["native-profile-launcher", "${{ fromJSON(steps.shared-launcher-budget.outputs.minutes) }}"],
-  ]);
   let transfers = 0;
   for (const [jobId, value] of Object.entries(jobs)) {
     const steps = record(value).steps;
     if (!Array.isArray(steps)) throw new Error("Expected job steps");
-    for (const value of steps) {
-      const step = record(value);
+    for (const entry of steps) {
+      const step = record(entry);
       if (!/^actions\/(?:upload|download)-artifact@/.test(String(step.uses))) continue;
       const artifact = record(step.with);
       const producerDiagnostics = jobId === "shared-sysroot" && artifact.name === "shared-spidermonkey-producer-diagnostics";
-      const budget = jobId === "shared-consumers" ? sharedDownloadBudgets.get(String(artifact.name)) : undefined;
-      expect(step["timeout-minutes"]).toBe(budget ?? (producerDiagnostics ? 2 : 5));
+      expect(step["timeout-minutes"]).toBe(producerDiagnostics ? 2 : 5);
       expect(step["continue-on-error"]).toBeUndefined();
       const retainWeek = (jobId === "web-unit" && step.name === "Retain first C1 WebKit admission failure")
-        || (jobId === "rust" && artifact.name === "ordinary-spidermonkey-program");
+        || (jobId === "ordinary-build" && artifact.name === "ordinary-spidermonkey-program");
       if (String(step.uses).startsWith("actions/upload-artifact@")) expect(artifact["retention-days"]).toBe(retainWeek ? 7 : 1);
       transfers++;
     }

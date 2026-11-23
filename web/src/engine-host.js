@@ -3,8 +3,6 @@ import { createScriptEvaluation } from "./script-evaluation.ts";
 import { createStackPrograms } from "./stack-programs.ts";
 import { observePromise } from "./promise-reactions.ts";
 import { installNativeStreamState } from "./native-stream-state.ts";
-import { oversizedCryptoInput } from "./crypto-inputs.js";
-import { installHostCrypto } from "./crypto-host.js";
 import { memoryViews } from "waffle/core/memory-views";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "./buffer-transfer.ts";
 import { ContentModules } from "./content-modules.ts";
@@ -12,8 +10,10 @@ import { createModuleRecords } from "./module-records.ts";
 import { SLOT_NAMES } from "./net/trampoline.ts";
 import { trackLookup } from "./net/lookup.ts";
 import { bindSharedObjectHost } from "./shared-objects/host.ts";
+import { hostCrypto } from "./host-crypto.ts";
 import { reportWasmCallTrap } from "./wasm-call-trap.ts";
 import { installSharedBufferRealm } from "./shared-objects/realm.ts";
+import { createTickScheduler } from "./tick-scheduler.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -38,14 +38,7 @@ import { installSharedBufferRealm } from "./shared-objects/realm.ts";
 // The host's own versions of what the polyfills replace on globalThis.
 /** Capability flags the host answers for; the wasm owns all the others. */
 const NETWORK_CAPS = new Set(SLOT_NAMES);
-const nativeSubtleCrypto = globalThis.crypto?.subtle;
 const NativeDOMException = globalThis.DOMException;
-const NativeCryptoKey = globalThis.CryptoKey;
-const NativeSubtleCrypto = globalThis.SubtleCrypto;
-const nativeSubtleOperations = nativeSubtleCrypto && Object.fromEntries(
-  ["digest", "generateKey", "importKey", "exportKey", "sign", "verify", "encrypt", "decrypt", "deriveBits", "deriveKey", "wrapKey", "unwrapKey"]
-    .map(name => [name, nativeSubtleCrypto[name]]),
-);
 const NativeTextEncoder = globalThis.TextEncoder;
 const NativeTextDecoder = globalThis.TextDecoder;
 const NativeBlob = globalThis.Blob;
@@ -133,6 +126,7 @@ const nativePromiseHasInstance = Function.prototype.call.bind(Function.prototype
 const NativeString = globalThis.String;
 const PENDING = Object.freeze({ state: "pending", value: undefined });
 const nativeProcess = typeof process === "object" && process && process.versions && process.versions.node ? process : null;
+const nativeProcessNextTick = nativeProcess && typeof nativeProcess.nextTick === "function" ? nativeProcess.nextTick.bind(nativeProcess) : null;
 const nativeAddEventListener = typeof globalThis.addEventListener === "function" ? globalThis.addEventListener.bind(globalThis) : null;
 
 const utf8 = new NativeTextEncoder();
@@ -431,6 +425,16 @@ class EngineHost {
     this.timer = null;
     this.timerAt = Infinity;
     this.immediate = false;
+    this.tickQueued = false;
+    this.ticks = typeof createTickScheduler === "function"
+      ? createTickScheduler(
+        () => { this.tickQueued = false; this.guard(() => this.internal.runTicks()); },
+        () => this.schedule(0),
+        nativeQueueMicrotask,
+        () => this.exited,
+      )
+      : null;
+    this.gcYield = false;
     // Module graph: key (path or builtin) -> URL; URL -> path for stack traces.
     this.urls = new Map();
     // promise -> {state, value}, for console.log and Bun.peek.
@@ -452,6 +456,14 @@ class EngineHost {
     if (NativeMessageChannel) {
       this.channel = new NativeMessageChannel();
       this.channel.port1.onmessage = () => {
+        if (this.gcYield) {
+          this.gcYield = false;
+          nativeSetTimeout(() => {
+            this.immediate = false;
+            this.pump();
+          }, 0);
+          return;
+        }
         this.immediate = false;
         this.pump();
       };
@@ -462,6 +474,8 @@ class EngineHost {
     const d = this.wasm.describe();
     this.entry = d.entry;
     const native = this.buildNative(d);
+    // Bulk crypto on the host's own Web Crypto; the runtime validates every call first.
+    native.hostCrypto = hostCrypto(promise => this.track(promise));
     this.native = native;
     // Before any module is read: the wasm then prepares every module for its record.
     if (!this.o.modules) native.hostUseModuleRecords();
@@ -480,7 +494,6 @@ class EngineHost {
     this.stackPrograms = internal.hasNativeStackTrace
       ? createStackPrograms(bytes => native.hash("sha256", bytes)) : undefined;
     internal.isProgramScriptHash = hash => this.stackPrograms?.has(hash) === true;
-    installHostCrypto(nativeSubtleCrypto,NativeCryptoKey,internal.crypto,native);
     // Module URLs show as their paths; frames of this host itself (and the
     // worker bundle it lives in) are internal, like the polyfills. So are Node's
     // own modules on the Node test host, internal or public: with async context
@@ -548,32 +561,10 @@ class EngineHost {
     // Browser workers expose no engine version, so they add no key.
     const hostV8 = globalThis.process?.versions?.v8;
     if (typeof hostV8 === "string") native.engineVersion = ["v8", hostV8];
-    this.installSubtleCrypto();
-    native.subtleCrypto = nativeSubtleCrypto;
     native.DOMException = NativeDOMException;
-    native.CryptoKey = NativeCryptoKey;
-    native.SubtleCrypto = NativeSubtleCrypto;
     const mapPosition = native.mapPosition;
     Object.assign(native, this.valueNatives((name, line, col) => name.startsWith("bunwasm:hot:") && native.hotMapLookup ? native.hotMapLookup(name, line, col) : mapPosition(name, line, col)));
     return native;
-  }
-
-  installSubtleCrypto() {
-    if (!nativeSubtleCrypto) return;
-    const host = this;
-    for (const [name, operation] of Object.entries(nativeSubtleOperations)) {
-      const wrapper = { [name](...args) {
-        let result;
-        try {
-          if (oversizedCryptoInput(name,args)) throw new NativeDOMException("Crypto input is too large","OperationError");
-          result = Reflect.apply(operation,this,args);
-        } catch (error) { result = NativePromise.reject(error); }
-        // Tracking observes rejection; the returned promise must still report an unhandled rejection.
-        return host.track(result).then(value => value);
-      } }[name];
-      Object.defineProperty(wrapper, "length", { value: operation.length });
-      Object.defineProperty(nativeSubtleCrypto, name, { value: wrapper, writable: true, configurable: true });
-    }
   }
 
   valueNatives(mapPosition) {
@@ -592,14 +583,33 @@ class EngineHost {
         host.exit(status);
         throw new ExitSignal(status);
       },
+      isExecutionUnwind(error) {
+        return Boolean(host.o.isExecutionUnwind?.(error));
+      },
       scheduleTick() {
+        if (host.ticks) {
+          host.ticks.schedule();
+          host.tickQueued = host.ticks.queued;
+          return;
+        }
         if (host.tickQueued) return;
         host.tickQueued = true;
-        nativeQueueMicrotask(() => host.drainTicks());
+        nativeQueueMicrotask(() => {
+          if (!host.tickQueued || host.exited) return;
+          host.tickQueued = false;
+          host.guard(() => host.internal.runTicks());
+        });
       },
       runMicrotasks() {
         // Native Promise jobs cannot run until the synchronous guest drain returns.
-        host.drainTicks();
+        if (host.ticks) {
+          host.ticks.drainNow();
+          host.tickQueued = host.ticks.queued;
+          return;
+        }
+        if (!host.tickQueued) return;
+        host.tickQueued = false;
+        host.guard(() => host.internal.runTicks());
       },
       // A timer or immediate was added, maybe while the loop waits on a
       // promise (top-level await) with nothing armed.
@@ -638,7 +648,12 @@ class EngineHost {
         if (host.o.asyncContext) return host.o.asyncContext.set(v);
         host.asyncContext = v;
       },
-      gc: () => nativeGc?.(),
+      gc() {
+        const runGc = typeof host.o.gc === "function" ? host.o.gc : nativeGc;
+        if (!runGc) return;
+        runGc();
+        if (host.o.yieldAfterGc) host.gcYield = true;
+      },
       memoryUsage() {
         const mem = typeof performance === "object" && performance.memory;
         const used = mem ? mem.usedJSHeapSize : 0;
@@ -946,17 +961,8 @@ class EngineHost {
     Object.defineProperty(globalThis, "fetch", { value: fetch, configurable: true, writable: true, enumerable: false });
   }
 
-  drainTicks() {
-    this.tickQueued = false;
-    this.guard(() => this.internal.runTicks());
-  }
-
-  // Bun runs process.nextTick callbacks before promise jobs, and promise
-  // callbacks keep the AsyncLocalStorage context they were registered in.
-  // The host engine owns the job queue, so every callback given to
-  // Promise.prototype.then (queueMicrotask goes through it too) drains
-  // pending ticks first and restores its context. `await` doesn't call
-  // `then` on native promises, so it is not covered.
+  // Promise callbacks keep the AsyncLocalStorage context they were registered in,
+  // and track settled states for console.log and Bun.peek.
   wrapPromiseJobs() {
     const host = this;
     const states = this.promiseStates;
@@ -978,7 +984,6 @@ class EngineHost {
       const context = host.asyncContext;
       const nativeContext = host.o.asyncContext;
       return (value) => {
-        if (host.tickQueued) host.drainTicks();
         const previous = host.asyncContext;
         if (!nativeContext) host.asyncContext = context;
         try {
@@ -1073,16 +1078,18 @@ class EngineHost {
         stop();
       }
     };
+    const scheduleRejectionFlush = nativeProcessNextTick || nativeQueueMicrotask;
+    const runRejection = fn => (this.ticks ? this.ticks.runRejectionCallback(fn, scheduleRejectionFlush) : fn());
     const onRejection = (reason, promise) => {
       if (this.exited || reason instanceof ExitSignal) return;
       if (handledWhileReporting.has(promise)) return;
       if (this.transfer(reason)) return;
-      if (!this.guard(() => report(reason, promise))) this.exit(1);
+      if (!runRejection(() => this.guard(() => report(reason, promise)))) this.exit(1);
     };
     // The host reports a late handler on a promise it reported; the runtime emits
     // 'rejectionHandled' when that report reached an 'unhandledRejection' listener.
     const onHandled = (promise) => {
-      if (!this.exited) this.guard(() => this.internal.handleRejectionHandled(promise));
+      if (!this.exited) runRejection(() => this.guard(() => this.internal.handleRejectionHandled(promise)));
     };
     if (nativeProcess) {
       nativeProcess.on("unhandledRejection", onRejection);
@@ -1119,12 +1126,16 @@ class EngineHost {
   }
 
   runEntry() {
+    this.enterRoot();
     const { entry, internal } = this;
+    const run = () => {
+      if (entry.kind === "eval") return this.importKey(entry.main);
+      if (entry.kind === "test") return internal.runTests(entry.args);
+      return internal.runMain(entry.main);
+    };
     let started;
     try {
-      if (entry.kind === "eval") started = this.importKey(entry.main);
-      else if (entry.kind === "test") started = internal.runTests(entry.args);
-      else started = internal.runMain(entry.main);
+      started = this.ticks ? this.ticks.runTask(run) : run();
     } catch (err) {
       this.uncaught(err);
       return;
@@ -1170,8 +1181,12 @@ class EngineHost {
     if (ms <= 0) {
       if (this.immediate) return;
       this.immediate = true;
-      if (this.channel) this.channel.port2.postMessage(0);
-      else nativeSetTimeout(() => {
+      if (this.channel && !this.gcYield) {
+        this.channel.port2.postMessage(0);
+        return;
+      }
+      this.gcYield = false;
+      nativeSetTimeout(() => {
         this.immediate = false;
         this.pump();
       }, 0);
@@ -1197,16 +1212,27 @@ class EngineHost {
   pump() {
     if (this.exited) return;
     this.enterRoot();
+    const step = fn => (this.ticks ? this.ticks.runTask(fn) : fn());
     // Read before stepping I/O, so a change published meanwhile still ends the next wait.
     const observedWake = this.o.processWake ? nativeAtomicsLoad(this.o.processWake, 0) : 0;
-    this.guard(() => this.internal.pumpSignals(), false);
+    step(() => this.guard(() => this.internal.pumpSignals(), false));
     if (this.exited) return;
+    // Drain ticks queued during the previous turn's host microtask checkpoint (including
+    // native `await` chains) after V8's microtask queue has emptied and ahead of the next
+    // timer or immediate.
+    if (this.ticks?.drainBeforeTurn()) {
+      this.flush();
+      if (this.exited) return;
+      this.idleWait = false;
+      return this.schedule(0);
+    }
     if (this.testComplete) return this.finish();
-    let next = this.guard(() => this.internal.runTimers(), 0);
+    let next = step(() => this.guard(() => this.internal.runTimers(), 0));
+    if (this.exited) return;
     // Network handles (net.js waiters): step them; the networking host's
     // onNews wakes the loop when something changes.
     const io = this.guard(() => this.internal.ioPending(), 0);
-    if (io > 0 && this.guard(() => this.internal.pumpIo(), false) && next !== 0) next = 0;
+    if (io > 0 && step(() => this.guard(() => this.internal.pumpIo(), false)) && next !== 0) next = 0;
     if (this.o.debug) this.o.debug(`pump next=${next} pending=${this.pendingAsync} io=${io}`);
     this.flush();
     if (this.exited) return;
@@ -1267,7 +1293,9 @@ class EngineHost {
     // Bun's on_before_exit: the microtasks and ticks that 'beforeExit' listeners queue run
     // first (the next turn), and the event comes again only after loop work they left alive.
     if (!stopped && !this.beforeExitRan) {
-      this.beforeExitRan = !this.testComplete && this.guard(() => this.internal.emitBeforeExit(), false);
+      const emit = () => this.guard(() => this.internal.emitBeforeExit(), false);
+      this.beforeExitRan = !this.testComplete && (this.ticks ? this.ticks.runTask(emit) : emit());
+      if (this.exited) return undefined;
       if (this.beforeExitRan) return this.schedule(0);
     }
     this.beforeExitRan = false;

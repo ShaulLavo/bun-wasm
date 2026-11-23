@@ -173,17 +173,30 @@ function definedDeclarations(cursor: Cursor, declarations: MemoryLimits[]): void
 
 /** Read all actual memories, including non-env imports and unexported definitions. */
 export function wasmMemoryLimits(bytes: Uint8Array): readonly MemoryLimits[] {
-  const module: Cursor = { bytes, at: 8 };
   const declarations: MemoryLimits[] = [];
+  forEachSection(bytes, (id, section) => {
+    if (id === 2) importedDeclarations(section, declarations);
+    if (id === 5) definedDeclarations(section, declarations);
+  });
+  return declarations;
+}
+
+function forEachSection(bytes: Uint8Array, visit: (id: number | undefined, section: Cursor) => void): void {
+  const module: Cursor = { bytes, at: 8 };
   while (module.at < bytes.length) {
     const id = bytes[module.at++];
     const size = readUnsigned(module);
     const section: Cursor = { bytes: bytes.subarray(module.at, module.at + size), at: 0 };
     module.at += size;
-    if (id === 2) importedDeclarations(section, declarations);
-    if (id === 5) definedDeclarations(section, declarations);
+    visit(id, section);
   }
-  return declarations;
+}
+
+/** Whether instantiating the module runs a start function. */
+export function wasmHasStartFunction(bytes: Uint8Array): boolean {
+  let found = false;
+  forEachSection(bytes, id => { found ||= id === 8; });
+  return found;
 }
 
 export function programKind(module: WebAssembly.Module): ProgramKind {

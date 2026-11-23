@@ -6,7 +6,10 @@ import { runInNewContext } from "node:vm";
 // stub loader. Its only runtime dependency is node:events; streams load on first use.
 export function loadFileHandleModule(): unknown {
   const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/fs_file_handle.ts", import.meta.url), "utf8");
-  const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`), { TextEncoder, DOMException });
+  const factory = runInNewContext(
+    new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`),
+    { TextEncoder, DOMException, FinalizationRegistry },
+  );
   return factory({
     describe: String,
     require(name: string) {

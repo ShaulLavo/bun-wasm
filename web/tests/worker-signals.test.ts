@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import type { RuntimeWorkerHost } from "waffle/browser/worker";
 import type { BunExecutorHost, RunRequest } from "../src/bun-executor.js";
+import { earlyInstance, type EarlyInstance } from "../src/early-instance.js";
 
 // Exercise the actual Bun worker entry and bootstrap module without executing guest code in the
 // test runner's realm. Waffle's bootstrap/authority behavior is covered separately; this isolates
@@ -15,26 +16,54 @@ const script = (file: string) => transpiler.transformSync(
 const source = script("../src/worker-main.ts") + "\nstart(self, [], () => {});\n";
 const entry = script("../src/worker.ts").replace('import("./worker-main.js")', "loadMain()");
 
-test("Bun worker entry posts before loading its bootstrap and keeps early messages for it", async () => {
+test("Bun worker entry posts first, instantiates the guest on its start message, then loads its bootstrap", async () => {
   const messages: unknown[] = [];
   const listeners = new Set<(event: { data: unknown }) => void>();
-  const loaded = Promise.withResolvers<{ start(ctx: unknown, early: readonly { data: unknown }[], stopKeeping: () => void): void }>();
+  const loaded = Promise.withResolvers<{ start(ctx: unknown, early: readonly { data: unknown }[], stopKeeping: () => void, instance: EarlyInstance | undefined): void }>();
   const scope = {
     postMessage(message: unknown) { messages.push(message); },
     addEventListener(_type: string, listener: (event: { data: unknown }) => void) { listeners.add(listener); },
     removeEventListener(_type: string, listener: (event: { data: unknown }) => void) { listeners.delete(listener); },
   };
+  const created: EarlyInstance[] = [];
+  const instantiate = (request: unknown) => {
+    // The guest is instantiated before the bootstrap starts to load.
+    expect(loads).toBe(0);
+    const instance = earlyInstance(request);
+    if (instance) created.push(instance);
+    return instance;
+  };
   let loads = 0;
-  runInNewContext(entry, { self: scope, setTimeout, loadMain() { loads++; expect(messages).toEqual([{ type: "worker-script" }]); return loaded.promise; } });
+  runInNewContext(entry, { self: scope, setTimeout, earlyInstance: instantiate, loadMain() { loads++; expect(messages).toEqual([{ type: "worker-script" }]); return loaded.promise; } });
   expect(messages).toEqual([{ type: "worker-script" }]);
-  expect(loads).toBe(1);
+  // Nothing loads until the start message has been handled.
+  expect(loads).toBe(0);
   expect(listeners.size).toBe(1);
-  const handshake = { data: { diagnostic: true } }, request = { data: { start: true } };
-  for (const listener of listeners) { listener(handshake); listener(request); }
-  const started = Promise.withResolvers<unknown[]>();
-  loaded.resolve({ start(ctx, early, stopKeeping) { expect(ctx).toBe(scope); stopKeeping(); started.resolve(early.slice()); } });
-  expect(await started.promise).toEqual([handshake, request]);
+  const module = new WebAssembly.Module(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  const request = { data: { module, startless: true } }, later = { data: { diagnostic: true } };
+  for (const listener of listeners) { listener(request); listener(later); }
+  expect(loads).toBe(1);
+  expect(created.map(instance => instance.module)).toEqual([module]);
+  const started = Promise.withResolvers<{ early: unknown[]; instance: EarlyInstance | undefined }>();
+  loaded.resolve({ start(ctx, early, stopKeeping, instance) { expect(ctx).toBe(scope); stopKeeping(); started.resolve({ early: early.slice(), instance }); } });
+  const handed = await started.promise;
+  expect(handed.early).toEqual([request, later]);
+  expect(handed.instance).toBe(created[0]);
   expect(listeners.size).toBe(0);
+});
+
+test("a first message that is not a startless guest still loads the bootstrap, with no early instance", async () => {
+  const listeners = new Set<(event: { data: unknown }) => void>();
+  const loaded = Promise.withResolvers<{ start(ctx: unknown, early: readonly { data: unknown }[], stopKeeping: () => void, instance: EarlyInstance | undefined): void }>();
+  const scope = { postMessage() {}, addEventListener(_type: string, listener: (event: { data: unknown }) => void) { listeners.add(listener); }, removeEventListener() {} };
+  let loads = 0;
+  runInNewContext(entry, { self: scope, setTimeout, earlyInstance, loadMain() { loads++; return loaded.promise; } });
+  const module = new WebAssembly.Module(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  for (const listener of listeners) listener({ data: { module } });
+  expect(loads).toBe(1);
+  const started = Promise.withResolvers<EarlyInstance | undefined>();
+  loaded.resolve({ start(_ctx, _early, _stopKeeping, instance) { started.resolve(instance); } });
+  expect(await started.promise).toBeUndefined();
 });
 
 test("Bun worker bootstrap dispatches kept messages again after installing its handler", () => {

@@ -1,5 +1,6 @@
 {
   "owner": "runtime",
+  "isolation": "process",
   "path": "scripts/install-selection.test.ts",
   "localRuntime": true
 }

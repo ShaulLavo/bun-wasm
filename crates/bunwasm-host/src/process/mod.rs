@@ -529,8 +529,9 @@ impl Processes {
         self.next = self.next.max(fd as u32 + 1);
     }
 
-    pub fn preopen_count(&self) -> usize {
-        self.runtime.dirs.len()
+    /// The preopens: host directory and guest path, in descriptor order from 3.
+    pub fn dirs(&self) -> &[(std::path::PathBuf, String)] {
+        &self.runtime.dirs
     }
 
     pub fn readiness(&self, fd: i32, write: bool) -> Result<(bool, bool), i32> {

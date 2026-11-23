@@ -1,4 +1,5 @@
 {
   "owner": "runtime",
+  "batch": "02-producer",
   "path": "scripts/spidermonkey-loop-controls.test.ts"
 }

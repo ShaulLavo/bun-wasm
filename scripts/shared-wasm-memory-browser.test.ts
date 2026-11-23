@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { programKind, programProfile, sharedGroupPair } from "../src/engine-kind.ts";
-import { spiderMonkeyTierOptions, spiderMonkeyTiers, type SpiderMonkeyTier } from "./spidermonkey-native-qualification.ts";
+import { sharedBrowserClocks, spiderMonkeyTierOptions, spiderMonkeyTiers, type SpiderMonkeyTier } from "./spidermonkey-native-qualification.ts";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -27,8 +27,9 @@ function selectedKind() {
   return kind;
 }
 
-const tiers: readonly (SpiderMonkeyTier | "default")[] = selectedKind() === "spidermonkey" ? spiderMonkeyTiers : ["default"];
+const kind = selectedKind();
+const tiers: readonly (SpiderMonkeyTier | "default")[] = kind === "spidermonkey" ? spiderMonkeyTiers : ["default"];
 test.each(tiers)("the shared Wasm memory fixture passes in a real group guest on the Browser host, tier %s", tier => {
   const env = tier === "default" ? process.env : spiderMonkeyTierOptions(tier, process.env).env;
   execFileSync(process.execPath, ["tests/shared-wasm-memory-browser.ts", "chromium"], { cwd: join(root, "web"), stdio: "inherit", env });
-}, 600_000);
+}, sharedBrowserClocks(kind).driverMs + 60_000);

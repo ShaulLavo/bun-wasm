@@ -21,3 +21,14 @@ function searchMatrix(factory: typeof Buffer) {
 test("UTF-16 search offsets match native Bun for small string and Buffer needles", () => {
   expect(searchMatrix(GuestBuffer)).toEqual(searchMatrix(Buffer));
 });
+
+test("unknown encoding object is coerced once during indexOf", () => {
+  let calls = 0;
+  expect(() => GuestBuffer.from("abc").indexOf("a", 0, {
+    toString() {
+      calls++;
+      return "bogus";
+    },
+  } as unknown as BufferEncoding)).toThrow(expect.objectContaining({ code: "ERR_UNKNOWN_ENCODING", message: "Unknown encoding: bogus" }));
+  expect(calls).toBe(1);
+});

@@ -56,7 +56,7 @@ test("build tool setup requires explicit runner-owned paths before doing work", 
 });
 
 test("every JSC stamp and sysroot job installs the pinned tools before identifying or using them", () => {
-  for (const id of ["jsc-prebuild", "native-quality", "rust"]) {
+  for (const id of ["native-quality", "ordinary-build", "rust"]) {
     const steps = workflow.jobs[id]!.steps;
     const install = steps.findIndex(step => step.name === installName);
     expect(install, id).toBeGreaterThan(0);

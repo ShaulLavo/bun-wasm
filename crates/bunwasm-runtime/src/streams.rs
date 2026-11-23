@@ -11,6 +11,7 @@ use crate::compression::{Handle, Mode, Options, WebCoder, WebFormat};
 
 struct TextDecoder {
     decoder: Decoder,
+    encoding: String,
     fatal: bool,
 }
 
@@ -26,7 +27,11 @@ impl TextDecoder {
                 .decoder
                 .decode_to_string_without_replacement(bytes, &mut text, last);
             if result != DecoderResult::InputEmpty {
-                return Err(NativeError::type_error("The encoded data was not valid"));
+                return Err(NativeError::type_error(format!(
+                    "The encoded data was not valid for encoding {}",
+                    self.encoding
+                ))
+                .prop("code", "ERR_ENCODING_INVALID_ENCODED_DATA"));
             }
         } else {
             let (result, _, _) = self.decoder.decode_to_string(bytes, &mut text, last);
@@ -79,13 +84,15 @@ pub fn install(table: &mut Table) {
         } else {
             encoding.new_decoder_with_bom_removal()
         };
+        let encoding_name = encoding.name().to_ascii_lowercase();
         let id = r.borrow_mut().insert(Resource::Text(TextDecoder {
             decoder,
+            encoding: encoding_name.clone(),
             fatal: a.bool(1),
         }));
         Ok(Record::new()
             .set("id", id)
-            .set("encoding", encoding.name().to_ascii_lowercase())
+            .set("encoding", encoding_name)
             .into())
     });
     let r = resources.clone();

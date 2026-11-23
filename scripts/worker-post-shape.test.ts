@@ -2,7 +2,9 @@
 // which throws has moved nothing rests on that call being the last thing the function does: no
 // statement after it, no `try` around it, no result taken from it. This checks that shape in the
 // JavaScript the guest actually embeds, which the build makes from the TypeScript sources with
-// `scripts/transpile-runtime.ts`, and in every wrapper that forwards to a port's `postMessage`.
+// `scripts/transpile-runtime.ts` (erase types, then drop whitespace and comments), and in every
+// wrapper that forwards to a port's `postMessage`. The readable erased form carries the detailed
+// checks; the minified form must keep the same last statements.
 import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -113,11 +115,33 @@ test("every wrapper forwards to the port's postMessage as its own last statement
   }
 });
 
-test("the build emits these modules by erasing types, statement for statement", () => {
+/** The module as the guest embeds it: types erased, then whitespace and comments removed. */
+function minified(stem: string): string {
+  const output = join(scratch, `${stem}.min.js`);
+  const result = Bun.spawnSync(["bun", join(root, "scripts/transpile-runtime.ts"), join(root, `crates/bunwasm-runtime/src/js/${stem}.ts`), output, "--minify-whitespace"], { stdout: "pipe", stderr: "pipe" });
+  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+  return readFileSync(output, "utf8");
+}
+
+test("the minified modules the guest embeds keep the same last statements", () => {
+  const embeddedThreads = codeOnly(minified("worker_threads"));
+  const list = statements(bodyOf(embeddedThreads, /postMessage\(value,transfer\)\{if\(!arguments\.length\)throw Object\.assign/));
+  expect(list.at(-1)).toBe("internal.native.transferArrayBuffers(call[0],call[1],call[2],call[3],call[4],call[5],call[6])");
+  expect(list.at(-2)).toBe("const call=beginPost(state,group.io,state.peer,packet,list);");
+  expect(list.filter(statement => statement.includes("transferArrayBuffers"))).toHaveLength(1);
+  expect(list.some(statement => /^(try|for|while|do|switch|using)\b/.test(statement))).toBe(false);
+  expect(embeddedThreads).toContain("postMessage(value,transfer){this.#port.postMessage(value,transfer)}");
+  const embeddedWeb = codeOnly(minified("web_worker"));
+  for (const header of [/postMessage\(value,transfer\)\{if\(this\.#phase/, /postMessage\(value,transfer\)\{if\(!arguments\.length\)throw new TypeError/]) {
+    const forwarding = statements(bodyOf(embeddedWeb, header));
+    expect(forwarding.at(-1)).toMatch(/^(this\.#worker|port)\.postMessage\(value,transferList\(transfer\)\)$/);
+    expect(forwarding.some(statement => /^(try|for|while|do|switch|using)\b/.test(statement))).toBe(false);
+  }
+});
+
+test("the build erases types statement for statement, then removes whitespace and comments only", () => {
   const build = readFileSync(join(root, "crates/bunwasm-runtime/build/polyfills.rs"), "utf8");
-  // Only these two stems go through the minifying transpiler, which may rewrite statements.
-  expect(build).toContain('let batch = if matches!(stem, "stack_trace" | "bun_builtins") {');
-  expect(build).toContain("transpile_batch(&ordinary, &transpiler, false);");
+  expect(build).toContain("transpile_batch(&compact, &transpiler, true);");
   // Erasure keeps every line: the emitted module has the source's line count.
   const source = readFileSync(join(root, "crates/bunwasm-runtime/src/js/worker_threads.ts"), "utf8");
   expect(emittedThreads.split("\n").length).toBe(source.split("\n").length);

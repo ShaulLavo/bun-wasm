@@ -1,5 +1,5 @@
 import { declareModuleMemory, pages, type MemoryDeclaration } from "waffle";
-import { wasmMemoryLimits } from "./engine-kind.ts";
+import { wasmHasStartFunction, wasmMemoryLimits } from "./engine-kind.ts";
 
 export function memoryDeclarations(source: Uint8Array): readonly MemoryDeclaration[] {
   return wasmMemoryLimits(source).map(memory => memory.shared
@@ -20,6 +20,13 @@ export function recordProgramMemory(module: WebAssembly.Module, source: Uint8Arr
   const core = limits.length === 1 ? limits[0] : undefined;
   const declaredMaximumBytes = core?.maximum === undefined ? null : core.maximum * 65536;
   coreLimits.set(module, { declaredMaximumBytes, factoryMaximumBytes: core?.origin === "defined" ? declaredMaximumBytes : null });
+  if (!wasmHasStartFunction(source)) startless.add(module);
+}
+
+const startless = new WeakSet<WebAssembly.Module>();
+/** True only for a module whose bytes were read here and declare no start function. */
+export function programIsStartless(module: WebAssembly.Module): boolean {
+  return startless.has(module);
 }
 
 /** Imported memory can have a tighter factory maximum; module declarations cannot establish it. */

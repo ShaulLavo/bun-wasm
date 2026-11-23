@@ -32,7 +32,13 @@ const originalSyntaxAtPR140 = "d7a30a96ca47cdac8fc9e4bf52f3e83e237e45c75d6589d4a
 
 test("streams changes only approved normalization and the own-descriptor invariant", () => {
   const emitted = emit("streams");
+  const bufferSourceLine = '  const bufferSource = internal.require("buffer_source");\n';
+  expect(emitted.split(bufferSourceLine)).toHaveLength(2);
   const original = emitted
+    .replace(bufferSourceLine, "")
+    .replace("const empty = bufferSource.empty;", "const empty = new Uint8Array(0);")
+    .replace(/function codecTransformer\(id\s*,\s*convert\s*\)/, "function codecTransformer(id, convert = internal.toUint8)")
+    .replace("codecTransformer(decoder.id, bufferSource.readBufferSource)", "codecTransformer(decoder.id)")
     .replace("const convertedLabel = domString(label);", "label = domString(label);")
     .replace("const convertedOptions = dictionary(options);", "options = dictionary(options);")
     .replaceAll("convertedOptions.fatal", "options.fatal")
@@ -137,8 +143,17 @@ const internal = {
     release(id) { events.push(["release", id]); },
   } },
   toUint8(value) { if (value === sentinel) throw sentinel; if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength); if (value instanceof ArrayBuffer) return new Uint8Array(value); throw new TypeError("Expected an ArrayBuffer or ArrayBufferView"); },
-  require(name) { if (name === "streams_polyfill") return polyfill; if (name === "compression_streams") return compression; throw new Error(name); },
+  require(name) {
+    if (name === "streams_polyfill") return polyfill;
+    if (name === "compression_streams") return compression;
+    if (name === "buffer_source") return bufferSource;
+    throw new Error(name);
+  },
 };
+const rawBufferSource = (${emit("buffer_source")})();
+const bufferSource = Object.assign({}, rawBufferSource, {
+  readBufferSource(value) { if (value === sentinel) throw sentinel; return rawBufferSource.readBufferSource(value); },
+});
 const polyfill = (${readFileSync(join(js, "streams_polyfill.js"), "utf8")})(internal);
 const compression = (${emit("compression_streams")})(internal);
 const getDescriptor = Object.getOwnPropertyDescriptor;
@@ -216,4 +231,40 @@ test("host wrapper returns the host text constructors and calls only the compres
   })`, Object.assign({}, host, { record(...args: unknown[]) { calls.push(args); } }));
   expect(output).toMatchObject(host);
   expect(calls).toEqual([["compression_streams"], [TransformStream, ReadableStream, WritableStream]]);
+});
+
+test("portable TextDecoderStream ignores detached views and shadowed byteLength and preserves fatal errors", async () => {
+  const result = await portable(`(async () => {
+const detached = new ArrayBuffer(3);
+const view = new Uint8Array(detached, 1, 1);
+view[0] = 65;
+const dv = new DataView(detached, 1, 1);
+detached.transfer();
+const shadowed = Uint8Array.of(65);
+Object.defineProperty(shadowed, "byteLength", { value: 0 });
+let getterCalled = false;
+const throwing = Uint8Array.of(66);
+Object.defineProperty(throwing, "byteLength", { get() { getterCalled = true; throw new Error("shadowed getter"); } });
+const stream = new adapters.TextDecoderStream();
+const reader = stream.readable.getReader();
+const writer = stream.writable.getWriter();
+const out = [];
+const drain = (async () => { while (true) { const r = await reader.read(); if (r.done) break; out.push(r.value); } })();
+await writer.write(detached);
+await writer.write(view);
+await writer.write(dv);
+await writer.write(shadowed);
+await writer.write(throwing);
+await writer.close();
+await drain;
+
+const fatalStream = new adapters.TextDecoderStream("utf-8", { fatal: true });
+const fatalWriter = fatalStream.writable.getWriter();
+const fatalReader = fatalStream.readable.getReader();
+const fatalRead = fatalReader.read().catch(error => error);
+const fatalWrite = fatalWriter.write(new Uint8Array([0xff])).catch(error => error);
+const [wErr, rErr] = await Promise.all([fatalWrite, fatalRead]);
+return [out, getterCalled, wErr instanceof TypeError, wErr.code, wErr.message, rErr === wErr];
+})()`);
+  expect(result).toEqual([["A", "B"], false, true, "ERR_ENCODING_INVALID_ENCODED_DATA", "The encoded data was not valid for encoding utf-8", true]);
 });

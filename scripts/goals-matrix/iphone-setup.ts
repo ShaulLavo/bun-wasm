@@ -1,9 +1,9 @@
 import type { NativeCommand } from "./iphone-cleanup";
-import { safariNodes } from "./iphone-tab-snapshot";
+import { ordinarySnapshot, ownedTabClose, proveTabClosed, safariBatch, visibleOwnedTab } from "./iphone-tab-snapshot";
 import { object } from "./evidence";
 import { admit, type Admission } from "./scope";
 
-type Nodes = ReturnType<typeof safariNodes>;
+type Nodes = ReturnType<typeof safariBatch>["nodes"];
 type Node = Nodes[number];
 
 function ordinaryGroup(nodes: Nodes) {
@@ -50,15 +50,16 @@ function hasMoreMenu(nodes: Nodes): boolean {
 }
 
 export function iphoneSafari(command: NativeCommand, admission: Admission) {
-  async function snapshot(target?: string): Promise<Nodes> {
+  async function batch(target?: string): Promise<ReturnType<typeof safariBatch>> {
     const read = { command: "snapshot", input: { interactiveOnly: true } };
     const steps = target === undefined ? [read] : [
       { command: "press", input: { target: { kind: "ref", ref: target }, settle: true } }, read,
     ];
     const output = await command(["batch", "--steps", JSON.stringify(steps), "--on-error", "stop", "--json"], admit(admission), admission.signal);
     admit(admission);
-    return safariNodes(output, steps.map(step => step.command));
+    return safariBatch(output, steps.map(step => step.command));
   }
+  async function snapshot(target?: string): Promise<Nodes> { return (await batch(target)).nodes; }
   async function overview(): Promise<Nodes> {
     await command(["open", "com.apple.mobilesafari"], admit(admission), admission.signal);
     let nodes = await snapshot();
@@ -96,10 +97,28 @@ export function iphoneSafari(command: NativeCommand, admission: Admission) {
     if (groups.length !== 1) throw new Error("Cannot identify one Private Safari tab group for owned cleanup");
     return snapshot(ref(groups[0]!));
   }
-  return { overview, ordinary, finish, privateGroup, snapshot };
+  return { overview, ordinary, finish, privateGroup, snapshot, batch };
 }
 
-export async function prepareIphoneSafari(command: NativeCommand, admission: Admission): Promise<void> {
+type StaleTabs = { titles: Set<string>; closed(title: string): Promise<void> };
+
+export async function prepareIphoneSafari(command: NativeCommand, admission: Admission, stale?: StaleTabs): Promise<void> {
   const safari = iphoneSafari(command, admission);
-  await safari.finish(await safari.ordinary(await safari.overview()));
+  let nodes = await safari.ordinary(await safari.overview());
+  if (stale?.titles.size) nodes = await closeVisibleStaleTabs(safari, nodes, stale);
+  await safari.finish(nodes);
+}
+
+async function closeVisibleStaleTabs(safari: ReturnType<typeof iphoneSafari>, nodes: Nodes, stale: StaleTabs): Promise<Nodes> {
+  let before = ordinarySnapshot(nodes);
+  for (let title = visibleOwnedTab(before, stale.titles); title !== undefined; title = visibleOwnedTab(before, stale.titles)) {
+    const closed = await safari.batch(ownedTabClose(before, title));
+    nodes = closed.nodes;
+    const after = ordinarySnapshot(nodes);
+    proveTabClosed(before, after, title, closed.press);
+    await stale.closed(title);
+    stale.titles.delete(title);
+    before = after;
+  }
+  return nodes;
 }

@@ -1,5 +1,5 @@
 {
   "owner": "native",
   "path": "tests/fixtures/webcrypto-key-postmessage",
-  "engines": ["quickjs", "jsc", "spidermonkey"]
+  "engines": ["quickjs", "jsc", "browser", "spidermonkey"]
 }

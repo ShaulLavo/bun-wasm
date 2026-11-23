@@ -10,7 +10,7 @@ const nativePreparationFiles = new Set([
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "scripts/fixtures/magic-string/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/wasm-validation/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
   "scripts/ci-program-delivery.ts",
-  "scripts/ci-browser-program.ts", "scripts/build-bun-browser.sh",
+  "scripts/ci-browser-program.ts", "scripts/build-bun-browser.sh", "scripts/wasm-name-sections.ts",
   "scripts/ci-ordinary-jsc-program.ts",
   "scripts/ci-ordinary-web-inputs.ts",
   "scripts/ci-jsc-artifact.ts",
@@ -54,7 +54,8 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 }
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
-  "scripts/ci-shared-check-budget.sh",
+  "scripts/ci-shared-check-budget.sh", "scripts/wasm-name-sections.ts",
+  "scripts/ci-shared-consumer-run.ts",
   "scripts/ci-shared-proof-inputs.ts", "scripts/ci-shared-proof-inputs.test.ts", "checks/quality-ci-shared-proof-inputs.json",
   "scripts/ci-build-tools.ts", "scripts/ci-binaryen.ts",
   "web/src/dev-html-client.ts", "scripts/generate-dev-html-client.ts",
@@ -85,10 +86,10 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml", ".github/actions/save-rust-build-cache/action.yml", "scripts/ci-sccache-cache.ts",
   // The shared Browser consumer's entry points, group-sensitive host and build/dependency inputs.
   "web/src/bun-executor.ts", "web/src/bun-launcher.ts", "src/quickjs-program.ts",
-  "web/src/runner.ts", "web/src/worker.ts", "web/src/worker-main.ts", "web/src/subprocess-broker.ts", "web/src/memory-telemetry.ts",
+  "web/src/runner.ts", "web/src/worker.ts", "web/src/worker-main.ts", "web/src/early-instance.ts", "web/src/subprocess-broker.ts", "web/src/memory-telemetry.ts",
   "web/src/net/trampoline.ts", "web/src/engine-loader.ts", "web/src/preview1-worker.ts",
   "web/src/program-profile.ts", "web/src/playground/playground.ts", "sandbox/src/sandbox.ts",
-  "scripts/stage-program-profiles.ts", "web/tests/explicit-profile-browser.ts", "web/build.ts", "sandbox/build.ts",
+  "scripts/stage-program-profiles.ts", "scripts/stage-guest-wasm.ts", "web/tests/explicit-profile-browser.ts", "web/build.ts", "sandbox/build.ts",
   "web/src/fs-worker.ts", "web/src/notification-worker.ts", "src/assets.ts", "src/program-memory.ts",
   "src/bun-adapter.ts", "src/process-runtime.ts", "src/executable-paths.ts", "src/guest-asset.generated.ts", "src/shared-objects.ts",
   "scripts/browser-build.ts", "scripts/base-program-build.ts", "scripts/bash-web-guests.ts", "scripts/bash-web-release-inputs.json", "web/package.json", "web/bun.lock",
@@ -113,7 +114,7 @@ const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
 const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/getter-dispatch/", "tests/fixtures/proxy-get-forwarding/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/assignment-chain-depth/", "tests/fixtures/statement-record-cap/", "tests/fixtures/statement-records-async-using/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
-  "scripts/ci-ordinary-web-inputs.ts",
+  "scripts/ci-ordinary-web-inputs.ts", "scripts/wasm-name-sections.ts",
   "scripts/runtime-file-checks.ts", "scripts/run-with-timeout.mts", "scripts/process-owner.mts", "scripts/linux-subreaper.mts",
   ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml",
   "scripts/ci-program-delivery.ts",
@@ -157,7 +158,7 @@ const webGuestFiles = new Set([
   "tests/fixtures/runtime-proc-spawn-requests.json", "web/guest-tests/compose.ts", "web/guest-tests/jsc.test.ts",
   "web/tests/subprocess.ts", "web/tests/subprocess.mjs",
   "web/src/fs.ts", "web/src/tool-command.ts", "web/src/engine-host.js", "web/src/engine-host.d.ts",
-  "web/src/crypto-host.js", "web/src/crypto-inputs.js", "web/src/promise-reactions.ts",
+  "web/src/host-crypto.ts", "web/src/promise-reactions.ts", "web/src/tick-scheduler.ts",
   "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts", "web/src/native-readable-iterator.ts", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
   "web/src/module-records.ts",
 ]);

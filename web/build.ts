@@ -10,6 +10,7 @@ import { previewWebsocketScript } from "./preview-build";
 import { buildBrowserEntries, buildClassicWorker, buildShellAssets } from "../scripts/browser-build";
 import { dirname, join, resolve } from "node:path";
 import { stageSharedPrograms } from "../scripts/stage-program-profiles";
+import { stageGuestWasm } from "../scripts/stage-guest-wasm";
 
 const here = import.meta.dir;
 const out = join(here, "dist");
@@ -67,11 +68,7 @@ await stageSharedPrograms(out, engineBuilds);
 
 async function copyWasm(source: string, name: string): Promise<boolean> {
   if (!existsSync(source)) return false;
-  const bytes = new Uint8Array(await Bun.file(source).arrayBuffer());
-  engineBuilds[name] = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-  // Only the .gz ships: the page decompresses it, and static hosts cap file sizes
-  // (Cloudflare: 25 MiB; bun-jsc.wasm is 43 MB raw, 12 MB gzipped).
-  await Bun.write(join(out, `${name}.gz`), Bun.gzipSync(bytes, { level: 9 }));
+  await stageGuestWasm(source, name, out, engineBuilds);
   console.log(`${name}: copied ${source} (${(statSync(source).size / 1024 / 1024).toFixed(1)} MB)`);
   return true;
 }

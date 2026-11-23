@@ -10,7 +10,7 @@ function provider() {
     randomBytes:length=>{allocations++;return new Uint8Array(length);},
     base64Encode:bytes=>Buffer.from(bytes).toString("base64url"),
     base64Decode:value=>new Uint8Array(Buffer.from(value,"base64url")),
-  },toUint8:value=>value};
+  },toUint8:value=>value,realTimers:{setImmediate}};
   factory(internal)(()=>{});
   return {subtle:crypto.subtle, allocations:()=>allocations};
 }

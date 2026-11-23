@@ -176,7 +176,7 @@ async function run(data: GuestData) {
   let entered = false;
   try {
     processHost = createNodeProcess({
-      transport: data.transport, env, preopenCount: Object.keys(config.preopens).length,
+      transport: data.transport, env, preopenCount: Object.keys(config.preopens).length, preopens: config.preopens,
       registry: (data.transport.data as { registry?: PipePublicationRegistryHandle } | undefined)?.registry,
       isSignalPending: () => signals.pending(),
       postMessage: message => parentPort!.postMessage(message), finish,
@@ -213,7 +213,11 @@ async function run(data: GuestData) {
     const modules = { url: (key: string) => prefix + encodeURIComponent(key), put: (url: string, source: string) => void sources.set(url, source) };
     const { createNodeNet } = await import("./node-net.mjs");
     const { startEngineHost } = await import("../src/engine-host.js");
+    const exposedGc = (globalThis as { __bunwasm_v8_gc?: unknown }).__bunwasm_v8_gc;
+    const nodeGc = typeof exposedGc === "function" ? (exposedGc as () => void).bind(globalThis) : undefined;
     await startEngineHost({ instance, moduleUrls: "data", modules: config.modules === "store" ? modules : undefined, fetch: nodeFetch,
+      gc: nodeGc,
+      yieldAfterGc: true,
       asyncContext: config.context === "native" ? createNodeAsyncContext() : undefined,
       net: processHost.engineNet(config.withNet ? createNodeNet({ net, http, https, zlib }) : undefined),
       processWake: processHost.client.wake,

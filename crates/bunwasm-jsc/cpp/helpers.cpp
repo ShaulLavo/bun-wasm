@@ -588,6 +588,25 @@ JSValueRef bunjsc_object_type_counts(JSContextRef ctx)
     return toRef(globalObject, counts);
 }
 
+// Bun's JSCTestingHelpers.cpp (jsFunctionIsLatin1String / jsFunctionIsUTF16String):
+// returns 1 for 8-bit WTF::String storage, 0 for 16-bit storage, -1 for non-strings.
+int32_t bunjsc_string_is_8bit(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* globalObject = toJS(ctx);
+    VM& vm = globalObject->vm();
+    JSLockHolder lock(vm);
+    auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
+    JSValue jsValue = toJS(globalObject, value);
+    if (!jsValue.isString())
+        return -1;
+    WTF::String str = jsValue.toWTFString(globalObject);
+    if (scope.exception()) {
+        scope.clearException();
+        return -1;
+    }
+    return str.is8Bit() ? 1 : 0;
+}
+
 // The heap size JSC measured at the end of the most recent collection (Bun's Bun.gc() result
 // and process.memoryUsage().heapUsed), without refreshing the memory telemetry.
 uint64_t bunjsc_heap_size_after_collection(JSContextRef ctx)

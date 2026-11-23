@@ -4,7 +4,6 @@ use aes::cipher::{
     BlockDecryptMut, BlockEncryptMut, KeyIvInit, StreamCipher, block_padding::Pkcs7,
 };
 use aes::cipher::{BlockEncrypt, KeyInit};
-use bunwasm_crypto_sys::bunwasm_key_encoding;
 use bunwasm_crypto_sys::{
     bunwasm_rsa, bunwasm_rsa_der, bunwasm_rsa_field, bunwasm_rsa_free, bunwasm_rsa_from_jwk,
     bunwasm_rsa_generate, bunwasm_rsa_parse,
@@ -72,7 +71,6 @@ fn dispatch(q: &J) -> Result<J> {
         return pqc(q, a);
     }
     match text(q, "op")? {
-        "keyEncoding" => key_encoding(q),
         "generate" => generate(alg),
         "import" => import(alg, text(q, "format")?, &bytes(q, "data")?),
         "export" => export(alg, text(q, "format")?, &q["key"]),
@@ -231,6 +229,11 @@ impl RsaKey {
         }
         Ok(out)
     }
+}
+/// The PKCS#1 DER of an RSA JWK's private or public half.
+pub(crate) fn rsa_pkcs1_der(jwk: &str, private: bool) -> Result<Vec<u8>> {
+    let k: J = data(serde_json::from_str(jwk))?;
+    RsaKey::from_jwk(&k)?.der(private)
 }
 fn rsa_format(format: &str, bytes: &[u8]) -> Result<(RsaKey, bool)> {
     if format == "jwk" {
@@ -604,11 +607,9 @@ fn ec_sign(a: &J, k: &J, input: &[u8], sig: &[u8], verify: bool) -> Result<J> {
     Ok(json!({"verified": crypto_ec::verify(curve, &parts, &digest, sig, der)?}))
 }
 
-fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J> {
-    let private = op == 0 || op == 3;
-    let key = RsaKey::from_jwk(k)?;
-    let der = key.der(private)?;
-    let hash = match text(a, "hash")? {
+/// The C adapter's digest number for a WebCrypto hash name (rsa.c `digest`).
+fn rsa_digest(name: &str) -> Option<i32> {
+    Some(match name {
         // Only Node's signing names reach MD5; WebCrypto has no MD5 hash.
         "MD5" => 5,
         "SHA-1" => 1,
@@ -619,8 +620,15 @@ fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J
         "SHA3-256" => 3256,
         "SHA3-384" => 3384,
         "SHA3-512" => 3512,
-        _ => return Err("NotSupportedError"),
-    };
+        _ => return None,
+    })
+}
+
+fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J> {
+    let private = op == 0 || op == 3;
+    let key = RsaKey::from_jwk(k)?;
+    let der = key.der(private)?;
+    let hash = rsa_digest(text(a, "hash")?).ok_or("NotSupportedError")?;
     let pss = text(a, "name")? == "RSA-PSS";
     let salt = if pss {
         i32::try_from(a["saltLength"].as_i64().ok_or("OperationError")?)
@@ -931,38 +939,4 @@ fn kw_crypt(key: &[u8], input: &[u8], encrypt: bool) -> Result<Vec<u8>> {
         32 => run!(aes::Aes256),
         _ => Err("DataError"),
     }
-}
-
-fn key_encoding(q: &J) -> Result<J> {
-    let input = bytes(q, "data")?;
-    let password = bytes(q, "password")?;
-    let cipher = data(std::ffi::CString::new(q["cipher"].as_str().unwrap_or("")))?;
-    let op = i32::try_from(number(q, "mode")?).map_err(|_| "DataError")?;
-    if !(0..=5).contains(&op) {
-        return Err("DataError");
-    }
-    let capacity = input
-        .len()
-        .checked_mul(2)
-        .and_then(|n| n.checked_add(4096))
-        .ok_or("OperationError")?;
-    let mut out = vec![0; capacity];
-    // The adapter borrows the inputs and copies the encoded key into this buffer.
-    let size = unsafe {
-        bunwasm_key_encoding(
-            op,
-            input.as_ptr(),
-            input.len(),
-            password.as_ptr(),
-            password.len(),
-            cipher.as_ptr(),
-            out.as_mut_ptr(),
-            out.len(),
-        )
-    };
-    if size == 0 || size > out.len() {
-        return Err("OperationError");
-    }
-    out.truncate(size);
-    Ok(output(out))
 }

@@ -1,5 +1,4 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { record } from "./guest-core-receipt.ts";
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow.ts";
@@ -27,135 +26,95 @@ function named(id: string, name: string) {
   return value;
 }
 
-type Route = { full: boolean; native: boolean; outcome: string; consumer?: string; programs?: string; handoff?: string; handoffFailed?: boolean; browser?: boolean; event?: string; draft?: boolean; cancelled?: boolean };
+type Route = { full: boolean; native: boolean; outcome: string; shared?: string; browser?: boolean; event?: string; draft?: boolean; cancelled?: boolean };
 function admission(id: string, route: Route): boolean {
   const value = job(id);
-  if (!Array.isArray(value.needs) || typeof value.if !== "string") throw new Error("Missing explicit dependencies/admission");
+  if (typeof value.if !== "string") throw new Error("Missing explicit admission");
+  const needs = typeof value.needs === "string" ? [value.needs] : Array.isArray(value.needs) ? value.needs : [];
   const browser = route.browser ?? route.full;
-  const full = route.full || route.event !== undefined && route.event !== "pull_request" && browser;
-  const outcomes: Record<string, string> = { rust: full ? "success" : "skipped", "browser-production": browser && !full ? "success" : "skipped", "ordinary-web-guests": route.consumer ?? (full ? route.outcome : "skipped"), "browser-guest": browser ? "success" : "skipped", "shared-sysroot": route.programs ?? "success" };
+  const outcomes: Record<string, string> = {
+    "ordinary-build": route.full || browser ? route.outcome : "skipped",
+    "shared-sysroot": route.shared ?? (route.native ? "success" : "skipped"),
+    "web-browser": "success",
+  };
   const expression = value.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("github.event_name", JSON.stringify(route.event ?? "pull_request")).replaceAll("github.event.pull_request.draft", String(route.draft ?? false))
     .replace(/needs\.selection\.outputs\.([\w-]+)/g, (_all, flag: string) => JSON.stringify(String(flag === "rust" ? route.full : flag === "browser_guest" ? browser : flag === "shared-native" ? route.native : true)))
-    .replaceAll("needs.ordinary-web-guests.outputs.shared-proof-inputs-failed", JSON.stringify(String(route.handoffFailed ?? false)))
-    .replaceAll("needs.ordinary-web-guests.outputs.shared-proof-inputs", JSON.stringify(route.handoff ?? (route.native ? "success" : "skipped")))
     .replace(/needs\.([\w-]+)\.result/g, (_all, dependency: string) => JSON.stringify(outcomes[dependency] ?? "success"))
     .replaceAll("always()", "true").replaceAll("cancelled()", String(route.cancelled ?? false));
-  const implicit = /always\(\)|cancelled\(\)|success\(\)|failure\(\)/.test(value.if) || value.needs.every(id => typeof id === "string" && (outcomes[id] ?? "success") === "success");
+  const implicit = /always\(\)|cancelled\(\)|success\(\)|failure\(\)/.test(value.if) || (!route.cancelled && needs.every(dep => typeof dep === "string" && (outcomes[dep] ?? "success") === "success"));
   return implicit && new Function(`return (${expression})`)() === true;
 }
 
-test("ordinary Web still gates shared qualification and ordinary consumers", () => {
-  for (const id of ["shared-consumers", "shared-proof", "browser-guest", "browser-process", "ci-result", "update-status"]) expect(job(id).needs).toContain("ordinary-web-guests");
-  for (const outcome of ["failure", "cancelled", "skipped", "", "missing"]) {
-    for (const id of ["shared-consumers", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome }), `${id}: ${outcome}`).toBe(false);
+test("ordinary-build gates runtime, fixtures, browser-guest and shared-consumers across routes", () => {
+  for (const id of ["rust", "rust-fixtures", "browser-guest", "shared-consumers", "ci-result", "update-status"]) expect(job(id).needs).toContain("ordinary-build");
+  for (const outcome of ["failure", "cancelled", "skipped"]) {
+    for (const id of ["rust", "rust-fixtures", "browser-guest", "shared-consumers"]) expect(admission(id, { full: true, native: true, outcome }), `${id}: ${outcome}`).toBe(false);
     expect(admission("shared-sysroot", { full: true, native: true, outcome })).toBe(true);
   }
   for (const event of ["pull_request", "push", "workflow_dispatch"]) {
-    for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-consumers", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome: "success", event }), id).toBe(true);
+    for (const id of ["ordinary-build", "rust", "rust-fixtures", "shared-sysroot", "shared-consumers", "browser-guest"]) expect(admission(id, { full: true, native: true, outcome: "success", event }), id).toBe(true);
   }
-  expect(admission("browser-process", { full: false, native: false, outcome: "skipped" })).toBe(true);
   expect(admission("shared-sysroot", { full: false, native: false, outcome: "skipped" })).toBe(true);
   expect(admission("shared-consumers", { full: false, native: false, outcome: "skipped" })).toBe(false);
-  expect(admission("ordinary-web-guests", { full: false, native: false, outcome: "skipped" })).toBe(false);
+  expect(admission("rust", { full: false, native: false, outcome: "skipped" })).toBe(false);
+  expect(admission("rust-fixtures", { full: false, native: false, outcome: "skipped" })).toBe(false);
   expect(admission("browser-guest", { full: false, native: false, outcome: "skipped" })).toBe(false);
   for (const event of ["pull_request", "push", "workflow_dispatch"]) {
     const route = { full: false, browser: true, native: false, outcome: "success", event };
-    expect(admission("ordinary-web-guests", route)).toBe(event !== "pull_request");
-    for (const id of ["browser-guest", "browser-process"]) expect(admission(id, route)).toBe(true);
-    const failures = event === "pull_request" ? [] : ["failure", "cancelled", "skipped", "", "unknown"];
-    for (const outcome of failures) expect(admission("browser-process", { ...route, outcome })).toBe(false);
+    expect(admission("ordinary-build", route)).toBe(true);
+    expect(admission("rust", route)).toBe(event !== "pull_request");
+    expect(admission("rust-fixtures", route)).toBe(event !== "pull_request");
+    expect(admission("browser-guest", route)).toBe(true);
   }
-  for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-consumers", "browser-guest", "browser-process"]) {
+  for (const id of ["ordinary-build", "rust", "rust-fixtures", "shared-sysroot", "shared-consumers", "browser-guest"]) {
     expect(admission(id, { full: true, native: true, outcome: "success", draft: true })).toBe(false);
     expect(admission(id, { full: true, native: true, outcome: "success", cancelled: true })).toBe(false);
   }
 });
 
-test("ordinary checks still run when shared production fails, and shared tests require uploaded inputs", () => {
+test("ordinary runtime checks still run when shared production fails, while shared consumers require shared-sysroot", () => {
   const route = { full: true, native: true, outcome: "success" };
-  for (const result of ["failure", "cancelled", "skipped", "", "missing"]) {
-    expect(admission("ordinary-web-guests", { ...route, programs: result })).toBe(true);
-    expect(admission("shared-consumers", { ...route, handoff: result })).toBe(false);
+  for (const result of ["failure", "cancelled", "skipped"]) {
+    expect(admission("rust", { ...route, shared: result })).toBe(true);
+    expect(admission("rust-fixtures", { ...route, shared: result })).toBe(true);
+    expect(admission("shared-consumers", { ...route, shared: result })).toBe(false);
   }
 });
 
-test("only the ordinary browser route can proceed after an assembly failure", () => {
-  for (const outcome of ["failure", "cancelled", "skipped", "", "missing"]) {
-    const route = { full: true, native: true, outcome, handoffFailed: true, handoff: "failure" };
-    expect(admission("browser-guest", route)).toBe(outcome === "failure");
-    expect(admission("browser-process", route)).toBe(outcome === "failure");
-    expect(admission("shared-consumers", route)).toBe(false);
-  }
-});
-
-test("every provider join rejects an independent consumer outside its exact full-route state", () => {
-  const routes = [
-    { full: true, browser: true, native: true },
-    { full: false, browser: true, native: false },
-    { full: false, browser: false, native: false },
-  ];
-  for (const event of ["pull_request", "push", "workflow_dispatch"]) {
-    for (const route of routes) checkConsumerJoins({ ...route, event, outcome: "success" });
-  }
-});
-
-function checkConsumerJoins(route: Route): void {
-  const full = route.full || route.event !== "pull_request" && route.browser;
-  const required = full ? "success" : "skipped";
-  const ids = ["browser-process"].concat(route.browser ? ["browser-guest"] : [], route.native ? ["shared-consumers"] : []);
-  for (const consumer of ["success", "failure", "cancelled", "skipped", "", "missing", "unknown"]) {
-    for (const id of ids) expect(admission(id, { ...route, consumer }), `${id}/${route.event}/${consumer}`).toBe(consumer === required);
-  }
-}
-
-test("real admission guard rejects unknown events and malformed or unselected inputs", () => {
-  const guard = named("ordinary-web-guests", "Require the selected full producer");
-  if (typeof guard.run !== "string") throw new Error("Missing guard body");
-  const body = guard.run;
-  const invoke = (env: NodeJS.ProcessEnv) => spawnSync("bash", ["-euo", "pipefail", "-c", body], { env: { ...process.env, GITHUB_EVENT_NAME: "pull_request", FULL_SELECTED: "true", RUST_SELECTED: "true", BROWSER_SELECTED: "true", JSC_SELECTED: "true", RUST_RESULT: "success", ...env } }).status;
-  for (const event of ["pull_request", "push", "workflow_dispatch"]) for (const jsc of ["true", "false"]) expect(invoke({ GITHUB_EVENT_NAME: event, JSC_SELECTED: jsc })).toBe(0);
-  for (const env of [{ GITHUB_EVENT_NAME: "schedule" }, { RUST_SELECTED: "yes" }, { BROWSER_SELECTED: "" }, { BROWSER_SELECTED: "false" }, { JSC_SELECTED: "yes" }, { FULL_SELECTED: "false" }, { RUST_RESULT: "skipped" }, { RUST_RESULT: "failure" }, { RUST_RESULT: "cancelled" }, { RUST_RESULT: "" }]) expect(invoke(env)).not.toBe(0);
-});
-
-test("the launcher is produced once for JSC or shared native and consumer transfer caps stay unchanged", () => {
-  const packaging = named("rust", "Package the native profile launcher");
-  expect(packaging.if).toBe("(needs.selection.outputs.jsc == 'true' || needs.selection.outputs.shared-native == 'true')");
-  const upload = steps("rust").filter(step => record(step.with) && step.with.name === "native-profile-launcher");
+test("ordinary-build produces the launcher once and runtime/fixtures download verified deliveries with five-minute caps", () => {
+  const upload = steps("ordinary-build").filter(step => record(step.with) && step.with.name === "native-profile-launcher");
   expect(upload).toHaveLength(1);
-  expect(upload[0]?.if).toBe("needs.selection.outputs.jsc == 'true' || needs.selection.outputs.shared-native == 'true'");
-  const downloads = steps("ordinary-web-guests").filter(step => step.uses === "actions/download-artifact@v4" && !step.id);
-  expect(downloads).toHaveLength(3);
-  for (const download of downloads) {
+  expect(upload[0]?.["timeout-minutes"]).toBe(5);
+  const runtimeDownloads = steps("rust").filter(step => step.uses === "actions/download-artifact@v4");
+  expect(runtimeDownloads).toHaveLength(5);
+  for (const download of runtimeDownloads) {
     expect(download["timeout-minutes"]).toBe(5);
     if (!record(download.with)) throw new Error("Missing artifact");
-    expect(download.if).toBe(download.with.name === "browser-program" ? undefined : "needs.selection.outputs.jsc == 'true'");
+    expect(download.if).toBe(download.with.name === "ordinary-jsc-program" ? "needs.selection.outputs.jsc == 'true'" : undefined);
   }
-  expect(job("ordinary-web-guests")["runs-on"]).toBe(job("rust")["runs-on"]);
-  expect(job("ordinary-web-guests")["timeout-minutes"]).toBe(20);
-  expect(job("rust")["timeout-minutes"]).toBe(60);
-  expect(JSON.stringify(job("ordinary-web-guests"))).not.toMatch(/cargo build|rustup|build-bun|save-rust-build-cache|save-release-downloads|wasmtime.*install/);
+  expect(job("ordinary-build")["runs-on"]).toBe(job("rust")["runs-on"]);
+  expect(job("ordinary-build")["timeout-minutes"]).toBe(60);
+  expect(job("rust")["timeout-minutes"]).toBe(30);
+  expect(job("rust-fixtures")["timeout-minutes"]).toBe(25);
+  expect(JSON.stringify(job("rust-fixtures"))).not.toMatch(/cargo build|rustup|build-bun|save-rust-build-cache|save-release-downloads/);
 });
 
-test("moved fixtures execute once after native backing verification, and final cache seeds keep producer qualification", () => {
-  const rust = steps("rust");
-  const consumer = steps("ordinary-web-guests");
-  expect(named("rust", "Verify JSC embedding source and native backing").run).toBe("bun scripts/jsc-embedding.ts verify dist/bun-jsc.wasm");
+test("ordinary Web guest fixtures execute once per route and final cache seeds keep producer qualification", () => {
+  const producer = steps("ordinary-build");
+  const consumer = steps("rust");
+  expect(named("ordinary-build", "Verify JSC embedding source and native backing").run).toBe("bun scripts/jsc-embedding.ts verify dist/bun-jsc.wasm");
   for (const name of ["Blocking JSC embedding and allocation checks", "Blocking Web guest cases (QuickJS and host engine)", "Blocking Web guest case (JSC)"]) {
-    expect(rust.some(step => step.name === name)).toBe(false);
     expect(consumer.filter(step => step.name === name)).toHaveLength(1);
   }
-  const alternate = steps("browser-production");
-  expect(alternate.some(step => step.name === "Blocking JSC embedding and allocation checks")).toBe(false);
-  expect(alternate.some(step => step.name === "Verify JSC embedding source and native backing")).toBe(false);
-  expect(named("browser-production", "Blocking Web guest cases (QuickJS and host engine)").if).toBeUndefined();
-  expect(named("browser-production", "Blocking Web guest case (JSC)").if).toBe("needs.selection.outputs.jsc == 'true'");
-  expect(alternate.some(step => record(step.with) && step.with.name === "ordinary-jsc-program")).toBe(false);
-  const exportIndex = rust.indexOf(named("rust", "Export the validated standard Browser and tools guests"));
+  // Browser-only PRs execute the Web guest checks inline inside ordinary-build when full != 'true'.
+  expect(named("ordinary-build", "Blocking Web guest cases (QuickJS and host engine)").if).toContain("!= 'true'");
+  expect(named("ordinary-build", "Blocking Web guest case (JSC)").if).toContain("!= 'true'");
+  const exportIndex = producer.indexOf(named("ordinary-build", "Export the validated standard Browser and tools guests"));
   for (const action of ["save-rust-build-cache", "save-release-downloads"]) {
-    const save = rust.findIndex(step => step.uses === `./.github/actions/${action}`);
+    const save = producer.findIndex(step => step.uses === `./.github/actions/${action}`);
     expect(save).toBeGreaterThan(exportIndex);
-    expect(rust[save]?.if).toBeUndefined();
+    expect(producer[save]?.if).toBeUndefined();
     const inner = readFileSync(new URL(`../.github/actions/${action}/action.yml`, import.meta.url), "utf8");
     expect(inner).toContain("github.event_name == 'push' && github.ref == 'refs/heads/main'");
     expect(inner).not.toContain("ordinary-web-guests");

@@ -83,6 +83,8 @@ declare namespace BunWasm {
     getAsyncContext(): unknown;
     setAsyncContext(context: unknown): void;
     runMicrotasks(): void;
+    isExecutionUnwind?(error: unknown): boolean;
+    stringIs8Bit?(value: unknown): boolean | undefined;
     exit(code?: number): never;
   }
 
@@ -90,6 +92,18 @@ declare namespace BunWasm {
 
   interface Internal {
     defineGlobal(name: string, value: unknown): void;
+    stringDecoderMaxLength?: number;
+    require(name: "buffer_source"): {
+      empty: Uint8Array;
+      isBuffer(input: unknown): input is ArrayBufferLike;
+      viewBytes(view: ArrayBufferView): Uint8Array;
+      inputBytes(input: ArrayBufferLike | ArrayBufferView): Uint8Array;
+      readBufferSource(input: unknown): Uint8Array;
+    };
+    require(name: "jsc_internals"): {
+      isLatin1String(value: unknown): boolean;
+      isUTF16String(value: unknown): boolean;
+    };
     require(name: "builtins"): { "bun:jsc": () => { callerSourceOrigin(): string | null } };
     require(name: "node_url"): { fileURLToPath(url: string | URL): string };
     /** QuickJS's process.env.TZ: the zone ID now in use, or null for an unknown zone. */
@@ -563,8 +577,22 @@ declare namespace BunWasm {
     require(name: "process_binding"): (name: unknown, own: Record<string, () => unknown>) => unknown;
     require(name: "process_allowed_flags"): ReadonlySet<string>;
     require(name: "process_report"): (process: object) => object;
+    require(name: "os_priority"): {
+      getPriority(pid?: unknown): number;
+      setPriority(pid?: unknown, priority?: unknown): void;
+    };
+    require(name: "process_ids"): {
+      getuid(): number; geteuid(): number; getgid(): number; getegid(): number; getgroups(): number[];
+      setuid(id: unknown): number; seteuid(id: unknown): number; setgid(id: unknown): number; setegid(id: unknown): number;
+      setgroups(groups: unknown): number;
+      initgroups(user: unknown, extraGroup: unknown): void;
+    };
+    require(name: "process_args"): {
+      umask(mask: unknown): number;
+      cpuUsage(usage: { user: number; system: number }, previous: unknown): { user: number; system: number };
+    };
     require(name: "uv_errors"): {
-      binding(): Record<string, unknown>;
+      binding(process: { pendingDeprecation?: boolean; emitWarning(message: string, type: string, code: string): void }): Record<string, unknown>;
       message(name: string): string | undefined;
     };
     /** The byte helper accepts arbitrary input and throws for unsupported shapes. */

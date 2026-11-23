@@ -10,7 +10,8 @@ function expandedSteps(action: string, call: string): string {
   if (!body) throw new Error(`Missing ${action} composite steps`);
   const values = inputs(call);
   let result = body.replace(/^/gm, "  ").trimEnd() + "\n";
-  for (const [name, value] of values) {
+  const ordered = Array.from(values.entries()).sort((a, b) => b[0].length - a[0].length);
+  for (const [name, value] of ordered) {
     result = result.replaceAll(`\${{ inputs.${name} }}`, value);
     result = result.replaceAll(`inputs.${name}`, value.startsWith("${{") ? value.slice(3, -2).trim() : `'${value}'`);
   }
@@ -18,11 +19,13 @@ function expandedSteps(action: string, call: string): string {
 }
 
 function foldCondition(step: string): string {
-  const match = step.match(/^        if: '([^']+)' (==|!=) '([^']+)'(?: && (.+))?\n/m);
-  if (!match) return step;
+  if (/^        if: \$\{\{[^}\n]*'false' == 'true'/m.test(step)) return "";
+  const cleaned = step.replaceAll(" && 'true' == 'true'", "");
+  const match = cleaned.match(/^        if: '([^']+)' (==|!=) '([^']+)'(?: && (.+))?\n/m);
+  if (!match) return cleaned;
   const enabled = match[2] === "==" ? match[1] === match[3] : match[1] !== match[3];
   if (!enabled) return "";
-  return foldCondition(step.replace(match[0], match[4] ? `        if: ${match[4]}\n` : ""));
+  return foldCondition(cleaned.replace(match[0], match[4] ? `        if: ${match[4]}\n` : ""));
 }
 
 export function expandNativeActions(source: string): string {
@@ -30,6 +33,7 @@ export function expandNativeActions(source: string): string {
     (step, action: string) => expandedSteps(action, step))
     .replaceAll("steps.native-setup.outputs.host-tools", "steps.host-tools.outputs.hash")
     .replaceAll("steps.native-setup.outputs.native-inputs", "steps.native-inputs.outputs.hash")
+    .replaceAll("steps.native-setup.outputs.jsc-inputs", "steps.jsc-inputs.outputs.hash")
     .replaceAll("steps.native-setup.outputs.object-key", "steps.rust-objects.outputs.cache-primary-key")
     .replaceAll("steps.native-seed.outputs.cargo-hit", "steps.native-cargo-cache.outputs.cache-hit")
     .replaceAll("steps.native-seed.outputs.cargo-matched", "steps.native-cargo-cache.outputs.cache-matched-key")

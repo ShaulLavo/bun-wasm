@@ -2,6 +2,7 @@
 import { captureProcessObserver } from "waffle/proc/observation";
 import { bootstrap, type WorkerExecutor } from "waffle/browser/worker";
 import { createBunExecutor, hasTerminalMetadata, type NestedModule, type RunRequest, type TerminalModule } from "./bun-executor.js";
+import type { EarlyInstance } from "./early-instance.js";
 
 // Like Waffle's own terminal module, Bun's loads only for a process the shell gave a terminal session.
 // The broker sends one start message, so awaiting it before bootstrap loses nothing.
@@ -17,7 +18,7 @@ const nestedModule = (request: RunRequest): Promise<NestedModule> => request.mem
  * Takes over the worker's messages, then dispatches again, in order, the messages the entry kept
  * while this module loaded, so listeners installed meanwhile see them as they would have.
  */
-export function start(ctx: DedicatedWorkerGlobalScope, early: readonly MessageEvent[], stopKeeping: () => void): void {
+export function start(ctx: DedicatedWorkerGlobalScope, early: readonly MessageEvent[], stopKeeping: () => void, instance?: EarlyInstance): void {
   // Keep the process transport on host-owned callables. Bun's browser guest runs in this same
   // worker realm and may replace global methods while evaluating user code; passing `ctx` directly
   // would let that code forge or suppress lifecycle messages after bootstrap starts.
@@ -38,7 +39,7 @@ export function start(ctx: DedicatedWorkerGlobalScope, early: readonly MessageEv
       const [terminal, nested] = await Promise.all([terminalModule(request), nestedModule(request)]);
       const observed = observer?.read();
       executor = observed && observed.kind !== "pending" ? { run: () => 0 }
-        : createBunExecutor(request, host, terminal, nested);
+        : createBunExecutor(request, host, terminal, nested, instance);
     } catch (error) {
       executor = { setup() { throw error; }, run: () => 0 };
     }

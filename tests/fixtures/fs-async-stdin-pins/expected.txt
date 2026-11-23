@@ -1,0 +1,1 @@
+ok fs-async-stdin-pins

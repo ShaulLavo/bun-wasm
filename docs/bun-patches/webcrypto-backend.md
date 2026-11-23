@@ -41,6 +41,6 @@ comparison with wasm. No upstream test implementation is copied.
 | --- | --- | --- |
 | [`third_party/licenses/boringssl-LICENSE`](#webcrypto-backend) | Port | Retain BoringSSL license notices with the wasm backend. |
 | [`crates/bunwasm-runtime/src/crypto.rs`, GCM adapter and `third_party/licenses/aes-gcm-MIT`](#webcrypto-backend) | Port | Adapt RustCrypto GCM to WebCrypto nonce and tag lengths. |
-| [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters and `web/src/engine-host.js` provider capture`](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
+| [`crates/bunwasm-runtime/src/js/crypto.js` and its shared key adapters](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto, on every engine. |
 
 [Ledger scope and pinned revisions](scope.md).

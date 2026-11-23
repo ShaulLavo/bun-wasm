@@ -29,8 +29,11 @@ reference. The local changes:
 - `pull` and `pullSync` take options but no transforms. Transforms need Node's iterable
   streams pipeline (`internal/streams/iter/pull`), which this runtime does not have;
   passing one throws `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`.
-- The garbage-collection finalizer that closes a leaked handle and raises
-  `ERR_INVALID_STATE` is not ported.
+- A `FinalizationRegistry` closes leaked handles on garbage collection and schedules
+  Bun's `ERR_INVALID_STATE` diagnostic (including the descriptor and snapshotted path) on
+  a later turn. Explicit `close()`, deferred last-ref `[kUnref]()`, and `[kCloseSync]()`
+  disarm and unregister the handle before closing its descriptor so a reused fd is never
+  closed by an old handle's finalizer.
 - Validators are local functions with Node's messages.
 
 ## mkdtemp
