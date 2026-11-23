@@ -104,3 +104,20 @@ Playwright import. It serves one local HTML fixture, observes its own host and
 frame, verifies the receipt is readable before teardown, and records frame-removal
 and session-deletion acknowledgements separately. It makes no framework, process
 ownership or physical-window-absence acceptance claim.
+
+## Preview loading document
+
+Desktop page expressions run through an indirect `eval` inside WebDriver's
+asynchronous script. Since `preview-loading-navigation.md`, every mounted preview
+navigation first shows a service-worker loading document whose CSP allows inline
+script but refuses string evaluation. The desktop frame's first render read then
+failed with `EvalError` instead of waiting for the guest page.
+
+After presenting its frame, the transport polls from the host document, within
+the open-preview phase admission, until the frame's same-origin location has left
+both its initial `about:blank` and the `/.loading/` document. Only then does it
+select the frame. A cross-origin document, whose location throws `SecurityError`,
+counts as left. Other read errors still fail the phase. The HTTP fixture shows
+the frame passing through `about:blank` and a loading document that refuses
+evaluation before the guest page. Chrome and Firefox evaluate through their
+debugging protocols, and iPhone Safari uses its observer bus, so neither changes.

@@ -64,14 +64,23 @@ class FixtureFrame {
   readonly reference = crypto.randomUUID();
   context: Context = createContext();
   constructor(readonly elements: Map<string, FixtureFrame>) {}
+  get contentWindow(): Context { return this.context; }
   addEventListener(): void {}
   focus(): void {}
   remove(): void { if (this.elements.get(this.id) === this) this.elements.delete(this.id); }
 }
 
+// The service worker's loading document allows inline script but refuses string evaluation.
+function loadingDocument(url: string): Context {
+  const context = document(url);
+  context.eval = () => { throw new EvalError("Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source"); };
+  return context;
+}
+
 function document(url = "about:blank"): Context {
   const elements = new Map<string, FixtureFrame>();
-  return createContext({ setTimeout, clearTimeout, crypto, location: { href: url }, HTMLIFrameElement: FixtureFrame,
+  const pathname = URL.canParse(url) ? new URL(url).pathname : url;
+  return createContext({ setTimeout, clearTimeout, crypto, location: { href: url, pathname }, HTMLIFrameElement: FixtureFrame,
     document: {
       getElementById: (id: string) => elements.get(id) ?? null,
       createElement: () => new FixtureFrame(elements),
@@ -256,6 +265,34 @@ test("propagates synchronous, rejected-promise, syntax, and JSON serialization e
     await expect(withScoped(transport, page => page.evaluate("1n"))).rejects.toThrow(/BigInt/);
     await expect(withScoped(transport, page => page.evaluate("(() => { const v = {}; v.self = v; return v; })()"))).rejects.toThrow(/circular|cyclic/i);
     expect(await withScoped(transport, page => page.evaluate<number>("6 * 7"))).toBe(42);
+  } finally { await transport.close(); }
+});
+
+test("desktop preview waits out the about:blank and loading documents before evaluating in the frame", async () => {
+  let checks = 0;
+  const frame = () => {
+    const value: unknown = runInContext('document.getElementById("__goalsIphonePreview")', driver.context());
+    assert.ok(value instanceof FixtureFrame);
+    return value;
+  };
+  const driver = fixture({ intercept: call => {
+    if (!call.path.endsWith("/execute/async") || !String(call.body.args).includes("frameLeftLoading")) return;
+    checks++;
+    if (checks === 1) frame().context = document();
+    if (checks === 2) frame().context = loadingDocument("http://fixture.test/__preview/.loading/1234");
+    if (checks === 4) frame().context = document("http://fixture.test/__preview/5173/");
+  } });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await withScoped(transport, page => page.openPreview("http://fixture.test/__preview/5173/"));
+    expect(checks).toBe(4);
+    expect(await withScoped(transport, page => page.evaluate("location.href"))).toBe("http://fixture.test/__preview/5173/");
+    // The fixture really refuses evaluation inside the loading document.
+    await withScoped(transport, page => page.useHost());
+    frame().context = loadingDocument("http://fixture.test/__preview/.loading/1234");
+    await withScoped(transport, page => page.usePreview());
+    await expect(withScoped(transport, page => page.evaluate("location.href"))).rejects.toThrow("unsafe-eval");
   } finally { await transport.close(); }
 });
 

@@ -216,6 +216,8 @@ async function withDriver(transport: Transport, action: (endpoint: string, timeo
   async function evaluation(body: Record<string, unknown>): Promise<Response> {
     const args = body.args;
     if (!Array.isArray(args) || typeof args[0] !== "string") throw new Error("Invalid fixture evaluation");
+    // The fixture preview is the inner transport's own navigation; it has no loading document.
+    if (args[0].includes("function frameLeftLoading")) return Response.json({ value: { ok: true, json: "true" } });
     try { return Response.json({ value: { ok: true, json: JSON.stringify((await withScoped(transport, page => page.evaluate(args[0]))) ?? null) } }); }
     catch (error) { return Response.json({ value: { ok: false, message: String(error) } }); }
   }

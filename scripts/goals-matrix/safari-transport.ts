@@ -35,6 +35,22 @@ function presentFrame(input: { url: string; token: string }, present: typeof pre
   frame.dataset.goalsPresentation = input.token;
 }
 
+// Read in the host document. Preview navigations first show the service worker's loading
+// document (web/src/preview-navigation.ts), whose CSP refuses the evaluation wrapper's eval.
+// The frame is ready once it has left both its initial about:blank and that document.
+function frameLeftLoading(token: string): boolean {
+  const frame = document.getElementById("__goalsIphonePreview");
+  if (!(frame instanceof HTMLIFrameElement) || frame.dataset.goalsPresentation !== token) throw new Error("Safari preview frame identity changed");
+  try {
+    const current = frame.contentWindow?.location;
+    return current !== undefined && current.href !== "about:blank" && !current.pathname.includes("/.loading/");
+  } catch (error) {
+    // Only a cross-origin document hides its location, and it is not the same-origin loading document.
+    if (error instanceof DOMException && error.name === "SecurityError") return true;
+    throw error;
+  }
+}
+
 function ownedFrame(token: string, remove: boolean): HTMLIFrameElement | null {
   const frame = document.getElementById("__goalsIphonePreview");
   if (!frame && remove) return null;
@@ -249,6 +265,7 @@ function transport(request: Request, sessionPath: string, host: string, capabili
     await ownedCommand({ kind: "frame-present", token }, admission, "/execute/sync", {
       script: `(${presentFrame.toString()})(arguments[0], ${presentIphonePreview.toString()}); return null;`, args: [{ url, token }],
     });
+    await until(() => evaluate<boolean>(`(${frameLeftLoading.toString()})(${JSON.stringify(token)})`, admission), Boolean, admit(admission));
     await previewContext(admission);
   }
 
