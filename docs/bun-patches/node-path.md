@@ -33,8 +33,8 @@ native Bun). Local changes:
   full segment walk.
 - Validation, boxed-string coercion and the right-to-left POSIX `resolve` stay
   the adapter's own code below, unchanged.
-- The POSIX code calls `charCodeAt`, `slice`, `indexOf` and `lastIndexOf`
-  through intrinsics that `src/js/bootstrap.js` captures before user code
+- The POSIX code calls `charCodeAt`, `slice`, `indexOf`, `lastIndexOf` and the
+  `Int32Array` constructor through intrinsics that `src/js/bootstrap.js` captures before user code
   runs, and builds no ordinary arrays: `normalize` keeps its segment stack as
   offsets in an `Int32Array`, which stays linear for long runs of `..` and has
   no inherited index accessors. Paths up to 1,022 code units share one buffer
