@@ -33,13 +33,23 @@ native Bun). Local changes:
   full segment walk.
 - Validation, boxed-string coercion and the right-to-left POSIX `resolve` stay
   the adapter's own code below, unchanged.
+- The POSIX code calls `charCodeAt`, `slice`, `indexOf` and `lastIndexOf`
+  through intrinsics that `src/js/bootstrap.js` captures before user code
+  runs, and uses indexed loops instead of array methods or iterators. Replacing
+  a public `String.prototype` or `Array.prototype` method therefore cannot
+  change a result, as with the native code it replaces.
+- `relative` keeps the native string route's one error: with a relative guest
+  cwd, the fixed one-unit offset can split a surrogate pair, and when both
+  resolved paths are well-formed Bun rejected that result with
+  `Error: Path string result contains an unpaired surrogate`.
 
 The native binding no longer has POSIX arms: its calls drop the platform flag,
 and `scripts/generate-node-path.ts` extracts only the Windows relative
 computation. `scripts/node-path-posix.test.ts` loads `path.ts` with a native
 binding that throws and compares about 39,000 results, from every sequence of
 up to six path tokens and 40,000 sampled pairs, with the host Bun's native
-`node:path`.
+`node:path`. It also checks the split-surrogate error recorded from the native
+guest and that results survive replaced string, array and `Math` methods.
 
 `crates/bunwasm-runtime/src/node_path.rs` and `src/js/path.ts` are **Host feature**
 original adapters. For Windows operations, after public validation and coercion, the

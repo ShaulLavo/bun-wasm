@@ -17,7 +17,13 @@ function loadGuestPath(): PathModule {
   new Function("globalThis", emitted)(scope);
   const crossing = () => { throw new Error("POSIX path operation crossed into Wasm"); };
   const nodePath = new Proxy({}, { get: () => crossing });
-  const internal = { native: { nodePath, globMatch: crossing }, stringIsWellFormed: (value: string) => value.isWellFormed() };
+  // Mirrors the captures in crates/bunwasm-runtime/src/js/bootstrap.js.
+  const uncurry = (method: Function) => Function.prototype.call.bind(method);
+  const stringIntrinsics = {
+    charCodeAt: uncurry(String.prototype.charCodeAt), slice: uncurry(String.prototype.slice),
+    indexOf: uncurry(String.prototype.indexOf), lastIndexOf: uncurry(String.prototype.lastIndexOf),
+  };
+  const internal = { native: { nodePath, globMatch: crossing }, stringIsWellFormed: uncurry(String.prototype.isWellFormed), stringIntrinsics };
   const factory = scope.__pathFactory;
   if (!factory) throw new Error("path.ts did not produce a factory");
   return factory(internal);
@@ -84,6 +90,50 @@ test("join, resolve and relative match native Bun on sampled pairs", () => {
   }
   compare("join");
   compare("resolve");
+});
+
+// Recorded from the previous native guest (QuickJS, base 972a04f46) with a
+// relative cwd of ".": a result that splits a surrogate pair was an error.
+test("relative rejects a split surrogate pair from well-formed inputs", () => {
+  const original = process.cwd;
+  process.cwd = () => ".";
+  try {
+    expect(() => guest.relative("a", "😀")).toThrow(new Error("Path string result contains an unpaired surrogate"));
+    expect(guest.relative("😀", "a")).toBe("..");
+    expect(guest.relative("😀x", "😀y")).toBe("..😀y");
+    expect(guest.relative("x", "é")).toBe("..é");
+    // An input with a lone surrogate used the lossless route and never threw.
+    expect(guest.relative("\ud800", "a")).toBe("..a");
+  } finally {
+    process.cwd = original;
+  }
+});
+
+test("replacing public string and array methods does not change results", () => {
+  const cases: [keyof PathModule, unknown[]][] = [
+    ["isAbsolute", ["/a"]], ["normalize", ["a/../b/./c//"]], ["normalize", ["/x/y"]], ["join", ["/a", "../b", "c/"]],
+    ["dirname", ["/a/b//"]], ["basename", ["/a/b.txt", ".txt"]], ["basename", ["/a/b/"]], ["extname", ["/a/b.c"]],
+    ["parse", ["/a/b.c"]], ["resolve", ["/a", "b", "../c"]], ["relative", ["/a/b/c", "/a/d"]],
+  ];
+  const call = (entry: [keyof PathModule, unknown[]]) => Reflect.apply(Reflect.get(guest, entry[0]) as Function, guest, entry[1]);
+  const expected = cases.map(call);
+  const replaced: [object, PropertyKey][] = [
+    [String.prototype, "charCodeAt"], [String.prototype, "slice"], [String.prototype, "indexOf"],
+    [String.prototype, "lastIndexOf"], [String.prototype, "split"], [String.prototype, "startsWith"],
+    [String.prototype, "endsWith"], [Array.prototype, "push"], [Array.prototype, "pop"], [Array.prototype, "join"],
+    [Array.prototype, Symbol.iterator], [Math, "min"],
+  ];
+  const saved = replaced.map(([owner, key]) => Object.getOwnPropertyDescriptor(owner, key)!);
+  const broken = { value: () => { throw new Error("replaced"); }, configurable: true, writable: true };
+  // Indexed loops only: destructuring and for-of need the replaced iterator.
+  let actual: unknown[] = [];
+  try {
+    for (let i = 0; i < replaced.length; i++) Object.defineProperty(replaced[i]![0], replaced[i]![1], broken);
+    actual = cases.map(call);
+  } finally {
+    for (let i = 0; i < replaced.length; i++) Object.defineProperty(replaced[i]![0], replaced[i]![1], saved[i]!);
+  }
+  expect(actual).toEqual(expected);
 });
 
 test("relative and resolve use the current directory for relative inputs", () => {

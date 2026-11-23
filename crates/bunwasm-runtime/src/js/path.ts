@@ -3,6 +3,9 @@
 
   const native = internal.native.nodePath;
   const isWellFormed = internal.stringIsWellFormed;
+  // Captured in bootstrap.js before user code runs, so replacing a public
+  // String.prototype method cannot change path results.
+  const { charCodeAt, slice, indexOf, lastIndexOf } = internal.stringIntrinsics;
   const SLASH = 47;
   const DOT = 46;
   type StringOperation = "basename" | "dirname" | "extname" | "normalize";
@@ -24,38 +27,46 @@
 
   // POSIX operations are lexical, so they run here on UTF-16 code units without
   // crossing into Wasm. They port Bun's `bun_node_path` POSIX algorithms, which
-  // follow Node's lib/path.js (docs/bun-patches/node-path.md).
+  // follow Node's lib/path.js (docs/bun-patches/node-path.md). They call only
+  // captured string intrinsics and use no array methods or iterators.
 
   function posixIsAbsolute(path: string): boolean {
-    return path.length > 0 && path.charCodeAt(0) === SLASH;
+    return path.length > 0 && charCodeAt(path, 0) === SLASH;
   }
 
   // Node's normalizeString: resolves `.` and `..` segments and drops empty ones.
   // Node walks code units and edits a result string; a segment stack gives the
-  // same result with native split and join, which interpreters run much faster.
-  // A `..` pops the previous segment unless that is itself a kept `..`.
+  // same result with native indexOf and slice, which interpreters run much
+  // faster. A `..` pops the previous segment unless that is itself a kept `..`.
   function normalizeSegments(path: string, allowAboveRoot: boolean): string {
     const kept: string[] = [];
-    for (const segment of path.split("/")) {
+    let count = 0;
+    for (let start = 0; start <= path.length;) {
+      const separator = indexOf(path, "/", start);
+      const end = separator === -1 ? path.length : separator;
+      const segment = slice(path, start, end);
+      start = end + 1;
       if (segment === "" || segment === ".") continue;
-      if (segment !== "..") kept.push(segment);
-      else if (kept.length > 0 && kept[kept.length - 1] !== "..") kept.pop();
-      else if (allowAboveRoot) kept.push("..");
+      if (segment !== "..") kept[count++] = segment;
+      else if (count > 0 && kept[count - 1] !== "..") count--;
+      else if (allowAboveRoot) kept[count++] = "..";
     }
-    return kept.join("/");
+    let result = count > 0 ? kept[0]! : "";
+    for (let i = 1; i < count; i++) result += "/" + kept[i];
+    return result;
   }
 
   // Without `//`, a leading `.` or `/.`, no segment is empty, `.` or `..`, so
   // the path is already normal.
   function isNormal(path: string): boolean {
-    return path.charCodeAt(0) !== DOT && path.indexOf("//") === -1 && path.indexOf("/.") === -1;
+    return charCodeAt(path, 0) !== DOT && indexOf(path, "//") === -1 && indexOf(path, "/.") === -1;
   }
 
   function posixNormalize(path: string): string {
     if (path.length === 0) return ".";
     if (isNormal(path)) return path;
-    const absolute = path.charCodeAt(0) === SLASH;
-    const trailing = path.charCodeAt(path.length - 1) === SLASH;
+    const absolute = charCodeAt(path, 0) === SLASH;
+    const trailing = charCodeAt(path, path.length - 1) === SLASH;
     const normalized = normalizeSegments(path, !absolute);
     if (normalized.length === 0) return absolute ? "/" : trailing ? "./" : ".";
     const tail = trailing ? normalized + "/" : normalized;
@@ -64,7 +75,8 @@
 
   function posixJoin(paths: readonly string[]): string {
     let joined = "";
-    for (const path of paths) {
+    for (let i = 0; i < paths.length; i++) {
+      const path = paths[i]!;
       if (path.length > 0) joined = joined.length > 0 ? joined + "/" + path : path;
     }
     return joined.length > 0 ? posixNormalize(joined) : ".";
@@ -73,26 +85,26 @@
   // Index of the last code unit that is not a trailing `/`, or -1.
   function lastNonSlash(path: string): number {
     let last = path.length - 1;
-    while (last >= 0 && path.charCodeAt(last) === SLASH) last--;
+    while (last >= 0 && charCodeAt(path, last) === SLASH) last--;
     return last;
   }
 
   function posixDirname(path: string): string {
     if (path.length === 0) return ".";
-    const hasRoot = path.charCodeAt(0) === SLASH;
+    const hasRoot = charCodeAt(path, 0) === SLASH;
     // Node scans down to index 1: the separator before the last component,
     // without trimming repeated separators before it.
     const last = lastNonSlash(path);
-    const end = last < 1 ? -1 : path.lastIndexOf("/", last);
+    const end = last < 1 ? -1 : lastIndexOf(path, "/", last);
     if (end < 1) return hasRoot ? "/" : ".";
-    return hasRoot && end === 1 ? "//" : path.slice(0, end);
+    return hasRoot && end === 1 ? "//" : slice(path, 0, end);
   }
 
   function posixBasename(path: string, suffix?: string): string {
     if (suffix !== undefined && suffix.length > 0 && suffix.length <= path.length) return basenameWithSuffix(path, suffix);
     const last = lastNonSlash(path);
     if (last === -1) return "";
-    return path.slice(path.lastIndexOf("/", last) + 1, last + 1);
+    return slice(path, lastIndexOf(path, "/", last) + 1, last + 1);
   }
 
   function basenameWithSuffix(path: string, suffix: string): string {
@@ -102,7 +114,7 @@
     let start = 0;
     let end = -1;
     for (let i = path.length - 1; i >= 0; i--) {
-      const code = path.charCodeAt(i);
+      const code = charCodeAt(path, i);
       if (code === SLASH && firstNonSlashEnd !== -1) {
         start = i + 1;
         break;
@@ -110,7 +122,7 @@
       if (code === SLASH) continue;
       if (firstNonSlashEnd === -1) firstNonSlashEnd = i + 1;
       if (suffixIndex === -1) continue;
-      if (code !== suffix.charCodeAt(suffixIndex)) {
+      if (code !== charCodeAt(suffix, suffixIndex)) {
         // The suffix does not match, so the result is the whole component.
         suffixIndex = -1;
         end = firstNonSlashEnd;
@@ -119,8 +131,8 @@
       suffixIndex--;
       if (suffixIndex === -1) end = i;
     }
-    if (start === end) return path.slice(start, firstNonSlashEnd);
-    return path.slice(start, end === -1 ? path.length : end);
+    if (start === end) return slice(path, start, firstNonSlashEnd);
+    return slice(path, start, end === -1 ? path.length : end);
   }
 
   // Shared scan of the last path component, from Node's extname and parse.
@@ -136,7 +148,7 @@
     // 0: nothing before the dot yet, 1: only dots, -1: a non-dot character.
     let preDotState = 0;
     for (let i = path.length - 1; i >= first; i--) {
-      const code = path.charCodeAt(i);
+      const code = charCodeAt(path, i);
       if (code === SLASH && componentEnd !== -1) {
         componentStart = i + 1;
         break;
@@ -156,24 +168,24 @@
   }
 
   function posixExtname(path: string): string {
-    return scanComponent(path, 0) ? path.slice(dotIndex, componentEnd) : "";
+    return scanComponent(path, 0) ? slice(path, dotIndex, componentEnd) : "";
   }
 
   function posixParse(path: string): Parsed {
     const parsed: Parsed = { root: "", dir: "", base: "", ext: "", name: "" };
     if (path.length === 0) return parsed;
-    const absolute = path.charCodeAt(0) === SLASH;
+    const absolute = charCodeAt(path, 0) === SLASH;
     if (absolute) parsed.root = "/";
     const extension = scanComponent(path, absolute ? 1 : 0);
     const start = componentStart === 0 && absolute ? 1 : componentStart;
     if (componentEnd !== -1 && extension) {
-      parsed.name = path.slice(start, dotIndex);
-      parsed.base = path.slice(start, componentEnd);
-      parsed.ext = path.slice(dotIndex, componentEnd);
+      parsed.name = slice(path, start, dotIndex);
+      parsed.base = slice(path, start, componentEnd);
+      parsed.ext = slice(path, dotIndex, componentEnd);
     } else if (componentEnd !== -1) {
-      parsed.base = parsed.name = path.slice(start, componentEnd);
+      parsed.base = parsed.name = slice(path, start, componentEnd);
     }
-    if (componentStart > 0) parsed.dir = path.slice(0, componentStart - 1);
+    if (componentStart > 0) parsed.dir = slice(path, 0, componentStart - 1);
     else if (absolute) parsed.dir = "/";
     return parsed;
   }
@@ -184,44 +196,54 @@
     for (let i = paths.length - 1; i >= -1 && !absolute; i--) {
       const value = i >= 0 ? paths[i] : process.cwd();
       if (!value) continue;
-      absolute = value.startsWith("/");
-      tail = value.slice(absolute ? 1 : 0) + "/" + tail;
+      absolute = charCodeAt(value, 0) === SLASH;
+      tail = slice(value, absolute ? 1 : 0) + "/" + tail;
     }
     const result = posixNormalize((absolute ? "/" : "") + tail);
-    return result.length > 1 && result.endsWith("/") ? result.slice(0, -1) : result;
+    return result.length > 1 && charCodeAt(result, result.length - 1) === SLASH ? slice(result, 0, -1) : result;
   }
 
-  // Bun's relative computation after both sides are resolved. Resolved paths
-  // start with `/` unless the guest cwd itself is relative.
   function posixRelative(from: string, to: string): string {
     if (from === to) return "";
     const source = posixResolve([from]);
     const target = posixResolve([to]);
     if (source === target) return "";
+    const result = relativeResolved(source, target);
+    // A relative guest cwd can make the fixed offset below split a surrogate
+    // pair. Bun's string route rejects such a result for well-formed inputs.
+    if (!isWellFormed(result) && isWellFormed(source) && isWellFormed(target)) {
+      throw new Error("Path string result contains an unpaired surrogate");
+    }
+    return result;
+  }
+
+  // Bun's relative computation after both sides are resolved. Resolved paths
+  // start with `/` unless the guest cwd itself is relative.
+  function relativeResolved(source: string, target: string): string {
     const sourceLength = source.length - 1;
     const targetLength = target.length - 1;
-    const length = Math.min(sourceLength, targetLength);
+    const length = sourceLength < targetLength ? sourceLength : targetLength;
     let lastCommonSep = -1;
     let i = 0;
     for (; i < length; i++) {
-      const code = source.charCodeAt(1 + i);
-      if (code !== target.charCodeAt(1 + i)) break;
+      const code = charCodeAt(source, 1 + i);
+      if (code !== charCodeAt(target, 1 + i)) break;
       if (code === SLASH) lastCommonSep = i;
     }
     if (i === length && targetLength > length) {
       // `from` is the root or an exact base path of `to`.
-      if (target.charCodeAt(1 + i) === SLASH) return target.slice(2 + i);
-      if (i === 0) return target.slice(1);
+      if (charCodeAt(target, 1 + i) === SLASH) return slice(target, 2 + i);
+      if (i === 0) return slice(target, 1);
     } else if (i === length && sourceLength > length) {
       // `to` is the root or an exact base path of `from`.
-      if (source.charCodeAt(1 + i) === SLASH) lastCommonSep = i;
+      if (charCodeAt(source, 1 + i) === SLASH) lastCommonSep = i;
       else if (i === 0) lastCommonSep = 0;
     }
     let out = "";
     for (i = lastCommonSep + 2; i <= source.length; i++) {
-      if (i === source.length || source.charCodeAt(i) === SLASH) out += out.length > 0 ? "/.." : "..";
+      if (i === source.length || charCodeAt(source, i) === SLASH) out += out.length > 0 ? "/.." : "..";
     }
-    return out + target.slice(1 + lastCommonSep);
+    return out + slice(target, 1 + lastCommonSep);
   }
 
   // Windows operations keep Bun's native algorithms, with a lossless UTF-16
@@ -309,18 +331,24 @@
     return typeof value === "string" ? value : validateString(value, `paths[${index}]`);
   }
 
+  // Indexed loops instead of array methods, which user code can replace.
   function strings(values: readonly unknown[]): string[] {
-    return values.map(pathArgument);
+    const paths: string[] = [];
+    for (let i = 0; i < values.length; i++) paths[i] = pathArgument(values[i], i);
+    return paths;
   }
 
+  // Validates right to left; POSIX stops at the last absolute path.
   function resolutionStrings(windows: boolean, values: readonly unknown[]): string[] {
-    const paths: string[] = [];
+    const reversed: string[] = [];
+    let count = 0;
     for (let i = values.length - 1; i >= 0; i--) {
       const value = pathArgument(values[i], i);
-      paths.push(value);
-      if (!windows && value.startsWith("/")) break;
+      reversed[count++] = value;
+      if (!windows && charCodeAt(value, 0) === SLASH) break;
     }
-    paths.reverse();
+    const paths: string[] = [];
+    for (let i = 0; i < count; i++) paths[i] = reversed[count - 1 - i]!;
     return paths;
   }
 

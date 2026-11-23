@@ -16,6 +16,12 @@ declare namespace BunWasm {
   interface Internal {
     isProgramScriptHash?(hash: string): boolean;
     stringIsWellFormed(value: string): boolean;
+    stringIntrinsics: {
+      charCodeAt(value: string, index: number): number;
+      slice(value: string, start?: number, end?: number): string;
+      indexOf(value: string, search: string, position?: number): number;
+      lastIndexOf(value: string, search: string, position?: number): number;
+    };
     mainPath: string;
     prepareText(source: string, goal: PrepareGoal, origin: string, name?: string): string;
     prepareFunctionArgs(args: string[], kind: FunctionKind, name?: string): string[];
