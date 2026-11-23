@@ -59,8 +59,8 @@ export async function loadEngineProgram(engine: Engine, profile: ProgramMemoryPr
   if (unavailable) throw new Error(unavailable);
   const asset = override ?? profileAsset(ENGINES[engine].wasm, profile);
   const url = new URL(asset, location.href).href;
-  // loadWasm finds the build fingerprint (and so its engine cache) by the page-relative name.
-  const loaded = engine === "browser" ? await loadWasm(asset, progress)
+  // The build fingerprint (and so the engine cache) is keyed by the staged asset's name.
+  const loaded = engine === "browser" ? await loadWasm(url, progress, override === undefined ? asset : undefined)
     : await loadPaired(url, engine, progress, profile);
   const expected = engine === "browser" ? "single" : engine;
   if (programKind(loaded.module) !== expected) throw new TypeError(`Bun engine mismatch: selected ${engine}`);
@@ -72,7 +72,7 @@ export async function loadEngineProgram(engine: Engine, profile: ProgramMemoryPr
  * Fetches and compiles a wasm module. Sites ship it gzipped (static hosts cap file sizes, and it is
  * 3-4x smaller) and the page decompresses it; a plain .wasm URL works too. Throws WasmMissing on 404.
  */
-export async function loadWasm(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string | null }> {
+export async function loadWasm(url: string, progress: (text: string) => void, asset = url): Promise<{ module: WebAssembly.Module; size: number; build: string | null }> {
   const requested = new URL(url, location.href);
   const name = requested.pathname;
   if (name.replace(/\.gz$/, "").endsWith("bun-tools.wasm")) return loadVerifiedTools(url, progress);
@@ -81,7 +81,7 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
     if (requested.origin === standard.origin && requested.pathname.replace(/\.gz$/, "") === standard.pathname) return loadPaired(url, kind, progress);
   }
   progress("loading bun.wasm…");
-  const build = assetBuild(url);
+  const build = assetBuild(asset);
   const key = new URL(url, location.href).href;
   const lookup = performance.now();
   const cached = build ? await cachedEngine(key, build) : null;

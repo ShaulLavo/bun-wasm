@@ -4,7 +4,11 @@ import { InputGate } from "../src/playground/playground";
 import { ENGINE_BIN } from "../../src/executable-paths";
 
 const cleanups: (() => Promise<void>)[] = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
+  // A booted playground installs the page's compile observer from its own bundled module copy.
+  Reflect.deleteProperty(globalThis, "__bunwasmCompileObserver");
+});
 
 const engineModule = () => ({ module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), size: 8, build: null });
 
