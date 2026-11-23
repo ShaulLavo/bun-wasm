@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chromium, firefox, type Browser } from "playwright";
+import { chromium, firefox, type Browser, type Page } from "playwright";
 import { installPageLoadObserver, type PageLoadState } from "../sandbox/tests/page-load-support";
 
 declare const __pageLoad: { state(app: string): PageLoadState };
@@ -23,7 +23,9 @@ const browsers: Browser[] = [];
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => new Response(pages[new URL(request.url).pathname] ?? "", { headers: { "content-type": "text/html" } }) });
 beforeAll(async () => {
   try {
-    browsers.push(await chromium.launch({ headless: true }), await firefox.launch({ headless: true }));
+    // Each browser is registered as soon as it launches, so a failing second launch still closes the first.
+    browsers.push(await chromium.launch({ headless: true }));
+    browsers.push(await firefox.launch({ headless: true }));
   } catch (error) {
     await Promise.all(browsers.map(browser => browser.close()));
     throw error;
@@ -35,27 +37,31 @@ afterAll(async () => {
   await server.stop(true);
 }, 60_000);
 
-test("page readiness comes from the page's marks, or from #status on builds without them", async () => {
-  for (const browser of browsers) {
-    const context = await browser.newContext();
-    try {
-      await context.addInitScript(installPageLoadObserver);
-      const page = await context.newPage();
-      const state = async (path: string) => {
-        await page.goto(`${server.url.origin}${path}`);
-        await page.waitForFunction(() => __pageLoad.state("web").ready !== null || __pageLoad.state("web").error !== null, undefined, { timeout: 10_000 });
-        return page.evaluate(() => ({ ...__pageLoad.state("web"), markedAt: Reflect.get(globalThis, "markedAt") as number | undefined }));
-      };
-      const unmarked = await state("/unmarked");
-      expect(unmarked.ready).toBeGreaterThan(0);
-      expect(unmarked.error).toBeNull();
-      const marked = await state("/marked");
-      expect(marked.ready).toBe(marked.markedAt!);
-      const failed = await state("/failed");
-      expect(failed.ready).toBeNull();
-      expect(failed.error).toBe("could not load bun.wasm");
-    } finally {
-      await context.close();
-    }
+/** The observer's settled state for one fixture page. */
+async function observed(page: Page, path: string): Promise<PageLoadState & { markedAt?: number }> {
+  await page.goto(`${server.url.origin}${path}`);
+  await page.waitForFunction(() => __pageLoad.state("web").ready !== null || __pageLoad.state("web").error !== null, undefined, { timeout: 10_000 });
+  return page.evaluate(() => ({ ...__pageLoad.state("web"), markedAt: Reflect.get(globalThis, "markedAt") as number | undefined }));
+}
+
+async function checkReadiness(browser: Browser): Promise<void> {
+  const context = await browser.newContext();
+  try {
+    await context.addInitScript(installPageLoadObserver);
+    const page = await context.newPage();
+    const unmarked = await observed(page, "/unmarked");
+    expect(unmarked.ready).toBeGreaterThan(0);
+    expect(unmarked.error).toBeNull();
+    const marked = await observed(page, "/marked");
+    expect(marked.ready).toBe(marked.markedAt!);
+    const failed = await observed(page, "/failed");
+    expect(failed.ready).toBeNull();
+    expect(failed.error).toBe("could not load bun.wasm");
+  } finally {
+    await context.close();
   }
+}
+
+test("page readiness comes from the page's marks, or from #status on builds without them", async () => {
+  for (const browser of browsers) await checkReadiness(browser);
 }, 60_000);

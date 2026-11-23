@@ -14,7 +14,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium, firefox, type BrowserContext, type BrowserType, type Page } from "playwright";
-import { ChildGroup, ContextGroup, installPageLoadObserver, onInterrupt, requireUniqueNames, type PageLoadState } from "./page-load-support";
+import { ChildGroup, ContextGroup, installPageLoadObserver, onInterrupt, requireUniqueNames, runAll, type PageLoadState } from "./page-load-support";
 
 const args = process.argv.slice(2);
 const option = (name: string, fallback: string) => args.includes(`--${name}`) ? args[args.indexOf(`--${name}`) + 1]! : fallback;
@@ -62,11 +62,11 @@ const contexts = new ContextGroup<BrowserContext>();
 // fsyncs 50-100x slower than an ordinary SSD (a cold indexedDB.open takes 9 s instead of 90 ms).
 const profiles = await mkdtemp(join(option("profiles", tmpdir()), "bun-wasm-page-load-"));
 let teardown: Promise<void> | undefined;
-const cleanup = () => teardown ??= (async () => {
-  await contexts.close();
-  await children.stop();
-  await rm(profiles, { recursive: true, force: true });
-})();
+const cleanup = () => teardown ??= runAll([
+  () => contexts.close(),
+  () => children.stop(),
+  () => rm(profiles, { recursive: true, force: true }),
+]);
 onInterrupt(cleanup);
 const visits: Visit[] = [];
 try {

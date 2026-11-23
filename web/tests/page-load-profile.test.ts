@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChildGroup, ContextGroup, requireUniqueNames } from "../../sandbox/tests/page-load-support";
+import { ChildGroup, ContextGroup, requireUniqueNames, runAll } from "../../sandbox/tests/page-load-support";
 
 test("variants with the same name are refused before anything starts", () => {
   expect(() => requireUniqueNames(["before", "after"])).not.toThrow();
@@ -39,6 +39,46 @@ test("teardown closes a browser context that is still launching", async () => {
   await teardown;
   expect(await visit).toBe("visited");
   expect(closed).toBeGreaterThan(0);
+});
+
+test("teardown waits for a context close that is already under way", async () => {
+  const group = new ContextGroup<{ close(): Promise<void> }>();
+  const closing = Promise.withResolvers<void>();
+  const visit = group.open(async () => ({ close: () => closing.promise }), async () => "visited");
+  await Bun.sleep(1);
+  let finished = false;
+  const teardown = group.close().then(() => { finished = true; });
+  await Bun.sleep(20);
+  expect(finished).toBe(false);
+  closing.resolve();
+  await teardown;
+  expect(await visit).toBe("visited");
+});
+
+test("teardown happens once and refuses later launches", async () => {
+  const group = new ContextGroup<{ close(): Promise<void> }>();
+  let launched = 0;
+  const first = group.close();
+  expect(group.close()).toBe(first);
+  const refused = await group.open(async () => { launched++; return { close: async () => {} }; }, async () => "visited")
+    .then(() => () => {}, (error: unknown) => () => { throw error; });
+  expect(refused).toThrow("no new launch");
+  expect(launched).toBe(0);
+  await first;
+});
+
+test("a context whose close fails does not stop the rest of teardown", async () => {
+  const group = new ContextGroup<{ close(): Promise<void> }>();
+  const visit = group.open(async () => ({ close: async () => { throw new Error("close failed"); } }), async () => "visited");
+  expect(await visit).toBe("visited");
+  const steps: string[] = [];
+  const outcome = await runAll([
+    () => group.close().then(() => { steps.push("contexts"); }),
+    async () => { steps.push("servers"); throw new Error("server stop failed"); },
+    async () => { steps.push("profiles"); },
+  ]).then(() => () => {}, (error: unknown) => () => { throw error; });
+  expect(steps).toEqual(["contexts", "servers", "profiles"]);
+  expect(outcome).toThrow("Teardown failed");
 });
 
 test("interrupting the profiler stops the servers it started", async () => {

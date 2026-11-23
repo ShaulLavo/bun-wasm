@@ -68,24 +68,47 @@ async function stopChild({ child, ended, done }: Tracked, graceMs: number): Prom
   clearTimeout(timer);
 }
 
-/** Browser contexts tracked from the launch call, so an interrupted launch is closed too. */
+/**
+ * Browser contexts tracked from the launch call until their close settles, so teardown closes
+ * one still launching and waits for closes already under way. Teardown is single-shot and
+ * refuses later launches. A close that fails never stops the rest of teardown.
+ */
 export class ContextGroup<Context extends { close(): Promise<void> }> {
-  private readonly contexts = new Set<Promise<Context>>();
+  private readonly launches = new Set<Promise<Context>>();
+  private readonly lifetimes = new Set<Promise<void>>();
+  private closing: Promise<void> | undefined;
 
-  async open<T>(launch: () => Promise<Context>, use: (context: Context) => Promise<T>): Promise<T> {
+  open<T>(launch: () => Promise<Context>, use: (context: Context) => Promise<T>): Promise<T> {
+    if (this.closing) return Promise.reject(new Error("Browser contexts are closing; no new launch"));
     const launching = launch();
-    this.contexts.add(launching);
-    try {
-      return await use(await launching);
-    } finally {
-      this.contexts.delete(launching);
-      await launching.then(context => context.close(), () => {});
-    }
+    this.launches.add(launching);
+    const lifetime = (async () => {
+      try { return await use(await launching); }
+      finally { await closeLaunched(launching).catch(() => {}); }
+    })();
+    const settled = lifetime.then(() => {}, () => {});
+    this.lifetimes.add(settled);
+    void settled.then(() => { this.launches.delete(launching); this.lifetimes.delete(settled); });
+    return lifetime;
   }
 
   close(): Promise<void> {
-    return Promise.all(Array.from(this.contexts, launching => launching.then(context => context.close(), () => {}))).then(() => {});
+    return this.closing ??= (async () => {
+      await Promise.allSettled(Array.from(this.launches, closeLaunched));
+      await Promise.allSettled(this.lifetimes);
+    })();
   }
+}
+
+function closeLaunched<Context extends { close(): Promise<void> }>(launching: Promise<Context>): Promise<void> {
+  return launching.then(context => context.close(), () => {});
+}
+
+/** Runs every step in order even when one fails, then reports the failures together. */
+export async function runAll(steps: readonly (() => Promise<unknown>)[]): Promise<void> {
+  const failures: unknown[] = [];
+  for (const step of steps) await step().catch((error: unknown) => { failures.push(error); });
+  if (failures.length) throw new AggregateError(failures, "Teardown failed");
 }
 
 /** Runs `cleanup` once on SIGINT, SIGTERM or SIGHUP, then exits with the signal's status. */

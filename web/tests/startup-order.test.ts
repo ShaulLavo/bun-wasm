@@ -223,6 +223,34 @@ test("after the shell fails, late download progress and the engine change nothin
   expect(playground.status.kind).toBe("error");
 });
 
+test("a shell that fails while the engine downloads fails startup, and nothing later replaces it", async () => {
+  const engine = deferred<ReturnType<typeof engineModule>>();
+  let progress: ((text: string) => void) | undefined;
+  const page = await models(undefined, undefined, report => { progress = report; return engine.promise; });
+  cleanups.push(page.cleanup);
+  let disposed = 0;
+  const create = page.boundary.BrowserSession.create;
+  Object.assign(page.boundary.BrowserSession, {
+    create: async (options: Parameters<typeof create>[0] & { onState(state: string, detail?: string): void }) => {
+      const shell = await create(options);
+      setTimeout(() => options.onState("failed", "shell worker crashed"), 0);
+      return { ...shell, dispose: async () => { disposed++; } };
+    },
+  });
+  const playground = new page.Playground("");
+  method<() => void>(playground, "terminalOpened")();
+  await playground.start();
+  expect(playground.failure).toBe("startup");
+  expect(playground.status).toEqual({ text: "Error: shell worker crashed", kind: "error" });
+  expect(disposed).toBe(1);
+  progress?.("downloading bun.wasm… 1.0 MB");
+  engine.resolve(engineModule());
+  for (let turns = 0; turns < 20; turns++) await turn();
+  expect(playground.status).toEqual({ text: "Error: shell worker crashed", kind: "error" });
+  expect(playground.ready).toBe(false);
+  expect(page.fixture.files.has(PACKAGE_CONTINUATION)).toBe(false);
+});
+
 test("input the shell rejects during replay is reported and startup still finishes", async () => {
   const engine = deferred<ReturnType<typeof engineModule>>();
   const page = await models(undefined, undefined, () => engine.promise);

@@ -284,6 +284,15 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     // The shell starts while the engine downloads. Its PATH names Bun's static bin directory,
     // and typing waits for Bun's registration below, so no command can run before Bun exists.
     term.onData(data => input.write(data));
+    // A shell that fails or exits before the playground is ready fails startup, even while the
+    // engine is still downloading. It only ever rejects; startup races it against both branches.
+    const shellEnded = Promise.withResolvers<never>();
+    shellEnded.promise.catch(() => {});
+    const shellState = (state: SessionState, detail?: string) => {
+      this.shellChanged(state, detail);
+      if (this.ready || (state !== "failed" && state !== "exited")) return;
+      shellEnded.reject(new Error(detail ?? `The shell ${state} during startup. Reload to start another session.`));
+    };
     const shellReady = (async () => {
       const [programs, { BrowserSession }, prompts] = await Promise.all([programsReady, sessionModule, promptModule]);
       const prompt = prompts?.createPrompt({
@@ -301,7 +310,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
         lineEditor: { mode: "zsh" },
         prompt,
         onOutput: bytes => term.write(bytes),
-        onState: (state, detail) => this.shellChanged(state, detail),
+        onState: shellState,
       });
       stage("shell-created");
       startedShell = shell;
@@ -318,7 +327,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     let size: number;
     try {
       // Both branches are observed from here, so whichever fails first ends startup at once.
-      [shell, { registration, size }] = await Promise.all([shellReady, registering]);
+      [shell, { registration, size }] = await Promise.race([Promise.all([shellReady, registering]), shellEnded.promise]);
     } catch (error) {
       this.startupFailed = true;
       void retireShell();
