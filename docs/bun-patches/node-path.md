@@ -36,9 +36,12 @@ native Bun). Local changes:
 - The POSIX code calls `charCodeAt`, `slice`, `indexOf` and `lastIndexOf`
   through intrinsics that `src/js/bootstrap.js` captures before user code
   runs, and builds no ordinary arrays: `normalize` keeps its segment stack as
-  offsets in a reused `Int32Array`, which stays linear for long runs of `..`
-  and has no inherited index accessors, and `join` and `resolve` validate their
-  arguments while they walk them. Replacing a public `String.prototype` or
+  offsets in an `Int32Array`, which stays linear for long runs of `..` and has
+  no inherited index accessors. Paths up to 1,022 code units share one buffer
+  whose capacity is a constant, never its replaceable `length` accessor; a
+  longer path gets a temporary buffer. Kept segments that are adjacent in the
+  input are copied as one slice. `join` and `resolve` validate their arguments
+  while they walk them. Replacing a public `String.prototype` or
   `Array.prototype` method, or adding inherited index accessors, therefore
   cannot change a result, as with the native code it replaces. The Windows
   wrappers keep their previous code exactly.
