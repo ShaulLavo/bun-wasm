@@ -19,6 +19,7 @@ import { engineEnvironment } from "../src/executable-paths.ts";
 import { isEngine, loadWasm, WasmMissing } from "../web/src/engine-loader.ts";
 import { stageSharedPrograms } from "./stage-program-profiles";
 import { stageGuestWasm } from "./stage-guest-wasm";
+import { settleAll } from "./stage-wasm-sidecars";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -320,14 +321,14 @@ test("the actual optional web staging hashes and compresses both tiny SpiderMonk
     mkdirSync(out);
     const source = readFileSync(new URL("../web/build.ts", import.meta.url), "utf8");
     const start = source.indexOf("const engineBuilds:");
-    const settled = "await Promise.all(staging);";
+    const settled = "await settleAll(staging);";
     const end = source.indexOf(settled, start) + settled.length;
     if (start < 0 || end <= start) throw new Error("Missing web asset copy boundary");
     const code = new Bun.Transpiler({ loader: "ts" }).transformSync(source.slice(start, end));
-    const stage = new Function("Bun", "existsSync", "join", "dirname", "resolve", "statSync", "out", "here", "process", "wasmSource", "stageSharedPrograms", "stageGuestWasm", "buildShellAssets", `return (async () => {${code}; return engineBuilds;})();`);
+    const stage = new Function("Bun", "existsSync", "join", "dirname", "resolve", "statSync", "out", "here", "process", "wasmSource", "stageSharedPrograms", "stageGuestWasm", "buildShellAssets", "settleAll", `return (async () => {${code}; return engineBuilds;})();`);
     const builds = await stage(Bun, existsSync, join, dirname, resolve, statSync, out, root, {
       env: { SPIDERMONKEY_WASM: join(root, programProfile(kind).core) },
-    }, join(root, "missing-quickjs.wasm"), (directory: string, builds: Record<string, string>) => stageSharedPrograms(directory, builds, { quickjs: undefined, jsc: undefined }), stageGuestWasm, async () => {});
+    }, join(root, "missing-quickjs.wasm"), (directory: string, builds: Record<string, string>) => stageSharedPrograms(directory, builds, { quickjs: undefined, jsc: undefined }), stageGuestWasm, async () => {}, settleAll);
     expect(Object.keys(builds).sort()).toEqual(["bun-spidermonkey.wasm", "spidermonkey-engine.wasm"]);
     for (const name of [programProfile(kind).core, programProfile(kind).side]) {
       const raw = readFileSync(join(root, name));

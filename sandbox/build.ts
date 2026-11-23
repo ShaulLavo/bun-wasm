@@ -10,6 +10,7 @@ import { templates } from "./src/template-catalog";
 import { templateFiles } from "./template-files";
 import { stageSharedPrograms } from "../scripts/stage-program-profiles";
 import { sortedBuilds, stageGuestWasm } from "../scripts/stage-guest-wasm";
+import { settleAll } from "../scripts/stage-wasm-sidecars";
 
 const here = import.meta.dir;
 const web = resolve(here, "../web");
@@ -61,7 +62,8 @@ const staging = guests.map(async ({ source, name }) => {
   await stageGuestWasm(source, name, out, engineBuilds);
   console.log(`${name}: ${source} (${(statSync(source).size / 1024 / 1024).toFixed(1)} MB)`);
 }).concat([stageSharedPrograms(out, engineBuilds), buildShellAssets(here, out)]);
-await Promise.all(staging);
+// A failure is reported only after every writer settled, so none is still writing into dist.
+await settleAll(staging);
 const builds = sortedBuilds(engineBuilds);
 
 for (const template of templates) {

@@ -8,6 +8,7 @@ import { profileAsset, verifyMemoryProfile } from "../web/src/program-profile";
 import { inputProfile, parseProgramReceipt, record, verifyProgramReceipt, type ProgramInputSnapshot } from "./guest-core-receipt";
 import { assertShippedGuestHasNoNames, keepNamesRequested } from "./wasm-name-sections";
 import { sha256, writeGuestTwins } from "./stage-guest-wasm";
+import { settleAll } from "./stage-wasm-sidecars";
 
 export function sharedProgramReceipts(engine: PairedEngine): string[] {
   return ["bun-core.wasm.core.json", "source.txt"].concat(engine === "spidermonkey"
@@ -28,7 +29,7 @@ export async function stageSharedPrograms(out: string, builds: Record<string, st
   spidermonkey: process.env.SHARED_SPIDERMONKEY_PROGRAM,
 }, policy: BackingPolicy = BUN_MEMORY_GROUP_POLICY): Promise<void> {
   // Brotli quality 11 takes tens of seconds per guest, so the programs compress concurrently.
-  await Promise.all((["quickjs", "jsc", "spidermonkey"] as const).map(async engine => {
+  await settleAll((["quickjs", "jsc", "spidermonkey"] as const).map(async engine => {
     const source = inputs[engine];
     if (source) await stageProgram(engine, source, out, builds, policy);
   }));
@@ -111,10 +112,12 @@ async function stageProgram(engine: PairedEngine, source: string, out: string, b
   for (const file of files.concat(sideFiles)) {
     await Bun.write(join(receipts, file.name), file.text);
   }
-  await Promise.all([{ name: names.core, bytes: core }, { name: names.side, bytes: side }].map(async file => {
-    assertShippedGuestHasNoNames(file.name, file.bytes, keepNamesRequested());
+  const guests = [{ name: names.core, bytes: core }, { name: names.side, bytes: side }];
+  for (const guest of guests) assertShippedGuestHasNoNames(guest.name, guest.bytes, keepNamesRequested());
+  await settleAll(guests.map(async file => {
     const name = profileAsset(file.name, "shared-group");
-    builds[name] = sha256(file.bytes);
-    await writeGuestTwins(join(out, name), file.bytes, builds[name]);
+    const digest = sha256(file.bytes);
+    await writeGuestTwins(join(out, name), file.bytes, digest);
+    builds[name] = digest;
   }));
 }

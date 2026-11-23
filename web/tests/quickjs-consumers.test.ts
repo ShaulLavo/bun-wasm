@@ -8,6 +8,7 @@ import { loadNodeProgram } from "../scripts/node-linked";
 import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
 import { stageSharedPrograms } from "../../scripts/stage-program-profiles";
 import { sortedBuilds, stageGuestWasm } from "../../scripts/stage-guest-wasm";
+import { settleAll } from "../../scripts/stage-wasm-sidecars";
 import { brotliDecompressSync } from "node:zlib";
 import { linkedFixtureValue } from "../../tests/package/linked-fixture";
 
@@ -22,7 +23,7 @@ async function scratch() {
 async function stagedAssets(root: string, project: "web" | "sandbox" = "sandbox", env: Record<string, string> = {}) {
   const source = await Bun.file(new URL(`../../${project}/build.ts`, import.meta.url)).text();
   const start = source.indexOf("const engineBuilds:");
-  const settled = "await Promise.all(staging);";
+  const settled = "await settleAll(staging);";
   const end = source.indexOf(settled) + settled.length;
   if (start < 0 || end <= start) throw new Error(`${project} engine staging boundary missing`);
   const engineBlock = source.slice(start, end);
@@ -30,11 +31,11 @@ async function stagedAssets(root: string, project: "web" | "sandbox" = "sandbox"
   const writeManifest = source.split("\n").find(line => line.startsWith('await Bun.write(join(out, "engine-builds.json"), JSON.stringify(builds))'));
   if (!sorted || !writeManifest) throw new Error(`${project} engine manifest writer missing`);
   const body = new Bun.Transpiler({ loader: "ts" }).transformSync(`${engineBlock}\n${sorted}\n${writeManifest}`);
-  const run = new Function("Bun", "existsSync", "statSync", "dirname", "join", "resolve", "here", "out", "process", "wasmSource", "stageSharedPrograms", "stageGuestWasm", "sortedBuilds", "buildShellAssets", `return (async () => { ${body} })();`);
+  const run = new Function("Bun", "existsSync", "statSync", "dirname", "join", "resolve", "here", "out", "process", "wasmSource", "stageSharedPrograms", "stageGuestWasm", "sortedBuilds", "buildShellAssets", "settleAll", `return (async () => { ${body} })();`);
   const here = join(root, project), out = join(root, "output");
   await mkdir(out, { recursive: true });
   await run(Bun, existsSync, statSync, dirname, join, resolve, here, out, { env }, join(root, "dist/bun.wasm"),
-    (directory: string, builds: Record<string, string>) => stageSharedPrograms(directory, builds, { quickjs: undefined, jsc: undefined }), stageGuestWasm, sortedBuilds, async () => {});
+    (directory: string, builds: Record<string, string>) => stageSharedPrograms(directory, builds, { quickjs: undefined, jsc: undefined }), stageGuestWasm, sortedBuilds, async () => {}, settleAll);
   return out;
 }
 

@@ -11,6 +11,7 @@ import { buildBrowserEntries, buildClassicWorker, buildShellAssets } from "../sc
 import { dirname, join, resolve } from "node:path";
 import { stageSharedPrograms } from "../scripts/stage-program-profiles";
 import { sortedBuilds, stageGuestWasm } from "../scripts/stage-guest-wasm";
+import { settleAll } from "../scripts/stage-wasm-sidecars";
 
 const here = import.meta.dir;
 const out = join(here, "dist");
@@ -107,7 +108,8 @@ const staging = guests.map(async ({ source, name }) => {
   await stageGuestWasm(source, name, out, engineBuilds);
   console.log(`${name}: copied ${source} (${(statSync(source).size / 1024 / 1024).toFixed(1)} MB)`);
 }).concat([stageSharedPrograms(out, engineBuilds), buildShellAssets(here, out)]);
-await Promise.all(staging);
+// A failure is reported only after every writer settled, so none is still writing into dist.
+await settleAll(staging);
 
 const builds = sortedBuilds(engineBuilds);
 await Bun.write(join(out, "engine-builds.json"), JSON.stringify(builds));

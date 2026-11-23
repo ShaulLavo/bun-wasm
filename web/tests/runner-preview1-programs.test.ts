@@ -167,7 +167,8 @@ test("a Preview1-first runtime does not register its guest as the immutable Bun 
     const second = await (program.module as () => Promise<WebAssembly.Module>)();
     expect(first).not.toBe(module);
     expect(second).toBe(first);
-    expect(fetch).toHaveBeenCalledTimes(2);
+    // The host serves the logical URL, so the loader never needs the `.gz` twin, and the second call reuses the module.
+    expect(fetch.mock.calls.map(([input]) => new URL(String(input)).pathname)).toEqual(["/bun-browser.wasm"]);
   } finally {
     for (const run of runs) run.kill(9);
     await Promise.all(runs.map(run => run.done));

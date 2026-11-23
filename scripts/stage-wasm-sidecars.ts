@@ -7,7 +7,7 @@ import { brotliCompress, constants, gzip } from "node:zlib";
 const brotli = promisify(brotliCompress);
 const gzipped = promisify(gzip);
 
-type Writer = (path: string, bytes: Uint8Array) => Promise<void>;
+export type Writer = (path: string, bytes: Uint8Array) => Promise<void>;
 
 /**
  * Write a raw program WASM plus `.br` and `.gz` twins. Hosts pick one by Accept-Encoding and send it
@@ -23,9 +23,16 @@ export async function writeWasmWithSidecars(path: string, bytes: Uint8Array, wri
     brotli(bytes, { params: { [constants.BROTLI_PARAM_QUALITY]: constants.BROTLI_MAX_QUALITY, [constants.BROTLI_PARAM_SIZE_HINT]: bytes.byteLength } }),
     gzipped(bytes, { level: 9 }),
   ]);
-  const outputs: [string, Uint8Array][] = [[path, bytes], [`${path}.gz`, gz], [`${path}.br`, br]];
+  await replaceFiles([[path, bytes], [`${path}.gz`, gz], [`${path}.br`, br]], write);
+}
+
+/**
+ * Write every output to a temporary file first and rename them into place only after all writes
+ * succeeded. On failure every writer has settled and every temporary file is gone.
+ */
+export async function replaceFiles(outputs: readonly [string, Uint8Array][], write: Writer = writeFile): Promise<void> {
   const suffix = `.${process.pid}-${randomUUID()}.tmp`;
-  await mkdir(dirname(path), { recursive: true });
+  await Promise.all(Array.from(new Set(outputs.map(([target]) => dirname(target))), directory => mkdir(directory, { recursive: true })));
   try {
     await writeAll(outputs, suffix, write);
     await requireFileTargets(outputs.map(([target]) => target));
@@ -38,9 +45,15 @@ export async function writeWasmWithSidecars(path: string, bytes: Uint8Array, wri
 
 /** Wait for every write, so none can recreate a temporary file after cleanup, then report the first failure. */
 async function writeAll(outputs: readonly [string, Uint8Array][], suffix: string, write: Writer): Promise<void> {
-  const settled = await Promise.allSettled(outputs.map(async ([target, data]) => write(target + suffix, data)));
+  await settleAll(outputs.map(async ([target, data]) => write(target + suffix, data)));
+}
+
+/** Like Promise.all, but a failure is reported only after every task settled, so none is still writing. */
+export async function settleAll<T>(tasks: readonly Promise<T>[]): Promise<T[]> {
+  const settled = await Promise.allSettled(tasks);
   const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failure) throw failure.reason;
+  return settled.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
 }
 
 /** Refuse before any rename, so a directory in one target's place never leaves the others half replaced. */

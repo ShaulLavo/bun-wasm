@@ -77,15 +77,32 @@ async function wasmRepresentation(encoding: Encoding, source: Representation, gz
   }
   if (encoding === "identity") return new Response(source.file, { headers });
   headers["content-encoding"] = encoding;
-  if (gzip?.encoding === "gzip") {
-    // The gzip twin's trailer holds the uncompressed size (mod 2^32), for the progress bar.
-    const trailer = new DataView(await gzip.file.slice(gzip.file.size - 4).arrayBuffer());
-    headers["x-uncompressed-length"] = String(trailer.getUint32(0, true));
-  }
+  const decoded = gzip?.encoding === "gzip" ? await gzipLength(gzip.file) : undefined;
+  if (decoded !== undefined) headers["x-uncompressed-length"] = String(decoded);
   return new Response(source.file, { headers });
 }
 
-const tls = process.env.TLS_CERT && process.env.TLS_KEY ? { cert: Bun.file(process.env.TLS_CERT), key: Bun.file(process.env.TLS_KEY) } : undefined;
+/**
+ * The gzip trailer's uncompressed size (mod 2^32), for the progress bar. It is optional, so a
+ * truncated or unreadable twin only drops the header instead of failing the response.
+ */
+async function gzipLength(file: ReturnType<typeof Bun.file>): Promise<number | undefined> {
+  try {
+    if (file.size < 18) return undefined;
+    return new DataView(await file.slice(file.size - 4).arrayBuffer()).getUint32(0, true);
+  } catch {
+    return undefined;
+  }
+}
+
+const tls = tlsFiles(process.env.TLS_CERT, process.env.TLS_KEY);
+
+/** HTTPS needs both files; one alone would silently serve plain HTTP, so it is refused. */
+function tlsFiles(cert: string | undefined, key: string | undefined) {
+  if (!cert && !key) return undefined;
+  if (!cert || !key) throw new Error("TLS_CERT and TLS_KEY must be set together");
+  return { cert: Bun.file(cert), key: Bun.file(key) };
+}
 const server = Bun.serve({
   port,
   tls,

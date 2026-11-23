@@ -140,7 +140,8 @@ async function workerTemplateDefault(page: Page, base: string, engine: string, t
     assert.deepEqual(await page.evaluate(() => ({ engine: playground.engine, profile: playground.profile })), { engine, profile: "shared-group" });
     assert.ok(isPairedEngine(engine));
     const names = programProfile(engine);
-    const allowed = [names.core, names.side].map(name => `/profiles/shared-group/${name}.gz`);
+    // The loader asks for the logical URL first and falls back to the `.gz` twin on a plain host.
+    const allowed = [names.core, names.side].flatMap(name => [`/profiles/shared-group/${name}`, `/profiles/shared-group/${name}.gz`]);
     assert.ok(requests.filter(path => /\.wasm(?:\.gz)?$/.test(path)).every(path => allowed.includes(path) || path.startsWith("/programs/")), `${template} eagerly fetched another engine or profile`);
     console.log(JSON.stringify({ template, engine, profile: "shared-group", explicitProfile: false, requests }));
   } finally { page.off("request", observe); }
@@ -166,7 +167,8 @@ async function mismatch(base: string, root: string): Promise<void> {
   await page.goto(`${base}?engine=quickjs&profile=shared-group&mode=memory&prompt=off`);
   await page.waitForFunction(() => document.querySelector("#status")?.textContent?.includes("profile mismatch"), undefined, { timeout: 60_000 });
   assert.equal(await page.evaluate(() => typeof playground), "undefined");
-  assert.equal(requests.some(path => path === "/bun.wasm.gz" || path === "/quickjs.wasm.gz"), false, "a refused shared profile never retries split assets");
+  const split = ["/bun.wasm", "/bun.wasm.gz", "/quickjs.wasm", "/quickjs.wasm.gz"];
+  assert.equal(requests.some(path => split.includes(path)), false, "a refused shared profile never retries split assets");
   assert.deepEqual(errors, []);
   await page.close();
   console.log(JSON.stringify({ mismatchedPair: "refused", profileFallback: false }));

@@ -1,25 +1,26 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { brotliCompress, constants, gzip } from "node:zlib";
+import { replaceFiles, settleAll, type Writer } from "./stage-wasm-sidecars";
 import { assertShippedGuestHasNoNames, keepNamesRequested } from "./wasm-name-sections";
 
 const brotli = promisify(brotliCompress);
 const gzipped = promisify(gzip);
 
 /**
- * Stage one guest for a site build: check that it ships no debug names, record its hash in
- * `builds`, and write `<name>.br` and `<name>.gz` into `out`. No raw file ships: static hosts cap
- * file sizes (Cloudflare: 25 MiB; jsc-engine.wasm is 34 MB raw). Negotiating hosts (site/worker.ts,
- * web/serve.ts) answer the logical `<name>` URL with a twin and a native Content-Encoding;
- * plain hosts serve the `.gz` twin, which the page decompresses (web/src/engine-loader.ts).
+ * Stage one guest for a site build: check that it ships no debug names, write `<name>.br` and
+ * `<name>.gz` into `out`, then record its hash in `builds`. No raw file ships: static hosts cap file
+ * sizes (Cloudflare: 25 MiB; jsc-engine.wasm is 34 MB raw). Negotiating hosts (site/worker.ts,
+ * web/serve.ts) answer the logical `<name>` URL with a twin and a native Content-Encoding; plain
+ * hosts serve the `.gz` twin, which the page decompresses (web/src/engine-loader.ts).
  */
-export async function stageGuestWasm(source: string, name: string, out: string, builds: Record<string, string>): Promise<void> {
+export async function stageGuestWasm(source: string, name: string, out: string, builds: Record<string, string>, write: Writer = writeFile): Promise<void> {
   const bytes = new Uint8Array(await Bun.file(source).arrayBuffer());
   assertShippedGuestHasNoNames(name, bytes, keepNamesRequested());
-  builds[name] = sha256(bytes);
-  await writeGuestTwins(join(out, name), bytes, builds[name]);
+  const digest = sha256(bytes);
+  await writeGuestTwins(join(out, name), bytes, digest, write);
+  builds[name] = digest;
 }
 
 /** Guests stage concurrently, so their digests are recorded in completion order. Sort them for stable output. */
@@ -31,10 +32,17 @@ export function sha256(bytes: Uint8Array): string {
   return new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 }
 
-/** Write `<path>.gz` and `<path>.br` for the guest whose SHA-256 is `digest`. */
-export async function writeGuestTwins(path: string, bytes: Uint8Array, digest: string): Promise<void> {
-  const [gz, br] = await Promise.all([gzipped(bytes, { level: 9 }), brotliTwin(bytes, digest)]);
-  await Promise.all([Bun.write(`${path}.gz`, gz), Bun.write(`${path}.br`, br)]);
+/**
+ * Write `<path>.gz` and `<path>.br` for the guest whose SHA-256 is `digest`. Both land in temporary
+ * files and replace the targets only after both writes succeeded, so a failure never leaves one twin
+ * of a guest without the other.
+ */
+export async function writeGuestTwins(path: string, bytes: Uint8Array, digest: string, write: Writer = writeFile): Promise<void> {
+  const quality = brotliQuality();
+  const gz = gzipped(bytes, { level: 9 });
+  const br = brotliTwin(bytes, digest, quality);
+  await settleAll([gz, br]);
+  await replaceFiles([[`${path}.gz`, await gz], [`${path}.br`, await br]], write);
 }
 
 /**
@@ -43,11 +51,11 @@ export async function writeGuestTwins(path: string, bytes: Uint8Array, digest: s
  * ordinary builds stay faster than their gzip -9 twin.
  */
 export function brotliQuality(env: NodeJS.ProcessEnv = process.env): number {
-  const value = env.BUN_WASM_BROTLI_QUALITY;
-  if (value === undefined || value === "") return 5;
-  const quality = Number(value);
-  if (!Number.isInteger(quality) || quality < constants.BROTLI_MIN_QUALITY || quality > constants.BROTLI_MAX_QUALITY) {
-    throw new Error(`BUN_WASM_BROTLI_QUALITY must be an integer from 0 to 11, got ${JSON.stringify(value)}`);
+  const value = env.BUN_WASM_BROTLI_QUALITY?.trim();
+  if (!value) return 5;
+  const quality = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  if (!(quality >= constants.BROTLI_MIN_QUALITY && quality <= constants.BROTLI_MAX_QUALITY)) {
+    throw new Error(`BUN_WASM_BROTLI_QUALITY must be an integer from 0 to 11, got ${JSON.stringify(env.BUN_WASM_BROTLI_QUALITY)}`);
   }
   return quality;
 }
@@ -56,8 +64,7 @@ export function brotliQuality(env: NodeJS.ProcessEnv = process.env): number {
  * The Brotli twin. BUN_WASM_COMPRESSION_CACHE names a directory that keeps twins by input digest
  * and quality, so the sandbox and playground builds of one site deploy compress each guest once.
  */
-async function brotliTwin(bytes: Uint8Array, digest: string): Promise<Uint8Array> {
-  const quality = brotliQuality();
+async function brotliTwin(bytes: Uint8Array, digest: string, quality: number): Promise<Uint8Array> {
   const cache = process.env.BUN_WASM_COMPRESSION_CACHE;
   const entry = cache ? join(cache, `${digest}.q${quality}.br`) : undefined;
   if (entry && await Bun.file(entry).exists()) return Bun.file(entry).bytes();
@@ -69,18 +76,7 @@ async function brotliTwin(bytes: Uint8Array, digest: string): Promise<Uint8Array
     [constants.BROTLI_PARAM_SIZE_HINT]: bytes.byteLength,
   };
   const br = await brotli(bytes, { params });
-  if (entry && cache) await writeAtomically(cache, entry, br);
+  // A crashed or concurrent writer never leaves a partial cache entry under the final name.
+  if (entry) await replaceFiles([[entry, br]]);
   return br;
-}
-
-/** A crashed or concurrent writer never leaves a partial cache entry under the final name. */
-async function writeAtomically(directory: string, path: string, bytes: Uint8Array): Promise<void> {
-  await mkdir(directory, { recursive: true });
-  const temporary = `${path}.${process.pid}-${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, bytes);
-    await rename(temporary, path);
-  } finally {
-    await rm(temporary, { force: true });
-  }
 }

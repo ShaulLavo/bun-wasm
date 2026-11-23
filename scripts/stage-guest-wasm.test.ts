@@ -3,7 +3,9 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { existsSync } from "node:fs";
 import { brotliQuality, sha256, sortedBuilds, stageGuestWasm } from "./stage-guest-wasm";
+import { settleAll } from "./stage-wasm-sidecars";
 
 // A valid module with a 64 KiB custom section, so the twins are real compressed streams.
 const guest = new Uint8Array(Buffer.concat([Buffer.from([0, 97, 115, 109, 1, 0, 0, 0, 0, 0x80, 0x80, 0x04]), Buffer.alloc(64 * 1024, 7)]));
@@ -40,10 +42,57 @@ test("a staged guest ships Brotli and gzip twins of its exact bytes and no raw f
 
 test("Brotli quality defaults to the quick setting and accepts only Brotli's own range", () => {
   expect(brotliQuality({})).toBe(5);
-  expect(brotliQuality({ BUN_WASM_BROTLI_QUALITY: "" })).toBe(5);
+  for (const blank of ["", " ", "\t\n"]) expect(brotliQuality({ BUN_WASM_BROTLI_QUALITY: blank })).toBe(5);
   expect(brotliQuality({ BUN_WASM_BROTLI_QUALITY: "11" })).toBe(11);
+  expect(brotliQuality({ BUN_WASM_BROTLI_QUALITY: " 9 " })).toBe(9);
   expect(brotliQuality({ BUN_WASM_BROTLI_QUALITY: "0" })).toBe(0);
-  for (const value of ["12", "-1", "5.5", "max"]) expect(() => brotliQuality({ BUN_WASM_BROTLI_QUALITY: value })).toThrow("BUN_WASM_BROTLI_QUALITY");
+  for (const value of ["12", "-1", "5.5", "max", "1e1", "0x5", "+5"]) expect(() => brotliQuality({ BUN_WASM_BROTLI_QUALITY: value })).toThrow("BUN_WASM_BROTLI_QUALITY");
+});
+
+test("an invalid quality fails before any twin or digest is written", async () => {
+  const root = await scratch();
+  await writeFile(join(root, "source.wasm"), guest);
+  process.env.BUN_WASM_BROTLI_QUALITY = "12";
+  const builds: Record<string, string> = {};
+  await expect(stageGuestWasm(join(root, "source.wasm"), "bun.wasm", join(root, "out"), builds)).rejects.toThrow("BUN_WASM_BROTLI_QUALITY");
+  expect(builds).toEqual({});
+  expect(existsSync(join(root, "out"))).toBe(false);
+});
+
+for (const failing of [".gz", ".br"]) test(`a failed ${failing} write leaves no twin, temporary file or digest behind`, async () => {
+  const root = await scratch();
+  const out = join(root, "out");
+  await writeFile(join(root, "source.wasm"), guest);
+  const builds: Record<string, string> = {};
+  const started: string[] = [];
+  const write = async (path: string, bytes: Uint8Array) => {
+    started.push(path);
+    if (path.includes(`bun.wasm${failing}.`)) throw new Error(`disk full at ${failing}`);
+    // The other writer finishes later, so cleanup must wait for it.
+    await Bun.sleep(20);
+    await writeFile(path, bytes);
+  };
+  await expect(stageGuestWasm(join(root, "source.wasm"), "bun.wasm", out, builds, write)).rejects.toThrow(`disk full at ${failing}`);
+  expect(started).toHaveLength(2);
+  expect(builds).toEqual({});
+  expect(await readdir(out)).toEqual([]);
+});
+
+test("a failed guest in a concurrent batch is reported only after the other writers settled", async () => {
+  const root = await scratch();
+  const out = join(root, "out");
+  await writeFile(join(root, "source.wasm"), guest);
+  const builds: Record<string, string> = {};
+  let finished = false;
+  const slow = async (path: string, bytes: Uint8Array) => { await Bun.sleep(50); await writeFile(path, bytes); finished = true; };
+  const failing = async () => { throw new Error("staging failed"); };
+  await expect(settleAll([
+    stageGuestWasm(join(root, "source.wasm"), "bun.wasm", out, builds, slow),
+    stageGuestWasm(join(root, "source.wasm"), "quickjs.wasm", out, builds, failing),
+  ])).rejects.toThrow("staging failed");
+  expect(finished).toBe(true);
+  expect(builds).toEqual({ "bun.wasm": sha256(guest) });
+  expect((await readdir(out)).sort()).toEqual(["bun.wasm.br", "bun.wasm.gz"]);
 });
 
 test("the compression cache reuses a twin by input digest and quality and leaves no temporary files", async () => {

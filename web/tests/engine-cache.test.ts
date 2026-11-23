@@ -207,7 +207,8 @@ for (const { name, asset, load, failure } of failureCases) test(`${name}: a mark
     expect(offline.module).toBeInstanceOf(WebAssembly.Module);
     expect(offline.build).toBe(build);
     expect(cache.lookups).toEqual([key]);
-    expect(fetched).toBe(3);
+    // Offline, the logical URL and then its `.gz` twin fail before the cached bytes serve.
+    expect(fetched).toBe(4);
   } finally {
     restoreGlobals();
   }
@@ -248,17 +249,68 @@ const logicalFailures: [string, () => Response][] = [
   ["404", () => new Response(null, { status: 404 })],
   ["406", () => new Response(null, { status: 406 })],
   ["a single-page index", () => new Response("<!doctype html>", { headers: { "content-type": "text/html; charset=utf-8" } })],
+  ["an uppercase TEXT/HTML index", () => new Response("<!doctype html>", { headers: { "content-type": "TEXT/HTML" } })],
+  ["an index labeled application/octet-stream", () => new Response("<!doctype html>", { headers: { "content-type": "application/octet-stream" } })],
+  ["an empty body", () => new Response(new Uint8Array(0), { headers: { "content-type": "application/wasm" } })],
   ["500", () => new Response(null, { status: 500 })],
+  ["a rejected fetch", () => { throw new TypeError("Failed to fetch"); }],
+  ["a body that fails while decoding", () => new Response(new ReadableStream({
+    start(controller) { controller.enqueue(wasm.slice(0, 6)); controller.error(new TypeError("Decoding failed")); },
+  }), { headers: { "content-type": "application/wasm", "content-encoding": "br" } })],
 ];
 
-test.each(logicalFailures)("a logical URL answered with %s falls back to the gzip twin the page decompresses", async (_label, answer) => {
+const loaders = [
+  ["Browser engine", (fetch: (url: string) => Promise<Response>) => loadUncached(fetch)],
+  ["verified tools", async (fetch: (url: string) => Promise<Response>) => {
+    const restoreGlobals = pageGlobals({ location: new URL("https://engine-cache.test/app/"), caches: memoryCaches().caches, fetch, __bunwasmBuilds: { "bun-tools.wasm": build } });
+    try { return await loadWasm("bun-tools.wasm", () => {}); } finally { restoreGlobals(); }
+  }],
+] as const;
+
+const fallbackCases = logicalFailures.flatMap(([label, answer]) => loaders.map(([loader, load]) => [label, loader, answer, load] as const));
+
+test.each(fallbackCases)("a logical URL answered with %s falls back to the gzip twin for the %s", async (_label, _loader, answer, load) => {
   const fetched: string[] = [];
-  const loaded = await loadUncached(async url => {
+  const loaded = await load(async url => {
     fetched.push(new URL(url).pathname);
     return url.includes(".gz") ? new Response(Bun.gzipSync(wasm)) : answer();
   });
   expect(loaded.size).toBe(wasm.length);
-  expect(fetched).toEqual(["/app/bun-browser.wasm", "/app/bun-browser.wasm.gz"]);
+  expect(fetched.map(path => path.replace("bun-tools", "bun-browser"))).toEqual(["/app/bun-browser.wasm", "/app/bun-browser.wasm.gz"]);
+});
+
+test.each(loaders)("a cancelled logical download stays cancelled for the %s instead of retrying the twin", async (_loader, load) => {
+  const fetched: string[] = [];
+  const cancelled = load(async url => {
+    fetched.push(new URL(url).pathname);
+    throw new DOMException("The operation was aborted.", "AbortError");
+  });
+  await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+  expect(fetched).toHaveLength(1);
+});
+
+test("a transport failure on both URLs reports the failure, not a missing asset", async () => {
+  const failing = async (url: string) => {
+    if (url.includes(".gz")) return new Response(null, { status: 404 });
+    throw new TypeError("Failed to fetch");
+  };
+  const outcome = await loadUncached(failing).then(() => undefined, (error: unknown) => error);
+  expect(outcome).toBeInstanceOf(TypeError);
+  expect(outcome).not.toBeInstanceOf(WasmMissing);
+});
+
+test("non-WebAssembly bytes at the logical URL with no twin reach verification instead of reading as missing", async () => {
+  const [, tools] = loaders;
+  const garbage = async (url: string) => url.includes(".gz") ? new Response(null, { status: 404 }) : new Response("not a module", { headers: { "content-type": "application/wasm" } });
+  await expect(tools[1](garbage)).rejects.toThrow("bun-tools.wasm integrity mismatch");
+});
+
+test("a module that does not compile is not downloaded again from its twin", async () => {
+  const fetched: string[] = [];
+  const broken = Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0, 1, 5]);
+  await expect(loadUncached(async url => { fetched.push(new URL(url).pathname); return new Response(broken, { headers: { "content-type": "application/wasm" } }); }))
+    .rejects.toBeInstanceOf(WebAssembly.CompileError);
+  expect(fetched).toEqual(["/app/bun-browser.wasm"]);
 });
 
 test("a failed logical URL with no twin reports its own status, and two misses report a missing asset", async () => {
