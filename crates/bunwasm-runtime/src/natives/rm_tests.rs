@@ -16,7 +16,11 @@ impl Fixture {
         ));
         fs::create_dir(&root).unwrap();
         let mut table = Table::default();
-        install_fs(&mut table);
+        let state = Rc::new(State::new(
+            Vec::new(),
+            Box::new(crate::transpiler::PassthroughTranspiler),
+        ));
+        install_fs(&mut table, &state);
         Self { root, table }
     }
 

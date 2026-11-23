@@ -1,4 +1,5 @@
-import { appendFile, mkdir, readFile, rename } from "node:fs/promises";
+import { mkdir, readFile, rename } from "node:fs/promises";
+import { orderedAppender } from "../goals-matrix/ordered-append";
 import { join } from "node:path";
 import { frameworks, type Box, type Framework } from "../goals-matrix/catalog";
 import { executeAttempt, type Execution } from "../goals-matrix/execute";
@@ -92,7 +93,7 @@ const defaultIO: SmokeIO = {
   },
   transport: async (config, box, beforeNative) => createIphoneTransport({ control: config.control, agent: config.agent, deviceUDID,
     timeoutMs: phaseTimeoutMs, cleanupTimeoutMs, beforeNative, tabJournal: safariTabJournal(),
-    saveNative: text => appendFile(join(config.matrix.output, "logs", `${box.framework}-${box.engine}.native.jsonl`), text) }),
+    saveNative: orderedAppender(join(config.matrix.output, "logs", `${box.framework}-${box.engine}.native.jsonl`)) }),
 };
 async function save(report: SmokeReport): Promise<void> {
   report.status = report.failures.length === 0 && report.cases.every(result => result.status === "pass") ? "green" : "red";

@@ -124,6 +124,22 @@ does not alter that upstream expectation or pretend it passes.
 QuickJS, JSC, Browser and SpiderMonkey, using one 64 MiB input repeated by
 reference for the oversized concatenation.
 
+`fillImpl` and `bidirectionalIndexOf` delegate argument/view coercion to the
+TypeScript helpers in `buffer_fill_args.ts`: `fillImpl` captures the
+pre-coercion intrinsic byte length for `end` validation, clamps the live range
+after encoding coercion before decoding string patterns or rejecting
+empty/detached `ArrayBufferView` patterns with Bun's `ERR_INVALID_ARG_VALUE`
+("Buffer cannot be empty"), and re-clamps after non-string `value` coercion.
+`bidirectionalIndexOf` captures the pre-coercion length for `lastIndexOf`'s
+default reverse offset, converts `encoding` once via ordinary string coercion
+(rejecting `Symbol` values), reads live intrinsic lengths before searching, and
+only inspects `.buffer.detached` when searching an empty needle in a
+zero-length haystack so nonempty searches keep the `.buffer` getter off the
+common path. Both are original adapter corrections against Bun
+`test/js/node/buffer-copy-fill-detach.test.ts` and
+`test/js/node/buffer-indexOf-detach.test.ts`, covered in
+`tests/fixtures/buffer-residual-semantics`.
+
 ## Classification
 
 | Patch or source | Class | Change |
