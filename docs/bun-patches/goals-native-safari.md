@@ -13,10 +13,19 @@ the stop deadline, or turn failed cleanup into a pass.
 `launchctl`, `osascript`, `ps`, and SafariDriver commands for the goals campaign.
 The existing Mac lock, owner availability check, and unlocked-console check run
 first. Desktop Safari starts through LaunchServices. A helper, `launchctl asuser
-<uid> osascript -l JavaScript`, calls `NSWorkspace launchApplicationAtURL` for
-`/Applications/Safari.app`, prints the PID of the returned `NSRunningApplication`,
-and keeps that object for the rest of the run. There is no environment or argument
-marker: LaunchServices ignores launch modifiers when it revives an existing record.
+<uid> /bin/sh -c 'trap "" TERM INT; exec osascript -l JavaScript'`, calls
+`NSWorkspace launchApplicationAtURL` for `/Applications/Safari.app` and keeps the
+returned `NSRunningApplication` for the rest of the run. There is no environment
+or argument marker: LaunchServices ignores launch modifiers when it revives an
+existing record.
+
+The helper's single report is one of four outcomes:
+- `launched`, with the PID and the request time;
+- `not-launched`, when LaunchServices returned nothing;
+- `existing`, when a live Safari already ran;
+- `lost`, when its output ended without a report.
+
+`lost` is never treated as a clean exit.
 
 SafariDriver's HTTP service finds its Safari through LaunchServices, not through
 the process table. On November 23, 2026 LaunchServices still held a record for a
@@ -31,36 +40,58 @@ The finite five-second GUI startup allowance, driver readiness bound and product
 phase deadlines are unchanged. Simulator-only runs do not launch desktop Safari.
 An already-running Safari is neither relaunched nor owned.
 
-Ownership needs the PID that LaunchServices reported to this request's helper and
-a kernel birth for that PID at or after the request. The birth comes from
-`proc_pidinfo(PROC_PIDTBSDINFO)` with microsecond precision, not one-second
-`ps lstart`, so an owner Safari started earlier in the same second is refused.
-`launchApplicationAtURL` returns an existing instance unchanged, so a refused
-instance is never terminated; its helper is told to exit and leaves it alone.
-The PID must keep that birth through the startup allowance, and a second Safari
-after the allowance blocks driver startup. One case cannot be told apart: an owner
-launch that reaches LaunchServices after this request but before it starts the
-process is merged into the same new instance. That instance is still the one this
-request started, and it is terminated with the run.
+Immediately before calling LaunchServices, the helper checks
+`NSRunningApplication.runningApplicationsWithBundleIdentifier("com.apple.Safari")`.
+It counts only instances whose process still answers `kill(pid, 0)`, so a stale
+record for a dead Safari does not count. If one is live, it reports `existing`
+without launching, and driver startup is refused. On the next line it records the
+wall clock, rounded up to an integer microsecond, as the request time.
 
-Cleanup never signals a PID. It asks the helper to call `forceTerminate` on the
-retained `NSRunningApplication`, which identifies the instance rather than a
-number that can be reused. `forceTerminate` sends no Apple Event, so it needs no
-automation consent. The helper reports only that instance's termination. Cleanup
+Ownership needs the reported PID's kernel birth, from
+`proc_pidinfo(PROC_PIDTBSDINFO)` as integer microseconds, to be at or after that
+request time. The comparison is done with `BigInt`, not in milliseconds or
+`ps lstart` seconds. An owner Safari born earlier, even within the same
+millisecond, is refused. `launchApplicationAtURL` returns an existing instance
+unchanged, so a refused instance is never terminated; its helper is told to
+`detach` and leaves it alone. The PID must keep that birth through the startup
+allowance, and a second Safari after the allowance blocks driver startup.
+
+One case cannot be told apart: an owner launch that reaches LaunchServices after
+the helper's request but before it starts the process is merged into the same new
+instance. That instance is still the one this request started, and it is
+terminated with the run. The microsecond comparison was checked on the Mac (macOS
+26.4, arm64): the request preceded Safari's kernel birth by 43 ms.
+
+Once ownership is proved, the controller sends `own`. Cleanup never signals a PID.
+It asks the helper to call `forceTerminate` on the retained `NSRunningApplication`,
+which identifies the instance rather than a number that can be reused.
+`forceTerminate` sends no Apple Event, so it needs no automation consent. Cleanup
 also requires the original PID and birth to be gone; a reused PID with a new birth
-does not count as the instance.
+does not count as the instance. Only then does it send `release`. Even after
+`release`, the helper waits until AppKit reports the instance terminated and its
+PID no longer answers `kill(pid, 0)`.
 
-The helper runs in the workload's process group. The installed Mac queue
-(`mac-queue-run.ts`, `monitor` and `workRemains`) keeps its lock until that group
-has no live members or the queue's own workload timeout stops the group. The
-LaunchServices Safari itself is not in the group. On proved termination the helper
-exits. On unproved termination, or when the launch request has not reported
-within ten seconds, cleanup throws, the receipt records `safariExited: false`, and
-the helper keeps waiting for its instance to end. The queue lock therefore stays
-held until that Safari ends or the queue's workload timeout stops the group; after
-that timeout the queue releases the lock even if Safari is still running. A helper
-that reported no launch has already exited and owns nothing. No preferences,
-automation settings, login state, or credentials change.
+The helper runs in the workload's process group, and the LaunchServices Safari
+does not. The installed Mac queue (`mac-queue-run.ts`, `monitor` and
+`workRemains`) keeps its lock until that group has no live members, or until its
+own workload timeout signals the group: SIGTERM first, then SIGKILL two seconds
+later. The queue's ordinary cancellation also sends SIGTERM or SIGINT to the group.
+
+The helper ignores SIGTERM and SIGINT. These ignored dispositions are inherited
+through `launchctl` and `exec`; this was verified on the Mac. So on cancellation
+the controller's own cleanup can still send `terminate`, provided it reaches that
+step before the queue's SIGKILL. If the controller's input closes after `own` (the
+controller crashed or was killed), the helper force-terminates the instance
+itself, then waits for it to end. Closed input before `own` never touches Safari.
+
+When termination is unproved, or the launch has not reported within ten seconds,
+cleanup throws and the receipt records `safariExited: false`. It never sends
+`release`, so the helper keeps holding the process group. A helper lost without a
+report is likewise recorded as `safariExited: false`. The queue lock therefore
+stays held until the instance ends, or until the queue's SIGKILL ends the group.
+After that SIGKILL the lock is released even if Safari still runs. A helper that
+reported `not-launched` or `existing` has already exited and owns nothing. No
+preferences, automation settings, login state, or credentials change.
 
 In the ordinary path the application stops only after driver exit is proved, and a
 failed driver shutdown leaves the application running. With the opt-in Safari

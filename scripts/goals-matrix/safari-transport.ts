@@ -57,8 +57,12 @@ function previewFrameState(input: { token: string; loading: string | null; failu
     const current = frame.contentWindow?.location;
     if (!current || current.href === "about:blank") return { state: "pending" };
     if (input.loading === null || !new RegExp(input.loading).test(current.pathname)) return { state: "ready" };
-    const status = frame.contentDocument?.querySelector('[role="status"]')?.textContent ?? "";
-    return status === input.failure ? { state: "failed", message: status } : { state: "pending" };
+    const loaded = frame.contentDocument;
+    if (!loaded || loaded.readyState !== "complete") return { state: "pending" };
+    // An expired or unbound token commits a plain-text 410 or 400 page with no status element.
+    const status = loaded.querySelector('[role="status"]');
+    if (!status) return { state: "failed", message: (loaded.body?.textContent ?? "").trim() || input.failure };
+    return status.textContent === input.failure ? { state: "failed", message: input.failure } : { state: "pending" };
   } catch (error) {
     // Only a cross-origin document hides its location, and it is not the same-origin loading document.
     if (error instanceof DOMException && error.name === "SecurityError") return { state: "ready" };
@@ -196,9 +200,11 @@ const evaluateScript = `
 const done = arguments[arguments.length - 1];
 const expression = arguments[0], loading = arguments[1], failure = arguments[2];
 if (typeof loading === "string" && new RegExp(loading).test(location.pathname)) {
-  const status = document.querySelector('[role="status"]');
-  const text = status && status.textContent ? status.textContent : "";
-  done({ loading: text === failure ? "failed" : "pending", message: text });
+  const status = document.readyState === "complete" ? document.querySelector('[role="status"]') : undefined;
+  const body = document.body && document.body.textContent ? document.body.textContent.trim() : "";
+  if (status === undefined) done({ loading: "pending", message: "" });
+  else if (status === null) done({ loading: "failed", message: body || failure });
+  else done({ loading: status.textContent === failure ? "failed" : "pending", message: status.textContent || "" });
   return;
 }
 Promise.resolve().then(() => (0, eval)(expression)).then(value => {

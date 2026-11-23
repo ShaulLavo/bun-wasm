@@ -53,8 +53,10 @@ launch shape. These original host additions copy no upstream code or ABI. First-
 wrapper-signal cancellation, and before/after bounded teardown settlement record
 the already retained driver child PID, exit code and signal. Desktop Safari starts
 through LaunchServices and has no child handle, so its entry records the launch
-attribution instead: request time, then the refused or owned PID with its kernel
-birth. The retained instance handle is not part of the snapshot.
+attribution instead: its state (`requested`, `ended` with its outcome, `lost`,
+`refused` or `owned`), and for the last two the request time and the PID with its
+kernel birth, as microsecond strings. The retained instance handle is not part of
+the snapshot.
 Available cached driver root and application start identities are copied into
 each record. The driver spawn bound is rounded to seconds; cached process start
 times are distinct from the WebContent kernel birth. No process lookup, native observer, browser request or log query is

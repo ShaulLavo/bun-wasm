@@ -99,9 +99,10 @@ function safariChildState(child: Pick<ReturnType<typeof Bun.spawn>, "pid" | "exi
 // LaunchServices starts desktop Safari, so it has no child handle. Record its attribution state.
 function desktopSafariState(state: DesktopSafari) {
   const launch = state.launch;
-  if (launch.kind === "none") return { kind: launch.kind };
-  if (launch.kind === "requested") return { kind: launch.kind, requested: launch.requested };
-  return { kind: launch.kind, requested: launch.requested, application: { ...launch.application } };
+  if (launch.kind === "ended") return { kind: launch.kind, outcome: launch.outcome };
+  if (launch.kind !== "owned" && launch.kind !== "refused") return { kind: launch.kind };
+  // Microsecond values are strings so the snapshot stays JSON.
+  return { kind: launch.kind, requestedUs: String(launch.requestedUs), application: { pid: launch.application.pid, bornUs: String(launch.application.bornUs) } };
 }
 async function driverReady(endpoint: string, signal: AbortSignal): Promise<boolean> {
   signal.throwIfAborted();

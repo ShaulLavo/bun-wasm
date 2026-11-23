@@ -116,10 +116,16 @@ failed with `EvalError` instead of waiting for the guest page.
 The transport matches the loading document by its exact reserved route,
 `<app>/__preview/.loading/<UUID>`. It derives `<app>/__preview/` from the preview URL
 `<app>/__preview/<port>/...`, so an application route that merely contains
-`.loading` is not mistaken for it. The terminal state is the loading document's
-`[role="status"]` text `The preview request failed. Reload to try again.`, copied
-from `web/src/preview-navigation.ts` without changing that file, so prepared sites
-stay valid.
+`.loading` is not mistaken for it. A document on that route is pending until its
+`readyState` is `complete`. After that it is failed in either of two cases:
+- It has no `[role="status"]` element. This is the plain-text HTTP 410 (`Preview
+  request is no longer available.`) or 400 (`Cannot bind the preview loading
+  document.`) that a lost or unbound token commits. Its body text becomes the
+  message, or the loading failure text if the body is empty.
+- Its status reads `The preview request failed. Reload to try again.`
+
+Both texts are copied from `web/src/preview-navigation.ts` without changing that
+file, so prepared sites stay valid.
 
 After presenting its frame, the transport polls from the host document, within
 the open-preview phase admission, until the frame's same-origin location has left
@@ -139,6 +145,8 @@ HTTP fixtures cover each case:
 - the frame passing through `about:blank` and a refusing loading document;
 - an application route containing `.loading`;
 - an immediate terminal failure, both at open and at evaluation;
+- plain-text 410 and 400 responses, still loading and then complete, both at open
+  and at evaluation;
 - a reload back to the loading document that waits and then evaluates;
 - an application CSP refusal that fails without retry.
 

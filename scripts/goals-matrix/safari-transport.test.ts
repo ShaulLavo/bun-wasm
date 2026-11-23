@@ -80,15 +80,23 @@ function refusingDocument(url: string, status = "Waiting for the development ser
   return context;
 }
 
-function document(url = "about:blank", status?: string): Context {
+// A plain-text response committed on the loading route: an HTTP 410 or 400 with no status element.
+function plainDocument(url: string, text: string, readyState = "complete"): Context {
+  const context = document(url, undefined, readyState, text);
+  context.eval = () => { throw new EvalError("Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source"); };
+  return context;
+}
+
+function document(url = "about:blank", status?: string, readyState = "complete", text = status ?? ""): Context {
   const elements = new Map<string, FixtureFrame>();
   const pathname = URL.canParse(url) ? new URL(url).pathname : url;
   return createContext({ setTimeout, clearTimeout, crypto, location: { href: url, pathname }, HTMLIFrameElement: FixtureFrame,
     document: {
+      readyState,
       getElementById: (id: string) => elements.get(id) ?? null,
       querySelector: (selector: string) => selector === '[role="status"]' && status !== undefined ? { textContent: status } : null,
       createElement: () => new FixtureFrame(elements),
-      body: { appendChild(frame: FixtureFrame) { frame.context = document(frame.src); elements.set(frame.id, frame); } },
+      body: { textContent: text, appendChild(frame: FixtureFrame) { frame.context = document(frame.src); elements.set(frame.id, frame); } },
     },
   });
 }
@@ -371,6 +379,47 @@ test("a reloaded preview whose loading document fails surfaces that failure at e
     await withScoped(transport, page => page.openPreview(previewURL));
     await expect(withScoped(transport, page => page.evaluate("'marker' && location.href"))).rejects.toThrow(`Safari preview loading failed: ${previewLoadingFailure}`);
     expect(counts.evaluations).toBe(1);
+  } finally { await transport.close(); }
+});
+
+// web/src/preview-navigation.ts answers a lost token with 410 and an unbound document with 400.
+const lostToken = ["HTTP 410", "Preview request is no longer available."] as const;
+const unbound = ["HTTP 400", "Cannot bind the preview loading document."] as const;
+
+test.each([lostToken, unbound])("a plain-text %s on the loading route fails the open at once", async (_status, text) => {
+  const { driver, counts } = previewDriver((frame, polls) => {
+    if (polls === 1) frame().context = plainDocument(loadingURL, text, "loading");
+    if (polls === 2) frame().context = plainDocument(loadingURL, text);
+  });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await expect(withScoped(transport, page => page.openPreview(previewURL))).rejects.toThrow(`Safari preview loading failed: ${text}`);
+    // The still-loading document was left pending; the completed one failed.
+    expect(counts.polls).toBe(2);
+  } finally { await transport.close(); }
+});
+
+test.each([lostToken, unbound])("a reload that commits a plain-text %s fails the evaluation at once", async (_status, text) => {
+  const { driver, counts } = previewDriver((frame, _polls, evaluations) => {
+    if (evaluations === 1) frame().context = plainDocument(loadingURL, text, "interactive");
+    if (evaluations === 2) frame().context = plainDocument(loadingURL, text);
+  });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await withScoped(transport, page => page.openPreview(previewURL));
+    await expect(withScoped(transport, page => page.evaluate("'marker' && location.href"))).rejects.toThrow(`Safari preview loading failed: ${text}`);
+    expect(counts.evaluations).toBe(2);
+  } finally { await transport.close(); }
+});
+
+test("an empty plain-text loading response still fails with the loading failure message", async () => {
+  const { driver } = previewDriver((frame, polls) => { if (polls === 1) frame().context = plainDocument(loadingURL, "  "); });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await expect(withScoped(transport, page => page.openPreview(previewURL))).rejects.toThrow(`Safari preview loading failed: ${previewLoadingFailure}`);
   } finally { await transport.close(); }
 });
 

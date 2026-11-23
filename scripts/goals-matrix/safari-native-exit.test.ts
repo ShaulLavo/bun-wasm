@@ -20,7 +20,7 @@ const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 
 // The wrapper never calls the instance here: the fixture's stopApp stops its own child.
-const inertInstance: SafariInstance = { report: async () => undefined, terminate: async () => false, detach() {}, release() {}, exited: Promise.resolve(0) };
+const inertInstance: SafariInstance = { report: async () => ({ kind: "lost" }), own() {}, terminate: async () => false, detach() {}, release() {}, exited: Promise.resolve(0) };
 
 async function fixture(joinMs = 1000, sink?: Sink) {
   const children: ReturnType<typeof Bun.spawn>[] = [];
@@ -61,7 +61,7 @@ async function fixture(joinMs = 1000, sink?: Sink) {
   const io: NativeHost = {
     platform: "darwin", uid: () => 501, signals: operation => operation(controller.signal),
     queue: async () => { events.push("queue"); }, available: async () => {}, console: async () => "",
-    prepare: async state => { events.push("prepare"); state.launch = { kind: "owned", requested: 1, instance: inertInstance, application: { pid: app.pid, born: 1 } }; },
+    prepare: async state => { events.push("prepare"); state.launch = { kind: "owned", requestedUs: 1n, instance: inertInstance, application: { pid: app.pid, bornUs: 2n } }; },
     port: async () => 12345, spawn: () => driver, own: ownSafariDriver, ready: async () => true,
     stopDriver: async () => { events.push("driver-stop"); pending.push(9); await stop(driver); },
     stopApp: async state => { events.push("app-stop"); pending.push(15); if (state.launch.kind !== "none") await stop(app); },
@@ -136,13 +136,13 @@ test.each([false, true])("real null reply snapshots retained children and cancel
   expect(first).toMatchObject({ phase: "workload", target: { pid: 101, birth: "7" }, value: { state: {
     observerPid: process.pid, observedAt: { utc: expect.any(String), monotonicMs: expect.any(Number) },
     driver: { child: { source: "retained-child-handle", pid: f.driver.pid, exitCode: null, signalCode: null }, spawnedAfter: expect.any(Number), root: null },
-    safari: { kind: "owned", requested: 1, application: { pid: f.app.pid, born: 1 } },
+    safari: { kind: "owned", requestedUs: "1", application: { pid: f.app.pid, bornUs: "2" } },
     cancellation: { source: "native-wrapper-signal", aborted: cancel, reason: cancel ? { kind: "error", name: "Error" } : null },
   } } });
   const deletion = f.owner.records.find(entry => entry.kind === "dispatch-boundary" && entry.phase === "session-delete");
   if (!first || !deletion) throw new Error("Missing first-invalid snapshot or deletion boundary");
   expect(first.sequence).toBeLessThan(deletion.sequence);
-  expect(snapshots).toContainEqual(expect.objectContaining({ phase: "driver-teardown", value: expect.objectContaining({ moment: "after-teardown", state: expect.objectContaining({ driver: expect.objectContaining({ child: expect.objectContaining({ signalCode: "SIGKILL" }) }), safari: { kind: "owned", requested: 1, application: { pid: f.app.pid, born: 1 } } }) }) }));
+  expect(snapshots).toContainEqual(expect.objectContaining({ phase: "driver-teardown", value: expect.objectContaining({ moment: "after-teardown", state: expect.objectContaining({ driver: expect.objectContaining({ child: expect.objectContaining({ signalCode: "SIGKILL" }) }), safari: { kind: "owned", requestedUs: "1", application: { pid: f.app.pid, bornUs: "2" } } }) }) }));
   expect(snapshots).toContainEqual(expect.objectContaining({ phase: "app-teardown", value: expect.objectContaining({ moment: "after-teardown", state: expect.objectContaining({ safari: expect.objectContaining({ kind: "owned" }) }) }) }));
   expect(f.app.signalCode).toBe("SIGKILL");
   expect(getEventListeners(f.controller.signal, "abort")).toHaveLength(listeners);
