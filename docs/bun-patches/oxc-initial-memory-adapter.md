@@ -62,9 +62,10 @@ Equal-width numeric replacements preserve all source positions. The adapter
 runs at the existing file-module preparation boundary before transpilation and
 source caching, for both Browser and in-guest engines.
 
-Hashing reads each binary through one 64 KiB buffer (`modules::file_sha256`,
-shared with the Rolldown adapter), so a binary that a reopened workspace keeps
-in IndexedDB costs one stored-chunk read per 64 KiB. It adds one equal-sized
+Hashing reads each binary through one transient 64 KiB heap buffer
+(`modules::binary_digest::file_sha256`, shared with the Rolldown adapter), so a
+binary that a reopened workspace keeps in IndexedDB costs one stored-chunk read
+per 64 KiB. It adds one equal-sized
 loader string and no full binary copy or retained adapter cache. Unrelated
 module paths return the borrowed source before hashing or filesystem access.
 

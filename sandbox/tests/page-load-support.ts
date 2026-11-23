@@ -1,5 +1,6 @@
 // Process and page helpers for page-load-profile.ts, kept apart so tests can import them.
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import type { Worker } from "playwright";
 
 export interface PageLoadState { ready: number | null; error: string | null }
 
@@ -31,9 +32,13 @@ export function installPageLoadObserver(): void {
   Object.assign(globalThis, { __pageLoad: { state } });
 }
 
-/** One IndexedDB read request or SHA-256 digest, on the epoch clock shared by every realm. */
+/**
+ * One IndexedDB read or SHA-256 digest, on the epoch clock shared by every realm. A cursor
+ * contributes one entry per row it delivers, timed from its open or `continue()` call to that
+ * row; its final empty result is not a read.
+ */
 export interface StorageRead {
-  kind: "get" | "getAll" | "cursor" | "digest"; start: number; end: number; bytes: number;
+  kind: "get" | "getAll" | "cursor" | "sha256"; start: number; end: number; bytes: number;
   /** The logical file size a Waffle chunk manifest names, which identifies the file read. */
   file?: number;
   /** The chunk index of a Waffle chunk record read. */
@@ -41,15 +46,18 @@ export interface StorageRead {
 }
 
 /**
- * A worker script, run through `worker.evaluate`: records every IndexedDB read request and
- * SHA-256 digest the worker starts, so a profile can split storage reads by startup stage.
- * Waffle's filesystem worker reads file payloads through these.
+ * A worker script, run through `worker.evaluate`: records every IndexedDB read and SHA-256
+ * digest the worker starts from then on, so a profile can split storage reads by startup stage.
+ * Waffle's filesystem worker reads file payloads through these. It runs after the worker's
+ * script has started, so `__storageCounter.installedAt` says from when the worker is covered.
  */
-export function installStorageReadCounter(): void {
-  const scope = globalThis as typeof globalThis & { __storageReads?: StorageRead[] };
-  if (scope.__storageReads) return;
-  const reads: StorageRead[] = scope.__storageReads = [];
+export function installStorageReadCounter(): number {
+  const scope = globalThis as typeof globalThis & { __storageReads?: StorageRead[]; __storageCounter?: { installedAt: number } };
   const now = () => performance.timeOrigin + performance.now();
+  if (scope.__storageCounter) return scope.__storageCounter.installedAt;
+  const installedAt = now();
+  scope.__storageCounter = { installedAt };
+  const reads: StorageRead[] = scope.__storageReads = [];
   const size = (value: unknown): number => {
     if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value.byteLength;
     if (Array.isArray(value)) return value.reduce((sum: number, item) => sum + size(item), 0);
@@ -58,31 +66,140 @@ export function installStorageReadCounter(): void {
   };
   const manifest = (value: unknown): number | undefined =>
     value && typeof value === "object" && "chunkSize" in value && "size" in value && typeof value.size === "number" ? value.size : undefined;
-  const track = (kind: StorageRead["kind"], request: IDBRequest) => {
+  const chunkIndex = (key: unknown) => Array.isArray(key) && typeof key[1] === "number" ? key[1] : undefined;
+  const track = (kind: "get" | "getAll", request: IDBRequest, key?: unknown) => {
     const start = now();
     request.addEventListener("success", () => {
-      const key: unknown = Reflect.get(request, "__key");
-      reads.push({ kind, start, end: now(), bytes: kind === "cursor" ? 0 : size(request.result), file: kind === "get" ? manifest(request.result) : undefined, chunk: Array.isArray(key) && typeof key[1] === "number" ? key[1] : undefined });
+      reads.push({ kind, start, end: now(), bytes: size(request.result), file: kind === "get" ? manifest(request.result) : undefined, chunk: chunkIndex(key) });
+    });
+    return request;
+  };
+  // Each cursor step is timed from the call that requested it: the open, then each continue().
+  const stepStarts = new WeakMap<IDBRequest, number>();
+  const trackCursor = (request: IDBRequest<IDBCursorWithValue | null>) => {
+    stepStarts.set(request, now());
+    request.addEventListener("success", () => {
+      const row = request.result;
+      if (row) reads.push({ kind: "cursor", start: stepStarts.get(request)!, end: now(), bytes: size(row.value) });
     });
     return request;
   };
   const store = IDBObjectStore.prototype;
   const { get, getAll, openCursor } = store;
-  store.get = function (...args: Parameters<IDBObjectStore["get"]>) {
-    const request = get.apply(this, args);
-    Reflect.set(request, "__key", args[0]);
-    return track("get", request);
-  };
+  store.get = function (...args: Parameters<IDBObjectStore["get"]>) { return track("get", get.apply(this, args), args[0]); };
   store.getAll = function (...args: Parameters<IDBObjectStore["getAll"]>) { return track("getAll", getAll.apply(this, args)); };
-  store.openCursor = function (...args: Parameters<IDBObjectStore["openCursor"]>) { return track("cursor", openCursor.apply(this, args)) as IDBRequest<IDBCursorWithValue | null>; };
+  store.openCursor = function (...args: Parameters<IDBObjectStore["openCursor"]>) { return trackCursor(openCursor.apply(this, args)); };
+  const cursor = IDBCursor.prototype;
+  const { continue: next, advance } = cursor;
+  cursor.continue = function (...args: Parameters<IDBCursor["continue"]>) {
+    stepStarts.set(this.request, now());
+    return next.apply(this, args);
+  };
+  cursor.advance = function (...args: Parameters<IDBCursor["advance"]>) {
+    stepStarts.set(this.request, now());
+    return advance.apply(this, args);
+  };
   const subtle = crypto.subtle;
   const digest = subtle.digest.bind(subtle);
+  const sha256 = (algorithm: AlgorithmIdentifier) => (typeof algorithm === "string" ? algorithm : algorithm.name).toUpperCase() === "SHA-256";
   subtle.digest = async (algorithm, data) => {
     const start = now();
     const result = await digest(algorithm, data);
-    reads.push({ kind: "digest", start, end: now(), bytes: data.byteLength });
+    if (sha256(algorithm)) reads.push({ kind: "sha256", start, end: now(), bytes: data.byteLength });
     return result;
   };
+  return installedAt;
+}
+
+/** Whether a worker's reads were collected, and from when its counter covered it. */
+export interface WorkerCoverage {
+  url: string;
+  status: "observed" | "unavailable";
+  /** Epoch ms the worker was reported and its counter installed; reads before `installedAt` are missed. */
+  createdAt: number;
+  installedAt?: number;
+  /** Why an unavailable worker's reads are missing: closed, blocked, or a failed evaluation. */
+  reason?: string;
+  reads: number;
+}
+
+export interface StorageCollection { reads: StorageRead[]; workers: WorkerCoverage[] }
+
+interface WatchedWorker {
+  worker: Worker;
+  createdAt: number;
+  installed: Promise<number | Error>;
+  closed: boolean;
+}
+
+/**
+ * Installs the read counter in each worker as Playwright reports it and collects every worker's
+ * reads, naming each worker whose reads are missing or start late instead of counting it as idle.
+ */
+export class StorageReadObserver {
+  private readonly watched: WatchedWorker[] = [];
+
+  watch(worker: Worker): void {
+    const entry: WatchedWorker = { worker, createdAt: Date.now(), installed: Promise.resolve(new Error("not installed")), closed: false };
+    entry.installed = worker.evaluate(installStorageReadCounter).catch((error: unknown) => error instanceof Error ? error : new Error(String(error)));
+    worker.on("close", () => { entry.closed = true; });
+    this.watched.push(entry);
+  }
+
+  /** A guest worker blocked in `Atomics.wait` never runs an evaluation; it is reported after `waitMs`. */
+  async collect(waitMs = 2_000): Promise<StorageCollection> {
+    const results = await Promise.all(this.watched.map(entry => collectWorker(entry, waitMs)));
+    return { reads: results.flatMap(result => result.reads), workers: results.map(result => result.coverage) };
+  }
+}
+
+async function collectWorker(entry: WatchedWorker, waitMs: number): Promise<{ reads: StorageRead[]; coverage: WorkerCoverage }> {
+  const base = { url: entry.worker.url(), createdAt: entry.createdAt };
+  const unavailable = (reason: string) => ({ reads: [], coverage: { ...base, status: "unavailable" as const, reason, reads: 0 } });
+  if (entry.closed) return unavailable("closed before collection");
+  const timeout = new Promise<"blocked">(resolve => setTimeout(resolve, waitMs, "blocked"));
+  const installed = await Promise.race([entry.installed, timeout]);
+  if (installed === "blocked") return unavailable(`counter not installed within ${waitMs} ms`);
+  if (installed instanceof Error) return unavailable(`counter not installed: ${installed.message.split("\n")[0]}`);
+  const reads = await Promise.race([
+    entry.worker.evaluate(() => (globalThis as { __storageReads?: StorageRead[] }).__storageReads ?? []).catch((error: unknown) => error instanceof Error ? error : new Error(String(error))),
+    timeout,
+  ]);
+  if (reads === "blocked") return unavailable(`reads not collected within ${waitMs} ms`);
+  if (reads instanceof Error) return unavailable(entry.closed ? "closed before collection" : `reads not collected: ${reads.message.split("\n")[0]}`);
+  return { reads, coverage: { ...base, status: "observed", installedAt: installed, reads: reads.length } };
+}
+
+/** IndexedDB reads and SHA-256 digests that started between the previous stage and this one. */
+export interface StoragePhase { phase: string; until: number; reads: number; bytes: number; readMs: number; digests: number; digestMs: number; files: Record<number, number> }
+
+/**
+ * Buckets reads by the boot stage each one started in, on the page's clock. Readiness bounds the
+ * last startup phase, also for builds without stage marks; work after it is `after-ready`. A
+ * visit that never became ready leaves `after-last-stage` instead.
+ */
+export function storagePhases(entries: readonly { name: string; end: number }[], ready: number | null, origin: number, reads: readonly StorageRead[]): StoragePhase[] {
+  const stages = entries.filter(entry => entry.name.startsWith("bunwasm:stage:") || entry.name === "bunwasm:dev-server" || entry.name === "bunwasm:preview")
+    .map(entry => ({ phase: entry.name.replace(/^bunwasm:(stage:)?/, ""), until: entry.end }))
+    .sort((a, b) => a.until - b.until);
+  const last = stages.at(-1)?.until ?? Number.NEGATIVE_INFINITY;
+  const bounded = ready !== null && ready > last ? stages.concat([{ phase: "ready", until: ready }]) : stages;
+  const tail = { phase: ready === null ? "after-last-stage" : "after-ready", until: Number.POSITIVE_INFINITY };
+  const phases: StoragePhase[] = bounded.concat([tail]).map(stage => ({ ...stage, reads: 0, bytes: 0, readMs: 0, digests: 0, digestMs: 0, files: {} }));
+  for (const read of reads) addRead(phases.find(item => read.start - origin <= item.until)!, read);
+  return phases;
+}
+
+function addRead(phase: StoragePhase, read: StorageRead): void {
+  if (read.kind === "sha256") {
+    phase.digests++;
+    phase.digestMs += read.end - read.start;
+    return;
+  }
+  if (read.file !== undefined) phase.files[read.file] = (phase.files[read.file] ?? 0) + 1;
+  phase.reads++;
+  phase.bytes += read.bytes;
+  phase.readMs += read.end - read.start;
 }
 
 export function requireUniqueNames(names: readonly string[]): void {
