@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { chromium, webkit } from "playwright";
 import { buildSite, verifySite } from "./browser-guest-site";
-import { assertClosed, fixture } from "./install-download-fixture";
+import { assertClosed, fixture, METADATA_HANDLES, TARBALL_HANDLES } from "./install-download-fixture";
 import { run, session, writeFile } from "../web/tests/playground.mjs";
 import { openPlaygroundPage } from "../web/tests/playground-navigation";
 
@@ -50,7 +50,7 @@ async function scenario(browser: Awaited<ReturnType<typeof chromium.launch>>, ur
     assert.equal(result.code, 0, result.output);
     assert.equal(registry.trace.missedBarrier, false, `${stage} ${topology} did not overlap`);
     if (topology === "parents") assert.equal(registry.trace.requests.length, 40, "cross-parent lookahead duplicated requests");
-    assert.ok(registry.trace.peak > 1 && registry.trace.peak <= 8, `${stage} concurrency ${registry.trace.peak}`);
+    assert.ok(registry.trace.peak > 1 && registry.trace.peak <= (stage === "metadata" ? METADATA_HANDLES : TARBALL_HANDLES), `${stage} concurrency ${registry.trace.peak}`);
     console.log(`${browser.browserType().name()} Waffle ${stage}: ${result.ms} ms, peak ${registry.trace.peak}, body exceeds per-handle window`);
     const requests = registry.trace.requests.length;
     const warm = await run(page, stage === "metadata" ? "bun install --lockfile-only --frozen-lockfile" : "bun install --frozen-lockfile", 30000);

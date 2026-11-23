@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
@@ -9,7 +9,7 @@ use std::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::pending::Pending;
+use super::{pending::Pending, trace};
 use crate::{Transpiler, encoding, host};
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -268,39 +268,75 @@ pub fn cache_dir() -> PathBuf {
 }
 
 pub fn fetch(url: &str, tarball: bool, refresh: bool, registry: &Registry) -> Result<Vec<u8>> {
-    let url_value = request_url(url)?;
-    let url = url_value.as_str();
-    let cache = cache_dir().join(format!("{:x}", Sha256::digest(url.as_bytes())));
-    let fresh = tarball
-        || fs::metadata(&cache)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| SystemTime::now().duration_since(t).ok())
-            .is_some_and(|age| age < Duration::from_secs(300));
-    if !refresh
-        && fresh
-        && let Ok(bytes) = fs::read(&cache)
-    {
-        if cacheable(&bytes, tarball, registry) {
-            return Ok(bytes);
-        }
-        fs::remove_file(&cache).map_err(|_| "Could not discard unsafe registry cache data")?;
-    }
-    Download::start(&url_value, tarball, refresh, registry)?.finish(registry)
+    Downloads::new(0).fetch(url, tarball, refresh, registry)
 }
 
-// Reserve one handle for a demand lookup that conservative lookahead did not predict.
-pub(super) const MAX_PREFETCHES: usize = 7;
+fn cache_path(url: &str) -> PathBuf {
+    cache_dir().join(format!("{:x}", Sha256::digest(url.as_bytes())))
+}
 
-/// Owns only handles. Unconsumed bodies stay under the host's per-handle backpressure.
-#[derive(Default)]
+/// Tarballs are immutable; metadata stays fresh for five minutes.
+fn fresh_cache(cache: &Path, tarball: bool) -> bool {
+    tarball
+        || fs::metadata(cache)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age < Duration::from_secs(300))
+}
+
+/// The cached response for `url`, when it is fresh and passes the same safety checks.
+fn cached(url: &url::Url, tarball: bool, registry: &Registry) -> Result<Option<Vec<u8>>> {
+    let cache = cache_path(url.as_str());
+    if !fresh_cache(&cache, tarball) {
+        return Ok(None);
+    }
+    let Ok(bytes) = trace::time("cache-read", || fs::read(&cache)) else {
+        return Ok(None);
+    };
+    if cacheable(&bytes, tarball, registry) {
+        return Ok(Some(bytes));
+    }
+    fs::remove_file(&cache).map_err(|_| "Could not discard unsafe registry cache data")?;
+    Ok(None)
+}
+
+/// Metadata lookahead requests in flight. One more handle stays free for a demand lookup
+/// that conservative lookahead did not predict. Registry metadata is small and
+/// latency-bound, and registries serve it over HTTP/2 (browsers queue extra HTTP/1.1
+/// requests per connection), so a wide window hides round trips.
+pub(super) const METADATA_PREFETCHES: usize = 63;
+/// Tarball requests in flight. Installs consume archives in order, so a narrower window
+/// leaves more bandwidth to the archive being waited for.
+pub(super) const TARBALL_PREFETCHES: usize = 31;
+/// Guest memory that bodies nobody waits for yet may fill. Past it, they wait under the
+/// host's per-handle backpressure as before.
+const PREFETCH_BUFFER: usize = 32 * 1024 * 1024;
+/// Largest single host read.
+const READ_CAP: usize = 256 * 1024;
+/// How often long guest work (extraction) lets other responses move.
+const PUMP_INTERVAL: Duration = Duration::from_millis(4);
+
+/// Owns handles in the order they will be consumed. While the installer waits for one
+/// response or extracts one package, the others keep reading within `PREFETCH_BUFFER`.
 pub struct Downloads {
-    pending: BTreeMap<String, Result<Download>>,
+    limit: usize,
+    pending: Vec<(String, Result<Download>)>,
+    pumped: Option<Instant>,
 }
 
 impl Downloads {
+    /// Holds at most `limit` prefetched requests.
+    pub fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            pending: Vec::new(),
+            pumped: None,
+        }
+    }
+
     pub fn is_full(&self) -> bool {
-        self.pending.len() >= MAX_PREFETCHES
+        self.pending.len() >= self.limit
     }
 
     pub fn clear(&mut self) {
@@ -308,34 +344,36 @@ impl Downloads {
     }
 
     pub fn retain(&mut self, urls: &[String]) {
-        self.pending.retain(|url, _| urls.contains(url));
+        self.pending.retain(|(url, _)| urls.contains(url));
+    }
+
+    fn contains(&self, url: &str) -> bool {
+        self.pending.iter().any(|(pending, _)| pending == url)
+    }
+
+    fn take(&mut self, url: &str) -> Option<Result<Download>> {
+        let index = self
+            .pending
+            .iter()
+            .position(|(pending, _)| pending == url)?;
+        Some(self.pending.remove(index).1)
     }
 
     pub fn prefetch(&mut self, url: &str, tarball: bool, refresh: bool, registry: &Registry) {
-        if self.is_full() || self.pending.contains_key(url) {
+        if self.is_full() || self.contains(url) {
             return;
         }
         let request = request_url(url).and_then(|url| {
-            let cache = cache_dir().join(format!("{:x}", Sha256::digest(url.as_str().as_bytes())));
-            let fresh = tarball
-                || fs::metadata(&cache)
-                    .and_then(|metadata| metadata.modified())
-                    .ok()
-                    .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-                    .is_some_and(|age| age < Duration::from_secs(300));
-            if !refresh && fresh && cache.is_file() {
+            let cache = cache_path(url.as_str());
+            if !refresh && fresh_cache(&cache, tarball) && cache.is_file() {
                 return Ok(None);
             }
             Download::start(&url, tarball, refresh, registry).map(Some)
         });
         match request {
             Ok(None) => {}
-            Ok(Some(request)) => {
-                self.pending.insert(url.into(), Ok(request));
-            }
-            Err(error) => {
-                self.pending.insert(url.into(), Err(error));
-            }
+            Ok(Some(request)) => self.pending.push((url.into(), Ok(request))),
+            Err(error) => self.pending.push((url.into(), Err(error))),
         }
     }
 
@@ -346,17 +384,67 @@ impl Downloads {
         refresh: bool,
         registry: &Registry,
     ) -> Result<Vec<u8>> {
-        match self.pending.remove(url) {
-            Some(request) => request?.finish(registry),
-            None => fetch(url, tarball, refresh, registry),
+        let download = match self.take(url) {
+            Some(request) => request?,
+            None => {
+                let url = request_url(url)?;
+                if !refresh && let Some(bytes) = cached(&url, tarball, registry)? {
+                    return Ok(bytes);
+                }
+                Download::start(&url, tarball, refresh, registry)?
+            }
+        };
+        download.finish(self, registry)
+    }
+
+    /// Lets other responses move during long guest work, at most every `PUMP_INTERVAL`.
+    pub fn tick(&mut self, registry: &Registry) {
+        let now = Instant::now();
+        if self
+            .pumped
+            .is_some_and(|at| now.duration_since(at) < PUMP_INTERVAL)
+        {
+            return;
+        }
+        self.pumped = Some(now);
+        self.pump(registry);
+    }
+
+    /// Reads what the host already holds for pending responses, in consumption order.
+    fn pump(&mut self, registry: &Registry) {
+        let mut buffered: usize = self
+            .pending
+            .iter()
+            .filter_map(|(_, download)| download.as_ref().ok())
+            .map(|download| download.body.len())
+            .sum();
+        for (_, download) in &mut self.pending {
+            let Ok(download) = download else {
+                continue;
+            };
+            if buffered >= PREFETCH_BUFFER {
+                return;
+            }
+            let before = download.body.len();
+            download.advance(PREFETCH_BUFFER - buffered, registry);
+            buffered += download.body.len() - before;
         }
     }
+}
+
+enum Body {
+    Head,
+    Reading,
+    Done,
+    Failed(String),
 }
 
 struct Download {
     handle: i32,
     url: String,
     tarball: bool,
+    body: Vec<u8>,
+    state: Body,
 }
 
 impl Download {
@@ -365,17 +453,103 @@ impl Download {
             handle: start_request(url, tarball, refresh, registry)?,
             url: url.as_str().into(),
             tarball,
+            body: Vec::new(),
+            state: Body::Head,
         })
     }
 
-    fn finish(self, registry: &Registry) -> Result<Vec<u8>> {
-        let bytes = response(self.handle, &self.url, registry)?;
-        if cacheable(&bytes, self.tarball, registry) && fs::create_dir_all(cache_dir()).is_ok() {
-            let cache = cache_dir().join(format!("{:x}", Sha256::digest(self.url.as_bytes())));
-            let _ = write(&cache, &bytes);
-        }
+    fn finish(mut self, others: &mut Downloads, registry: &Registry) -> Result<Vec<u8>> {
+        let (download, store) = if self.tarball {
+            ("tarball-download", "tarball-cache-write")
+        } else {
+            ("metadata-download", "metadata-cache-write")
+        };
+        trace::time(download, || self.complete(others, registry))?;
+        let bytes = std::mem::take(&mut self.body);
+        trace::bytes(download, bytes.len());
+        trace::time(store, || {
+            store_cache(&self.url, &bytes, self.tarball, registry)
+        });
         Ok(bytes)
     }
+
+    /// Waits for the whole response. The idle timer starts here, on consumption.
+    fn complete(&mut self, others: &mut Downloads, registry: &Registry) -> Result<()> {
+        let mut pending = Pending::new(idle_timeout(), Instant::now());
+        loop {
+            // Others first: a notification for this response that arrives after its read
+            // below still ends the wait.
+            others.pump(registry);
+            if self.advance(usize::MAX, registry) {
+                pending.progressed(Instant::now());
+            }
+            match &self.state {
+                Body::Done => return Ok(()),
+                Body::Failed(error) => return Err(error.clone()),
+                Body::Head | Body::Reading => wait(&mut pending, &self.url)?,
+            }
+        }
+    }
+
+    /// Moves the response forward without blocking, reading about `budget` body bytes at
+    /// most. Returns whether anything changed.
+    fn advance(&mut self, budget: usize, registry: &Registry) -> bool {
+        let head = matches!(self.state, Body::Head) && self.read_head(registry);
+        let reading = matches!(self.state, Body::Reading);
+        let start = self.body.len();
+        while matches!(self.state, Body::Reading) && self.body.len() - start < budget {
+            match host::read_into(self.handle, &mut self.body, READ_CAP) {
+                Ok(0) => self.state = Body::Done,
+                Ok(_) if self.body.len() > LIMIT => {
+                    self.state = Body::Failed("Download exceeds 256 MiB limit".into())
+                }
+                Ok(_) => {}
+                Err(host::AGAIN) => break,
+                Err(_) => self.state = Body::Failed(network_error(self.handle, registry)),
+            }
+        }
+        // Only a head, body bytes or the end of the body count as progress: an unanswered
+        // request must still reach its idle timeout.
+        head || self.body.len() > start || (reading && !matches!(self.state, Body::Reading))
+    }
+
+    /// Reads the response head if it arrived. Returns whether it did (or failed).
+    fn read_head(&mut self, registry: &Registry) -> bool {
+        let head = match host::fetch_head(self.handle) {
+            Ok(head) => head,
+            Err(host::AGAIN) => return false,
+            Err(_) => {
+                self.state = Body::Failed(network_error(self.handle, registry));
+                return true;
+            }
+        };
+        self.state = match response_status(&head) {
+            Ok(status) if (200..300).contains(&status) => Body::Reading,
+            Ok(status) => Body::Failed(format!("GET {} - {status}", self.url)),
+            Err(error) => Body::Failed(error),
+        };
+        true
+    }
+}
+
+fn response_status(head: &[u8]) -> Result<u64> {
+    let head: Value = serde_json::from_slice(head).map_err(|e| e.to_string())?;
+    Ok(head["status"].as_u64().unwrap_or(0))
+}
+
+fn store_cache(url: &str, bytes: &[u8], tarball: bool, registry: &Registry) {
+    if cacheable(bytes, tarball, registry) && fs::create_dir_all(cache_dir()).is_ok() {
+        let _ = write(&cache_path(url), bytes);
+    }
+}
+
+fn idle_timeout() -> Duration {
+    let seconds = std::env::var("BUN_CONFIG_HTTP_IDLE_TIMEOUT")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(300);
+    Duration::from_secs(seconds)
 }
 
 impl Drop for Download {
@@ -427,50 +601,11 @@ fn start_request(
     Ok(handle)
 }
 
-fn response(handle: i32, url: &str, registry: &Registry) -> Result<Vec<u8>> {
-    let seconds = std::env::var("BUN_CONFIG_HTTP_IDLE_TIMEOUT")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .filter(|s| *s > 0)
-        .unwrap_or(300);
-    let mut pending = Pending::new(Duration::from_secs(seconds), Instant::now());
-    let head = loop {
-        match host::fetch_head(handle) {
-            Ok(head) => break head,
-            Err(host::AGAIN) => wait(&mut pending, url)?,
-            Err(_) => return Err(network_error(handle, registry)),
-        }
-    };
-    let head: Value = serde_json::from_slice(&head).map_err(|e| e.to_string())?;
-    let status = head["status"].as_u64().unwrap_or(0);
-    if !(200..300).contains(&status) {
-        return Err(format!("GET {url} - {status}"));
-    }
-    let mut out = Vec::new();
-    pending.progressed(Instant::now());
-    loop {
-        match host::read(handle, 64 * 1024) {
-            Ok(bytes) if bytes.is_empty() => return Ok(out),
-            Ok(bytes) => append_progress(&mut out, &mut pending, &bytes),
-            Err(host::AGAIN) => wait(&mut pending, url)?,
-            Err(_) => return Err(network_error(handle, registry)),
-        }
-        if out.len() > LIMIT {
-            return Err("Download exceeds 256 MiB limit".into());
-        }
-    }
-}
-
-fn append_progress(out: &mut Vec<u8>, pending: &mut Pending, bytes: &[u8]) {
-    out.extend_from_slice(bytes);
-    pending.progressed(Instant::now());
-}
-
 fn wait(pending: &mut Pending, url: &str) -> Result<()> {
     let timeout_ms = pending
         .next_poll_ms(Instant::now())
         .ok_or_else(|| format!("Timeout downloading {url}"))?;
-    host::poll(timeout_ms);
+    trace::time("net-idle", || host::poll(timeout_ms));
     Ok(())
 }
 
@@ -599,25 +734,52 @@ pub fn archive_manifest(bytes: &[u8]) -> Result<Value> {
     manifest.ok_or_else(|| "Tarball has no package.json".into())
 }
 
-pub fn extract(bytes: &[u8], destination: &Path) -> Result<()> {
+/// Extracts into `destination` and returns the bytes of the archive's root `package.json`
+/// (the last one written, as on disk), so callers can validate it without reading it back.
+/// `tick` runs once per entry so other downloads keep moving during long extractions.
+pub fn extract(
+    bytes: &[u8],
+    destination: &Path,
+    tick: &mut dyn FnMut(),
+) -> Result<Option<Vec<u8>>> {
     let mut directories = BTreeSet::new();
+    let mut data = Vec::new();
+    let mut manifest = None;
     visit_archive(bytes, |entry, path| {
+        tick();
         let target = destination.join(path);
         if entry.header().entry_type().is_dir() {
-            return fs::create_dir_all(target).map_err(|e| e.to_string());
+            return create_directory(&target);
         }
-        let parent = target.parent().unwrap();
-        let needs_parent = !directories.contains(parent);
-        if needs_parent {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        ensure_parent(&mut directories, &target)?;
+        // One write per file: each write is a host filesystem call in the browser.
+        data.clear();
+        data.reserve(entry.size() as usize);
+        trace::time("extract-inflate", || entry.read_to_end(&mut data))
+            .map_err(|e| e.to_string())?;
+        trace::time("extract-write", || fs::write(&target, &data)).map_err(|e| e.to_string())?;
+        if path == Path::new("package.json") {
+            manifest = Some(data.clone());
         }
-        if needs_parent && directories.len() < 1024 {
-            directories.insert(parent.to_path_buf());
-        }
-        let mut out = fs::File::create(&target).map_err(|e| e.to_string())?;
-        std::io::copy(entry, &mut out).map_err(|e| e.to_string())?;
-        out.flush().map_err(|e| e.to_string())
-    })
+        Ok(())
+    })?;
+    Ok(manifest)
+}
+
+fn create_directory(path: &Path) -> Result<()> {
+    trace::time("extract-mkdir", || fs::create_dir_all(path)).map_err(|e| e.to_string())
+}
+
+fn ensure_parent(directories: &mut BTreeSet<PathBuf>, target: &Path) -> Result<()> {
+    let parent = target.parent().unwrap();
+    if directories.contains(parent) {
+        return Ok(());
+    }
+    create_directory(parent)?;
+    if directories.len() < 1024 {
+        directories.insert(parent.to_path_buf());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

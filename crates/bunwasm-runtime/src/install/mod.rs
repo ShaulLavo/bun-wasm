@@ -5,9 +5,15 @@ mod migration;
 mod overrides;
 mod pending;
 mod resolve;
+mod trace;
 mod version;
 
-use std::{collections::BTreeSet, fs, path::Path, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+    time::Instant,
+};
 
 use serde_json::{Value, json};
 
@@ -81,6 +87,7 @@ fn execute(
         return version::run(args.into_iter().skip(1), parser);
     }
     let start = Instant::now();
+    trace::start();
     let mut opts = options(args)?;
     let member = local::root(parser)?;
     if command == "ci" {
@@ -185,7 +192,9 @@ fn execute(
         {
             local.meta = manifest.clone();
         }
-        resolver.resolve(project_manifest, opts.production)?;
+        trace::time("resolve", || {
+            resolver.resolve(project_manifest, opts.production)
+        })?;
         if command != "remove" && command != "update" {
             finalize_additions(&mut manifest, &opts, &resolver, member.as_deref())?;
         }
@@ -214,9 +223,9 @@ fn execute(
         let installed = if opts.lockfile_only {
             0
         } else {
-            let count = install_packages(&mut resolver)?;
-            prune(&locked, &resolver)?;
-            link_bins(&resolver)?;
+            let (count, manifests) = trace::time("install", || install_packages(&mut resolver))?;
+            trace::time("prune", || prune(&locked, &resolver))?;
+            trace::time("link-bins", || link_bins(&resolver, &manifests))?;
             count
         };
         if manifest != old_manifest {
@@ -244,6 +253,7 @@ fn execute(
         }
         Ok(())
     })();
+    trace::report(start.elapsed());
     result.map_err(|error| redactor.redact(&error))
 }
 
@@ -427,23 +437,30 @@ fn forget_installed_source(path: &Path) -> Result<()> {
     }
 }
 
-fn install_packages(resolver: &mut Resolver) -> Result<usize> {
+/// Installs missing packages. Returns the installed count and the manifests extraction read,
+/// so linking binaries need not read them back.
+fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, Value>)> {
     let mut installed = 0;
+    let mut manifests = BTreeMap::new();
     let keys: Vec<_> = resolver.packages.keys().cloned().collect();
-    let mut downloads = io::Downloads::default();
+    let mut downloads = io::Downloads::new(io::TARBALL_PREFETCHES);
     let mut lookahead = keys.iter();
+    // Lookahead already found these missing. Only their own installs add them; reinstalling a
+    // parent can remove a nested package, so positive answers are checked again.
+    let mut absent = BTreeSet::new();
     for key in &keys {
-        prefetch_packages(resolver, &mut lookahead, &mut downloads);
+        prefetch_packages(resolver, &mut lookahead, &mut downloads, &mut absent);
         let package = &resolver.packages[key];
-        if package_present(package) {
+        if !absent.remove(key) && trace::time("present-check", || package_present(package)) {
             continue;
         }
-        if let Err(error) = install_package(
+        let result = install_package(
             package,
             resolver.refresh,
             &resolver.registry,
             &mut downloads,
-        ) {
+        );
+        if let Err(error) = result {
             if !package.optional || package.explicit_tarball {
                 return Err(format!("{}@{}: {error}", package.name, package.version));
             }
@@ -455,15 +472,19 @@ fn install_packages(resolver: &mut Resolver) -> Result<usize> {
             resolver.packages.remove(key);
             continue;
         }
+        if let Ok(Some(manifest)) = result {
+            manifests.insert(key.clone(), manifest);
+        }
         installed += 1;
     }
-    Ok(installed)
+    Ok((installed, manifests))
 }
 
 fn prefetch_packages<'a>(
     resolver: &Resolver,
     lookahead: &mut impl Iterator<Item = &'a String>,
     downloads: &mut io::Downloads,
+    absent: &mut BTreeSet<String>,
 ) {
     while !downloads.is_full() {
         let Some(key) = lookahead.next() else {
@@ -472,9 +493,10 @@ fn prefetch_packages<'a>(
         let Some(package) = resolver.packages.get(key) else {
             continue;
         };
-        if package.local.is_some() || package_present(package) {
+        if package.local.is_some() || trace::time("present-check", || package_present(package)) {
             continue;
         }
+        absent.insert(key.clone());
         downloads.prefetch(
             &package.tarball,
             true,
@@ -489,10 +511,10 @@ fn install_package(
     refresh: bool,
     registry: &io::Registry,
     downloads: &mut io::Downloads,
-) -> Result<()> {
+) -> Result<Option<Value>> {
     if let Some(local) = &package.local {
         forget_installed_source(&package.path())?;
-        return local::link(&local.path, &package.path());
+        return local::link(&local.path, &package.path()).map(|()| None);
     }
     let bytes = downloads.fetch(
         &package.tarball,
@@ -500,25 +522,19 @@ fn install_package(
         refresh && !package.explicit_tarball,
         registry,
     )?;
-    io::integrity(&bytes, &package.integrity)?;
+    trace::time("integrity", || io::integrity(&bytes, &package.integrity))?;
     let path = package.path();
     let staging = path.with_file_name(format!(
         ".{}.bun-wasm-tmp",
         package.name.rsplit('/').next().unwrap()
     ));
-    if staging.exists() {
-        fs::remove_dir_all(&staging).map_err(|e| e.to_string())?;
-    }
-    fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-    let result = io::extract(&bytes, &staging)
-        .and_then(|_| validate_package(&staging, package))
-        .and_then(|()| {
-            forget_installed_source(&path)?;
-            if path.exists() {
-                fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
-            }
-            fs::rename(&staging, &path).map_err(|e| e.to_string())?;
-            io::write(&installed_source_path(&path), &installed_source(package))
+    empty_directory(&staging)?;
+    let mut tick = || downloads.tick(registry);
+    let result = trace::time("extract", || io::extract(&bytes, &staging, &mut tick))
+        .and_then(|manifest| validate_package(manifest.as_deref(), package))
+        .and_then(|manifest| {
+            trace::time("publish", || publish_package(&staging, &path, package))?;
+            Ok(Some(manifest))
         });
     if result.is_err() {
         let _ = fs::remove_dir_all(staging);
@@ -526,14 +542,41 @@ fn install_package(
     result
 }
 
-fn validate_package(staging: &Path, package: &Package) -> Result<()> {
-    let bytes =
-        fs::read(staging.join("package.json")).map_err(|_| "Tarball has no package.json")?;
-    let manifest: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+/// Creates `path` as a new empty directory, replacing a leftover one. The common case (it
+/// does not exist yet) costs one filesystem call.
+fn empty_directory(path: &Path) -> Result<()> {
+    match fs::create_dir(path) {
+        Ok(()) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            fs::remove_dir_all(path).map_err(|e| e.to_string())?
+        }
+        Err(_) => {}
+    }
+    fs::create_dir_all(path).map_err(|e| e.to_string())
+}
+
+/// Moves the extracted package into place, then records where it came from. A fresh install
+/// is one rename; replacing an existing package first drops its record and its directory.
+/// A stale record left beside a fresh directory only matches the same package identity.
+fn publish_package(staging: &Path, path: &Path, package: &Package) -> Result<()> {
+    if fs::rename(staging, path).is_err() {
+        forget_installed_source(path)?;
+        if path.exists() {
+            fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+        }
+        fs::rename(staging, path).map_err(|e| e.to_string())?;
+    }
+    io::write(&installed_source_path(path), &installed_source(package))
+}
+
+/// Checks the extracted root `package.json`, from the bytes extraction just wrote.
+fn validate_package(manifest: Option<&[u8]>, package: &Package) -> Result<Value> {
+    let bytes = manifest.ok_or("Tarball has no package.json")?;
+    let manifest: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     if manifest["name"] != package.name || manifest["version"] != package.version {
         return Err("Tarball name/version does not match registry metadata".into());
     }
-    Ok(())
+    Ok(manifest)
 }
 
 fn prune(locked: &Value, resolver: &Resolver) -> Result<()> {
@@ -992,16 +1035,24 @@ fn finalize_updates(
     Ok(())
 }
 
-fn link_package_bins(package: &Package) -> Result<()> {
+fn link_package_bins(package: &Package, manifest: Option<&Value>) -> Result<()> {
     let path = package.path();
     if package.local.is_some() && !path.join("package.json").exists() {
         return Ok(());
     }
-    let meta: Value =
-        serde_json::from_slice(&fs::read(path.join("package.json")).map_err(|e| e.to_string())?)
+    let read;
+    let meta = match manifest {
+        Some(manifest) => manifest,
+        None => {
+            read = serde_json::from_slice::<Value>(
+                &fs::read(path.join("package.json")).map_err(|e| e.to_string())?,
+            )
             .map_err(|e| e.to_string())?;
+            &read
+        }
+    };
     let modules = resolve::path(&package.chain[..package.chain.len() - 1]).join("node_modules");
-    for (name, file) in binary_entries(&meta, &path)? {
+    for (name, file) in binary_entries(meta, &path)? {
         let target = std::env::current_dir()
             .map_err(|e| e.to_string())?
             .join(&path)
@@ -1024,9 +1075,9 @@ fn link_package_bins(package: &Package) -> Result<()> {
     Ok(())
 }
 
-fn link_bins(resolver: &Resolver) -> Result<()> {
-    for package in resolver.packages.values() {
-        link_package_bins(package)?;
+fn link_bins(resolver: &Resolver, manifests: &BTreeMap<String, Value>) -> Result<()> {
+    for (key, package) in &resolver.packages {
+        link_package_bins(package, manifests.get(key))?;
     }
     let Ok(entries) = fs::read_dir("node_modules/.bin") else {
         return Ok(());

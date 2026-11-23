@@ -44,7 +44,7 @@ impl MetadataLookahead {
     fn urls(&mut self, index: usize, resolver: &Resolver) -> Vec<String> {
         self.selected
             .retain(|candidate| candidate.needed(index, resolver));
-        while self.selected.len() < io::MAX_PREFETCHES {
+        while self.selected.len() < io::METADATA_PREFETCHES {
             let Some(candidate) = self.remaining.pop_front() else {
                 break;
             };
@@ -212,7 +212,7 @@ impl Resolver {
             #[cfg(test)]
             packuments: BTreeMap::new(),
             responses: BTreeMap::new(),
-            downloads: io::Downloads::default(),
+            downloads: io::Downloads::new(io::METADATA_PREFETCHES),
             pending: VecDeque::new(),
             workspaces: BTreeMap::new(),
             production: false,
@@ -420,12 +420,12 @@ impl Resolver {
         }
         MetadataLookahead {
             remaining,
-            selected: Vec::with_capacity(io::MAX_PREFETCHES),
+            selected: Vec::with_capacity(io::METADATA_PREFETCHES),
         }
     }
 
     fn pending_metadata(&self, candidates: &mut VecDeque<MetadataCandidate>) {
-        for key in self.pending.iter().take(io::MAX_PREFETCHES) {
+        for key in self.pending.iter().take(io::METADATA_PREFETCHES) {
             self.pending_parent_metadata(&self.packages[key], candidates);
         }
     }
@@ -777,8 +777,10 @@ impl Resolver {
         if let Some(meta) = self.packuments.get(name) {
             return Ok(meta.clone());
         }
-        let parsed = serde_json::from_slice(&self.responses[name])
-            .map_err(|e| format!("Invalid registry response for {name}: {e}"));
+        let parsed = super::trace::time("metadata-parse", || {
+            serde_json::from_slice(&self.responses[name])
+        })
+        .map_err(|e| format!("Invalid registry response for {name}: {e}"));
         if parsed.is_err() {
             self.responses.remove(name);
         }

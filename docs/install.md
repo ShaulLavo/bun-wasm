@@ -206,6 +206,12 @@ three engines. The headless Node host uses a separate fetch worker during synchr
 Rust CLI startup, then keeps its existing asynchronous network adapter for JS.
 See [the fixture README](install-fixtures.md).
 
+`BUN_WASM_INSTALL_TRACE=1 bun install` prints where an install spent its wall time
+to stderr: network waits (`net-idle`), metadata and tarball downloads with their
+bytes, cache reads and writes, integrity checks, extraction split into inflating,
+directory creation and file writes, publication and binary links. Each row shows
+milliseconds, calls and KiB.
+
 The install subset is
 `cli/install` (113 files), run unchanged with `scripts/bun-suite.sh --network
 loopback --jobs 2`. The checked-in full baseline is deliberately unchanged.

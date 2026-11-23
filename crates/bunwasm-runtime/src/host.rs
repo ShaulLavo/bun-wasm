@@ -259,6 +259,21 @@ pub fn read(handle: i32, cap: usize) -> Result<Vec<u8>, i32> {
     Ok(buf)
 }
 
+/// Like `read`, but appends up to `cap` bytes to `out` without zeroing or copying a buffer.
+/// Returns the count (zero at EOF) or the negative code.
+pub fn read_into(handle: i32, out: &mut Vec<u8>, cap: usize) -> Result<usize, i32> {
+    out.reserve(cap);
+    let spare = out.spare_capacity_mut();
+    let n = call(Slot::Read, [handle, ptr_mut(spare), cap as i32, 0]).ok_or(UNSUPPORTED)?;
+    if n < 0 {
+        return Err(n);
+    }
+    let n = (n as usize).min(cap);
+    // SAFETY: the host initialized the first `n` spare bytes, and `n` fits the reservation.
+    unsafe { out.set_len(out.len() + n) };
+    Ok(n)
+}
+
 pub fn write(handle: i32, data: &[u8]) -> i32 {
     call(Slot::Write, [handle, ptr(data), data.len() as i32, 0]).unwrap_or(UNSUPPORTED)
 }

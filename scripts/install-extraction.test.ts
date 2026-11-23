@@ -20,6 +20,7 @@ test("installer extraction reuses parent directories and preserves archive behav
 use serde_json::Value;
 type Result<T> = std::result::Result<T, String>;
 const LIMIT: usize = 256 * 1024 * 1024;
+mod trace { pub fn time<T>(_: &'static str, step: impl FnOnce() -> T) -> T { step() } }
 ${source.slice(start, end).replaceAll("fs::create_dir_all(", "crate::create_dir_all(")}`);
     copyFileSync(join(root, "crates/bunwasm-runtime/fixtures/install-extraction.rs"), join(scratch, "src/main.rs"));
     writeFileSync(join(scratch, "Cargo.toml"), `[package]

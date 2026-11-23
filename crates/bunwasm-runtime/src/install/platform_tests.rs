@@ -271,7 +271,11 @@ fn extract_platform_archives() {
                 write_lock(&resolver.locked, &resolver.registry).unwrap()
             );
         }
-        let installed = install_packages(&mut resolver).unwrap();
+        let (installed, manifests) = install_packages(&mut resolver).unwrap();
+        assert_eq!(
+            manifests.keys().collect::<Vec<_>>(),
+            ["compatible", "neutral"]
+        );
         let mut extracted: Vec<_> = std::fs::read_dir("node_modules")
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
