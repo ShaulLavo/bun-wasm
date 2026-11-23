@@ -21,6 +21,7 @@ declare namespace BunWasm {
       slice(value: string, start?: number, end?: number): string;
       indexOf(value: string, search: string, position?: number): number;
       lastIndexOf(value: string, search: string, position?: number): number;
+      Int32Array: Int32ArrayConstructor;
     };
     mainPath: string;
     prepareText(source: string, goal: PrepareGoal, origin: string, name?: string): string;

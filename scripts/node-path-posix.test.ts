@@ -21,7 +21,7 @@ function loadGuestPath(): PathModule {
   const uncurry = (method: Function) => Function.prototype.call.bind(method);
   const stringIntrinsics = {
     charCodeAt: uncurry(String.prototype.charCodeAt), slice: uncurry(String.prototype.slice),
-    indexOf: uncurry(String.prototype.indexOf), lastIndexOf: uncurry(String.prototype.lastIndexOf),
+    indexOf: uncurry(String.prototype.indexOf), lastIndexOf: uncurry(String.prototype.lastIndexOf), Int32Array,
   };
   const internal = { native: { nodePath, globMatch: crossing }, stringIsWellFormed: uncurry(String.prototype.isWellFormed), stringIntrinsics };
   const factory = scope.__pathFactory;
@@ -148,6 +148,17 @@ test("replacing public string and array methods does not change results", () => 
     for (let i = 0; i < replaced.length; i++) Object.defineProperty(replaced[i]![0], replaced[i]![1], saved[i]!);
   }
   expect(actual).toEqual(expected);
+});
+
+test("a replaced global Int32Array does not change long normalizations", () => {
+  const original = globalThis.Int32Array;
+  const input = "./" + "x".repeat(1021);
+  try {
+    globalThis.Int32Array = function () { return new original(0); } as unknown as Int32ArrayConstructor;
+    expect(guest.normalize(input)).toBe(host.normalize(input));
+  } finally {
+    globalThis.Int32Array = original;
+  }
 });
 
 // The previous adapter called `startsWith` and `slice` on whatever a replaced

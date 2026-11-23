@@ -5,7 +5,7 @@
   const isWellFormed = internal.stringIsWellFormed;
   // Captured in bootstrap.js before user code runs, so replacing a public
   // String.prototype method cannot change path results.
-  const { charCodeAt, slice, indexOf, lastIndexOf } = internal.stringIntrinsics;
+  const { charCodeAt, slice, indexOf, lastIndexOf, Int32Array } = internal.stringIntrinsics;
   const SLASH = 47;
   const DOT = 46;
   type StringOperation = "basename" | "dirname" | "extname" | "normalize";
@@ -269,14 +269,23 @@
   // errors. An empty or falsy cwd is skipped.
   type CwdLike = { startsWith(search: string): boolean; slice(start: number): string };
 
-  // `value` keeps the previous expressions, whose text engines quote in errors.
   function cwdIsAbsolute(value: unknown): boolean {
     if (!value) return false;
-    return typeof value === "string" ? charCodeAt(value, 0) === SLASH : (value as CwdLike).startsWith("/");
+    return typeof value === "string" ? charCodeAt(value, 0) === SLASH : legacyStartsWith(value as CwdLike);
   }
 
   function cwdTail(value: unknown, absolute: boolean): string {
-    return typeof value === "string" ? slice(value, absolute ? 1 : 0) : (value as CwdLike).slice(absolute ? 1 : 0);
+    return typeof value === "string" ? slice(value, absolute ? 1 : 0) : legacySlice(value as CwdLike, absolute);
+  }
+
+  // These keep the previous expressions' exact text, which engines quote in
+  // errors, so their parameters are typed rather than cast.
+  function legacyStartsWith(value: CwdLike): boolean {
+    return value.startsWith("/");
+  }
+
+  function legacySlice(value: CwdLike, absolute: boolean): string {
+    return value.slice(absolute ? 1 : 0);
   }
 
   function posixRelative(from: string, to: string): string {
