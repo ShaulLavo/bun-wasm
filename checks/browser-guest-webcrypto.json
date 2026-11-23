@@ -7,6 +7,7 @@
     ".github/actions/native-production/action.yml",
     "crates/bunwasm-runtime/src/js/crypto.js",
     "crates/bunwasm-runtime/src/js/crypto_host_compute.ts",
+    "web/src/engine-codec.ts",
     "web/src/engine-host.js",
     "web/src/host-crypto.ts"
   ]
