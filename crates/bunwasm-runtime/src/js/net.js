@@ -1932,9 +1932,14 @@
 
   function bunTcp() { return internal.require("bun_tcp")({ Connection, listenOrThrow, acceptLoop, waiters }); }
 
-  const WebSocket = internal.require("websocket").clientClass(Connection);
+  // The WebSocket client loads on first use; fetch and servers do not need it. One class per guest.
+  let WebSocket;
   return {
-    fetch, serve, nodeHttp, nodeNet, bunTcp, caps, WebSocket,
+    fetch, serve, nodeHttp, nodeNet, bunTcp, caps,
+    get WebSocket() {
+      WebSocket ??= internal.require("websocket").clientClass(Connection);
+      return WebSocket;
+    },
     addWaiter, removeWaiter, cancelIoWaiters, hostError,
   };
 })

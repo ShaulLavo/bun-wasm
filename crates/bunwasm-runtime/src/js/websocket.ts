@@ -3,10 +3,8 @@
 (function (internal: BunWasm.WebSocketInternal) {
   "use strict";
   const { Buffer } = internal.require("buffer");
-  // The runtime's own codecs: this loads with net.js on first use, after programs may replace globals.
-  const { TextEncoder: Encoder = TextEncoder, TextDecoder: Decoder = TextDecoder } = internal.web ?? {};
-  const encoder = new Encoder();
-  const decoder = new Decoder("utf-8", { fatal: true, ignoreBOM: true });
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   const MAX_PAYLOAD = 16 * 1024 * 1024;
   const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
