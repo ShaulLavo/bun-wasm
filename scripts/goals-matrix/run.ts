@@ -18,7 +18,7 @@ import { checkReactStartup, reactStartupURL } from "./react-startup";
 import { preflight } from "./preparation";
 import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./platform";
 import { createIphoneTransport, validateIphoneControl } from "./iphone-transport";
-import { appendFile } from "node:fs/promises";
+import { orderedAppender } from "./ordered-append";
 import { appendFileSync } from "node:fs";
 import { playgroundProfile, templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { ownershipReceipt } from "./safari-ownership";
@@ -102,15 +102,6 @@ function nativeAdmissionOptions(values: Map<string, string>): NativeAdmission | 
     return value;
   };
   return { lane: values.get("mac-lane") ?? "", thread: values.get("mac-thread") ?? "", expectedSeconds: seconds("mac-expected-seconds", 600), waitSeconds: seconds("mac-wait-seconds", 3600), timeoutSeconds: seconds("mac-timeout-seconds", 900) };
-}
-/** Append evidence records in call order: concurrent appendFile calls can land out of order. */
-function orderedAppender(path: string): (text: string) => Promise<void> {
-  let tail: Promise<unknown> = Promise.resolve();
-  return text => {
-    const write = tail.then(() => appendFile(path, text));
-    tail = write.catch(() => undefined);
-    return write;
-  };
 }
 async function nativeTransport(box: Cell, config: Options, timeoutMs: number, report: Report, capture?: SafariCausalCapture, exit?: ExitOwner): Promise<Transport> {
   if (box.browser === "iphone-safari" && config.iphoneControlUrl && config.iphoneAgentCommand && config.deviceUDID) return createIphoneTransport({
