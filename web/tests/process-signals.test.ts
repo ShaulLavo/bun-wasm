@@ -42,6 +42,7 @@ function fixture() {
   let writeError: Error | undefined;
   let cancelIoWaitersCalls = 0;
   let selected: { status: number; signal: number } | undefined;
+  let polls = 0;
   const context = createContext({ TextEncoder, TextDecoder, Uint8Array, Error });
   const internal = {
     native: {
@@ -52,6 +53,7 @@ function fixture() {
       exit(code: number): never { throw new GuestExit(code); },
       hostSignal(signal: number, mode: number) {
         if (signal === 0) {
+          polls++;
           const next = pending.values().next();
           if (next.done) return 0;
           pending.delete(next.value);
@@ -98,6 +100,7 @@ function fixture() {
     writeFails(error: Error) { writeError = error; },
     ticks() { while (ticks.length) ticks.shift()!(); },
     selected: () => selected,
+    polls: () => polls,
     send(signal: number) {
       const mode = dispositions.get(signal) ?? 0;
       if (mode === 2) pending.add(signal);
@@ -170,6 +173,30 @@ for (const [name, signal] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]] a
     expect(f.pending.size).toBe(0);
   });
 }
+
+test("the loop polls the host for signals only while one has a handler", () => {
+  const f = fixture();
+  expect(f.pump()).toBe(false);
+  expect(f.process.kill(f.process.pid, "SIGPIPE")).toBe(true);
+  expect(f.pump()).toBe(false);
+  expect(f.polls()).toBe(0);
+  const calls: unknown[] = [];
+  const first = (name: unknown) => calls.push(`first ${String(name)}`);
+  const second = (name: unknown) => calls.push(`second ${String(name)}`);
+  f.process.on("SIGUSR1", first);
+  f.process.on("SIGUSR2", second);
+  f.send(10);
+  expect(f.pump()).toBe(true);
+  f.process.off("SIGUSR1", first);
+  f.send(12);
+  expect(f.pump()).toBe(true);
+  expect(calls).toEqual(["first SIGUSR1", "second SIGUSR2"]);
+  const polled = f.polls();
+  expect(polled).toBeGreaterThan(0);
+  f.process.off("SIGUSR2", second);
+  expect(f.pump()).toBe(false);
+  expect(f.polls()).toBe(polled);
+});
 
 test("process listener publication precedes removeListener observers", () => {
   const f = fixture();

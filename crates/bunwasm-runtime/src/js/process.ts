@@ -327,6 +327,8 @@
     signalNames.get(number)!.push(name);
   }
   const dispositions = new Map<number, number>();
+  // Signals whose disposition is "handled" (2): the only ones the host queues for pumpSignals.
+  let handledSignals = 0;
   function publishSignalDisposition(number: number) {
     if (number === 9) return; // SIGKILL cannot acquire a handler or ignored disposition.
     // SIGPIPE starts ignored, but Node/Bun restore DEFAULT after its last handler is removed.
@@ -337,6 +339,7 @@
     if ((dispositions.get(number) || 0) === disposition) return;
     const result = native.hostSignal(number, disposition);
     if (result < 0) throw signalFailure(result, "uv_signal_start");
+    handledSignals += Number(disposition === 2) - Number(dispositions.get(number) === 2);
     dispositions.set(number, disposition);
   }
   // EventEmitter invokes this after its actual mutation, before removeListener observers.
@@ -351,7 +354,7 @@
   const startup = native.hostSignal(13, 1);
   if (startup < 0) throw signalFailure(startup, "uv_signal_start");
   dispositions.set(13, 1);
-  internal.pumpSignals = internal.require("process_signals")(processBase, signalNames);
+  internal.pumpSignals = internal.require("process_signals")(processBase, signalNames, () => handledSignals > 0);
 
   // process.exitCode is Bun's exit byte (BunProcess.cpp setProcessExitCodeInner): Node's
   // validateInteger after numeric strings convert, undefined and null leave it alone, and it

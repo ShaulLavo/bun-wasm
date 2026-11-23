@@ -1,11 +1,13 @@
 (function (internal: BunWasm.Internal) {
   "use strict";
-  return function signalDispatcher(process: BunWasm.NodeEmitter, names: ReadonlyMap<number, readonly string[]>) {
+  // `handled` says whether any signal has a JavaScript handler. Only those signals queue a
+  // delivery here, so without one every loop turn skips the crossing into the host.
+  return function signalDispatcher(process: BunWasm.NodeEmitter, names: ReadonlyMap<number, readonly string[]>, handled = () => true) {
     let dispatching = false;
     return function pumpSignals(): boolean {
       // All cooperative entry paths share this guard, including broken-pipe
       // handling. Engine checkpoints leave signals pending; they never call JS.
-      if (dispatching) return false;
+      if (dispatching || !handled()) return false;
       dispatching = true;
       let progress = false;
       try {
