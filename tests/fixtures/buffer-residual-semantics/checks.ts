@@ -92,6 +92,75 @@ export function residualChecks(factory: typeof Buffer) {
       assert.doesNotThrow(() => buffer.writeUInt8(0));
       assert.doesNotThrow(() => buffer.writeBigInt64LE(0n));
     } },
+    { name: "fill clamps and survives detach or resize during value and encoding coercion", run() {
+      const detachedByValueOf = factory.alloc(16, 0xcc);
+      assert.equal(detachedByValueOf.fill({ valueOf() { detachedByValueOf.buffer.transfer(0); return 0x42; } } as unknown as number), detachedByValueOf);
+      assert.equal(detachedByValueOf.byteLength, 0);
+
+      const detachedByToString = factory.alloc(16, 0xcc);
+      assert.equal(detachedByToString.fill({ toString() { detachedByToString.buffer.transfer(0); return "42"; } } as unknown as number), detachedByToString);
+      assert.equal(detachedByToString.byteLength, 0);
+
+      const detachedByEnc = factory.alloc(16, 0xcc);
+      assert.equal(detachedByEnc.fill("A", 0, 16, { toString() { detachedByEnc.buffer.transfer(0); return "utf8"; } } as unknown as BufferEncoding), detachedByEnc);
+      assert.equal(detachedByEnc.byteLength, 0);
+
+      const rab = new ArrayBuffer(64, { maxByteLength: 64 });
+      const resized = factory.from(rab);
+      resized.fill(0x00);
+      resized.fill("A", 0, 64, { toString() { rab.resize(8); return "utf8"; } } as unknown as BufferEncoding);
+      assert.equal(resized.length, 8);
+      assert.equal(resized.toString("ascii"), "AAAAAAAA");
+
+      // Pattern validation must happen after clamping against the live destination length.
+      const detachedHex = factory.alloc(4, 1);
+      assert.equal(
+        detachedHex.fill("g", 0, 4, { toString() { detachedHex.buffer.transfer(); return "hex"; } } as unknown as BufferEncoding),
+        detachedHex,
+      );
+
+      // Detached and empty views report Bun's ERR_INVALID_ARG_VALUE ("Buffer cannot be empty"),
+      // and shadowed byteLength properties on views are ignored.
+      const dvAb = new ArrayBuffer(4);
+      const detachedDv = new DataView(dvAb);
+      dvAb.transfer();
+      assert.throws(() => factory.alloc(4).fill(detachedDv as unknown as Uint8Array), { code: "ERR_INVALID_ARG_VALUE", message: "Buffer cannot be empty" });
+      assert.throws(() => factory.alloc(4).fill(new Uint8Array(0)), { code: "ERR_INVALID_ARG_VALUE", message: "Buffer cannot be empty" });
+      const shadowed = new Uint8Array([0x41, 0x42]);
+      Object.defineProperty(shadowed, "byteLength", { value: 0 });
+      assert.equal(factory.alloc(4).fill(shadowed).toString("utf8"), "ABAB");
+    } },
+    { name: "indexOf coerces encoding on Buffer needles and handles detached haystack or needle", run() {
+      const ab = new ArrayBuffer(16);
+      const haystack = factory.from(ab);
+      haystack.fill(0x42);
+      const needle = factory.from([0x42]);
+      assert.equal(haystack.indexOf(needle, 0, { toString() { ab.transfer(32); return "utf8"; } } as unknown as BufferEncoding), -1);
+
+      const buf = factory.from("abcdef");
+      const needleAb = new ArrayBuffer(3);
+      const detachedNeedle = factory.from(needleAb);
+      detachedNeedle.set([0x62, 0x63, 0x64]);
+      assert.equal(buf.indexOf(detachedNeedle, 0, { toString() { needleAb.transfer(32); return "utf8"; } } as unknown as BufferEncoding), 0);
+      assert.equal(factory.from("ello hello hello").lastIndexOf("hello", "utf8"), 11);
+
+      // lastIndexOf uses initial pre-coercion length when offset coerces to NaN.
+      const growAb = new ArrayBuffer(2, { maxByteLength: 8 });
+      const growBuf = factory.from(growAb);
+      assert.equal(growBuf.lastIndexOf("", { valueOf() { growAb.resize(4); return NaN; } } as unknown as number), 2);
+
+      // Ordinary string coercion rejects Symbol encodings for Buffer needles too.
+      assert.throws(() => factory.from("abc").indexOf(factory.from("a"), 0, Symbol("encoding") as unknown as BufferEncoding), { name: "TypeError" });
+
+      // Live empty vs detached empty haystack with empty needle.
+      const liveEmpty = factory.alloc(0);
+      assert.equal(liveEmpty.indexOf(""), 0);
+      assert.equal(liveEmpty.lastIndexOf(""), 0);
+      const detachedEmpty = factory.alloc(4);
+      detachedEmpty.buffer.transfer();
+      assert.equal(detachedEmpty.indexOf(""), -1);
+      assert.equal(detachedEmpty.lastIndexOf(""), -1);
+    } },
   ];
 }
 
