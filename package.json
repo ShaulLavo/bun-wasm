@@ -63,6 +63,7 @@
     "web/src/worker-main.ts",
     "web/src/early-instance.ts",
     "web/src/engine-host.js",
+    "web/src/engine-codec.ts",
     "web/src/wasm-call-trap.ts",
     "web/src/script-evaluation.ts",
     "web/src/stack-programs.ts",

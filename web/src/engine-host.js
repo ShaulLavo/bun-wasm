@@ -14,6 +14,7 @@ import { hostCrypto } from "./host-crypto.ts";
 import { reportWasmCallTrap } from "./wasm-call-trap.ts";
 import { installSharedBufferRealm } from "./shared-objects/realm.ts";
 import { createTickScheduler } from "./tick-scheduler.ts";
+import { decodeUtf8, defineField, encodeUtf8, encodeUtf8Into, IN_PLACE_ENCODE } from "./engine-codec.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -131,34 +132,14 @@ const nativeAddEventListener = typeof globalThis.addEventListener === "function"
 
 const utf8 = new NativeTextEncoder();
 const fromUtf8 = new NativeTextDecoder();
-const wireFromUtf8 = new NativeTextDecoder("utf-8", { ignoreBOM: true });
 
 // --- the value encoding (engine_host.rs encode/decode) ------------------------------------
 
 const T = { UNDEFINED: 0, NULL: 1, FALSE: 2, TRUE: 3, NUM: 4, STR: 5, BYTES: 6, ARRAY: 7, OBJECT: 8, BIGINT: 9, BIGUINT: 10 };
 const I64_MIN = -(2n ** 63n);
 const I64_MAX = 2n ** 63n - 1n;
-// Most strings that cross are short ASCII paths and keys. Below these lengths a plain loop beats a
-// TextEncoder/TextDecoder call, whose fixed cost is larger than the copy.
-const SHORT_ENCODE = 16;
-const SHORT_DECODE = 256;
-// encodeInto writes in place when three bytes per UTF-16 unit fit; longer strings are encoded once.
-const IN_PLACE_ENCODE = 1 << 16;
 // The reused writer keeps at most this much buffer between calls.
 const KEPT_WRITER_BYTES = 1 << 20;
-const FIELD = { __proto__: null, value: undefined, enumerable: true, writable: true, configurable: true };
-
-/** Short UTF-8 as a string: ASCII without a copy, anything else through the decoder. */
-function wireString(bytes, start, end) {
-  if (end - start > SHORT_DECODE) return wireFromUtf8.decode(bytes.slice(start, end));
-  for (let i = start; i < end; i++) {
-    if (bytes[i] >= 0x80) return wireFromUtf8.decode(bytes.slice(start, end));
-  }
-  if (end - start > SHORT_ENCODE) return String.fromCharCode.apply(null, bytes.subarray(start, end));
-  let text = "";
-  for (let i = start; i < end; i++) text += String.fromCharCode(bytes[i]);
-  return text;
-}
 
 class Writer {
   constructor() {
@@ -178,25 +159,12 @@ class Writer {
   /** A length-prefixed UTF-8 string. */
   string(s) {
     const n = s.length;
-    if (n > IN_PLACE_ENCODE) return this.bytes(utf8.encode(s));
+    if (n > IN_PLACE_ENCODE) return this.bytes(encodeUtf8(s));
     this.room(4 + n * 3);
-    const at = this.len + 4;
-    let end = at;
-    if (n <= SHORT_ENCODE) end = this.ascii(s, at);
-    if (end - at < n) end += utf8.encodeInto(end === at ? s : s.slice(end - at), this.buf.subarray(end)).written;
-    this.view.setUint32(this.len, end - at, true);
+    const end = encodeUtf8Into(s, this.buf, this.len + 4);
+    this.view.setUint32(this.len, end - this.len - 4, true);
     this.len = end;
     return undefined;
-  }
-  /** Copies the leading ASCII of `s` to `at`; returns where it stopped. */
-  ascii(s, at) {
-    const buf = this.buf;
-    for (let i = 0; i < s.length; i++) {
-      const c = s.charCodeAt(i);
-      if (c >= 0x80) return at + i;
-      buf[at + i] = c;
-    }
-    return at + s.length;
   }
   room(n) {
     if (this.len + n <= this.buf.length) return;
@@ -312,7 +280,7 @@ class Reader {
     this.need(n);
     const start = this.pos;
     this.pos += n;
-    return wireString(this.bytes, start, this.pos);
+    return decodeUtf8(this.bytes, start, this.pos);
   }
   value() {
     this.need(1);
@@ -371,11 +339,8 @@ class Reader {
     const out = {};
     for (let i = 0; i < n; i++) {
       const k = this.string();
-      // Defined, not assigned: a "__proto__" key or an inherited setter must not intercept it.
-      FIELD.value = this.value();
-      Object.defineProperty(out, k, FIELD);
+      defineField(out, k, this.value());
     }
-    FIELD.value = undefined;
     return out;
   }
 }

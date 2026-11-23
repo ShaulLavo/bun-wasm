@@ -43,6 +43,7 @@ function fixture() {
   let cancelIoWaitersCalls = 0;
   let selected: { status: number; signal: number } | undefined;
   let polls = 0;
+  let fatalChecks = 0;
   const context = createContext({ TextEncoder, TextDecoder, Uint8Array, Error });
   const internal = {
     native: {
@@ -52,6 +53,12 @@ function fixture() {
       tlsDispose() {}, closeAllDirs() {},
       exit(code: number): never { throw new GuestExit(code); },
       hostSignal(signal: number, mode: number) {
+        // Mode 4 reads only the fatal outcome, as Waffle's runtime_proc.signal does.
+        if (signal === 0 && mode === 4) {
+          fatalChecks++;
+          if (selected) throw new GuestExit(selected.status);
+          return 0;
+        }
         if (signal === 0) {
           polls++;
           const next = pending.values().next();
@@ -101,6 +108,7 @@ function fixture() {
     ticks() { while (ticks.length) ticks.shift()!(); },
     selected: () => selected,
     polls: () => polls,
+    fatalChecks: () => fatalChecks,
     send(signal: number) {
       const mode = dispositions.get(signal) ?? 0;
       if (mode === 2) pending.add(signal);
@@ -174,12 +182,25 @@ for (const [name, signal] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]] a
   });
 }
 
-test("the loop polls the host for signals only while one has a handler", () => {
+for (const [name, signal] of [["SIGINT", 2], ["SIGTERM", 15]] as const) {
+  test(`a supervisor's default ${name} stops a guest with no listeners at the next loop turn`, () => {
+    const f = fixture();
+    expect(f.pump()).toBe(false);
+    f.send(signal);
+    expect(f.pump).toThrow(GuestExit);
+    expect(f.selected()).toEqual({ status: 128 + signal, signal });
+    expect(f.polls()).toBe(0);
+    expect(f.fatalChecks()).toBe(2);
+  });
+}
+
+test("the loop dequeues signals only while one has a handler", () => {
   const f = fixture();
   expect(f.pump()).toBe(false);
   expect(f.process.kill(f.process.pid, "SIGPIPE")).toBe(true);
   expect(f.pump()).toBe(false);
   expect(f.polls()).toBe(0);
+  expect(f.fatalChecks()).toBe(2);
   const calls: unknown[] = [];
   const first = (name: unknown) => calls.push(`first ${String(name)}`);
   const second = (name: unknown) => calls.push(`second ${String(name)}`);

@@ -695,6 +695,40 @@ fn write_file(
 }
 
 /// Every data native.
+/// Natives that can add, remove or rename a path. `open` does only with O_CREAT.
+const PATH_CHANGES: &[&str] = &[
+    "writeFile",
+    "writeFileFlags",
+    "mkdir",
+    "rm",
+    "rmdir",
+    "unlink",
+    "rename",
+    "copyFile",
+    "symlink",
+    "link",
+    "open",
+];
+
+/// After a native that may have changed which path a require() finds, forget the remembered
+/// targets (`Resolver::forget_required`), whether or not the call succeeded.
+fn forget_required_after_path_changes(t: &mut Table, state: &Rc<State>) {
+    for (name, function) in t.functions.iter_mut() {
+        if !PATH_CHANGES.contains(name) {
+            continue;
+        }
+        let (inner, st, open) = (function.clone(), state.clone(), *name == "open");
+        *function = Rc::new(move |a| {
+            let creates = !open || a.opt_num(1).is_some_and(|flags| flags as i32 & 64 != 0);
+            let result = inner(a);
+            if creates {
+                st.resolver.forget_required();
+            }
+            result
+        });
+    }
+}
+
 pub fn table(state: &Rc<State>) -> Table {
     let mut t = Table::default();
     crate::html_rewriter::install(&mut t);
@@ -707,6 +741,7 @@ pub fn table(state: &Rc<State>) -> Table {
     });
     install_fs(&mut t, state);
     install_fds(&mut t, state);
+    forget_required_after_path_changes(&mut t, state);
     crate::directory::install(&mut t, state);
     install_modules(&mut t, state);
     let st = state.clone();
@@ -2432,6 +2467,38 @@ mod builtin_tests {
         assert!(matches!(sync_mode(1052674), SyncMode::All));
         assert!(matches!(sync_mode(4097), SyncMode::Data));
         assert!(matches!(sync_mode(577), SyncMode::None));
+    }
+
+    #[test]
+    fn path_changing_natives_forget_remembered_require_targets() {
+        let root = std::env::temp_dir().join(format!(
+            "bun-wasm-required-{}-{}", std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(root.join("lib/a")).unwrap();
+        fs::write(root.join("lib/a/index.js"), "module.exports = 1;\n").unwrap();
+        let path = |relative: &str| root.join(relative).to_str().unwrap().to_owned();
+        let state = test_state();
+        let mut natives = Table::default();
+        install_fs(&mut natives, &state);
+        install_fds(&mut natives, &state);
+        forget_required_after_path_changes(&mut natives, &state);
+        let from = path("index.js");
+        let found = || state.resolver.resolve("./lib/a", &from, crate::resolve::Kind::Require);
+        assert_eq!(found(), Ok(crate::resolve::Resolved::File(path("lib/a/index.js"))));
+        // A higher-precedence file written by this process wins at once.
+        call(&natives, "writeFile", &[path("lib/a.js").into(), "module.exports = 2;\n".into()]).unwrap();
+        assert_eq!(found(), Ok(crate::resolve::Resolved::File(path("lib/a.js"))));
+        // Reading through `open` keeps the remembered target.
+        fs::remove_file(root.join("lib/a.js")).unwrap();
+        let fd = call(&natives, "open", &[path("lib/a/index.js").into(), 0.into()]).unwrap();
+        call(&natives, "close", &[fd]).unwrap();
+        assert_eq!(found(), Ok(crate::resolve::Resolved::File(path("lib/a.js"))));
+        // Removing it through the runtime falls back to the directory's index again.
+        fs::write(root.join("lib/a.js"), "module.exports = 2;\n").unwrap();
+        call(&natives, "unlink", &[path("lib/a.js").into()]).unwrap();
+        assert_eq!(found(), Ok(crate::resolve::Resolved::File(path("lib/a/index.js"))));
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -146,3 +146,30 @@ for (const [mode, source] of [
     worker.stderr.destroy();
   }
 }
+
+// A guest with no signal listener that keeps queueing timer callbacks never idles, so only the
+// loop's own signal check can stop it: a default SIGINT or SIGTERM must end it at once.
+for (const [signal, number] of [["SIGINT", 2], ["SIGTERM", 15]] as const) {
+  const busy = Bun.spawn([process.execPath, "-e", `
+    let ticks = 0;
+    const tick = () => {
+      if (++ticks === 2) console.log("ready");
+      setTimeout(tick, 0);
+    };
+    tick();
+  `], { stdout: "pipe", stderr: "pipe", timeout: 5000, killSignal: "SIGKILL" });
+  const busyReader = busy.stdout.getReader();
+  try {
+    assert.equal(new TextDecoder().decode((await busyReader.read()).value).trim(), "ready");
+    busy.kill(signal);
+    assert.equal(await busy.exited, 128 + number);
+    assert.equal(busy.signalCode, signal);
+    assert.equal(busy.exitedDueToTimeout, false);
+    console.log("busy timers default", signal, busy.signalCode);
+  } finally {
+    busy.kill("SIGKILL");
+    await busy.exited;
+    await busyReader.cancel();
+    await busy.stderr.cancel();
+  }
+}

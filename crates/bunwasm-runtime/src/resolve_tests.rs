@@ -557,7 +557,8 @@ fn require_keeps_found_targets_and_retries_failures() {
     );
     assert!(resolver.resolve("./lib/b", &from, Kind::Require).is_err());
 
-    // Like Node's Module._pathCache: a found require() target stays; a failure is probed again.
+    // A change this process did not make keeps a found target, like Node's Module._pathCache;
+    // a failure is probed again.
     fixture.file("lib/a.ts");
     fs::remove_file(fixture.path("lib/a.js")).unwrap();
     fixture.file("lib/b.js");
@@ -577,5 +578,34 @@ fn require_keeps_found_targets_and_retries_failures() {
     assert_eq!(
         resolver.resolve("./a", &fixture.path("lib/index.js"), Kind::Require),
         Ok(Resolved::File(fixture.path("lib/a.ts")))
+    );
+    // A path change through the runtime's natives forgets every remembered target.
+    resolver.forget_required();
+    assert_eq!(
+        resolver.resolve("./lib/a", &from, Kind::Require),
+        Ok(Resolved::File(fixture.path("lib/a.ts")))
+    );
+}
+
+#[test]
+fn plugin_module_registration_overrides_a_remembered_imports_alias() {
+    let fixture = Fixture::new();
+    fixture.write("package.json", r##"{"imports":{"#alias":"virtual"}}"##);
+    fixture.file("node_modules/virtual/index.js");
+    let resolver = Resolver::new();
+    let from = fixture.path("index.js");
+    assert_eq!(
+        resolver.resolve("#alias", &from, Kind::Require),
+        Ok(Resolved::File(fixture.path("node_modules/virtual/index.js")))
+    );
+    let key = resolver.register_object_module("virtual");
+    assert_eq!(
+        resolver.resolve("#alias", &from, Kind::Require),
+        Ok(Resolved::Builtin(key))
+    );
+    resolver.clear_object_modules();
+    assert_eq!(
+        resolver.resolve("#alias", &from, Kind::Require),
+        Ok(Resolved::File(fixture.path("node_modules/virtual/index.js")))
     );
 }
