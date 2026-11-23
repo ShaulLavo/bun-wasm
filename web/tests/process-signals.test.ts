@@ -194,6 +194,18 @@ for (const [name, signal] of [["SIGINT", 2], ["SIGTERM", 15]] as const) {
   });
 }
 
+test("a guest-replaced Number does not hide a published handler from the loop", () => {
+  const f = fixture();
+  runInContext("globalThis.Number = () => 0;", f.context);
+  const calls: unknown[] = [];
+  f.process.on("SIGTERM", (name: unknown) => calls.push(name));
+  expect(f.dispositions.get(15)).toBe(2);
+  f.send(15);
+  expect(f.pump()).toBe(true);
+  expect(calls).toEqual(["SIGTERM"]);
+  expect(f.selected()).toBeUndefined();
+});
+
 test("the loop dequeues signals only while one has a handler", () => {
   const f = fixture();
   expect(f.pump()).toBe(false);

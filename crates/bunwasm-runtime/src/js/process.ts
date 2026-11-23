@@ -339,7 +339,8 @@
     if ((dispositions.get(number) || 0) === disposition) return;
     const result = native.hostSignal(number, disposition);
     if (result < 0) throw signalFailure(result, "uv_signal_start");
-    handledSignals += Number(disposition === 2) - Number(dispositions.get(number) === 2);
+    // Plain operators: guest code can replace globals such as Number.
+    handledSignals += (disposition === 2 ? 1 : 0) - (dispositions.get(number) === 2 ? 1 : 0);
     dispositions.set(number, disposition);
   }
   // EventEmitter invokes this after its actual mutation, before removeListener observers.

@@ -3,9 +3,9 @@
 // realm and may replace String, TextEncoder, TextDecoder or Object methods, so every built-in
 // used here is captured when the worker bundle loads, before any guest code.
 
-const uncurryThis = <T, A extends unknown[], R>(method: (this: T, ...args: A) => R) =>
-  (self: T, ...args: A): R => Reflect.apply(method, self, args);
 const apply = Reflect.apply;
+const uncurryThis = <T, A extends unknown[], R>(method: (this: T, ...args: A) => R) =>
+  (self: T, ...args: A): R => apply(method, self, args);
 const defineProperty = Object.defineProperty;
 const fromCharCode = String.fromCharCode;
 const charCodeAt = uncurryThis(String.prototype.charCodeAt);

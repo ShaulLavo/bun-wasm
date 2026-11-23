@@ -34,11 +34,13 @@ const wire: unknown = runInNewContext(`${host.slice(start, end)}
   Uint8Array, ArrayBuffer, DataView, Array: ObservedArray, Error, TypeError, RangeError, SyntaxError,
 });
 
+// Captured: one test replaces Reflect.apply while it calls through these helpers.
+const reflectApply = Reflect.apply;
 function method(value: unknown, name: string): (...args: unknown[]) => unknown {
   assert.ok(value && typeof value === "object");
   const fn: unknown = Reflect.get(value, name);
   assert.ok(typeof fn === "function");
-  return (...args) => Reflect.apply(fn, value, args);
+  return (...args) => reflectApply(fn, value, args);
 }
 
 const encodeValue = method(wire, "encode");
@@ -243,7 +245,7 @@ for (const shared of [false, true]) {
     const saved = {
       charCodeAt: String.prototype.charCodeAt, slice: String.prototype.slice, fromCharCode: String.fromCharCode,
       encodeInto: TextEncoder.prototype.encodeInto, encode: TextEncoder.prototype.encode, decode: TextDecoder.prototype.decode,
-      defineProperty: Object.defineProperty,
+      defineProperty: Object.defineProperty, apply: Reflect.apply,
     };
     let wrapped = 0;
     const sabotage = () => { throw new Error("guest replacement called"); };
@@ -251,6 +253,7 @@ for (const shared of [false, true]) {
     Object.assign(TextEncoder.prototype, { encodeInto: sabotage, encode: sabotage });
     TextDecoder.prototype.decode = sabotage;
     String.fromCharCode = sabotage;
+    Reflect.apply = sabotage;
     // A wrapper that decodes again in the middle of a field must neither run nor corrupt fields.
     Object.defineProperty = ((target: object, key: PropertyKey, descriptor: PropertyDescriptor) => {
       wrapped++;
@@ -269,6 +272,7 @@ for (const shared of [false, true]) {
       TextDecoder.prototype.decode = saved.decode;
       String.fromCharCode = saved.fromCharCode;
       Object.defineProperty = saved.defineProperty;
+      Reflect.apply = saved.apply;
     }
     assert.equal(wrapped, 0);
     assert.equal(JSON.stringify(output), JSON.stringify(value));

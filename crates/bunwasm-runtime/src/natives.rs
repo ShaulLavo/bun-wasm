@@ -695,38 +695,47 @@ fn write_file(
 }
 
 /// Every data native.
-/// Natives that can add, remove or rename a path. `open` does only with O_CREAT.
-const PATH_CHANGES: &[&str] = &[
-    "writeFile",
-    "writeFileFlags",
-    "mkdir",
-    "rm",
-    "rmdir",
-    "unlink",
-    "rename",
-    "copyFile",
-    "symlink",
-    "link",
-    "open",
+/// Natives that can add, remove or rename a path. `open` and `sqlite.open` do only when their
+/// flags (argument 1) may create the file: Linux O_CREAT, as the JS layer passes it, and
+/// SQLITE_OPEN_CREATE.
+const PATH_CHANGES: &[(&str, Option<i32>)] = &[
+    ("writeFile", None),
+    ("writeFileFlags", None),
+    ("mkdir", None),
+    ("rm", None),
+    ("rmdir", None),
+    ("unlink", None),
+    ("rename", None),
+    ("copyFile", None),
+    ("symlink", None),
+    ("link", None),
+    ("archive.extract", None),
+    ("open", Some(64)),
+    ("sqlite.open", Some(0x4)),
 ];
 
 /// After a native that may have changed which path a require() finds, forget the remembered
 /// targets (`Resolver::forget_required`), whether or not the call succeeded.
 fn forget_required_after_path_changes(t: &mut Table, state: &Rc<State>) {
     for (name, function) in t.functions.iter_mut() {
-        if !PATH_CHANGES.contains(name) {
-            continue;
+        let change = PATH_CHANGES.iter().find(|(key, _)| key == name);
+        if let Some(&(_, create_flag)) = change {
+            *function = forgetting_required(function.clone(), state.clone(), create_flag);
         }
-        let (inner, st, open) = (function.clone(), state.clone(), *name == "open");
-        *function = Rc::new(move |a| {
-            let creates = !open || a.opt_num(1).is_some_and(|flags| flags as i32 & 64 != 0);
-            let result = inner(a);
-            if creates {
-                st.resolver.forget_required();
-            }
-            result
-        });
     }
+}
+
+/// `inner`, followed by `Resolver::forget_required` unless its flags rule out creating a path.
+fn forgetting_required(inner: DataFn, st: Rc<State>, create_flag: Option<i32>) -> DataFn {
+    Rc::new(move |a| {
+        let changes =
+            create_flag.is_none_or(|bit| a.opt_num(1).is_some_and(|flags| flags as i32 & bit != 0));
+        let result = inner(a);
+        if changes {
+            st.resolver.forget_required();
+        }
+        result
+    })
 }
 
 pub fn table(state: &Rc<State>) -> Table {
@@ -741,7 +750,6 @@ pub fn table(state: &Rc<State>) -> Table {
     });
     install_fs(&mut t, state);
     install_fds(&mut t, state);
-    forget_required_after_path_changes(&mut t, state);
     crate::directory::install(&mut t, state);
     install_modules(&mut t, state);
     let st = state.clone();
@@ -778,6 +786,8 @@ pub fn table(state: &Rc<State>) -> Table {
     crate::sqlite::install(&mut t);
     #[cfg(feature = "engine-split")]
     crate::wasm::install(&mut t);
+    // Last, so it sees every native that can create a path.
+    forget_required_after_path_changes(&mut t, state);
     t.constants.push(("platformInfo", platform_info()));
     t
 }
@@ -2505,6 +2515,51 @@ mod builtin_tests {
         fs::write(root.join("lib/a.js"), "module.exports = 2;\n").unwrap();
         call(&natives, "unlink", &[path("lib/a.js").into()]).unwrap();
         assert_eq!(found(), index);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn archive_extract_and_sqlite_create_forget_remembered_require_targets() {
+        use crate::resolve::{Kind, Resolved};
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let name = format!(
+            "bun-wasm-required-late-{}-{}",
+            std::process::id(),
+            nanos.as_nanos()
+        );
+        let root = std::env::temp_dir().join(name);
+        fs::create_dir_all(root.join("lib/a")).unwrap();
+        fs::write(root.join("lib/a/index.js"), "module.exports = 1;\n").unwrap();
+        let path = |relative: &str| root.join(relative).to_str().unwrap().to_owned();
+        let state = test_state();
+        // The whole table: natives installed after the file-system ones are covered too.
+        let natives = table(&state);
+        let from = path("index.js");
+        let found = || state.resolver.resolve("./lib/a", &from, Kind::Require);
+        let index = Ok(Resolved::File(path("lib/a/index.js")));
+        let file = Ok(Resolved::File(path("lib/a.js")));
+        assert_eq!(found(), index);
+        // Bun.Archive.extract writing a higher-precedence file makes it the target.
+        let mut header = tar::Header::new_ustar();
+        header.set_path("lib/a.js").unwrap();
+        header.set_size(1);
+        header.set_mode(0o644);
+        header.set_cksum();
+        let mut tar = header.as_bytes().to_vec();
+        tar.push(b'2');
+        tar.resize(512 * 4, 0);
+        let destination: Val = path("").into();
+        call(&natives, "archive.extract", &[Val::Bytes(tar), destination]).unwrap();
+        assert_eq!(found(), file);
+        // An SQLite open that cannot create its file keeps the target; one that can forgets it.
+        fs::remove_file(root.join("lib/a.js")).unwrap();
+        let database: Val = path("data.db").into();
+        let readonly = call(&natives, "sqlite.open", &[database.clone(), 1.into()]);
+        assert!(readonly.is_err());
+        assert_eq!(found(), file);
+        let handle = call(&natives, "sqlite.open", &[database, 6.into()]).unwrap();
+        assert_eq!(found(), index);
+        call(&natives, "sqlite.close", &[handle, false.into()]).unwrap();
         fs::remove_dir_all(&root).unwrap();
     }
 
