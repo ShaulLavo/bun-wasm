@@ -594,18 +594,15 @@ fn plugin_module_registration_overrides_a_remembered_imports_alias() {
     fixture.file("node_modules/virtual/index.js");
     let resolver = Resolver::new();
     let from = fixture.path("index.js");
-    assert_eq!(
-        resolver.resolve("#alias", &from, Kind::Require),
-        Ok(Resolved::File(fixture.path("node_modules/virtual/index.js")))
-    );
+    let file = Ok(Resolved::File(
+        fixture.path("node_modules/virtual/index.js"),
+    ));
+    assert_eq!(resolver.resolve("#alias", &from, Kind::Require), file);
     let key = resolver.register_object_module("virtual");
     assert_eq!(
         resolver.resolve("#alias", &from, Kind::Require),
         Ok(Resolved::Builtin(key))
     );
     resolver.clear_object_modules();
-    assert_eq!(
-        resolver.resolve("#alias", &from, Kind::Require),
-        Ok(Resolved::File(fixture.path("node_modules/virtual/index.js")))
-    );
+    assert_eq!(resolver.resolve("#alias", &from, Kind::Require), file);
 }

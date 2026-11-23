@@ -2471,10 +2471,14 @@ mod builtin_tests {
 
     #[test]
     fn path_changing_natives_forget_remembered_require_targets() {
-        let root = std::env::temp_dir().join(format!(
-            "bun-wasm-required-{}-{}", std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-        ));
+        use crate::resolve::{Kind, Resolved};
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let name = format!(
+            "bun-wasm-required-{}-{}",
+            std::process::id(),
+            nanos.as_nanos()
+        );
+        let root = std::env::temp_dir().join(name);
         fs::create_dir_all(root.join("lib/a")).unwrap();
         fs::write(root.join("lib/a/index.js"), "module.exports = 1;\n").unwrap();
         let path = |relative: &str| root.join(relative).to_str().unwrap().to_owned();
@@ -2484,20 +2488,23 @@ mod builtin_tests {
         install_fds(&mut natives, &state);
         forget_required_after_path_changes(&mut natives, &state);
         let from = path("index.js");
-        let found = || state.resolver.resolve("./lib/a", &from, crate::resolve::Kind::Require);
-        assert_eq!(found(), Ok(crate::resolve::Resolved::File(path("lib/a/index.js"))));
+        let found = || state.resolver.resolve("./lib/a", &from, Kind::Require);
+        let index = Ok(Resolved::File(path("lib/a/index.js")));
+        let file = Ok(Resolved::File(path("lib/a.js")));
+        assert_eq!(found(), index);
         // A higher-precedence file written by this process wins at once.
-        call(&natives, "writeFile", &[path("lib/a.js").into(), "module.exports = 2;\n".into()]).unwrap();
-        assert_eq!(found(), Ok(crate::resolve::Resolved::File(path("lib/a.js"))));
+        let source: Val = "module.exports = 2;\n".into();
+        call(&natives, "writeFile", &[path("lib/a.js").into(), source]).unwrap();
+        assert_eq!(found(), file);
         // Reading through `open` keeps the remembered target.
         fs::remove_file(root.join("lib/a.js")).unwrap();
         let fd = call(&natives, "open", &[path("lib/a/index.js").into(), 0.into()]).unwrap();
         call(&natives, "close", &[fd]).unwrap();
-        assert_eq!(found(), Ok(crate::resolve::Resolved::File(path("lib/a.js"))));
+        assert_eq!(found(), file);
         // Removing it through the runtime falls back to the directory's index again.
         fs::write(root.join("lib/a.js"), "module.exports = 2;\n").unwrap();
         call(&natives, "unlink", &[path("lib/a.js").into()]).unwrap();
-        assert_eq!(found(), Ok(crate::resolve::Resolved::File(path("lib/a/index.js"))));
+        assert_eq!(found(), index);
         fs::remove_dir_all(&root).unwrap();
     }
 
