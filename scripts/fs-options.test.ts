@@ -388,10 +388,10 @@ test("recursive readdir error paths and Dirent parentPath match Bun for sync and
   expect(syncErr?.path).toBe(walk);
   expect(syncErr?.syscall).toBe("scandir");
 
-  // The async walk reports the first looping link it opens, through `sub` or
-  // its `alias` symlink. Which comes first is the filesystem's directory order:
-  // XFS lists small directories in creation order, tmpfs in reverse, and ext4
-  // by name hash, so both paths are correct.
+  // The loop is reachable through `sub` and through its `alias` symlink, so the
+  // async error may name either. Native Bun walks on worker threads and reports
+  // whichever error a worker records first; the guest walks entries in the
+  // order the filesystem lists them. Both paths are correct.
   const loops = [path.join(walk, "sub", "loop"), path.join(walk, "alias", "loop")];
   const cbErr = await new Promise<NodeJS.ErrnoException | null>(resolve => fs.readdir(walk, { recursive: true }, resolve));
   expect(cbErr?.code).toBe("ELOOP");
