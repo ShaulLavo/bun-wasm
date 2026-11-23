@@ -129,13 +129,27 @@
       return path === expected.events ? "events" : null;
     }
 
+    function expectedHttpsOrigin(url: URL, hostHeader: string | null): string | null {
+      const authority = hostHeader?.trim() || url.host;
+      if (!authority || /[/?#\\@\s]/.test(authority)) return null;
+      try {
+        const parsedHttp = new URL(`http://${authority}`);
+        if (parsedHttp.origin !== url.origin) return null;
+        return new URL(`https://${authority}`).origin;
+      } catch {
+        return null;
+      }
+    }
+
     function validOrigin(request: Request): boolean {
       const origin = request.headers.get("origin");
       if (!origin) return false;
       const url = new URL(request.url);
-      if (origin === url.origin || origin === `http://localhost:${server.port}`) return true;
+      if (origin === url.origin) return true;
+      if (url.protocol !== "http:") return false;
+      if (origin === `http://localhost:${server.port}`) return true;
       // A plain listener behind TLS (the HTTPS preview tunnel, a proxy) sees the page's https origin.
-      return url.protocol === "http:" && origin === `https://${url.host}`;
+      return origin === expectedHttpsOrigin(url, request.headers.get("host"));
     }
 
     function respond(request: Request): Response | null {
