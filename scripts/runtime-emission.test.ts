@@ -335,6 +335,13 @@ function inStrictCode(node: ts.Node): boolean {
   return false;
 }
 
+test("no runtime module writes `__proto__: __proto__`, which Bun reprints as a shorthand that no longer sets the prototype", () => {
+  const directory = join(root, "crates/bunwasm-runtime/src/js");
+  for (const name of readdirSync(directory).filter(entry => /\.(js|ts)$/.test(entry) && !entry.endsWith(".d.ts") && !/^(intl|tz_data)\./.test(entry))) {
+    expect(readFileSync(join(directory, name), "utf8"), name).not.toMatch(/__proto__\s*:\s*__proto__\b/);
+  }
+});
+
 test("no sloppy runtime module declares a function inside a nested block, where Bun's reprint scopes it differently", () => {
   const directory = join(root, "crates/bunwasm-runtime/src/js");
   for (const name of readdirSync(directory).filter(entry => /\.(js|ts)$/.test(entry) && !entry.endsWith(".d.ts") && !/^(intl|tz_data)\./.test(entry))) {
@@ -345,7 +352,10 @@ test("no sloppy runtime module declares a function inside a nested block, where 
       // A declaration is at function or script level, or it sits in a nested block, a switch clause or an unbraced `if`.
       const topLevel = parent && (ts.isSourceFile(parent) || (ts.isBlock(parent) && ts.isFunctionLike(parent.parent)));
       const inBlock = ts.isFunctionDeclaration(node) && !topLevel;
-      if (inBlock && !inStrictCode(node)) nested.push(node.name?.text ?? "default");
+      // In strict code a block-scoped function is the same after Bun's reprint, except in a switch clause,
+      // where the declaration is hoisted to the whole switch block and Bun's `let` is not.
+      const inSwitchClause = ts.isFunctionDeclaration(node) && parent && (ts.isCaseClause(parent) || ts.isDefaultClause(parent));
+      if ((inBlock && !inStrictCode(node)) || inSwitchClause) nested.push(node.name?.text ?? "default");
       ts.forEachChild(node, visit);
     };
     visit(file);
