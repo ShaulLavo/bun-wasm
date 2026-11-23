@@ -560,11 +560,13 @@ test("native.gc() schedules one unref'd post-turn collection and cancels it on e
   expect(gcCalls).toBe(4);
 });
 
-test("native.gc() collects WeakRef targets dereferenced in the same turn before a subsequent setTimeout", () => {
+function runNodeHostGcProbe(body: string) {
   const engineHostUrl = new URL("../src/engine-host.js", import.meta.url).href;
+  const asyncContextUrl = new URL("../scripts/async-context.ts", import.meta.url).href;
   const script = `
     import { readFileSync } from "node:fs";
     import { runInNewContext } from "node:vm";
+    import { createNodeAsyncContext } from ${JSON.stringify(asyncContextUrl)};
     const src = readFileSync(new URL(${JSON.stringify(engineHostUrl)}), "utf8")
       .replace(/^import .*;\\n/gm, "")
       .replace("export function startEngineHost", "function startEngineHost");
@@ -578,6 +580,7 @@ test("native.gc() collects WeakRef targets dereferenced in the same turn before 
       isWasmMemoryBuffer: () => false,
       installNativeStreamState: () => () => {},
     });
+    const asyncContext = createNodeAsyncContext();
     const host = new EngineHost(
       {
         instance: { exports: { memory: new WebAssembly.Memory({ initial: 1 }) } },
@@ -585,11 +588,29 @@ test("native.gc() collects WeakRef targets dereferenced in the same turn before 
         onExit: () => {},
         gc: globalThis.__bunwasm_v8_gc.bind(globalThis),
         yieldAfterGc: true,
+        asyncContext,
       },
       () => {},
       () => {},
     );
     const natives = host.valueNatives(() => undefined);
+    try {
+      ${body}
+    } finally {
+      host.channel?.port1.close();
+      host.channel?.port2.close();
+    }
+  `;
+  const run = Bun.spawnSync(["node", "--expose-gc-as=__bunwasm_v8_gc", "--input-type=module", "-e", script], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(run.exitCode, run.stderr.toString()).toBe(0);
+  return JSON.parse(run.stdout.toString().trim());
+}
+
+test("native.gc() collects WeakRef targets dereferenced in the same turn before a subsequent setTimeout", () => {
+  const result = runNodeHostGcProbe(`
     const refs = [];
     for (let i = 0; i < 20; i++) {
       let obj = { payload: new Uint8Array(64 * 1024) };
@@ -601,14 +622,31 @@ test("native.gc() collects WeakRef targets dereferenced in the same turn before 
       natives.gc();
       await new Promise(r => setTimeout(r, 10));
     }
-    host.channel?.port1.close();
-    host.channel?.port2.close();
     console.log(JSON.stringify({ alive: alive() }));
-  `;
-  const run = Bun.spawnSync(["node", "--expose-gc-as=__bunwasm_v8_gc", "--input-type=module", "-e", script], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  expect(run.exitCode, run.stderr.toString()).toBe(0);
-  expect(JSON.parse(run.stdout.toString().trim())).toEqual({ alive: 0 });
+  `);
+  expect(result).toEqual({ alive: 0 });
+});
+
+test("native.gc() called inside an active AsyncLocalStorage store does not retain the store through follow-up collection", () => {
+  const result = runNodeHostGcProbe(`
+    let preservedAfterGc = false;
+    function createRefs() {
+      const targets = Array.from({ length: 20 }, () => ({ payload: new Uint8Array(64 * 1024) }));
+      const refs = targets.map(target => new WeakRef(target));
+      const previous = asyncContext.get();
+      asyncContext.set(targets);
+      try {
+        for (const ref of refs) ref.deref();
+        natives.gc();
+        preservedAfterGc = asyncContext.get() === targets;
+      } finally {
+        asyncContext.set(previous);
+      }
+      return refs;
+    }
+    const refs = createRefs();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    console.log(JSON.stringify({ preservedAfterGc, alive: refs.filter(ref => ref.deref() !== undefined).length }));
+  `);
+  expect(result).toEqual({ preservedAfterGc: true, alive: 0 });
 });

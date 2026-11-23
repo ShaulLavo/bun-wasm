@@ -3,8 +3,10 @@ import type { EngineHostOptions } from "../src/engine-host.js";
 
 export function createNodeAsyncContext(): NonNullable<EngineHostOptions["asyncContext"]> {
   const frames = new AsyncLocalStorage<unknown>();
+  const root = AsyncLocalStorage.snapshot();
   return {
     get: () => frames.getStore(),
     set: frame => frames.enterWith(frame),
+    runRoot: fn => root(fn),
   };
 }

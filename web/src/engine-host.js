@@ -1181,18 +1181,24 @@ class EngineHost {
     return promise;
   }
 
+  runInRoot(fn) {
+    return this.o.asyncContext?.runRoot ? this.o.asyncContext.runRoot(fn) : fn();
+  }
+
   schedulePostTurnGc(runGc) {
     if (this.exited || this.postGcTimer !== null) return;
     // WeakRef.prototype.deref() pins targets in V8's KeepDuringJob set for the current turn,
     // so a synchronous Bun.gc(true) in that turn promotes rather than collects them. Schedule
-    // one unref'd follow-up collection after the turn ends (once KeepDuringJob is cleared) so
-    // WeakRef and FinalizationRegistry assertions observe collection before later timers run.
-    const timer = nativeSetTimeout(() => {
-      this.postGcTimer = null;
-      if (!this.exited) runGc();
-    }, 0);
-    timer?.unref?.();
-    this.postGcTimer = timer;
+    // one unref'd follow-up collection in a later turn (once KeepDuringJob is cleared), from
+    // the root async context so the timer cannot retain an active guest AsyncLocalStorage store.
+    this.runInRoot(() => {
+      const timer = nativeSetTimeout(() => {
+        this.postGcTimer = null;
+        if (!this.exited) runGc();
+      }, 0);
+      timer?.unref?.();
+      this.postGcTimer = timer;
+    });
   }
 
   schedule(ms) {
@@ -1205,10 +1211,12 @@ class EngineHost {
         return;
       }
       this.gcYield = false;
-      nativeSetTimeout(() => {
-        this.immediate = false;
-        this.pump();
-      }, 0);
+      this.runInRoot(() => {
+        nativeSetTimeout(() => {
+          this.immediate = false;
+          this.pump();
+        }, 0);
+      });
       return;
     }
     // runTimers hands back fractional ms, and setTimeout drops the fraction: the
