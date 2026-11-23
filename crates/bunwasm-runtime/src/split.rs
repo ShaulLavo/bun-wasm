@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
-use crate::data::{Args, DataFn, NativeError, NativeResult, Record, Val};
+use crate::data::{Args, DataFn, NativeError, NativeResult, Record, Val, WORD_ARGS, WordFn};
 use crate::{Entry, Options, State, host, modules, natives, new_state, ops, split_api};
 
 type Run = extern "C" fn(u32) -> i32;
@@ -189,9 +189,15 @@ fn dispatcher(state: &Rc<State>, entry: &Entry, main_path: &str) -> Rc<ops::Disp
             )
         })
         .collect();
+    // The engine reads the description once, at startup, so it moves out instead of copying.
+    let description = Cell::new(Some(description));
     entries.push((
         split_api::DESCRIBE,
-        Rc::new(move |_| Ok(description.clone())),
+        Rc::new(move |_| {
+            description
+                .take()
+                .ok_or_else(|| NativeError::error("core description already read"))
+        }),
     ));
     let st = state.clone();
     entries.push((split_api::RESOLVE, Rc::new(move |args| resolve(&st, args))));
@@ -213,19 +219,6 @@ fn dispatcher(state: &Rc<State>, entry: &Entry, main_path: &str) -> Rc<ops::Disp
                 .ok_or_else(|| NativeError::error("missing internal module"))
         }),
     ));
-    let st = state.clone();
-    entries.push((
-        split_api::TAKE_TICK,
-        Rc::new(move |_| Ok(st.tick_pending.replace(false).into())),
-    ));
-    let st = state.clone();
-    entries.push((
-        split_api::FLUSH,
-        Rc::new(move |_| {
-            st.flush();
-            Ok(Val::Undefined)
-        }),
-    ));
     entries.push((split_api::WRAPPER_SOURCE, Rc::new(wrapper)));
     let st = state.clone();
     entries.push((
@@ -234,7 +227,27 @@ fn dispatcher(state: &Rc<State>, entry: &Entry, main_path: &str) -> Rc<ops::Disp
     ));
     let dispatcher =
         ops::Dispatcher::registry(NonZeroU32::MIN, entries).expect("unique data operations");
-    Rc::new(dispatcher.with_words(words))
+    const _: () = assert!(
+        split_api::WORD_TAKE_TICK == ops::WORD_API && split_api::WORD_FLUSH == ops::WORD_API + 1
+    );
+    let api_words: Vec<WordFn> = vec![take_tick, flush];
+    Rc::new(dispatcher.with_words(words).with_api_words(api_words))
+}
+
+/// Runs `f` on the active process; a word call outside one is a broken engine.
+fn with_session_state(f: impl FnOnce(&State) -> i64) -> i64 {
+    SESSION_STATE.with(|state| f(state.borrow().as_ref().expect("active process")))
+}
+
+fn take_tick(_: &[u32; WORD_ARGS]) -> i64 {
+    with_session_state(|state| i64::from(state.tick_pending.replace(false)))
+}
+
+fn flush(_: &[u32; WORD_ARGS]) -> i64 {
+    with_session_state(|state| {
+        state.flush();
+        0
+    })
 }
 
 pub(crate) fn run(options: Options) -> i32 {

@@ -4,7 +4,7 @@ use std::io::Write;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use crate::client::CoreClient;
+use crate::client::{CoreClient, Description, NativeTable};
 use crate::engine::{Engine, NativeError};
 use crate::natives;
 use crate::program::run_in_engine;
@@ -17,9 +17,14 @@ pub(crate) enum Entry {
 
 pub(crate) fn run<E: Engine>(session: u32) -> i32 {
     let client = CoreClient::new(session);
-    let (entry, main) = client.entry().expect("core entry description");
+    let Description {
+        entry,
+        main,
+        natives,
+    } = client.describe().expect("core description");
     let core = Rc::new(Core::<E> {
         client,
+        natives: RefCell::new(Some(natives)),
         internal: RefCell::new(None),
         handoffs: RefCell::new(HashMap::new()),
         flushed: Cell::new(Instant::now()),
@@ -38,6 +43,8 @@ type ModuleHandoffs<V> = RefCell<HashMap<String, (V, V)>>;
 /// returned, pending wrapper-module handoffs, and the module host.
 pub(crate) struct Core<E: Engine> {
     pub(crate) client: CoreClient,
+    /// Core's natives, from its description, until the bootstrap installs them.
+    pub(crate) natives: RefCell<Option<NativeTable>>,
     pub(crate) internal: RefCell<Option<E::Value>>,
     /// Exports objects of wrapper modules, until their `import.meta` is set.
     pub(crate) handoffs: ModuleHandoffs<E::Value>,

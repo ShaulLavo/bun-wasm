@@ -523,10 +523,33 @@
   const noProcesses = "WASI has no processes";
   const noNetwork = "WASI has no network access";
 
-  const { TOML, YAML, JSON5, JSONC } = internal.require("formats");
-  const { Glob } = internal.require("glob");
-  const { Cookie, CookieMap } = internal.require("cookie");
-  const { ArrayBufferSink } = internal.require("array_buffer_sink");
+  // Members whose modules load on first read, so a process that never uses them skips them.
+  // Each then becomes a plain data property, like the rest of Bun. The literal below lists
+  // them as undefined, so Bun keeps its key order.
+  const lazyMembers = {
+    ArrayBufferSink: () => internal.require("array_buffer_sink").ArrayBufferSink,
+    Archive: () => internal.require("archive").Archive,
+    TOML: () => internal.require("formats").TOML,
+    YAML: () => internal.require("formats").YAML,
+    JSON5: () => internal.require("formats").JSON5,
+    JSONC: () => internal.require("formats").JSONC,
+    Glob: () => internal.require("glob").Glob,
+    Cookie: () => internal.require("cookie").Cookie,
+    CookieMap: () => internal.require("cookie").CookieMap,
+    JSONL: () => internal.require("jsonl"),
+    Transpiler: () => internal.require("bun_transpiler").Transpiler,
+    plugin: () => internal.require("bun_plugin").plugin,
+    dns: () => internal.require("dns").bun(),
+  };
+  function defineLazyMembers(target) {
+    for (const name of Object.keys(lazyMembers)) {
+      const settle = (value) => {
+        Object.defineProperty(target, name, { value, writable: true, enumerable: true, configurable: true });
+        return value;
+      };
+      Object.defineProperty(target, name, { get: () => settle(lazyMembers[name]()), set: settle, enumerable: true, configurable: true });
+    }
+  }
   function semverString(value) {
     if (typeof value === "symbol") throw new TypeError("Cannot convert a symbol to a string");
     return `${value}`;
@@ -547,19 +570,18 @@
     ? forceColor !== "0"
     : globalThis.process.env.NO_COLOR === undefined && native.isatty(2);
 
-  const dns = internal.require("dns");
-
   const Bun = {
-    ArrayBufferSink,
-    Archive: internal.require("archive").Archive,
+    ArrayBufferSink: undefined,
+    Archive: undefined,
 
     jest: () => internal.require("bun_test").exports,
     semver,
-    TOML, YAML, JSON5, JSONC, Glob, Cookie, CookieMap, JSONL: internal.require("jsonl"),
+    TOML: undefined, YAML: undefined, JSON5: undefined, JSONC: undefined, Glob: undefined,
+    Cookie: undefined, CookieMap: undefined, JSONL: undefined,
     version: info.version,
     revision: info.revision,
     version_with_sha: `v${info.version} (${info.revision.slice(0, 9)})`,
-    Transpiler: internal.require("bun_transpiler").Transpiler,
+    Transpiler: undefined,
     get argv() {
       return globalThis.process.argv;
     },
@@ -600,7 +622,7 @@
       const measured = native.gc();
       return typeof measured === "number" ? measured : native.memoryUsage().heapUsed ?? 0;
     },
-    plugin: internal.require("bun_plugin").plugin,
+    plugin: undefined,
     resolveSync,
     resolve: async (spec, from) => resolveSync(spec, from),
     fileURLToPath: (url) => internal.require("node_url").fileURLToPath(url),
@@ -649,9 +671,10 @@
     listen: (options) => internal.require("net").bunTcp().listen(options),
     connect: (options) => internal.require("net").bunTcp().connect(options),
     udpSocket: unsupported("Bun.udpSocket", noNetwork),
-    dns: dns.bun(),
+    dns: undefined,
     openInEditor: unsupported("Bun.openInEditor", noProcesses),
   };
+  defineLazyMembers(Bun);
   internal.BunFile = BunFile;
   Object.defineProperty(Bun, Symbol.toStringTag, { value: "Bun", configurable: true });
   return Bun;

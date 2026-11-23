@@ -20,7 +20,7 @@ const native = {
     counts.set(id, (counts.get(id) || 0) + 1);
     return factories.has(id) ? String(id) : undefined;
   },
-  evalScript: source => factories.get(Number(source)),
+  evalBuiltin: source => factories.get(Number(source)),
   bunBuiltinHookName: id => id === 124 ? "createTestBinding" : `js2native_wrap_test_hook_${id}`,
   bunBuiltinErrorCode: () => "ERR_INVALID_URI",
   isPromise: value => value instanceof Promise,

@@ -19,10 +19,15 @@ impl Dispatcher {
         Self::registry(session, vec![(op, function)])
     }
     pub fn call(&self, args: Vec<Val>) -> NativeResult {
-        if self.functions.len() != 1 {
+        if self.len() != 1 {
             return Err(NativeError::error("expected one data native"));
         }
-        let op = *self.functions.keys().next().expect("one data native");
+        let index = self
+            .natives
+            .iter()
+            .position(Option::is_some)
+            .expect("one data native");
+        let op = DATA_NATIVE + index as u32;
         abi::call(self, op, self.session.get(), args)
     }
 }

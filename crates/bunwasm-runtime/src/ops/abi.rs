@@ -5,18 +5,20 @@ use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::ptr::NonNull;
-use std::rc::Rc;
 
 use super::{Dispatcher, Frame, Reply, Status, WordFrame, error_status};
 use crate::data::codec::{self, CodecError};
 use crate::data::{NativeError, Val, drop_tree};
 
-struct Allocation {
+/// One live transport allocation: zeroed memory the transport obtained with exactly this layout.
+/// The transport frees it once; a copy is valid while the allocation is live.
+#[derive(Clone, Copy)]
+struct Span {
     pointer: NonNull<u8>,
     layout: Layout,
 }
 
-impl Allocation {
+impl Span {
     #[cfg(any(test, not(feature = "engine-split"), bun_wasm_shared_group))]
     fn copy(&self) -> Result<Vec<u8>, Status> {
         let mut bytes = Vec::new();
@@ -38,14 +40,14 @@ impl Allocation {
     /// Reads the allocation in place. Core owns it, and the engine that wrote it is blocked in
     /// the dispatch that holds this borrow, so nothing writes it meanwhile.
     fn bytes(&self) -> &[u8] {
-        // SAFETY: allocation owns exactly layout.size initialized bytes, live while self is.
+        // SAFETY: the live allocation owns exactly layout.size initialized bytes.
         unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), self.layout.size()) }
     }
 
     /// Encodes into a fresh allocation. Nothing else has seen its pointer, so no other borrow of
     /// its bytes exists.
     fn encode(&self, value: &Val) -> Result<(), CodecError> {
-        // SAFETY: allocation owns exactly layout.size initialized bytes, live while self is.
+        // SAFETY: the live allocation owns exactly layout.size initialized bytes.
         let bytes =
             unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), self.layout.size()) };
         codec::encode_into(value, bytes)
@@ -79,7 +81,7 @@ impl Allocation {
 
 /// Runs a word call inside its frame. Nothing on this path allocates, so the call ends with
 /// its result in the frame or as a broken call, never as a resource limit.
-fn word(dispatcher: &Dispatcher, frame: &Allocation) -> Result<Status, Status> {
+fn word(dispatcher: &Dispatcher, frame: &Span) -> Result<Status, Status> {
     let call = WordFrame::decode(frame.bytes())?;
     let result = dispatcher
         .word(call.op, call.session, &call.words)
@@ -88,10 +90,17 @@ fn word(dispatcher: &Dispatcher, frame: &Allocation) -> Result<Status, Status> {
     Ok(Status::Ok)
 }
 
-impl Drop for Allocation {
+/// Unpins what one data call pinned when the call returns. Calls nest, so pins unwind in order.
+struct Pins<'a> {
+    pinned: &'a RefCell<Vec<u32>>,
+    count: usize,
+}
+
+impl Drop for Pins<'_> {
     fn drop(&mut self) {
-        // SAFETY: this allocation was obtained with alloc_zeroed and this exact layout.
-        unsafe { dealloc(self.pointer.as_ptr(), self.layout) };
+        let mut pinned = self.pinned.borrow_mut();
+        let len = pinned.len() - self.count;
+        pinned.truncate(len);
     }
 }
 
@@ -99,29 +108,46 @@ impl Drop for Allocation {
 /// Native tests assign synthetic linear offsets; wasm uses the actual wasm32 pointers.
 #[derive(Default)]
 pub(crate) struct Transport {
-    allocations: RefCell<Vec<(u32, Rc<Allocation>)>>,
+    /// Live allocations by offset, oldest first. A call's own frame, request and reply are the
+    /// newest, so lookups search from the end.
+    allocations: RefCell<Vec<(u32, Span)>>,
+    /// The frames and requests of the data calls running now. None can be freed, and a running
+    /// frame cannot be entered again.
+    pinned: RefCell<Vec<u32>>,
     #[cfg(not(target_arch = "wasm32"))]
     next_offset: Cell<u32>,
 }
 
+impl Drop for Transport {
+    fn drop(&mut self) {
+        for (_, span) in self.allocations.get_mut().drain(..) {
+            // SAFETY: each live span was obtained with alloc_zeroed and this exact layout.
+            unsafe { dealloc(span.pointer.as_ptr(), span.layout) };
+        }
+    }
+}
+
 impl Transport {
     pub fn alloc(&self, bytes: u32, align: u32) -> u32 {
-        let Ok(layout) = Layout::from_size_align(bytes as usize, align as usize) else {
-            return 0;
-        };
-        if bytes == 0 || self.allocations.borrow_mut().try_reserve(1).is_err() {
-            return 0;
+        self.allocate(bytes, align).map_or(0, |(offset, _)| offset)
+    }
+
+    fn allocate(&self, bytes: u32, align: u32) -> Option<(u32, Span)> {
+        let layout = Layout::from_size_align(bytes as usize, align as usize).ok()?;
+        let mut allocations = self.allocations.borrow_mut();
+        if bytes == 0 || allocations.try_reserve(1).is_err() {
+            return None;
         }
         // SAFETY: the nonzero size and alignment were checked by Layout.
-        let Some(pointer) = NonNull::new(unsafe { alloc_zeroed(layout) }) else {
-            return 0;
-        };
-        let allocation = Rc::new(Allocation { pointer, layout });
+        let pointer = NonNull::new(unsafe { alloc_zeroed(layout) })?;
+        let span = Span { pointer, layout };
         let Some(offset) = self.offset(pointer, bytes, align) else {
-            return 0;
+            // SAFETY: obtained just above with this layout and never shared.
+            unsafe { dealloc(pointer.as_ptr(), layout) };
+            return None;
         };
-        self.allocations.borrow_mut().push((offset, allocation));
-        offset
+        allocations.push((offset, span));
+        Some((offset, span))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -138,76 +164,83 @@ impl Transport {
     }
 
     pub fn free(&self, pointer: u32, bytes: u32, align: u32) -> Result<(), Status> {
+        if self.pinned.borrow().contains(&pointer) {
+            return Err(Status::BadCall);
+        }
         let mut allocations = self.allocations.borrow_mut();
         let index = allocations
             .iter()
-            .position(|(p, _)| *p == pointer)
+            .rposition(|(p, _)| *p == pointer)
             .ok_or(Status::BadCall)?;
-        let allocation = &allocations[index].1;
-        if allocation.layout.size() != bytes as usize || allocation.layout.align() != align as usize
-        {
+        let span = allocations[index].1;
+        if span.layout.size() != bytes as usize || span.layout.align() != align as usize {
             return Err(Status::BadCall);
         }
-        if Rc::strong_count(allocation) != 1 {
-            return Err(Status::BadCall);
-        }
-        let removed = allocations.swap_remove(index);
+        // `remove` keeps the oldest-first order; the freed span is usually among the newest.
+        allocations.remove(index);
         drop(allocations);
-        drop(removed);
+        // SAFETY: the span was obtained with alloc_zeroed and this exact layout, and it is no
+        // longer listed, so nothing reaches it again.
+        unsafe { dealloc(span.pointer.as_ptr(), span.layout) };
         Ok(())
     }
 
     /// The live frame-aligned allocation at `pointer`, whatever its size.
-    fn owned(&self, pointer: u32) -> Result<Rc<Allocation>, Status> {
+    fn owned(&self, pointer: u32) -> Result<Span, Status> {
         let allocations = self.allocations.borrow();
-        let (_, allocation) = allocations
+        let (_, span) = allocations
             .iter()
+            .rev()
             .find(|(p, _)| *p == pointer)
             .ok_or(Status::BadCall)?;
-        if allocation.layout.align() < Frame::ALIGN as usize {
+        if span.layout.align() < Frame::ALIGN as usize {
             return Err(Status::BadCall);
         }
-        Ok(allocation.clone())
+        Ok(*span)
     }
 
-    fn allocation(&self, pointer: u32, bytes: u32) -> Result<Rc<Allocation>, Status> {
-        let allocation = self.owned(pointer)?;
-        if allocation.layout.size() != bytes as usize {
+    #[cfg(any(test, not(feature = "engine-split"), bun_wasm_shared_group))]
+    fn allocation(&self, pointer: u32, bytes: u32) -> Result<Span, Status> {
+        let span = self.owned(pointer)?;
+        if span.layout.size() != bytes as usize {
             return Err(Status::BadCall);
         }
-        Ok(allocation)
+        Ok(span)
+    }
+
+    /// Pins a data call's frame and request until the returned guard drops.
+    fn pin(&self, frame: u32, request: u32) -> Result<Pins<'_>, Status> {
+        let mut pinned = self.pinned.borrow_mut();
+        pinned.try_reserve(2).map_err(|_| Status::ResourceLimit)?;
+        pinned.extend([frame, request]);
+        Ok(Pins {
+            pinned: &self.pinned,
+            count: 2,
+        })
     }
 
     /// Encodes `value` into one allocation of exactly its encoded length, the only copy of the
     /// encoded bytes. Returns the allocation's pointer and length.
     pub fn encode(&self, value: &Val) -> Result<(u32, u32), CodecError> {
-        self.encode_payload(codec::encoded_len(value)?, |allocation| {
-            allocation.encode(value)
-        })
+        self.encode_payload(codec::encoded_len(value)?, |span| span.encode(value))
     }
 
     fn encode_error(&self, error: &NativeError) -> Result<(u32, u32), CodecError> {
-        self.encode_payload(codec::encoded_error_len(error)?, |allocation| {
-            allocation.encode_error(error)
+        self.encode_payload(codec::encoded_error_len(error)?, |span| {
+            span.encode_error(error)
         })
     }
 
     fn encode_payload(
         &self,
         len: usize,
-        fill: impl FnOnce(&Allocation) -> Result<(), CodecError>,
+        fill: impl FnOnce(&Span) -> Result<(), CodecError>,
     ) -> Result<(u32, u32), CodecError> {
         let len = u32::try_from(len).map_err(|_| CodecError::Allocation)?;
-        let pointer = self.alloc(len, Frame::ALIGN);
-        if pointer == 0 {
-            return Err(CodecError::Allocation);
-        }
-        let encoded = fill(
-            &self
-                .allocation(pointer, len)
-                .expect("fresh transport allocation"),
-        );
-        if let Err(error) = encoded {
+        let (pointer, span) = self
+            .allocate(len, Frame::ALIGN)
+            .ok_or(CodecError::Allocation)?;
+        if let Err(error) = fill(&span) {
             self.free(pointer, len, Frame::ALIGN)
                 .expect("fresh transport allocation");
             return Err(error);
@@ -240,25 +273,31 @@ impl Transport {
     }
 
     fn call(&self, dispatcher: &Dispatcher, frame_ptr: u32) -> Result<Status, Status> {
-        let frame_owner = self.owned(frame_ptr)?;
-        // A live call pins its frame, rejecting free/reuse and recursive entry of that frame.
-        if Rc::strong_count(&frame_owner) != 2 {
+        let frame_span = self.owned(frame_ptr)?;
+        // A running call pins its frame, rejecting free/reuse and recursive entry of that frame.
+        if self.pinned.borrow().contains(&frame_ptr) {
             return Err(Status::BadCall);
         }
-        if frame_owner.layout.size() == WordFrame::SIZE {
-            return word(dispatcher, &frame_owner);
+        if frame_span.layout.size() == WordFrame::SIZE {
+            return word(dispatcher, &frame_span);
         }
-        if frame_owner.layout.size() != Frame::SIZE {
+        if frame_span.layout.size() != Frame::SIZE {
             return Err(Status::BadCall);
         }
         let mut frame_bytes = [0; Frame::SIZE];
-        frame_bytes.copy_from_slice(frame_owner.bytes());
+        frame_bytes.copy_from_slice(frame_span.bytes());
         let frame = Frame::decode(&frame_bytes)?;
         frame.request(frame_ptr, memory_len())?;
+        // The engine may reuse one request buffer, so the request is a prefix of its allocation.
+        let request = self.owned(frame.request_ptr)?;
+        let request_len = frame.request_len as usize;
+        if request_len > request.layout.size() {
+            return Err(Status::BadCall);
+        }
+        let pins = self.pin(frame_ptr, frame.request_ptr)?;
         // Decode the request where the engine wrote it; a copy would hold the payload twice.
-        let request = self.allocation(frame.request_ptr, frame.request_len)?;
-        let reply = dispatcher.dispatch(frame.op, frame.session, request.bytes());
-        drop(request);
+        let reply = dispatcher.dispatch(frame.op, frame.session, &request.bytes()[..request_len]);
+        drop(pins);
         let status = reply.status();
         let encoded = match reply {
             Reply::Value(value) => {
@@ -276,7 +315,7 @@ impl Transport {
         let (pointer, len) = encoded.map_err(error_status)?;
         frame_bytes[16..20].copy_from_slice(&pointer.to_le_bytes());
         frame_bytes[20..24].copy_from_slice(&len.to_le_bytes());
-        frame_owner.write(&frame_bytes);
+        frame_span.write(&frame_bytes);
         Ok(status)
     }
 

@@ -12,7 +12,7 @@ function check(name, phase) {
   const native = {
     bunBuiltinNames: () => ["internal:globals-test"],
     bunBuiltinSource: () => "test",
-    evalScript() {
+    evalBuiltin() {
       compiles++;
       return intrinsics => () => assert.equal(intrinsics[name], saved);
     },
