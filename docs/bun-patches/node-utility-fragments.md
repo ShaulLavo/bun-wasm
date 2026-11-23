@@ -8,6 +8,7 @@ The strict TypeScript migration models raw parser arguments, positional and opti
 
 Two typed destination extractions replace concat-overload casts. The constructor Set lookup remains before the constructor array, including its second Set lookup. Enumerable string keys are captured before concat lookup and Symbol enumeration. The AST gate reverses only those two explicit extraction shapes and then checks the unchanged approved original hash, including strict directives. Executable controls compare lookup/call order, receivers, identities and per-event thrown-error identity. Reordering mutations must fail. Every emitted token still maps to its actual TypeScript line and column. Comparison dispatch overloads and guarded intrinsic brand checks remain unchanged.
 
+`types.isAsyncFunction` and `types.isGeneratorFunction` keep the brand test on the function's prototype and then reject a function whose source is exactly the engine's native-function placeholder (`function () { [native code] }`), which is what a bound or host function prints. Bun's native check never looks at source text; this is an original adapter, and `tests/fixtures/util-function-types` covers bound functions and source that only ends with the same comment.
 
 ## Classification
 

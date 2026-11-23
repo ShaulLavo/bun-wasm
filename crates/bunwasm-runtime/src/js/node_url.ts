@@ -71,10 +71,234 @@
       this.path = null;
       this.href = null;
     }
+
+    format() {
+      return format(this);
+    }
+
+    resolve(relative: string | Url) {
+      return this.resolveObject(parse(relative, false, true)).format();
+    }
+
+    // Port of Url.prototype.resolveObject in vendor/bun/src/js/node/url.ts (Node's legacy resolver).
+    resolveObject(relative: string | Url): Url {
+      return resolveUrlObject(this, relative);
+    }
   }
 
   const SLASHED_PROTOCOLS = new Set<string | null>(["http:", "https:", "ftp:", "gopher:", "file:", "ws:", "wss:"]);
   const UNSAFE_PROTOCOLS = new Set<string | null>(["javascript:"]);
+  // Bun's slashedProtocol table names each protocol with and without its colon.
+  function isSlashedProtocol(protocol: string | null) {
+    return protocol !== null && (SLASHED_PROTOCOLS.has(protocol) || SLASHED_PROTOCOLS.has(protocol + ":"));
+  }
+
+  // The legacy resolver reads and writes any field, including ones a caller added.
+  type Fields = Record<string, any>;
+
+  function copyFields(target: Fields, source: Fields, except?: string) {
+    for (const key of Object.keys(source)) if (key !== except) target[key] = source[key];
+  }
+
+  function finishResolved(result: Fields): Url {
+    result.href = result.format();
+    return result as Url;
+  }
+
+  function prependHost(path: string[], host: string) {
+    if (path[0] === "") path[0] = host;
+    else path.unshift(host);
+  }
+
+  // user@host left in a host field moves to auth and host.
+  function splitAuthFromHost(result: Fields) {
+    const authInHost = result.host && result.host.indexOf("@") > 0 ? result.host.split("@") : false;
+    if (!authInHost) return;
+    result.auth = authInHost.shift();
+    result.hostname = result.host = authInHost.shift();
+  }
+
+  function setPath(result: Fields) {
+    if (result.pathname !== null || result.search !== null) result.path = (result.pathname || "") + (result.search || "");
+  }
+
+  // Port of Url.prototype.resolveObject in vendor/bun/src/js/node/url.ts (Node's legacy resolver).
+  function resolveUrlObject(base: Url, relativeInput: string | Url): Url {
+    const relative: Fields = typeof relativeInput === "string" ? parse(relativeInput, false, true) : relativeInput;
+    const result: Fields = new Url();
+    copyFields(result, base);
+    // The hash is always overridden, even by href="".
+    result.hash = relative.hash;
+    if (relative.href === "") return finishResolved(result);
+    if (relative.slashes && !relative.protocol) return resolveSchemeRelative(result, relative);
+    if (relative.protocol && relative.protocol !== result.protocol) return resolveOtherProtocol(result, relative);
+    return resolvePath(result, relative);
+  }
+
+  // hrefs like //foo/bar always cut to the protocol.
+  function resolveSchemeRelative(result: Fields, relative: Fields): Url {
+    copyFields(result, relative, "protocol");
+    if (isSlashedProtocol(result.protocol) && result.hostname && !result.pathname) {
+      result.pathname = "/";
+      result.path = result.pathname;
+    }
+    return finishResolved(result);
+  }
+
+  function takeHostFromPath(result: Fields, relative: Fields) {
+    const relPath: string[] = (relative.pathname || "").split("/");
+    while (relPath.length && !(relative.host = relPath.shift())) {}
+    relative.host ||= "";
+    relative.hostname ||= "";
+    if (relPath[0] !== "") relPath.unshift("");
+    if (relPath.length < 2) relPath.unshift("");
+    result.pathname = relPath.join("/");
+  }
+
+  function resolveOtherProtocol(result: Fields, relative: Fields): Url {
+    const protocol = relative.protocol;
+    // A protocol outside the known URL schemes is taken as absolute.
+    if (!isSlashedProtocol(protocol)) {
+      copyFields(result, relative);
+      return finishResolved(result);
+    }
+    result.protocol = protocol;
+    const hostless = protocol === "file" || protocol === "file:" || UNSAFE_PROTOCOLS.has(protocol) || UNSAFE_PROTOCOLS.has(protocol + ":");
+    if (!relative.host && !hostless) takeHostFromPath(result, relative);
+    else result.pathname = relative.pathname;
+    result.search = relative.search;
+    result.query = relative.query;
+    result.host = relative.host || "";
+    result.auth = relative.auth;
+    result.hostname = relative.hostname || relative.host;
+    result.port = relative.port;
+    if (result.pathname || result.search) result.path = (result.pathname || "") + (result.search || "");
+    result.slashes = result.slashes || relative.slashes;
+    return finishResolved(result);
+  }
+
+  // A non-slashed url's relative links like ../.. can crawl up to the hostname too.
+  function crawlToHost(result: Fields, relative: Fields, srcPath: string[], relPath: string[], mustEndAbs: unknown) {
+    result.hostname = "";
+    result.port = null;
+    if (result.host) prependHost(srcPath, result.host);
+    result.host = "";
+    if (relative.protocol) {
+      relative.hostname = null;
+      relative.port = null;
+      result.auth = null;
+      if (relative.host) prependHost(relPath, relative.host);
+      relative.host = null;
+    }
+    return mustEndAbs && (relPath[0] === "" || srcPath[0] === "");
+  }
+
+  function takeAbsoluteHost(result: Fields, relative: Fields) {
+    if (relative.host || relative.host === "") {
+      if (result.host !== relative.host) result.auth = null;
+      result.host = relative.host;
+      result.port = relative.port;
+    }
+    if (relative.hostname || relative.hostname === "") {
+      if (result.hostname !== relative.hostname) result.auth = null;
+      result.hostname = relative.hostname;
+    }
+  }
+
+  // Only the search is pulled out, like href='?foo'.
+  function resolveSearchOnly(result: Fields, relative: Fields, srcPath: string[], crawled: boolean): Url {
+    if (crawled) {
+      result.hostname = result.host = srcPath.shift();
+      splitAuthFromHost(result);
+    }
+    result.search = relative.search;
+    result.query = relative.query;
+    setPath(result);
+    return finishResolved(result);
+  }
+
+  function resolvePath(result: Fields, relative: Fields): Url {
+    const isSourceAbs = result.pathname && result.pathname.charAt(0) === "/";
+    const isRelAbs = relative.host || (relative.pathname && relative.pathname.charAt(0) === "/");
+    let mustEndAbs = isRelAbs || isSourceAbs || (result.host && relative.pathname);
+    const removeAllDots = mustEndAbs;
+    let srcPath: string[] = (result.pathname && result.pathname.split("/")) || [];
+    const relPath: string[] = (relative.pathname && relative.pathname.split("/")) || [];
+    const psychotic = Boolean(result.protocol && !isSlashedProtocol(result.protocol));
+    if (psychotic) mustEndAbs = crawlToHost(result, relative, srcPath, relPath, mustEndAbs);
+
+    if (isRelAbs) {
+      takeAbsoluteHost(result, relative);
+      result.search = relative.search;
+      result.query = relative.query;
+      srcPath = relPath;
+    } else if (relPath.length) {
+      // Throw away the existing file and take the new path instead.
+      srcPath.pop();
+      srcPath = srcPath.concat(relPath);
+      result.search = relative.search;
+      result.query = relative.query;
+    } else if (relative.search !== null && relative.search !== undefined) {
+      return resolveSearchOnly(result, relative, srcPath, psychotic);
+    }
+    if (!srcPath.length) {
+      result.pathname = null;
+      result.path = result.search ? "/" + result.search : null;
+      return finishResolved(result);
+    }
+    return finishPath(result, relative, srcPath, { mustEndAbs, removeAllDots, psychotic });
+  }
+
+  // Strips single dots and resolves double dots to the parent directory; returns how many
+  // `..` went above the root.
+  function removeDots(srcPath: string[]) {
+    let up = 0;
+    for (let i = srcPath.length; i >= 0; i--) {
+      const part = srcPath[i];
+      if (part === ".") {
+        srcPath.splice(i, 1);
+      } else if (part === "..") {
+        srcPath.splice(i, 1);
+        up++;
+      } else if (up) {
+        srcPath.splice(i, 1);
+        up--;
+      }
+    }
+    return up;
+  }
+
+  function finishPath(result: Fields, relative: Fields, srcPath: string[], flags: { mustEndAbs: unknown; removeAllDots: unknown; psychotic: boolean }): Url {
+    let mustEndAbs = flags.mustEndAbs;
+    // A url that ends in . or .. gets a trailing slash; one that ends in anything else does not.
+    const last = srcPath[srcPath.length - 1];
+    const hasTrailingSlash = ((result.host || relative.host || srcPath.length > 1) && (last === "." || last === "..")) || last === "";
+    let up = removeDots(srcPath);
+    // A path allowed to go above the root keeps its leading ..s.
+    if (!mustEndAbs && !flags.removeAllDots) for (; up--; up) srcPath.unshift("..");
+    if (mustEndAbs && srcPath[0] !== "" && (!srcPath[0] || srcPath[0].charAt(0) !== "/")) srcPath.unshift("");
+    if (hasTrailingSlash && srcPath.join("/").slice(-1) !== "/") srcPath.push("");
+
+    const isAbsolute = srcPath[0] === "" || (srcPath[0] && srcPath[0].charAt(0) === "/");
+    if (flags.psychotic) {
+      result.hostname = isAbsolute ? "" : srcPath.length ? srcPath.shift() : "";
+      result.host = result.hostname;
+      splitAuthFromHost(result);
+    }
+    mustEndAbs ||= result.host && srcPath.length;
+    if (mustEndAbs && !isAbsolute) srcPath.unshift("");
+
+    if (srcPath.length > 0) {
+      result.pathname = srcPath.join("/");
+    } else {
+      result.pathname = null;
+      result.path = null;
+    }
+    setPath(result);
+    result.auth = relative.auth || result.auth;
+    result.slashes = result.slashes || relative.slashes;
+    return finishResolved(result);
+  }
   const codes = (text: string) => new Set(Array.from(text, (char) => char.charCodeAt(0)));
   // Bun's legacy parser (vendor/bun/src/js/node/url.ts): characters never allowed in a host
   // end it, as do the host-ending /, ? and #. Forbidden sets apply after IDNA.
@@ -167,11 +391,49 @@
     return rest;
   }
 
+  // Bun's fast path for a plain path with an optional query: no `@` before the first `?` or `#`,
+  // and no `#` at all. Its result keeps the text as given.
+  const SIMPLE_PATH = /^(\/\/?(?!\/)[^?\s]*)(\?[^\s]*)?$/;
+
+  function parseSimplePath(trimmed: string, parseQueryString: boolean): Url | null {
+    const split = trimmed.search(/[?#]/);
+    const head = split < 0 ? trimmed : trimmed.slice(0, split);
+    if (head.includes("@") || trimmed.includes("#")) return null;
+    const text = head.replaceAll("\\", "/") + trimmed.slice(head.length);
+    const match = SIMPLE_PATH.exec(text);
+    if (match === null) return null;
+    const result = new Url();
+    result.path = text;
+    result.href = text;
+    result.pathname = match[1];
+    if (match[2]) {
+      result.search = match[2];
+      const query = match[2].slice(1);
+      result.query = parseQueryString ? internal.builtin("node:querystring").parse(query) : query;
+    } else if (parseQueryString) {
+      result.query = Object.create(null);
+    }
+    return result;
+  }
+
+  // `user@host` after the protocol always starts a host, even without slashesDenoteHost.
+  function startsWithAuthority(text: string) {
+    const unslashed = text.replace(/^[^?#]*/, (head) => head.replaceAll("\\", "/"));
+    const protocol = /^[a-z0-9.+-]+:/i.exec(unslashed);
+    return /^\/\/[^@/]+@[^@/]+/.test(protocol ? unslashed.slice(protocol[0].length) : unslashed);
+  }
+
   function parse(input: unknown, parseQueryString = false, slashesDenoteHost = false): Url {
     if (input instanceof Url) return input;
     if (typeof input !== "string") throw invalidArg("url", "of type string", input);
     const result = new Url();
     let rest = input.trim();
+    if (!slashesDenoteHost) {
+      const simple = parseSimplePath(rest, parseQueryString);
+      if (simple !== null) return simple;
+    }
+    // Bun decides whether `//` starts a host on the whole string, query and fragment included.
+    const hostMarked = slashesDenoteHost || startsWithAuthority(rest);
 
     const hashAt = rest.indexOf("#");
     if (hashAt >= 0) {
@@ -184,8 +446,8 @@
       result.query = rest.slice(queryAt + 1);
       rest = rest.slice(0, queryAt);
     } else if (parseQueryString) {
-      result.search = "";
-      result.query = {};
+      result.search = null;
+      result.query = Object.create(null);
     }
     // Bun turns backslashes into slashes before the first ? or #, which is all that is left here.
     rest = rest.replaceAll("\\", "/");
@@ -198,19 +460,26 @@
       result.protocol = proto[1].toLowerCase();
       rest = rest.slice(proto[1].length);
     }
-    const hasSlashes = rest.startsWith("//");
-    if (hasSlashes && (result.protocol === null ? slashesDenoteHost : true)) {
-      result.slashes = true;
-      rest = parseAuthority(result, rest.slice(2), input);
+    const hostless = UNSAFE_PROTOCOLS.has(result.protocol);
+    let slashes = false;
+    // Without a protocol, `//` starts a host only when asked to, or when it is followed by `user@host`.
+    if (hostMarked || result.protocol !== null) {
+      slashes = rest.startsWith("//");
+      if (slashes && !hostless) {
+        rest = rest.slice(2);
+        result.slashes = true;
+      }
     }
-    if (!UNSAFE_PROTOCOLS.has(result.protocol)) {
+    // A protocol outside the slashed ones (mailto:, for one) has its host before the path too.
+    if (!hostless && (slashes || (result.protocol !== null && !isSlashedProtocol(result.protocol)))) {
+      rest = parseAuthority(result, rest, input);
+    }
+    if (!hostless) {
       rest = autoEscape(rest);
       escapeParts(result);
     }
-    if (rest || result.host) {
-      result.pathname = rest || (SLASHED_PROTOCOLS.has(result.protocol) ? "/" : rest);
-    }
-    if (result.pathname === "" && !result.host) result.pathname = null;
+    if (rest) result.pathname = rest;
+    if (isSlashedProtocol(result.protocol) && result.hostname && !result.pathname) result.pathname = "/";
     const search = result.search || "";
     result.path = result.pathname === null && !search ? null : (result.pathname || "") + search;
     result.href = format(result);
@@ -292,7 +561,7 @@
     parse,
     format,
     resolve,
-    resolveObject: (from: string, to: string) => parse(resolve(from, to)),
+    resolveObject: (from: string, to: string) => (from ? parse(from, false, true).resolveObject(to) : to),
     domainToASCII: (domain: unknown) => native.domainToASCII(String(domain)),
     domainToUnicode: (domain: unknown) => native.domainToUnicode(`${domain}`),
     urlToHttpOptions,

@@ -38,7 +38,7 @@ Bob is 42 years, 42, 1.5, {"j":1}, %%
   "key-dash": 1,
   nested: [
     {
-      deep: [ 1, [ 2, [ 3, [ 4 ] ] ] ],
+      deep: [Array ...],
     }
   ],
 }

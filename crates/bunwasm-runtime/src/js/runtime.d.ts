@@ -455,6 +455,7 @@ declare namespace BunWasm {
   interface Internal {
     require(name: "yaml_coercion"): (value: unknown) => unknown;
     require(name: "formats_limit"): { checkSize(input: { readonly byteLength: number }): void };
+    require(name: "function_brands"): { isNativePlaceholder(value: Function): boolean };
     toUint8(value: ArrayBuffer | SharedArrayBuffer | ArrayBufferView): Uint8Array;
   }
 }

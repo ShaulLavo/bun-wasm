@@ -1,0 +1,35 @@
+nested "{\n  \u001b[0ma\u001b[2m:\u001b[0m {\n    \u001b[0mb\u001b[2m:\u001b[0m [ \u001b[0m\u001b[33m1\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[32m\"v\"\u001b[0m\u001b[0m ]\u001b[0m\u001b[2m,\u001b[0m\n  }\u001b[0m\u001b[2m,\u001b[0m\n}"
+flat "{\n  \u001b[0ma\u001b[2m:\u001b[0m \u001b[0m\u001b[33m1\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  \u001b[0mb\u001b[2m:\u001b[0m \u001b[0m\u001b[32m\u001b[0m\u001b[32m\"x\"\u001b[0m\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  \u001b[0mc\u001b[2m:\u001b[0m \u001b[0m\u001b[33mnull\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  \u001b[0md\u001b[2m:\u001b[0m \u001b[0m\u001b[2mundefined\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  \u001b[0me\u001b[2m:\u001b[0m \u001b[0m\u001b[33mfalse\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  \u001b[0mf\u001b[2m:\u001b[0m \u001b[0m\u001b[33m2n\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  \u001b[0mg\u001b[2m:\u001b[0m \u001b[0m\u001b[34mSymbol(q)\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n}"
+keys "{\n  \u001b[0m\u001b[32m\"3\"\u001b[0m\u001b[2m:\u001b[0m \u001b[0m\u001b[33m4\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  \u001b[0m\u001b[32m\"a-b\"\u001b[0m\u001b[2m:\u001b[0m \u001b[0m\u001b[33m1\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  \u001b[0m\u001b[2m[\u001b[0m\u001b[34mSymbol(k)\u001b[0m\u001b[2m]:\u001b[0m \u001b[0m\u001b[33m2\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n}"
+functions "{\n  \u001b[0mf\u001b[2m:\u001b[0m \u001b[36m[Function: f]\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  \u001b[0mg\u001b[2m:\u001b[0m \u001b[36m[class A]\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  \u001b[0mh\u001b[2m:\u001b[0m \u001b[36m[Function: h]\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n}"
+strings "[ \u001b[0m\u001b[32m\"a\"\u001b[0m\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[32m\"b\"\u001b[0m\u001b[0m ]"
+array "[ \u001b[0m\u001b[33m1\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[32m\"two\"\u001b[0m\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[33mnull\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[2mundefined\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[33mtrue\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[33m3n\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[34mSymbol(s)\u001b[0m ]"
+typed "Uint8Array(2) [ \u001b[0m\u001b[33m1\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[33m2\u001b[0m ]"
+boxed "[ \u001b[0m\u001b[33m[Number: 1]\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[32m\"s\"\u001b[0m\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[33m[Boolean: true]\u001b[0m ]"
+regexp "\u001b[0m\u001b[31m/a+/g\u001b[0m"
+date "[\n  \u001b[0m\u001b[35m1970-01-01T00:00:00.000Z\u001b[0m\n]"
+circular "{\n  \u001b[0mname\u001b[2m:\u001b[0m \u001b[0m\u001b[32m\u001b[0m\u001b[32m\"c\"\u001b[0m\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  \u001b[0mself\u001b[2m:\u001b[0m \u001b[0m\u001b[36m[Circular]\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n}"
+class "Foo {\n  \u001b[0ma\u001b[2m:\u001b[0m \u001b[0m\u001b[33m1\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n}"
+map "Map(1) {\n  \u001b[0m\u001b[32m\"a\"\u001b[0m: \u001b[0m\u001b[33m1\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n}"
+set "Set(2) {\n  \u001b[0m\u001b[33m1\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  \u001b[0m\u001b[32m\"b\"\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n}"
+deep "{\n  \u001b[0ma\u001b[2m:\u001b[0m {\n    \u001b[0mb\u001b[2m:\u001b[0m {\n      \u001b[0mc\u001b[2m:\u001b[0m {\n        \u001b[0md\u001b[2m:\u001b[0m \u001b[0m\u001b[33m1\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n      }\u001b[0m\u001b[2m,\u001b[0m\n    }\u001b[0m\u001b[2m,\u001b[0m\n  }\u001b[0m\u001b[2m,\u001b[0m\n}"
+colors false "{\n  a: {\n    b: [ 1, \"v\" ],\n  },\n}"
+undefined depth "{\n  \u001b[0ma\u001b[2m:\u001b[0m {\n    \u001b[0mb\u001b[2m:\u001b[0m [ \u001b[0m\u001b[33m1\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[32m\"v\"\u001b[0m\u001b[0m ]\u001b[0m\u001b[2m,\u001b[0m\n  }\u001b[0m\u001b[2m,\u001b[0m\n}"
+null depth "{\n  \u001b[0ma\u001b[2m:\u001b[0m {\n    \u001b[0mb\u001b[2m:\u001b[0m [ \u001b[0m\u001b[33m1\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[32m\"v\"\u001b[0m\u001b[0m ]\u001b[0m\u001b[2m,\u001b[0m\n  }\u001b[0m\u001b[2m,\u001b[0m\n}"
+depth and colors "{\n  \u001b[0ma\u001b[2m:\u001b[0m {\n    \u001b[0mb\u001b[2m:\u001b[0m \u001b[0m\u001b[36m[Array ...]\u001b[0m\u001b[0m\u001b[2m,\u001b[0m\n  }\u001b[0m\u001b[2m,\u001b[0m\n}"
+colors only "{\n  \u001b[0ma\u001b[2m:\u001b[0m {\n    \u001b[0mb\u001b[2m:\u001b[0m [ \u001b[0m\u001b[33m1\u001b[0m\u001b[0m\u001b[2m,\u001b[0m \u001b[0m\u001b[32m\"v\"\u001b[0m\u001b[0m ]\u001b[0m\u001b[2m,\u001b[0m\n  }\u001b[0m\u001b[2m,\u001b[0m\n}"
+depth 0 "{\n  a: [Object ...],\n}"
+depth 1 "{\n  a: {\n    b: [Object ...],\n  },\n}"
+depth 0 "{\n  a: [Object ...],\n}"
+depth Infinity "{\n  a: {\n    b: {\n      c: {\n        d: 1,\n      },\n    },\n  },\n}"
+depth -Infinity "{\n  a: {\n    b: {\n      c: {\n        d: 1,\n      },\n    },\n  },\n}"
+depth 4294967296 "{\n  a: {\n    b: {\n      c: {\n        d: 1,\n      },\n    },\n  },\n}"
+depth NaN threw expected depth to be an integer, got NaN
+depth 1.5 threw expected depth to be an integer, got 1.5
+depth -1 threw expected depth to be greater than or equal to 0, got -1
+custom depth=8 colors=false styled="xyz" util=true
+custom depth=8 colors=true styled="\u001b[32mx\u001b[39my\u001b[33mz\u001b[39m" util=true
+custom depth=2 colors=true styled="\u001b[32mx\u001b[39my\u001b[33mz\u001b[39m" util=true
+rethrown sentinel: true
+range error kept: true Maximum call stack size exceeded
+tall: true Maximum call stack size exceeded.

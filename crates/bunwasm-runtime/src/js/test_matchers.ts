@@ -22,6 +22,55 @@
   const bunFilePrototype = internal.BunFile?.prototype;
   const bunFileSize = bunFilePrototype && Object.getOwnPropertyDescriptor(bunFilePrototype, "size")?.get;
 
+  const mapSize = Object.getOwnPropertyDescriptor(Map.prototype, "size")?.get;
+  const setSize = Object.getOwnPropertyDescriptor(Set.prototype, "size")?.get;
+  // The web classes are absent from a bare script context.
+  const webPrototype = (name: "URLSearchParams" | "Headers" | "FormData"): any => {
+    const constructor = (globalThis as Record<string, any>)[name];
+    return typeof constructor === "function" ? constructor.prototype : undefined;
+  };
+  const searchParamsSize = Object.getOwnPropertyDescriptor(webPrototype("URLSearchParams") ?? {}, "size")?.get;
+  const headersCount = Object.getOwnPropertyDescriptor(webPrototype("Headers") ?? {}, "count")?.get;
+  const formDataPrototype: object | undefined = webPrototype("FormData");
+  const formDataKeys = formDataPrototype === undefined ? undefined : (formDataPrototype as FormData).keys;
+  const typedArrayLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "length")?.get;
+
+  // A captured native getter's number for `value`, or undefined when `value` lacks its brand.
+  function brandedNumber(getter: (() => unknown) | undefined, value: object): number | undefined {
+    if (getter === undefined) return undefined;
+    try {
+      return apply(getter, value, noArgs) as number;
+    } catch (error) {
+      if (error instanceof TypeError) return undefined;
+      throw error;
+    }
+  }
+
+  function blobLength(value: object): number | undefined {
+    if (!blobSize || !apply(isPrototypeOf, Blob.prototype, [value])) return undefined;
+    if (bunFilePrototype && bunFileSize && apply(isPrototypeOf, bunFilePrototype, [value])) return apply(bunFileSize, value, noArgs) as number;
+    if (typeof blobBytes === "function" && typedArrayByteLength) return apply(typedArrayByteLength, apply(blobBytes, value, noArgs), noArgs) as number;
+    return apply(blobSize, value, noArgs) as number;
+  }
+
+  function formDataLength(value: object): number | undefined {
+    if (formDataPrototype === undefined || typeof formDataKeys !== "function" || !apply(isPrototypeOf, formDataPrototype, [value])) return undefined;
+    let count = 0;
+    for (const _name of apply(formDataKeys, value, noArgs) as Iterable<string>) count++;
+    return count;
+  }
+
+  // The length `toHaveLength` compares (JSValue::getLengthIfPropertyExistsInternal): the size of
+  // the collection types, read from the engine's own accessors, otherwise the `length` property.
+  function lengthOf(value: unknown): unknown {
+    if (value === null || value === undefined) return undefined;
+    if (typeof value === "string") return value.length;
+    if (typeof value !== "object") return (value as { length?: unknown }).length;
+    return brandedNumber(mapSize, value) ?? brandedNumber(setSize, value) ?? brandedNumber(typedArrayLength, value) ??
+      brandedNumber(arrayBufferByteLength, value) ?? brandedNumber(searchParamsSize, value) ?? brandedNumber(headersCount, value) ?? blobLength(value) ??
+      formDataLength(value) ?? (value as { length?: unknown }).length;
+  }
+
   function isStringValue(value: unknown): boolean {
     if (typeof value === "string") return true;
     if (value === null || typeof value !== "object") return false;
@@ -275,5 +324,5 @@
     return { track, unhandled, complete };
   }
 
-  return { settle, every, some, ancestors, throwOutcome, within, nthReturned, pending, even, odd, empty, extended };
+  return { settle, every, some, ancestors, throwOutcome, within, nthReturned, pending, even, odd, empty, lengthOf, extended };
 })

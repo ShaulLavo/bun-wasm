@@ -158,6 +158,15 @@
 
   // ───────────────────────────── tags ─────────────────────────────
 
+  // `instanceof` asks a revoked proxy for its prototype, which throws.
+  function isAccessor(value) {
+    try {
+      return value instanceof Accessor;
+    } catch {
+      return false;
+    }
+  }
+
   // A tag result: { tag, stringLike, custom }.
   function tagOf(value, opts) {
     const disableCustom = !!(opts && opts.disableCustom);
@@ -176,7 +185,7 @@
       case "bigint":
         return { tag: "BigInt" };
     }
-    if (value instanceof Accessor) return { tag: "GetterSetter" };
+    if (isAccessor(value)) return { tag: "GetterSetter" };
     if (value === globalThis && hideGlobal) return { tag: "GlobalObject" };
     if (isProxy(value) && value !== globalThis) return proxyTag(value);
     if (!disableCustom) {
@@ -462,11 +471,14 @@
   class Formatter {
     constructor(options) {
       this.out = "";
-      this.indent = 0;
+      // A console group starts the formatter at its own indentation level.
+      this.indent = options.indent || 0;
       this.depth = 0;
       this.maxDepth = options.maxDepth;
       this.outerMaxDepth = undefined;
       this.quoteStrings = !!options.quoteStrings;
+      this.colors = !!options.colors;
+      this.errorLabel = options.errorLabel || "error";
       this.quoteKeys = false;
       this.estimatedLineLength = 0;
       this.alwaysNewlineScope = false;
@@ -476,11 +488,35 @@
       this.formatBufferAsText = false;
       this.remaining = [];
       this.visited = new Set();
+      // The deepest nesting reached, which tells an engine's stack overflow from an error thrown shallow.
+      this.nesting = 0;
+      this.deepest = 0;
       this.customFormatted = null;
     }
 
     write(s) {
       this.out += s;
+    }
+
+    // ConsoleObject.rs's `<r><color>text<r>`; plain text without `colors: true`.
+    paint(color, text) {
+      return this.colors ? "\u001b[0m\u001b[" + color + "m" + text + "\u001b[0m" : text;
+    }
+
+    // `<cyan>text<r>`, which functions and classes use without the leading reset.
+    paintBare(color, text) {
+      return this.colors ? "\u001b[" + color + "m" + text + "\u001b[0m" : text;
+    }
+
+    // `<d>:<r> ` after every property key.
+    keySuffix() {
+      return this.colors ? "\u001b[2m:\u001b[0m " : ": ";
+    }
+
+    // A string value is followed by one more reset, as ConsoleObject.rs writes after it.
+    formatElement(tag, value) {
+      this.format(tag, value);
+      if (this.colors && tag.stringLike) this.write("\u001b[0m");
     }
 
     addForNewLine(n) {
@@ -500,7 +536,7 @@
     }
 
     printComma() {
-      this.write(",");
+      this.write(this.paint("2", ","));
       this.estimatedLineLength += 1;
     }
 
@@ -532,20 +568,26 @@
 
     printAs(tag, value, tagResult) {
       const info = tagResult || {};
-      if (!CIRCULAR_TAGS.has(tag)) {
-        this.dispatch(tag, value, info);
+      const tracked = CIRCULAR_TAGS.has(tag);
+      if (tracked && this.visited.has(value)) {
+        this.write(this.paint("36", "[Circular]"));
         return;
       }
-      if (this.visited.has(value)) {
-        this.write("[Circular]");
-        return;
-      }
-      this.visited.add(value);
+      this.enter();
+      if (tracked) this.visited.add(value);
       try {
         this.dispatch(tag, value, info);
       } finally {
-        this.visited.delete(value);
+        this.nesting -= 1;
+        if (tracked) this.visited.delete(value);
       }
+    }
+
+    // One more level of recursion: Bun's stack overflows long before this many.
+    enter() {
+      if (this.nesting >= MAX_NESTING) throw new RangeError(CALL_STACK_MESSAGE);
+      this.nesting += 1;
+      if (this.nesting > this.deepest) this.deepest = this.nesting;
     }
 
     dispatch(tag, value, info) {
@@ -561,10 +603,10 @@
           return this.printBigInt(value);
         case "Undefined":
           this.addForNewLine(9);
-          return this.write("undefined");
+          return this.write(this.paint("2", "undefined"));
         case "Null":
           this.addForNewLine(4);
-          return this.write("null");
+          return this.write(this.paint("33", "null"));
         case "Boolean":
           return this.printBoolean(value, info);
         case "Symbol":
@@ -623,14 +665,14 @@
       const str = typeof value === "symbol" ? value.toString() : String(value);
       this.addForNewLine(str.length);
       if (this.quoteStrings && !info.regexp) {
-        this.write(str.length === 0 ? '""' : quoteJSON(str));
+        this.write(this.paint("32", str.length === 0 ? '""' : quoteJSON(str)));
         return;
       }
       if (info.boxed) {
         this.write("[String: " + quoteJSON(str) + "]");
         return;
       }
-      this.write(str);
+      this.write(info.regexp ? this.paint("31", str) : str);
     }
 
     printNumber(value, info) {
@@ -639,22 +681,22 @@
         const num = String(Number.prototype.valueOf.call(value));
         if (name !== "Number") {
           this.addForNewLine(name.length + num.length + 11);
-          this.write("[Number (" + name + "): " + num + "]");
+          this.write(this.paint("33", "[Number (" + name + "): " + num + "]"));
           return;
         }
         this.addForNewLine(name.length + num.length + 4);
-        this.write("[" + name + ": " + num + "]");
+        this.write(this.paint("33", "[" + name + ": " + num + "]"));
         return;
       }
       const text = formatNumber(value);
       this.addForNewLine(text.length);
-      this.write(text);
+      this.write(this.paint("33", text));
     }
 
     printBigInt(value) {
       const text = value.toString();
       this.addForNewLine(text.length);
-      this.write(text + "n");
+      this.write(this.paint("33", text + "n"));
     }
 
     printBoolean(value, info) {
@@ -663,15 +705,15 @@
         const text = String(Boolean.prototype.valueOf.call(value));
         if (name !== "Boolean") {
           this.addForNewLine(text.length + name.length + 14);
-          this.write("[Boolean (" + name + "): " + text + "]");
+          this.write(this.paint("33", "[Boolean (" + name + "): " + text + "]"));
           return;
         }
         this.addForNewLine(text.length + 11);
-        this.write("[Boolean: " + text + "]");
+        this.write(this.paint("33", "[Boolean: " + text + "]"));
         return;
       }
       this.addForNewLine(value ? 4 : 5);
-      this.write(value ? "true" : "false");
+      this.write(this.paint("33", value ? "true" : "false"));
     }
 
     printSymbol(value) {
@@ -679,10 +721,10 @@
       this.addForNewLine(6);
       if (description) {
         this.addForNewLine(description.length + 2);
-        this.write("Symbol(" + description + ")");
+        this.write(this.paint("34", "Symbol(" + description + ")"));
         return;
       }
-      this.write("Symbol()");
+      this.write(this.paint("34", "Symbol()"));
     }
 
     printDate(value) {
@@ -693,7 +735,7 @@
         text = "null";
       }
       this.addForNewLine(text.length);
-      this.write(text === "null" ? "Invalid Date" : text.slice(1, -1));
+      this.write(this.paint("35", text === "null" ? "Invalid Date" : text.slice(1, -1)));
     }
 
     // ── custom inspect / proxy ──
@@ -701,8 +743,13 @@
     printCustomFormatted() {
       const { fn, self } = this.customFormatted;
       const depthArg = Math.max(0, this.maxDepth - this.depth);
-      const options = { depth: this.maxDepth, colors: false, showHidden: false, stylize: (s) => String(s) };
-      const result = fn.call(self, depthArg, options, nodeInspectForCustom);
+      const options = {
+        depth: this.maxDepth,
+        colors: this.colors,
+        showHidden: false,
+        stylize: this.colors ? stylizeForCustom : (s) => String(s),
+      };
+      const result = fn.call(self, depthArg, options, publicInspect());
       if (typeof result === "string") {
         this.write(result);
         return;
@@ -729,17 +776,17 @@
       const protoName = protoIsClass ? functionName(proto) : "";
       this.addForNewLine(protoName.length);
       const base = printable === "" ? "(anonymous)" : printable;
-      this.write(protoName === "" ? "[class " + base + "]" : "[class " + base + " extends " + protoName + "]");
+      this.write(this.paintBare("36", protoName === "" ? "[class " + base + "]" : "[class " + base + " extends " + protoName + "]"));
     }
 
     printFunction(value) {
       const printable = functionName(value);
       const funcName = functionKindName(value);
       if (printable === "" || funcName === printable) {
-        this.write(funcName === "" ? "[Function]" : "[" + funcName + "]");
+        this.write(this.paintBare("36", funcName === "" ? "[Function]" : "[" + funcName + "]"));
         return;
       }
-      this.write("[" + (funcName === "" ? "Function" : funcName) + ": " + printable + "]");
+      this.write(this.paintBare("36", "[" + (funcName === "" ? "Function" : funcName) + ": " + printable + "]"));
     }
 
     printGetterSetter(value) {
@@ -755,10 +802,16 @@
       }
       const state = internal.promiseState(value);
       const label = state === "pending" ? "<pending>" : state === "rejected" ? "<rejected>" : "<resolved>";
-      this.write("Promise { " + label + " }");
+      this.write("Promise { " + this.paint("36", label) + " }");
     }
 
     // ── arrays ──
+
+    // print_depth_exceeded_marker: `[Array ...]` for a collection past the depth limit.
+    printDepthExceededMarker(name) {
+      this.addForNewLine(name.length + 6);
+      this.write(this.paint("36", "[" + name + " ...]"));
+    }
 
     printArray(value, info) {
       const len = Number(value.length) || 0;
@@ -767,6 +820,7 @@
         this.addForNewLine(2);
         return;
       }
+      if (this.depth > this.maxDepth) return this.printDepthExceededMarker("Array");
       const state = { wasGoodTime: this.alwaysNewlineScope || len > 10 };
       this.indent += 1;
       this.depth += 1;
@@ -813,7 +867,7 @@
         this.printComma();
         this.arraySeparator(state);
         const element = value[i];
-        this.format(tagOf(element, this.tagOpts()), element);
+        this.formatElement(tagOf(element, this.tagOpts()), element);
         i += 1;
       }
       if (emptyStart !== null) this.printEmptyRun(emptyStart, len - emptyStart, state);
@@ -835,7 +889,7 @@
         this.addForNewLine(2);
       }
       if (!present) return 0;
-      this.format(tag, element);
+      this.formatElement(tag, element);
       return null;
     }
 
@@ -896,6 +950,7 @@
         this.write(name + " {}");
         return;
       }
+      if (this.depth > this.maxDepth) return this.printDepthExceededMarker(name);
       const prevQuote = this.quoteStrings;
       this.quoteStrings = true;
       this.write(this.singleLine ? name + "(" + length + ") { " : name + "(" + length + ") {\n");
@@ -1006,6 +1061,7 @@
         this.write(name + " {}");
         return;
       }
+      if (this.depth > this.maxDepth) return this.printDepthExceededMarker(name);
       const prevQuote = this.quoteStrings;
       this.quoteStrings = true;
       this.write(this.singleLine ? name + "(" + length + ") { " : name + "(" + length + ") {\n");
@@ -1041,6 +1097,7 @@
     }
 
     printIterator(value, label) {
+      if (this.depth > this.maxDepth) return this.printDepthExceededMarker(label);
       const prevQuote = this.quoteStrings;
       this.quoteStrings = true;
       this.write(label + " { ");
@@ -1105,11 +1162,11 @@
       const suffix = view.isBigInt ? "n" : "";
       const MAX = 512;
       const shown = Math.min(view.length, MAX + 1);
-      this.write(formatTypedElement(view.elements[0]) + suffix);
+      this.write(this.paint("33", formatTypedElement(view.elements[0]) + suffix));
       for (let i = 1; i < shown; i++) {
         this.printComma();
         this.space();
-        this.write(formatTypedElement(view.elements[i]) + suffix);
+        this.write(this.paint("33", formatTypedElement(view.elements[i]) + suffix));
       }
       if (view.length > MAX + 1) this.write(suffix + ", ... " + (view.length - MAX - 1) + " more");
     }
@@ -1152,7 +1209,7 @@
         this.writeIndent();
         this.resetLine();
       }
-      this.write("[Object ...]");
+      this.write(this.paint("36", "[Object ...]"));
     }
 
     printObjectTail(value, ctx) {
@@ -1190,7 +1247,8 @@
       ctx.i += 1;
       if (before > 0) this.propertySeparator(ctx);
       this.writePropertyKey(key);
-      this.format(tag, value);
+      if (this.colors && tag.stringLike) this.write("\u001b[0m\u001b[32m");
+      this.formatElement(tag, value);
     }
 
     handleFirstProperty(ctx) {
@@ -1224,17 +1282,21 @@
       if (typeof key === "symbol") {
         const desc = key.description || "";
         this.addForNewLine(12 + desc.length);
+        if (this.colors) {
+          this.write("\u001b[0m\u001b[2m[\u001b[0m\u001b[34mSymbol(" + desc + ")\u001b[0m\u001b[2m]:\u001b[0m ");
+          return;
+        }
         this.write("[Symbol(" + desc + ")]: ");
         return;
       }
       if (!this.quoteKeys && IDENT_RE.test(key)) {
         this.addForNewLine(key.length + 1);
-        this.write(key + ": ");
+        this.write((this.colors ? "\u001b[0m" + key : key) + this.keySuffix());
         return;
       }
       this.addForNewLine(key.length + 2);
       // Bun writes 16-bit keys between quotes without escaping them.
-      this.write(hasWideChars(key) ? '"' + key + '": ' : quoteJSON(key) + ": ");
+      this.write(this.paint("32", hasWideChars(key) ? '"' + key + '"' : quoteJSON(key)) + this.keySuffix());
     }
 
     // ── printf-style formatting ──
@@ -1306,7 +1368,8 @@
       } else {
         converted = toNumberLoose(value);
       }
-      const text = formatNumber(converted);
+      // `%f` prints negative zero as 0.
+      const text = formatNumber(Object.is(converted, -0) ? 0 : converted);
       this.addForNewLine(text.length);
       this.write(text);
     }
@@ -1599,16 +1662,17 @@
     return true;
   }
 
-  function errorNameAndMessage(name, message, code) {
+  // `label` is the display level: "error", or "warn" for console.warn.
+  function errorNameAndMessage(name, message, code, label = "error") {
     if (name !== "" && message !== "") {
       if (name !== "Error") return name + ": " + message + "\n";
       const prefixed = code !== undefined && message.length > code.length + 3 && message.startsWith(code + ": ");
       if (prefixed) return code + ": " + message.slice(code.length + 2) + "\n";
-      return "error: " + message + "\n";
+      return label + ": " + message + "\n";
     }
     if (name !== "") return name + ": \n";
-    if (message !== "") return "error: " + message + "\n";
-    return "error\n";
+    if (message !== "") return label + ": " + message + "\n";
+    return label + "\n";
   }
 
   function stringProp(err, key) {
@@ -1679,9 +1743,10 @@
     const name = stringProp(err, "name");
     const message = stringProp(err, "message");
     const code = errorCode(err);
-    const lines = sourceExcerpt(top);
+    // console.warn shows an error without its source lines.
+    const lines = f.errorLabel === "warn" ? null : sourceExcerpt(top);
     if (lines !== null) writeExcerpt(f, lines, top);
-    f.write(errorNameAndMessage(name, message, code));
+    f.write(errorNameAndMessage(name, message, code, f.errorLabel));
 
     const toAppend = printErrorProperties(f, err, code, prevHadErrors);
     for (const frame of frames) f.write(formatFrame(frame));
@@ -1784,6 +1849,7 @@
         f.write("\n[Circular]");
         continue;
       }
+      f.enter();
       f.visited.add(err);
       f.write("\n");
       const prevDepth = f.depth;
@@ -1797,6 +1863,7 @@
       } finally {
         f.depth = prevDepth;
         f.visited.delete(err);
+        f.nesting -= 1;
       }
     }
   }
@@ -1814,7 +1881,7 @@
 
   // Non-Error thrown values (`throw "str"`, `throw {a: 1}`, ...).
   function formatThrownValue(f, value) {
-    f.write(errorNameAndMessage("", thrownMessage(value), undefined));
+    f.write(errorNameAndMessage("", thrownMessage(value), undefined, f.errorLabel));
     f.format(tagOf(value, { hideGlobal: true, disableCustom: true }), value);
     f.write("\n");
   }
@@ -1827,22 +1894,24 @@
 
   // ───────────────────────────── public API ─────────────────────────────
 
-  function readInspectOptions(options) {
-    const result = { maxDepth: 8, quoteStrings: true, orderedProperties: false, singleLine: false };
-    if (options === undefined || options === null) return result;
-    if (typeof options !== "object") {
-      applyDepth(result, options);
+  function readInspectOptions(options, colors) {
+    const result = { maxDepth: 8, quoteStrings: true, orderedProperties: false, singleLine: false, colors: false };
+    if (!isObjectLike(options)) {
+      // Not an options object: the second argument is the depth, the third the colors.
+      if (options !== undefined) applyDepth(result, options);
+      if (colors !== undefined && colors !== null) result.colors = !!colors;
       return result;
     }
     if (options.depth !== undefined) applyDepth(result, options.depth);
+    if (options.colors !== undefined) result.colors = !!options.colors;
     if (options.sorted !== undefined) result.orderedProperties = !!options.sorted;
     if (options.compact !== undefined) result.singleLine = !!options.compact;
     return result;
   }
 
   function applyDepth(result, depth) {
-    if (typeof depth !== "number" || Number.isNaN(depth)) return;
-    if (!Number.isFinite(depth)) {
+    if (typeof depth !== "number") return;
+    if (depth === Infinity || depth === -Infinity) {
       result.maxDepth = 65535;
       return;
     }
@@ -1852,10 +1921,42 @@
   }
 
   /** Bun.inspect(value, options?) */
-  function bunInspect(value, options) {
-    const f = new Formatter(readInspectOptions(options));
-    f.format(tagOf(value), value);
+  function bunInspect(value, options, colors) {
+    const f = new Formatter(readInspectOptions(options, colors));
+    try {
+      f.format(tagOf(value), value);
+    } catch (error) {
+      throw f.deepest >= MIN_OVERFLOW_NESTING ? overflowAsRangeError(error) : error;
+    }
     return f.out;
+  }
+
+  // An engine overflows its stack only deep inside nested values.
+  const MIN_OVERFLOW_NESTING = 64;
+  const CALL_STACK_MESSAGE = "Maximum call stack size exceeded.";
+  // Nesting that overflows Bun's native stack long before this much output builds up.
+  const MAX_NESTING = 8192;
+
+  // An engine's own overflow error (QuickJS "stack overflow", V8 without the period) becomes
+  // the RangeError JSC throws.
+  function overflowAsRangeError(error) {
+    const message = ownMessage(error);
+    if (message.startsWith("Maximum call stack size exceeded") || message === "stack overflow") {
+      return new RangeError(CALL_STACK_MESSAGE);
+    }
+    return error;
+  }
+
+  // The message of an engine error, read without running any user accessor or proxy trap, so
+  // whatever a custom inspector threw reaches the caller untouched.
+  function ownMessage(error) {
+    if (!isObjectLike(error) || isProxy(error)) return "";
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(error, "message");
+      return descriptor !== undefined && typeof descriptor.value === "string" ? descriptor.value : "";
+    } catch {
+      return "";
+    }
   }
 
   /** console.log(...args) output without the trailing newline. */
@@ -1866,6 +1967,9 @@
       quoteStrings: false,
       singleLine: false,
       orderedProperties: false,
+      indent: opts.indent,
+      colors: opts.colors,
+      errorLabel: opts.level === "warn" ? "warn" : "error",
     });
     if (args.length === 0) return "";
     f.remaining = Array.prototype.slice.call(args, 1);
@@ -2858,6 +2962,12 @@ function createNodeInspect(internal) {
     return formatRaw(ctx, value, recurseTimes, typedArray);
   }
 
+  // The `inspect` custom inspectors receive is `require("util").inspect`, not this inner function.
+  function utilInspect() {
+    const util = internal.require("util");
+    return util && typeof util.inspect === "function" ? util.inspect : inspect;
+  }
+
   // Runs a user `[util.inspect.custom]` method (or the Buffer formatter).
   // Returns undefined when the value has no custom representation.
   function formatCustom(ctx, value, recurseTimes, proxied) {
@@ -2872,7 +2982,7 @@ function createNodeInspect(internal) {
 
     const depth = ctx.depth === null ? null : ctx.depth - recurseTimes;
     const isCrossContext = proxied || !(value instanceof Object);
-    const ret = maybeCustom.call(value, depth, getUserOptions(ctx, isCrossContext), inspect);
+    const ret = maybeCustom.call(value, depth, getUserOptions(ctx, isCrossContext), utilInspect());
     // A custom inspector returning `this` falls back to the default output.
     if (ret === value) return undefined;
     if (typeof ret !== "string") return formatValue(ctx, ret, recurseTimes);
@@ -4055,8 +4165,19 @@ function createNodeInspect(internal) {
     return { nodeInspect: inspect, nodeFormat: format, nodeFormatWithOptions: formatWithOptions };
   }
 
-  function nodeInspectForCustom(value, options) {
-    return nodeInspect(value, options);
+  // `require("util").inspect`, which custom inspectors receive as their third argument.
+  function publicInspect() {
+    const util = internal.require("util");
+    return util && typeof util.inspect === "function" ? util.inspect : nodeInspect;
+  }
+
+  // Node's stylizeWithColor, for the options Bun.inspect passes to a custom inspector.
+  function stylizeForCustom(str, styleType) {
+    const style = nodeInspect.styles[styleType];
+    if (style === undefined) return str;
+    if (typeof style === "function") return style(str);
+    const color = nodeInspect.colors[style];
+    return color === undefined ? str : "\u001b[" + color[0] + "m" + str + "\u001b[" + color[1] + "m";
   }
 
   bunInspect.custom = INSPECT_CUSTOM;

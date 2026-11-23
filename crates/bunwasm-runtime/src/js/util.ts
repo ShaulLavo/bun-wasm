@@ -463,7 +463,7 @@
   }
 
   function isFunctionWithTag(value: unknown, tags: string[]) {
-    return typeof value === "function" && tags.includes(tagOf(value));
+    return typeof value === "function" && tags.includes(tagOf(value)) && !internal.require("function_brands").isNativePlaceholder(value);
   }
 
   function typedArrayCheck(name: string) {

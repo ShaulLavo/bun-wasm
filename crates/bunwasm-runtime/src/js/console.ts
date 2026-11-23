@@ -18,12 +18,39 @@
     write(indented + "\n");
   }
 
-  function out(args: readonly unknown[]) {
-    emit(native.writeStdout, inspector().formatArgs(args));
+  // Bun writes a group's indentation before the message only; the formatter indents the lines
+  // it breaks itself, so a line break inside a string stays at the start of the line.
+  function emitFormatted(write: (text: string) => void, text: string) {
+    write(groupIndent + text + "\n");
   }
 
-  function err(args: readonly unknown[]) {
-    emit(native.writeStderr, inspector().formatArgs(args));
+  function formatOptions(level?: "warn") {
+    return { indent: groupIndent.length / 2, level };
+  }
+
+  function out(args: readonly unknown[]) {
+    emitFormatted(native.writeStdout, inspector().formatArgs(args, formatOptions()));
+  }
+
+  function err(args: readonly unknown[], level?: "warn") {
+    emitFormatted(native.writeStderr, inspector().formatArgs(args, formatOptions(level)));
+  }
+
+  // console.dir reads only `depth` and `colors` (ConsoleObject.rs, message_type == Dir). A depth
+  // is clamped to 0 or above, then cut to 16 bits; null is the largest depth.
+  function dirOptions(options: BunWasm.ConsoleInspectOptions | undefined): BunWasm.ConsoleInspectOptions {
+    const result: BunWasm.ConsoleInspectOptions = { depth: 2 };
+    if (options === null || typeof options !== "object") return result;
+    const depth: unknown = options.depth;
+    if (depth === null) {
+      result.depth = 65535;
+    } else if (typeof depth === "number" || typeof depth === "bigint") {
+      const n = Number(depth);
+      const int32 = Number.isNaN(n) ? 0 : Math.max(-2147483648, Math.min(2147483647, Math.trunc(n)));
+      result.depth = Math.max(int32, 0) & 0xffff;
+    }
+    if (typeof options.colors === "boolean") result.colors = options.colors;
+    return result;
   }
 
   function formatDuration(ms: number) {
@@ -35,7 +62,7 @@
     log: (...args: unknown[]) => out(args),
     info: (...args: unknown[]) => out(args),
     debug: (...args: unknown[]) => out(args),
-    warn: (...args: unknown[]) => err(args),
+    warn: (...args: unknown[]) => err(args, "warn"),
     error: (...args: unknown[]) => err(args),
     trace(...args: unknown[]) {
       const holder = new Error();
@@ -60,7 +87,8 @@
       err((["Assertion failed:"] as unknown[]).concat(args));
     },
     dir(value: unknown, options?: BunWasm.ConsoleInspectOptions) {
-      emit(native.writeStdout, inspector().bunInspect(value, options));
+      const { depth, colors } = dirOptions(options);
+      emitFormatted(native.writeStdout, inspector().formatArgs([value], { depth, colors, indent: groupIndent.length / 2 }));
     },
     dirxml: (...args: unknown[]) => out(args),
     count(label: unknown = "default") {
