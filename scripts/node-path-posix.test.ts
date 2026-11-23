@@ -20,7 +20,7 @@ function loadGuestPath(): PathModule {
   // Mirrors the captures in crates/bunwasm-runtime/src/js/bootstrap.js.
   const uncurry = (method: Function) => Function.prototype.call.bind(method);
   const stringIntrinsics = {
-    charCodeAt: uncurry(String.prototype.charCodeAt), slice: uncurry(String.prototype.slice),
+    slice: uncurry(String.prototype.slice),
     indexOf: uncurry(String.prototype.indexOf), lastIndexOf: uncurry(String.prototype.lastIndexOf), Int32Array,
   };
   const internal = { native: { nodePath, globMatch: crossing }, stringIsWellFormed: uncurry(String.prototype.isWellFormed), stringIntrinsics };

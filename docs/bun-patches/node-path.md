@@ -31,9 +31,17 @@ native Bun). Local changes:
 - `normalize` returns a path unchanged when it has no `//`, no leading `.` and
   no `/.`, because then no segment is empty, `.` or `..`. Otherwise it runs the
   full segment walk.
-- Validation, boxed-string coercion and the right-to-left POSIX `resolve` stay
-  the adapter's own code below, unchanged.
-- The POSIX code calls `charCodeAt`, `slice`, `indexOf`, `lastIndexOf` and the
+- Validation order, boxed-string coercion and the right-to-left POSIX
+  `resolve`, which reads the guest cwd only when no argument is absolute, keep
+  the adapter's previous behavior.
+- Code units are compared by string indexing (`path[i] === "/"`), which calls
+  no method and which JSC's interpreter runs far faster than a bound
+  `charCodeAt`. Indices always stay inside the string.
+- `resolve` joins its pieces as they are and skips `.` pieces. The previous
+  adapter stripped an absolute piece's `/`, appended `/` to every piece and
+  prefixed `/` again, which normalizes to the same result; an already normal
+  join now takes `normalize`'s fast path.
+- The POSIX code calls `slice`, `indexOf`, `lastIndexOf` and the
   `Int32Array` constructor through intrinsics that `src/js/bootstrap.js` captures before user code
   runs, and builds no ordinary arrays: `normalize` keeps its segment stack as
   offsets in an `Int32Array`, which stays linear for long runs of `..` and has

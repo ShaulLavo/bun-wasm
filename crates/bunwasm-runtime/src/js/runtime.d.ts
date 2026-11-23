@@ -17,7 +17,6 @@ declare namespace BunWasm {
     isProgramScriptHash?(hash: string): boolean;
     stringIsWellFormed(value: string): boolean;
     stringIntrinsics: {
-      charCodeAt(value: string, index: number): number;
       slice(value: string, start?: number, end?: number): string;
       indexOf(value: string, search: string, position?: number): number;
       lastIndexOf(value: string, search: string, position?: number): number;

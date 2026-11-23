@@ -10,9 +10,8 @@
   const internal = { native, sharedObjects: native.sharedObjects,
     stringIsWellFormed: uncurry(String.prototype.isWellFormed),
     // node:path's POSIX operations run on these before user code can replace them.
-    stringIntrinsics: { charCodeAt: uncurry(String.prototype.charCodeAt), slice: uncurry(String.prototype.slice),
-      indexOf: uncurry(String.prototype.indexOf), lastIndexOf: uncurry(String.prototype.lastIndexOf),
-      Int32Array } };
+    stringIntrinsics: { slice: uncurry(String.prototype.slice), indexOf: uncurry(String.prototype.indexOf),
+      lastIndexOf: uncurry(String.prototype.lastIndexOf), Int32Array } };
 
   // Engine hooks for the formatter (inspect.js) and util.types.
   function isModuleNamespace(value) {
