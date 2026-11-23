@@ -1203,7 +1203,6 @@ class EngineHost {
       this.flush();
       if (this.exited) return;
       this.idleWait = false;
-      this.beforeExitRan = false;
       return this.schedule(0);
     }
     if (this.testComplete) return this.finish();

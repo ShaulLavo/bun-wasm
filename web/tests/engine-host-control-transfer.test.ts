@@ -285,3 +285,89 @@ test("tick scheduler drains sync ticks before native await and microtask ticks a
   channel.port2.close();
   expect(order).toEqual(["sync-tick", "five-awaits", "micro-tick", "next-immediate"]);
 });
+
+test("beforeExit microtask tick drains without triggering an extra beforeExit unless it schedules loop work", async () => {
+  const events: string[] = [];
+  const ticks: Array<() => void> = [];
+  const done = Promise.withResolvers<number>();
+  const context = {
+    TextEncoder,
+    TextDecoder,
+    URL,
+    Blob,
+    queueMicrotask,
+    setTimeout,
+    clearTimeout,
+    MessageChannel,
+    SLOT_NAMES: [],
+    memoryViews,
+    createTickScheduler,
+    installNativeStreamState: () => () => {},
+  };
+  const { EngineHost } = runInNewContext(source + "\n({ EngineHost });", context);
+  const host = new EngineHost(
+    { instance: { exports: { memory: new WebAssembly.Memory({ initial: 1 }) } }, moduleUrls: "blob", onExit: () => {} },
+    done.resolve,
+    done.reject,
+  );
+  let beforeExitCalls = 0;
+  let pendingTimer = false;
+  host.native = { tlsDispose() {}, closeAllDirs() {}, flushOutput() {}, hostCaps: {} };
+  host.internal = {
+    pumpSignals: () => false,
+    ioPending: () => 0,
+    pumpIo: () => false,
+    runTicks() {
+      while (ticks.length > 0) ticks.shift()!();
+    },
+    runTimers() {
+      if (!pendingTimer) return -1;
+      pendingTimer = false;
+      events.push("timer");
+      return 0;
+    },
+    emitBeforeExit() {
+      beforeExitCalls++;
+      events.push(`beforeExit:${beforeExitCalls}`);
+      if (beforeExitCalls === 1) {
+        Promise.resolve().then(() => {
+          events.push("microtask:1");
+          ticks.push(() => {
+            events.push("tick:1");
+            pendingTimer = true;
+          });
+          host.ticks.schedule();
+        });
+        return true;
+      }
+      if (beforeExitCalls === 2) {
+        Promise.resolve().then(() => {
+          events.push("microtask:2");
+          ticks.push(() => events.push("tick:2"));
+          host.ticks.schedule();
+        });
+        return true;
+      }
+      return true;
+    },
+    beforeExit() {
+      events.push("exit");
+      return 0;
+    },
+    handleUncaught(error: unknown) {
+      throw error;
+    },
+  };
+  host.schedule(0);
+  expect(await done.promise).toBe(0);
+  expect(events).toEqual([
+    "beforeExit:1",
+    "microtask:1",
+    "tick:1",
+    "timer",
+    "beforeExit:2",
+    "microtask:2",
+    "tick:2",
+    "exit",
+  ]);
+});
