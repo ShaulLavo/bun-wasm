@@ -15,7 +15,7 @@ const builder = join(scratch, "embed");
 function runBuild(override?: string, directory = manifest, destination = out) {
   return commands.run(builder, [], {
     phase: "embed", timeout: 4_000,
-    env: { ...process.env, CARGO_MANIFEST_DIR: directory, OUT_DIR: destination, BUNWASM_JS_OVERRIDE_DIR: override ?? "" },
+    env: { ...process.env, CARGO_MANIFEST_DIR: directory, OUT_DIR: destination, BUNWASM_JS_OVERRIDE_DIR: override ?? "", BUNWASM_JS_PRESERVE_POSITIONS: "" },
   });
 }
 
@@ -57,21 +57,44 @@ afterAll(async () => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-test("embeds TypeScript factories, leaves JavaScript raw, and excludes declarations", async () => {
-  writeFileSync(join(source, "leaf.ts"), '(function (this: unknown, value: number): number { "use strict"; if (this !== undefined) throw new Error("lost strict mode"); return value + 1; })\n');
+test("embeds minified TypeScript and JavaScript factories and excludes declarations", async () => {
+  writeFileSync(join(source, "leaf.ts"), '(function (this: unknown, value: number): number {\n  "use strict";\n  // Comment text is dropped.\n  if (this !== undefined) throw new Error("lost strict mode");\n  return value + 1;\n})\n');
   writeFileSync(join(source, "ambient.d.ts"), "declare const ignored: number;\n");
-  writeFileSync(join(source, "old.js"), "(function () { return 7; })\n");
+  writeFileSync(join(source, "old.js"), "(function () {\n  return 7;\n})\n");
+  // The Intl data modules are embedded exactly as written.
+  writeFileSync(join(source, "intl.js"), "(function () {\n  return 1;\n})\n");
   const result = await runBuild();
   expect(result.exitCode, result.diagnostic).toBe(0);
   expect(result.reason, result.diagnostic).toBe("exit");
   const table = readFileSync(join(out, "polyfills.rs"), "utf8");
   expect(table).toContain('("leaf", include_str!(');
-  expect(table).toContain(join(source, "old.js"));
+  expect(table).toContain(join(out, "runtime-js/old.js"));
+  expect(table).toContain(join(source, "intl.js"));
   expect(table).not.toContain("ambient");
   const generated = readFileSync(join(out, "runtime-js/leaf.js"), "utf8");
   // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
   expect((0, eval)(generated)(41)).toBe(42);
   expect(generated).not.toContain(": number");
+  expect(generated).not.toContain("Comment text");
+  expect(generated).toContain('"use strict"');
+  expect(generated.trim().split("\n")).toHaveLength(1);
+  // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
+  expect((0, eval)(readFileSync(join(out, "runtime-js/old.js"), "utf8"))()).toBe(7);
+  expect(readFileSync(join(source, "intl.js"), "utf8")).toContain("\n  return 1;\n");
+  rmSync(join(source, "intl.js"));
+});
+
+test("keeps token positions when BUNWASM_JS_PRESERVE_POSITIONS is set", async () => {
+  writeFileSync(join(source, "leaf.ts"), "(function (value: number) {\n  return value + 1;\n})\n");
+  const result = await commands.run(builder, [], {
+    phase: "embed-positions", timeout: 4_000,
+    env: { ...process.env, CARGO_MANIFEST_DIR: manifest, OUT_DIR: out, BUNWASM_JS_OVERRIDE_DIR: "", BUNWASM_JS_PRESERVE_POSITIONS: "1" },
+  });
+  expect(result.exitCode, result.diagnostic).toBe(0);
+  expect(result.stdout.toString()).toContain("cargo:rerun-if-env-changed=BUNWASM_JS_PRESERVE_POSITIONS");
+  const table = readFileSync(join(out, "polyfills.rs"), "utf8");
+  expect(table).toContain(join(source, "old.js"));
+  expect(readFileSync(join(out, "runtime-js/leaf.js"), "utf8")).toBe("(function (value        ) {\n  return value + 1;\n})\n");
 });
 
 test("transpiles TypeScript overrides and tracks their files", async () => {
@@ -101,8 +124,10 @@ test("embeds the converted runtime factories under their original names", async 
   expect(result.reason, result.diagnostic).toBe("exit");
   const table = readFileSync(join(directory, "polyfills.rs"), "utf8");
   expect(table).not.toContain(source);
-  expect(result.stderr.match(/runtime-js launch phase=strip /g)).toHaveLength(1);
+  // One batch minifies every module; the Intl data modules are left out of it.
+  expect(result.stderr.match(/runtime-js launch phase=strip /g)).toBeNull();
   expect(result.stderr.match(/runtime-js launch phase=compact /g)).toHaveLength(1);
+  expect(result.stderr).not.toContain("phase=compact source=" + join(root, "crates/bunwasm-runtime/src/js/intl.js"));
   expect(result.stderr.match(/runtime-js phase=bun_wrap /g)).toHaveLength(1);
   expect(result.stderr.match(/runtime-js phase=direct_stream /g)).toHaveLength(1);
   expect(table).toContain('("direct_stream", include_str!(');
