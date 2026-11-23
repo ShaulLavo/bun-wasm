@@ -8,6 +8,8 @@
 //   internal.getSourceLine(f, n)  -> string | undefined (1-based line)
 //   internal.isESMNamespace(v)    -> boolean
 // Optional hooks (feature-detected):
+//   internal.sourceColumn(rule, f, n, column) -> a stack column rule applied to line n of f
+//                                    in the host ("callee" or "constructor")
 //   internal.getProxyTarget(p)    -> target object (Bun prints a proxy as its target)
 //   internal.isError(v) / internal.isPromise(v) -> exact brand checks
 //   internal.iteratorEntries(it)  -> array of the remaining entries of a Map/Set
@@ -1531,24 +1533,41 @@
     return frames;
   }
 
-  // JSC (without Bun's position remapping) reports a call at its open paren;
-  // Bun prints the callee, i.e. the last identifier before it.
-  function calleeColumn(file, lineNo, column) {
+  // A column rule runs where the source line is stored when the host offers
+  // `internal.sourceColumn(rule, file, line, column)` (crates/bunwasm-runtime/src/source_column.rs):
+  // a minified bundle keeps its code on one line, and copying that line into the engine for
+  // every frame made error.stack reads dominate `next build` on JSC. Hot-run modules keep
+  // their lines in JavaScript (hot_run.ts serves them through getSourceLine), and hosts
+  // without the native read the line too; both paths apply the same rule.
+  function sourceColumn(rule, file, lineNo, column, readText) {
+    const hot = file.startsWith("bunwasm:hot:");
+    if (!hot && typeof internal.sourceColumn === "function") return internal.sourceColumn(rule, file, lineNo, column);
     if (typeof internal.getSourceLine !== "function") return column;
     const text = internal.getSourceLine(file, lineNo);
-    if (typeof text !== "string" || text[column - 1] !== "(") return column;
+    return typeof text === "string" ? readText(text, column) : column;
+  }
+
+  // JSC (without Bun's position remapping) reports a call at its open paren;
+  // Bun prints the callee, i.e. the last identifier before it.
+  function calleeColumnInText(text, column) {
+    if (text[column - 1] !== "(") return column;
     let start = column - 1;
     while (start > 0 && /[\w$]/.test(text[start - 1])) start--;
     return start < column - 1 ? start + 1 : column;
   }
 
   // SpiderMonkey points a constructor call at `new`, unlike Bun's callee.
-  function constructorColumn(file, lineNo, column) {
-    if (typeof internal.getSourceLine !== "function") return column;
-    const text = internal.getSourceLine(file, lineNo);
-    if (typeof text !== "string") return column;
+  function constructorColumnInText(text, column) {
     const prefix = /^new[ \t]+(?=[$A-Z_a-z])/.exec(text.slice(column - 1));
     return prefix ? column + prefix[0].length : column;
+  }
+
+  function calleeColumn(file, lineNo, column) {
+    return sourceColumn("callee", file, lineNo, column, calleeColumnInText);
+  }
+
+  function constructorColumn(file, lineNo, column) {
+    return sourceColumn("constructor", file, lineNo, column, constructorColumnInText);
   }
 
   // JavaScriptCore and SpiderMonkey frames: `name@file:line:col`, `module code@…`,

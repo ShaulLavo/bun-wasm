@@ -14,6 +14,7 @@ Bun, WebKit or V8 source.
 | `crates/bunwasm-runtime/src/js/console.ts`, `trace` | Host feature | Drop the header before the frames `console.trace` prints. |
 | `crates/bunwasm-runtime/src/js/bootstrap.js`, `fallbackErrorText` | Host feature | Print the frames once under the fallback's label line. |
 | `crates/bunwasm-runtime/src/modules.rs` and `natives.rs`, `sourceGeneration` | Host feature | Count changes to loaded sources and position maps, for the JSC frame cache. |
+| `crates/bunwasm-runtime/src/source_column.rs` and `natives.rs`, `sourceColumn` | Host feature | Apply the inspector's callee and constructor column rules to the stored source line, returning only the column. |
 
 ## The header
 
@@ -49,6 +50,17 @@ read about 50 times slower than the native text. Formatted frames are cached by 
 text. The cache empties when `sourceGeneration` moves: `crates/bunwasm-runtime/src/modules.rs`
 bumps it whenever a loaded source or position map changes, including a file reloaded after
 `delete require.cache[path]`. A hot run maps through changing revisions and skips the cache.
+
+Moving a call's column to its callee reads only the characters around the column, but the
+rule used to fetch the whole source line into JavaScript. A minified bundle keeps its code
+on one line (Next's compiled `@vercel/nft` has a 126,000-character line), so each frame
+copied that line into the engine, and every read that missed the cache paid for it: on
+`next build`, Collecting build traces went from under a minute to about ten. The
+`sourceColumn` native now applies the rule where the line is stored, caching line boundaries
+and per-line UTF-16 offset checkpoints per `sourceGeneration` so distinct frame columns on
+long minified or non-ASCII lines do not rescan the source. Hot-run modules,
+whose lines live in JavaScript, and hosts without the native still read the line.
+
 A hot run keeps the native text for the inspector, as QuickJS does. Custom
 `Error.prepareStackTrace` formatters still receive CallSites parsed from the native
 text. An empty trace stays without a stack property.

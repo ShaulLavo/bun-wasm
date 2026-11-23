@@ -1804,6 +1804,19 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
     t.add("getSourceLine", move |a| {
         Ok(st.source_line(a.str(0)?, a.num(1)? as usize).into())
     });
+    // inspect.js's stack-frame column rules, applied to the stored line so a minified
+    // bundle's line never crosses into the engine per frame (crate::source_column).
+    let st = state.clone();
+    t.add("sourceColumn", move |a| {
+        let rule = crate::source_column::Rule::parse(a.str(0)?)
+            .ok_or_else(|| NativeError::type_error("Unknown source column rule"))?;
+        let column = a.num(3)?;
+        if !(column >= 1.0 && column.fract() == 0.0 && column <= u32::MAX as f64) {
+            return Ok(column.into());
+        }
+        let mapped = st.source_column(rule, a.str(1)?, a.num(2)? as usize, column as usize);
+        Ok((mapped as f64).into())
+    });
     // `Bun.build`: the options as JSON (src/js/bun.js normalizes them), the
     // outputs as `{ outputs: [{ path, kind, contents }], logs }`.
     let st = state.clone();
