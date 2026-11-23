@@ -12,6 +12,16 @@
 //! Columns are 1-based UTF-16 code-unit offsets, as in stack text. Each rule matches the
 //! JavaScript it replaces exactly, including a column outside the line, which stays unchanged.
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
+/// Lines up to this byte length are cheap to scan directly without allocating a checkpoint table.
+const SMALL_LINE_BYTES: usize = 256;
+/// UTF-16 code units between stored byte-offset checkpoints on long non-ASCII lines.
+const CHECKPOINT_STRIDE: usize = 128;
+/// Maximum number of recently indexed files retained per `source_generation`.
+const MAX_CACHED_SOURCES: usize = 8;
+
 /// The column rules `sourceColumn` applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Rule {
@@ -33,6 +43,7 @@ impl Rule {
 }
 
 /// The column Bun prints for `column` (1-based) on `line`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn apply(rule: Rule, line: &str, column: usize) -> usize {
     let Some(unit) = column.checked_sub(1) else {
         return column;
@@ -40,9 +51,213 @@ pub(crate) fn apply(rule: Rule, line: &str, column: usize) -> usize {
     let Some(offset) = byte_offset(line, unit) else {
         return column;
     };
+    apply_at_offset(rule, line.as_bytes(), offset, column)
+}
+
+fn apply_at_offset(rule: Rule, bytes: &[u8], offset: usize, column: usize) -> usize {
     match rule {
-        Rule::Callee => callee(line.as_bytes(), offset, column),
-        Rule::Constructor => constructor(&line.as_bytes()[offset..], column),
+        Rule::Callee => callee(bytes, offset, column),
+        Rule::Constructor => constructor(&bytes[offset..], column),
+    }
+}
+
+/// Cached line boundaries and lazy per-line UTF-16 checkpoints for one loaded source.
+pub(crate) struct SourceIndex {
+    /// `[start, end)` byte range of each line (0-based), matching `str::lines()`.
+    lines: Vec<(usize, usize)>,
+    /// Lazy UTF-16 offset tables for long lines (`len > SMALL_LINE_BYTES`).
+    utf16: HashMap<usize, LineUtf16>,
+}
+
+impl SourceIndex {
+    pub(crate) fn new(text: &str) -> Self {
+        Self {
+            lines: line_ranges(text),
+            utf16: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn line<'a>(&self, text: &'a str, index: usize) -> Option<&'a str> {
+        let &(start, end) = self.lines.get(index)?;
+        Some(&text[start..end])
+    }
+
+    pub(crate) fn apply_column(
+        &mut self,
+        text: &str,
+        rule: Rule,
+        line_index: usize,
+        column: usize,
+    ) -> Option<usize> {
+        let &(start, end) = self.lines.get(line_index)?;
+        let line = &text[start..end];
+        let Some(unit) = column.checked_sub(1) else {
+            return Some(column);
+        };
+        let offset = if line.len() <= SMALL_LINE_BYTES {
+            byte_offset(line, unit)
+        } else {
+            self.utf16
+                .entry(line_index)
+                .or_insert_with(|| LineUtf16::new(line))
+                .byte_offset(line, unit)
+        };
+        let Some(offset) = offset else {
+            return Some(column);
+        };
+        Some(apply_at_offset(rule, line.as_bytes(), offset, column))
+    }
+}
+
+/// Bounded LRU cache of [`SourceIndex`] values keyed by `(file, generation, text pointer)`.
+#[derive(Default)]
+pub(crate) struct SourceIndexCache {
+    entries: Vec<CachedSource>,
+}
+
+struct CachedSource {
+    file: String,
+    generation: u32,
+    from_original_file: bool,
+    text: Rc<str>,
+    index: SourceIndex,
+}
+
+impl SourceIndexCache {
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub(crate) fn cached_original_text(&self, file: &str, generation: u32) -> Option<Rc<str>> {
+        self.entries
+            .iter()
+            .find(|e| e.from_original_file && e.generation == generation && e.file == file)
+            .map(|e| e.text.clone())
+    }
+
+    pub(crate) fn get_or_insert(
+        &mut self,
+        file: &str,
+        generation: u32,
+        from_original_file: bool,
+        text: &Rc<str>,
+    ) -> &mut SourceIndex {
+        if let Some(pos) = self.entries.iter().position(|e| {
+            e.generation == generation
+                && e.from_original_file == from_original_file
+                && e.file == file
+                && Rc::ptr_eq(&e.text, text)
+        }) {
+            if pos != 0 {
+                self.entries[..=pos].rotate_right(1);
+            }
+            return &mut self.entries[0].index;
+        }
+        if let Some(pos) = self.entries.iter().position(|e| e.file == file) {
+            self.entries.remove(pos);
+        } else if self.entries.len() >= MAX_CACHED_SOURCES {
+            self.entries.pop();
+        }
+        self.entries.insert(
+            0,
+            CachedSource {
+                file: file.to_owned(),
+                generation,
+                from_original_file,
+                text: text.clone(),
+                index: SourceIndex::new(text),
+            },
+        );
+        &mut self.entries[0].index
+    }
+}
+
+/// `[start, end)` byte spans of each line in `text`, matching `str::lines()` exactly.
+fn line_ranges(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    while start < bytes.len() {
+        match bytes[start..].iter().position(|&b| b == b'\n') {
+            Some(rel) => {
+                let nl = start + rel;
+                let end = if nl > start && bytes[nl - 1] == b'\r' {
+                    nl - 1
+                } else {
+                    nl
+                };
+                lines.push((start, end));
+                start = nl + 1;
+            }
+            None => {
+                lines.push((start, bytes.len()));
+                break;
+            }
+        }
+    }
+    lines
+}
+
+enum LineUtf16 {
+    /// Every byte is ASCII, so UTF-16 code unit `u` is byte `u`.
+    Ascii,
+    /// Checkpoints `(utf16_unit, byte_offset)` spaced every `CHECKPOINT_STRIDE` UTF-16 units.
+    /// Invariant: for every `k`, `k * CHECKPOINT_STRIDE <= checkpoints[k].0 <= k * CHECKPOINT_STRIDE + 1`.
+    Checkpoints {
+        total_units: usize,
+        checkpoints: Vec<(usize, usize)>,
+    },
+}
+
+impl LineUtf16 {
+    fn new(line: &str) -> Self {
+        if line.is_ascii() {
+            return Self::Ascii;
+        }
+        let mut checkpoints = Vec::with_capacity(line.len() / CHECKPOINT_STRIDE + 1);
+        checkpoints.push((0, 0));
+        let mut units = 0;
+        let mut next_mark = CHECKPOINT_STRIDE;
+        for (byte, ch) in line.char_indices() {
+            if units >= next_mark {
+                checkpoints.push((units, byte));
+                next_mark = checkpoints.len() * CHECKPOINT_STRIDE;
+            }
+            units += ch.len_utf16();
+        }
+        Self::Checkpoints {
+            total_units: units,
+            checkpoints,
+        }
+    }
+
+    fn byte_offset(&self, line: &str, unit: usize) -> Option<usize> {
+        match self {
+            Self::Ascii => (unit < line.len()).then_some(unit),
+            Self::Checkpoints {
+                total_units,
+                checkpoints,
+            } => {
+                if unit >= *total_units {
+                    return None;
+                }
+                let mut idx = (unit / CHECKPOINT_STRIDE).min(checkpoints.len() - 1);
+                if checkpoints[idx].0 > unit {
+                    idx -= 1;
+                }
+                let (mut units, start_byte) = checkpoints[idx];
+                for (rel, ch) in line[start_byte..].char_indices() {
+                    if units == unit {
+                        return Some(start_byte + rel);
+                    }
+                    units += ch.len_utf16();
+                    if units > unit {
+                        return None;
+                    }
+                }
+                None
+            }
+        }
     }
 }
 
@@ -194,5 +409,83 @@ mod tests {
     fn a_long_minified_line_is_read_in_place() {
         let line = format!("{};fail(1)", "x".repeat(130_000));
         assert_eq!(apply(Rule::Callee, &line, 130_006), 130_002);
+    }
+
+    #[test]
+    fn source_index_lines_match_str_lines() {
+        let samples = [
+            "",
+            "\n",
+            "\r\n",
+            "\r",
+            "a",
+            "a\n",
+            "a\r\n",
+            "a\r\rb",
+            "a\r\r\n",
+            "a\r\nb\nc\r",
+            "a\n\n",
+            "\n\r\n",
+            "a\u{2028}b\u{2029}c\nlast",
+        ];
+        for sample in samples {
+            let index = SourceIndex::new(sample);
+            let expected: Vec<&str> = sample.lines().collect();
+            let actual: Vec<&str> = (0..expected.len())
+                .map(|i| index.line(sample, i).unwrap())
+                .collect();
+            assert_eq!(actual, expected, "lines for {sample:?}");
+            assert_eq!(index.line(sample, expected.len()), None);
+        }
+    }
+
+    #[test]
+    fn indexed_lookup_matches_unindexed_across_checkpoint_boundaries() {
+        let ascii_long = format!("{}invoke(1); throw new Error();", "x".repeat(400));
+        let surrogate_at_boundary = format!(
+            "{}🦊f(1);{}🦊new Thing();{}🦊",
+            "a".repeat(CHECKPOINT_STRIDE - 1),
+            "b".repeat(CHECKPOINT_STRIDE - 5),
+            "c".repeat(CHECKPOINT_STRIDE - 3),
+        );
+        let all_surrogates = format!("{}f(1)new X()", "🦊".repeat(CHECKPOINT_STRIDE + 5));
+        let bmp_and_astral = format!("'é';{}🦊new\tThing();", "f();".repeat(90));
+        for line in [
+            ascii_long,
+            surrogate_at_boundary,
+            all_surrogates,
+            bmp_and_astral,
+        ] {
+            assert!(line.len() > SMALL_LINE_BYTES);
+            let mut index = SourceIndex::new(&line);
+            let units = line.encode_utf16().count();
+            for column in 0..=units + 2 {
+                assert_eq!(
+                    index.apply_column(&line, Rule::Callee, 0, column),
+                    Some(callee_js(&line, column)),
+                    "indexed callee col {column}"
+                );
+                assert_eq!(
+                    index.apply_column(&line, Rule::Constructor, 0, column),
+                    Some(constructor_js(&line, column)),
+                    "indexed constructor col {column}"
+                );
+            }
+            assert_eq!(index.utf16.len(), 1);
+        }
+    }
+
+    #[test]
+    fn repeated_lookups_on_long_unicode_line_reuse_index() {
+        let calls = 31_500;
+        let source = format!("'é';{}", "f();".repeat(calls));
+        let mut index = SourceIndex::new(&source);
+        for i in 0..calls {
+            assert_eq!(
+                index.apply_column(&source, Rule::Callee, 0, 6 + 4 * i),
+                Some(5 + 4 * i)
+            );
+        }
+        assert_eq!(index.utf16.len(), 1);
     }
 }

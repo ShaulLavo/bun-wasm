@@ -56,7 +56,9 @@ rule used to fetch the whole source line into JavaScript. A minified bundle keep
 on one line (Next's compiled `@vercel/nft` has a 126,000-character line), so each frame
 copied that line into the engine, and every read that missed the cache paid for it: on
 `next build`, Collecting build traces went from under a minute to about ten. The
-`sourceColumn` native now applies the rule where the line is stored. Hot-run modules,
+`sourceColumn` native now applies the rule where the line is stored, caching line boundaries
+and per-line UTF-16 offset checkpoints per `sourceGeneration` so distinct frame columns on
+long minified or non-ASCII lines do not rescan the source. Hot-run modules,
 whose lines live in JavaScript, and hosts without the native still read the line.
 
 A hot run keeps the native text for the inspector, as QuickJS does. Custom

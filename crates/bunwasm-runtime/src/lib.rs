@@ -149,6 +149,8 @@ pub(crate) struct State {
     source_generation: Cell<u32>,
     /// The original file most recently read for an error excerpt.
     last_original: RefCell<Option<(String, Rc<str>)>>,
+    /// Cached line spans and UTF-16 column checkpoints for stack-frame lookups.
+    source_columns: RefCell<source_column::SourceIndexCache>,
     stdout: RefCell<BufWriter<io::Stdout>>,
     /// Set when `process.nextTick` queued work.
     /// Handled signals dequeued by a synchronous sleep, delivered at the next checkpoint.
@@ -195,6 +197,7 @@ impl State {
             positions: RefCell::new(HashMap::new()),
             source_generation: Cell::new(0),
             last_original: RefCell::new(None),
+            source_columns: RefCell::new(source_column::SourceIndexCache::default()),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
             deferred_signals: RefCell::new(host::DeferredSignals::default()),
             tick_pending: Cell::new(false),

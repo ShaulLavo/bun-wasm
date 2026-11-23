@@ -513,6 +513,7 @@ impl State {
     fn sources_changed(&self) {
         self.source_generation
             .set(self.source_generation.get().wrapping_add(1));
+        self.source_columns.borrow_mut().clear();
     }
 
     /// Moves whenever a loaded source or a position map changes (`sourceGeneration`).
@@ -568,7 +569,12 @@ impl State {
     }
 
     pub fn source_line(&self, file: &str, line: usize) -> Option<String> {
-        self.with_source_line(file, line, str::to_owned)
+        let index = line.checked_sub(1)?;
+        let (text, from_original_file) = self.source_text(file)?;
+        let generation = self.source_generation.get();
+        let mut cache = self.source_columns.borrow_mut();
+        let source = cache.get_or_insert(file, generation, from_original_file, &text);
+        source.line(&text, index).map(str::to_owned)
     }
 
     /// `column` on `line` of `file` after a stack-frame column rule, read without copying the
@@ -580,30 +586,31 @@ impl State {
         line: usize,
         column: usize,
     ) -> usize {
-        self.with_source_line(file, line, |text| {
-            crate::source_column::apply(rule, text, column)
-        })
-        .unwrap_or(column)
+        let Some(index) = line.checked_sub(1) else {
+            return column;
+        };
+        let Some((text, from_original_file)) = self.source_text(file) else {
+            return column;
+        };
+        let generation = self.source_generation.get();
+        let mut cache = self.source_columns.borrow_mut();
+        let source = cache.get_or_insert(file, generation, from_original_file, &text);
+        source
+            .apply_column(&text, rule, index, column)
+            .unwrap_or(column)
     }
 
-    fn with_source_line<R>(
-        &self,
-        file: &str,
-        line: usize,
-        read: impl FnOnce(&str) -> R,
-    ) -> Option<R> {
-        let index = line.checked_sub(1)?;
+    fn source_text(&self, file: &str) -> Option<(Rc<str>, bool)> {
         let original = self
             .positions
             .borrow()
             .get(file)
             .and_then(|p| p.original.clone());
-        let text = match original {
-            Some(Original::File) => self.original_file_text(file)?,
-            Some(Original::Text(text)) => text,
-            None => self.sources.borrow().get(file)?.0.clone(),
-        };
-        text.lines().nth(index).map(read)
+        match original {
+            Some(Original::File) => Some((self.original_file_text(file)?, true)),
+            Some(Original::Text(text)) => Some((text, false)),
+            None => Some((self.sources.borrow().get(file)?.0.clone(), false)),
+        }
     }
 
     /// The file `path` as it was loaded. Stack formatting asks for several lines of one
@@ -614,6 +621,13 @@ impl State {
             && cached == path
         {
             return Some(text.clone());
+        }
+        if let Some(text) = self
+            .source_columns
+            .borrow()
+            .cached_original_text(path, self.source_generation.get())
+        {
+            return Some(text);
         }
         let raw = std::fs::read(path).ok()?;
         if self.source_digests.borrow().get(path) != Some(&self.source_digest(&raw)) {
@@ -1381,5 +1395,54 @@ mod tests {
             "require"
         ));
         assert!(!declares("if (a == require) {}", "require"));
+    }
+
+    #[test]
+    fn source_column_caches_index_per_generation_and_invalidates_on_reload() {
+        let file = TestModule::new("source-column-cache");
+        let path = file.path();
+        let calls = 2_000;
+        let first = format!("'é';{}", "f();".repeat(calls));
+        file.write(&first);
+        let state = State::new(
+            Vec::new(),
+            Box::new(crate::transpiler::PassthroughTranspiler),
+        );
+        state.load_source(&path).unwrap();
+        for i in 0..calls {
+            assert_eq!(
+                state.source_column(crate::source_column::Rule::Callee, &path, 1, 6 + 4 * i),
+                5 + 4 * i
+            );
+        }
+        assert_eq!(state.source_line(&path, 1).as_deref(), Some(first.as_str()));
+        assert_eq!(state.source_line(&path, 2), None);
+        assert_eq!(
+            state.source_column(crate::source_column::Rule::Callee, &path, 2, 10),
+            10
+        );
+
+        // Reloading the file bumps source_generation and invalidates cached offsets.
+        let second = format!("'é';{}", "abc();".repeat(100));
+        file.write(&second);
+        state.load_source(&path).unwrap();
+        assert_eq!(
+            state.source_column(crate::source_column::Rule::Callee, &path, 1, 8),
+            5
+        );
+        assert_eq!(
+            state.source_column(crate::source_column::Rule::Callee, &path, 1, 14),
+            11
+        );
+
+        // Even a direct sources replacement without bumping source_generation misses on Rc::ptr_eq.
+        state
+            .sources
+            .borrow_mut()
+            .insert(path.clone(), (Rc::from("  invoke(1);"), Format::Cjs));
+        assert_eq!(
+            state.source_column(crate::source_column::Rule::Callee, &path, 1, 9),
+            3
+        );
     }
 }
