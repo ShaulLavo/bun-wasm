@@ -9,8 +9,10 @@ import { checkEmptyPaths } from "../tests/fixtures/fs-empty-path/index.ts";
 async function checkSource(): Promise<void> {
   const source = fs.readFileSync(new URL("../crates/bunwasm-runtime/src/js/node_fs.js", import.meta.url), "utf8");
   const optionsPath = process.argv[2];
-  if (!optionsPath) throw new Error("Missing generated filesystem options factory");
+  const buffersPath = process.argv[3];
+  if (!optionsPath || !buffersPath) throw new Error("Missing generated filesystem helper factories");
   const helpers = runInNewContext(fs.readFileSync(optionsPath, "utf8"), { Date })({});
+  const buffersReaddir = runInNewContext(fs.readFileSync(buffersPath, "utf8"), { Uint8Array, ArrayBuffer, DataView })();
   const native = {
     hostCaps: { proc_spawn: false },
     utf8Decode: (bytes: Uint8Array) => Buffer.from(bytes).toString(),
@@ -32,6 +34,7 @@ async function checkSource(): Promise<void> {
       if (name === "buffer") return { Buffer };
       if (name === "path") return path;
       if (name === "fs_options") return helpers;
+      if (name === "fs_buffers_readdir") return buffersReaddir;
       if (name === "fs_watch") return () => ({});
       // Pins only matter while a buffer can be transferred mid-call; this fixture never does.
       if (name === "fs_buffer_pins") return { pin: () => () => {} };
