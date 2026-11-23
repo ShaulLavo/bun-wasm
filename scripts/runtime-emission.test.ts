@@ -335,10 +335,34 @@ function inStrictCode(node: ts.Node): boolean {
   return false;
 }
 
+/** The object-literal properties `__proto__: __proto__`, however the key is written (name or string, any spacing or comments). */
+function protoSelfAssignments(code: string): number {
+  const file = ts.createSourceFile("module.ts", code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  let found = 0;
+  const visit = (node: ts.Node) => {
+    if (ts.isPropertyAssignment(node) && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) && node.name.text === "__proto__"
+      && ts.isIdentifier(node.initializer) && node.initializer.text === "__proto__") found++;
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
+test("the `__proto__: __proto__` finder sees every spelling that Bun reprints as a shorthand", () => {
+  for (const spelling of ["{ __proto__: __proto__ }", '{ "__proto__": __proto__ }', "{ '__proto__' : __proto__ }", "{ __proto__: /* comment */ __proto__ }", "{ a: 1, __proto__ // note\n: __proto__ }"]) {
+    expect(protoSelfAssignments(`const o = ${spelling};`), spelling).toBe(1);
+    // The hazard is real: the reprint becomes a shorthand, which defines an own property instead of setting the prototype.
+    expect(compact(`(function (__proto__) { return ${spelling}; })\n`).output, spelling).toMatch(/[{,]__proto__\}/);
+  }
+  for (const harmless of ["{ __proto__: null }", "{ __proto__: base }", "{ ['__proto__']: __proto__ }", "{ other: __proto__ }"]) {
+    expect(protoSelfAssignments(`const o = ${harmless};`), harmless).toBe(0);
+  }
+});
+
 test("no runtime module writes `__proto__: __proto__`, which Bun reprints as a shorthand that no longer sets the prototype", () => {
   const directory = join(root, "crates/bunwasm-runtime/src/js");
   for (const name of readdirSync(directory).filter(entry => /\.(js|ts)$/.test(entry) && !entry.endsWith(".d.ts") && !/^(intl|tz_data)\./.test(entry))) {
-    expect(readFileSync(join(directory, name), "utf8"), name).not.toMatch(/__proto__\s*:\s*__proto__\b/);
+    expect(protoSelfAssignments(readFileSync(join(directory, name), "utf8")), name).toBe(0);
   }
 });
 
