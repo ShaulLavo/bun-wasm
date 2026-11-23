@@ -940,4 +940,3 @@ fn kw_crypt(key: &[u8], input: &[u8], encrypt: bool) -> Result<Vec<u8>> {
         _ => Err("DataError"),
     }
 }
-
