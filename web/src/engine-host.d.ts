@@ -48,6 +48,8 @@ export interface EngineHostOptions {
   asyncContext?: {
     get(): unknown;
     set(frame: unknown): void;
+    /** Run a host-internal callback outside any guest async context (for example scheduling host timers). */
+    runRoot?<T>(fn: () => T): T;
   };
   /** Called exactly once when the program ends (process.exit, uncaught error, empty event loop). */
   onExit(code: number): void;
