@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { sharedBrowserClocks } from "./spidermonkey-native-qualification.ts";
 
 type StepResult = { label: string; kind: "native" | "browser"; status: number; output: Buffer };
 type NativeStepResult = StepResult & { cleanupConfirmed: boolean };
@@ -47,7 +48,7 @@ function nativeCommand(deadlineEpoch: number, statePath: string): { args: string
 }
 
 function browserCommand(engine: string, deadlineEpoch: number): { args: string[]; expired: boolean } {
-  const cap = engine === "spidermonkey" ? 1320 : 420;
+  const cap = sharedBrowserClocks(engine).consumerSeconds;
   const remaining = deadlineEpoch - Math.floor(Date.now() / 1000);
   if (remaining <= 0) return { args: [], expired: true };
   const limit = Math.min(remaining, cap);

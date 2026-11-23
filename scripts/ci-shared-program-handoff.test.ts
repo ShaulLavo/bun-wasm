@@ -168,7 +168,7 @@ test("two consumer runners verify same-source inputs inline and cover all six sh
   expect(job["continue-on-error"]).toBeUndefined();
   expect(consumerRunner).toContain('"native", "--profile", "shared-group"');
   expect(consumerRunner).toContain('"browser-guest", "--profile", "shared-group"');
-  expect(consumerRunner).toContain('engine === "spidermonkey" ? 1320 : 420');
+  expect(consumerRunner).toContain("sharedBrowserClocks(engine).consumerSeconds");
   expect(consumerRunner).toContain("Shared native process cleanup could not be confirmed");
   expect(shared.needs).toBe("selection");
   expect(shared.if).toContain("needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true'");
@@ -240,7 +240,7 @@ test("shared consumer runner enforces per-engine Browser caps and cleanup receip
     expect(realQjsJsc.status, realQjsJsc.stdout + realQjsJsc.stderr).toBe(0);
     const qjsLines = readFileSync(recordPath, "utf8").trim().split("\n");
     expect(qjsLines.filter(line => line.includes("native --profile shared-group"))).toHaveLength(2);
-    expect(qjsLines.filter(line => line.includes("420 bun") && line.includes("browser-guest --profile shared-group"))).toHaveLength(2);
+    expect(qjsLines.filter(line => line.includes("900 bun") && line.includes("browser-guest --profile shared-group"))).toHaveLength(2);
     writeFileSync(recordPath, "");
     const sm = run("spidermonkey", { REAL_SUPERVISOR: "1" });
     expect(sm.status, sm.stdout + sm.stderr).toBe(0);

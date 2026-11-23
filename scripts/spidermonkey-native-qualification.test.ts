@@ -89,8 +89,24 @@ test('Browser hang caps preserve page, driver and sequential-tier supervision', 
   expect(clock).toEqual({ pageMs: 480_000, driverMs: 540_000, consumerSeconds: 1320 });
   expect(clock.driverMs).toBeGreaterThan(clock.pageMs);
   expect(clock.consumerSeconds * 1000).toBeGreaterThan(clock.driverMs * 2);
-  for (const kind of ['quickjs', 'jsc']) expect(sharedBrowserClocks(kind)).toEqual({ pageMs: 240_000, driverMs: 300_000, consumerSeconds: 420 });
-  for (const entry of ['spidermonkey-canary.ts', 'spidermonkey-recursion.ts', 'spidermonkey-reentry.ts', 'parser-reserve-ownership.ts', 'failed-stop.ts', 'address-space/guest.ts']) {
-    expect(sharedBrowserClocks('spidermonkey', entry).pageMs).toBe(240_000);
+  for (const kind of ['quickjs', 'jsc']) expect(sharedBrowserClocks(kind)).toEqual({ pageMs: 600_000, driverMs: 720_000, consumerSeconds: 900 });
+  for (const kind of ['spidermonkey', 'quickjs', 'jsc']) {
+    for (const entry of ['spidermonkey-canary.ts', 'spidermonkey-recursion.ts', 'spidermonkey-reentry.ts', 'parser-reserve-ownership.ts', 'failed-stop.ts', 'address-space/guest.ts']) {
+      expect(sharedBrowserClocks(kind, entry).pageMs).toBe(240_000);
+    }
+  }
+});
+
+// CI's quickjs-jsc job runs the QuickJS and JSC Browser drivers side by side on one 4 vCPU runner.
+// There, on 2026-11-22, the JSC browser-guest.ts entry took 104 s to about 250 s (it finished just
+// after the old 240 s page cap) and a whole driver run up to 264 s. A hang cap leaves room for twice that.
+test('QuickJS and JSC Browser hang caps leave room for twice the slowest healthy CI run', () => {
+  const slowestEntryMs = 250_000, slowestDriverMs = 264_000, otherBrowserChecksMs = 40_000;
+  for (const kind of ['quickjs', 'jsc']) {
+    const clock = sharedBrowserClocks(kind);
+    expect(clock.pageMs).toBeGreaterThanOrEqual(2 * slowestEntryMs);
+    expect(clock.driverMs).toBeGreaterThanOrEqual(2 * slowestDriverMs);
+    expect(clock.driverMs).toBeGreaterThan(clock.pageMs);
+    expect(clock.consumerSeconds * 1000).toBeGreaterThan(clock.driverMs + otherBrowserChecksMs);
   }
 });
