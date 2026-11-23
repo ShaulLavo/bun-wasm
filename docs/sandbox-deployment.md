@@ -23,12 +23,27 @@ any engine side modules. Existing qualified guests can be selected with absolute
 embedded runtime files.
 
 `site/build.ts` also requires `SHARED_QUICKJS_PROGRAM` and `SHARED_JSC_PROGRAM`, the
-shared-group programs that worker templates use. Build them against a shared-PIC
-sysroot (`bun scripts/build-wasi-sysroot.ts --shared-pic` with `BUN_WASM_SYSROOT`
-pointing at it), then run `bun scripts/build-native-profile.ts shared-group OUT ENGINE`
-once per engine; JSC also needs `JSC_PROFILE=shared-group bash scripts/build-jsc.sh`
-first. Point each variable at the program directory the producer writes: QuickJS
-lands in `OUT/program`, JSC in `OUT/program-jsc`.
+shared-group programs that worker templates use. Build them in a subshell against a
+private shared-PIC sysroot: `BUN_WASM_SYSROOT` and `BUN_WASM_SHARED_SYSROOT` must name
+the same directory, and shared JSC needs its own `JSC_BUILD_DIR`, separate from the
+split JSC build. With `S` a scratch directory under `/work/tmp`:
+
+```sh
+(
+  export BUN_WASM_SHARED_SYSROOT="$S/sysroot-shared" BUN_WASM_SYSROOT="$S/sysroot-shared"
+  export CARGO_TARGET_DIR="$S/target-shared"
+  source env.sh
+  bun scripts/build-wasi-sysroot.ts --shared-pic
+  bun scripts/build-native-profile.ts shared-group "$S/group-quickjs" quickjs
+  export JSC_PROFILE=shared-group JSC_BUILD_DIR="$S/jsc-shared"
+  bash scripts/build-jsc.sh
+  bun scripts/build-native-profile.ts shared-group "$S/group-jsc" jsc
+)
+export SHARED_QUICKJS_PROGRAM="$S/group-quickjs/program"
+export SHARED_JSC_PROGRAM="$S/group-jsc/program-jsc"
+```
+
+QuickJS lands in `OUT/program` and JSC in `OUT/program-jsc`.
 
 Run the preflight before the build:
 

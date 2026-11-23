@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Phase, PhaseResult } from "./goals-matrix/model";
 import { smokeCases } from "./iphone-smoke/cases";
-import { chromeCells, liveSmokeOptions, overallStatus, parseDeployment, phaseSummary, smokeGreen } from "./chrome-live-smoke";
+import { chromeCells, fetchDeployment, liveSmokeOptions, overallStatus, parseDeployment, phaseSummary, runLiveSmoke, smokeGreen } from "./chrome-live-smoke";
 
 function result(phase: Phase, status: "pass" | "fail"): PhaseResult {
   const common = { phase, startedAt: "2026-11-23T00:00:00.000Z", durationMs: 1, timeoutMs: 1000 };
@@ -28,6 +31,37 @@ test("options reject a missing output, unknown flags, bad URLs and bad limits", 
   expect(() => liveSmokeOptions(["--output=x", "--base-url=ftp://example.test/"])).toThrow("http(s)");
   expect(() => liveSmokeOptions(["--output=x", "--base-url=not a url"])).toThrow();
   for (const value of ["0", "-5", "1.5", "soon"]) expect(() => liveSmokeOptions(["--output=x", `--timeout-ms=${value}`])).toThrow("positive integer");
+  expect(liveSmokeOptions(["--output=x", "--timeout-ms=2147483647"]).timeoutMs).toBe(2_147_483_647);
+  expect(() => liveSmokeOptions(["--output=x", "--timeout-ms=2147483648"])).toThrow("at most 2147483647");
+  expect(() => liveSmokeOptions(["--output=x", "--install-timeout-ms=2147483648"])).toThrow("at most 2147483647");
+});
+
+async function withServer(fetch: (request: Request) => Response | Promise<Response>, run: (base: URL) => Promise<void>): Promise<void> {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch });
+  try { await run(new URL(server.url.href)); } finally { await server.stop(true); }
+}
+
+test("the deployment request is bounded by the timeout", async () => {
+  const pending = Promise.withResolvers<Response>();
+  await withServer(() => pending.promise, async base => {
+    await expect(fetchDeployment(base, 50)).rejects.toThrow(/timed out|abort/i);
+  });
+  pending.resolve(new Response("late"));
+});
+
+test("a failed run does not leave an earlier run's verdict or logs behind", async () => {
+  const output = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bw-chrome-live-"));
+  try {
+    await Bun.write(join(output, "result.json"), JSON.stringify({ status: "green" }));
+    await Bun.write(join(output, "logs/old.log"), "earlier run");
+    await withServer(() => new Response("unavailable", { status: 503 }), async base => {
+      await expect(runLiveSmoke({ base, output, timeoutMs: 5000, installTimeoutMs: 5000 })).rejects.toThrow("503");
+    });
+    expect(await Bun.file(join(output, "result.json")).exists()).toBe(false);
+    expect(await Bun.file(join(output, "logs/old.log")).exists()).toBe(false);
+  } finally {
+    await rm(output, { recursive: true, force: true });
+  }
 });
 
 test("cells mirror the iPhone smoke in Chrome", () => {

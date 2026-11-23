@@ -1,7 +1,7 @@
 // Chrome check of a deployed sandbox: the iPhone smoke's three cells, run in Chrome for Testing with the
 // goals-matrix Playwright transport against the live origin instead of a local asset server.
 // Usage: bun scripts/chrome-live-smoke.ts --output=DIR [--base-url=https://bun.sprockt.dev/] [--timeout-ms=N]
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { frameworks, type Box, type Framework } from "./goals-matrix/catalog";
@@ -23,9 +23,13 @@ interface CellResult { box: Box; url: string; smokeGreen: boolean; summary: stri
 
 const usage = "Usage: bun scripts/chrome-live-smoke.ts --output=DIR [--base-url=URL] [--timeout-ms=N] [--install-timeout-ms=N]";
 
+// Timers wrap above a signed 32-bit millisecond count (2147483648 ms fires after 1 ms).
+const maxTimerMs = 2_147_483_647;
+
 function positiveInteger(value: string, name: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`--${name} must be a positive integer, not ${JSON.stringify(value)}`);
+  if (parsed > maxTimerMs) throw new Error(`--${name} must be at most ${maxTimerMs} ms, not ${value}`);
   return parsed;
 }
 
@@ -77,8 +81,8 @@ export function parseDeployment(value: unknown): Deployment {
   return { sourceCommit, waffleVersion };
 }
 
-async function fetchDeployment(base: URL): Promise<Deployment> {
-  const response = await fetch(new URL("/deployment.json", base));
+export async function fetchDeployment(base: URL, timeoutMs: number): Promise<Deployment> {
+  const response = await fetch(new URL("/deployment.json", base), { signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) throw new Error(`GET /deployment.json answered ${response.status}`);
   return parseDeployment(await response.json());
 }
@@ -105,9 +109,16 @@ async function runCell(box: Box, options: LiveSmokeOptions): Promise<CellResult>
   return result;
 }
 
-async function runLiveSmoke(options: LiveSmokeOptions): Promise<"green" | "red"> {
-  await mkdir(join(options.output, "logs"), { recursive: true });
-  const deployment = await fetchDeployment(options.base);
+/** A reused output directory must not keep an earlier run's verdict or logs if this run fails. */
+async function freshOutput(output: string): Promise<void> {
+  await rm(join(output, "result.json"), { force: true });
+  await rm(join(output, "logs"), { recursive: true, force: true });
+  await mkdir(join(output, "logs"), { recursive: true });
+}
+
+export async function runLiveSmoke(options: LiveSmokeOptions): Promise<"green" | "red"> {
+  await freshOutput(options.output);
+  const deployment = await fetchDeployment(options.base, options.timeoutMs);
   const results: CellResult[] = [];
   // One cell at a time: each owns a whole browser and the shared preview port.
   for (const box of chromeCells()) results.push(await runCell(box, options));
