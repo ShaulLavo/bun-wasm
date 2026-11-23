@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installFixture as install } from "./install-fixture-command";
 
-import { assertClosed, fixture } from "./install-download-fixture";
+import { assertClosed, fixture, METADATA_HANDLES, TARBALL_HANDLES } from "./install-download-fixture";
 import { demandFixture } from "./install-demand-fixture";
 
 
@@ -25,7 +25,7 @@ for (const transitive of [false, true]) {
       console.log(`${process.env.INSTALL_ENGINE ?? "quickjs"} ${transitive ? "transitive" : "root"}: ${(performance.now() - start).toFixed(1)} ms, peak ${registry.trace.peak}`);
       assert.equal(registry.trace.missedBarrier, false, "second metadata request did not start before first response was released");
       assert.ok(registry.trace.peak > 1, "fixture observed only serial HTTP work");
-      assert.ok(registry.trace.peak <= 8, `unbounded metadata requests: ${registry.trace.peak}`);
+      assert.ok(registry.trace.peak <= METADATA_HANDLES, `unbounded metadata requests: ${registry.trace.peak}`);
       assert.equal(registry.trace.requests.length, transitive ? 21 : 20);
       const lock = readFileSync(join(directory, "bun.lock"), "utf8");
       rmSync(join(directory, "cache"), { recursive: true, force: true });
@@ -77,7 +77,7 @@ test("tarball downloads overlap and warm installs request nothing", async () => 
     await install(directory, registry.base, [], 0, true);
     console.log(`${process.env.INSTALL_ENGINE ?? "quickjs"} archives: ${(performance.now() - start).toFixed(1)} ms, peak ${registry.trace.peak}`);
     assert.equal(registry.trace.missedBarrier, false, "second tarball request did not start before first archive was released");
-    assert.ok(registry.trace.peak > 1 && registry.trace.peak <= 8, `tarball concurrency ${registry.trace.peak}`);
+    assert.ok(registry.trace.peak > 1 && registry.trace.peak <= TARBALL_HANDLES, `tarball concurrency ${registry.trace.peak}`);
     for (const name of Object.keys(registry.dependencies)) {
       assert.equal(JSON.parse(readFileSync(join(directory, "node_modules", name, "package.json"), "utf8")).name, name);
     }
@@ -118,7 +118,7 @@ test("metadata lookahead spans already resolved parents with narrow child lists"
     await install(directory, registry.base);
     assert.equal(registry.trace.missedBarrier, false, "next resolved parent's metadata did not start before the current child response was released");
     assert.equal(registry.trace.requests.length, 40, "lookahead duplicated or speculated beyond known edges");
-    assert.ok(registry.trace.peak <= 8, `metadata concurrency ${registry.trace.peak}`);
+    assert.ok(registry.trace.peak <= METADATA_HANDLES, `metadata concurrency ${registry.trace.peak}`);
     const packages = lockRows(directory);
     for (const name of Object.keys(registry.dependencies)) {
       const child = name.replace("parent-", "item-");
@@ -143,16 +143,16 @@ function lockRows(directory: string): Map<string, unknown> {
   return new Map<string, unknown>(Object.entries(lock.packages));
 }
 
-test("unpredicted alias demand reserves the eighth handle and queued requests start their idle timer on consumption", async () => {
+test("unpredicted alias demand reserves the last handle and queued requests start their idle timer on consumption", async () => {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-metadata-demand-"));
   const registry = await demandFixture();
   try {
     writeFileSync(join(directory, "package.json"), JSON.stringify({ dependencies: registry.dependencies }));
     await install(directory, registry.base, [], 0, false, ["BUN_CONFIG_HTTP_IDLE_TIMEOUT=1"]);
-    assert.equal(registry.trace.peak, 8, "seven lookahead handles must leave room for an unpredicted demand");
-    assert.equal(registry.trace.requests.length, 11, "nested alias lookups must not duplicate requests");
+    assert.equal(registry.trace.peak, METADATA_HANDLES, "lookahead handles must leave room for an unpredicted demand");
+    assert.equal(registry.trace.requests.length, 3 + METADATA_HANDLES, "nested alias lookups must not duplicate requests");
     const rows = lockRows(directory);
-    assert.deepEqual(Array.from(rows.keys()).sort(), ["a-shared", "b-parent", "b-parent/a-shared", "c-parent"].concat(Array.from({ length: 7 }, (_, index) => `item-${index}`)).sort());
+    assert.deepEqual(Array.from(rows.keys()).sort(), ["a-shared", "b-parent", "b-parent/a-shared", "c-parent"].concat(Array.from({ length: METADATA_HANDLES - 1 }, (_, index) => `item-${index}`)).sort());
     const rootAlias = rows.get("a-shared"), nestedAlias = rows.get("b-parent/a-shared");
     assert.ok(Array.isArray(rootAlias) && Array.isArray(nestedAlias));
     assert.equal(rootAlias[0], "real-old@1.0.0");

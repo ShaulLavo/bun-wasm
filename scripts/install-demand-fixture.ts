@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { Trace } from "./install-download-fixture";
+import { METADATA_HANDLES, type Trace } from "./install-download-fixture";
 
 type State = {
   base: string;
@@ -27,7 +27,7 @@ export async function demandFixture() {
 
 function metadata(state: State, name: string): string {
   const dependencies = name === "b-parent" ? { "a-shared": "npm:real-new@1.0.0" } : {};
-  if (name === "c-parent") Object.assign(dependencies, Object.fromEntries(Array.from({ length: 7 }, (_, index) => [`item-${index}`, "1.0.0"])));
+  if (name === "c-parent") Object.assign(dependencies, Object.fromEntries(Array.from({ length: METADATA_HANDLES - 1 }, (_, index) => [`item-${index}`, "1.0.0"])));
   return JSON.stringify({ name, versions: { "1.0.0": { name, version: "1.0.0", dependencies, dist: { tarball: `${state.base}/${name}.tgz` } } } });
 }
 

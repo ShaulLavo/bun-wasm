@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { packageFixture } from "../tests/install/registry.mjs";
 
-export type Trace = { requests: string[]; active: Set<ServerResponse>; peak: number; missedBarrier: boolean };
+/** Metadata requests resolution keeps open at once: 63 lookahead handles
+ * (`METADATA_PREFETCHES` in crates/bunwasm-runtime/src/install/io.rs) plus one for an
+ * unpredicted demand lookup. */
+export const METADATA_HANDLES = 64;
+/** Tarball requests an install keeps open at once (`TARBALL_PREFETCHES` plus the one consumed). */
+export const TARBALL_HANDLES = 32;
+
+export type Trace ={ requests: string[]; active: Set<ServerResponse>; peak: number; missedBarrier: boolean };
 
 function metadata(name: string, base: string, dependencies: Record<string, string>, integrity: string | undefined, padding: boolean) {
   const manifest = { name, version: "1.0.0", dependencies, dist: { tarball: `${base}/archives/${name}`, integrity } };

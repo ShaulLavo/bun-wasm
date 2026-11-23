@@ -259,6 +259,16 @@ pub fn read(handle: i32, cap: usize) -> Result<Vec<u8>, i32> {
     Ok(buf)
 }
 
+/// Like `read`, but fills the caller's buffer instead of allocating one per call.
+/// Returns the count (zero at EOF) or the negative code.
+pub fn read_to(handle: i32, buf: &mut [u8]) -> Result<usize, i32> {
+    let n = call(Slot::Read, [handle, ptr_mut(buf), buf.len() as i32, 0]).ok_or(UNSUPPORTED)?;
+    if n < 0 {
+        return Err(n);
+    }
+    Ok((n as usize).min(buf.len()))
+}
+
 pub fn write(handle: i32, data: &[u8]) -> i32 {
     call(Slot::Write, [handle, ptr(data), data.len() as i32, 0]).unwrap_or(UNSUPPORTED)
 }
