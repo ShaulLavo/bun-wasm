@@ -12,7 +12,7 @@ const parser = source.slice(source.indexOf("enum Command {"), source.indexOf("//
 const tool = readFileSync(new URL("../crates/bunwasm-cli/src/tool_args.rs", import.meta.url), "utf8");
 const file = join(scratch, "args.rs");
 writeFileSync(file, `#![allow(dead_code)]
-#[derive(Debug, PartialEq)] enum RunMode { Once, Hot }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] enum RunMode { #[default] Once, Hot }
 enum Entry { File(String), Eval(String), Test(Vec<String>) }
 mod bunwasm_runtime { pub const BUN_VERSION: &str = "test"; pub const BUN_REVISION: &str = "test"; }
 const HELP: &str = "help";
@@ -21,17 +21,21 @@ ${parser.replace("mod tool_args;", "")}
 fn hot_forms() {
     for argv in [vec!["--hot", "run", "entry.ts"], vec!["run", "--hot", "entry.ts"], vec!["--hot", "entry.ts"], vec!["--hot", "--hot", "entry.ts"]] {
         let expected: Vec<_> = argv.iter().filter(|arg| **arg == "--hot").map(|arg| arg.to_string()).collect();
-        let Command::Run(Entry::File(_), _, _, flags, mode) = parse_command(argv.into_iter().map(String::from).collect(), false) else { panic!("not file"); };
-        assert_eq!(mode, RunMode::Hot); assert_eq!(flags, expected);
+        let Command::Run(Entry::File(_), _, _, flags, run_flags) = parse_command(argv.into_iter().map(String::from).collect(), false) else { panic!("not file"); };
+        assert_eq!(run_flags.mode, RunMode::Hot); assert!(!run_flags.experimental_stream_iter); assert_eq!(flags, expected);
     }
 }
 fn operands_and_conditions() {
-    let Command::Run(_, args, conditions, flags, mode) = parse_command(vec!["run", "--conditions", "custom", "--hot", "--", "entry.ts", "--hot"].into_iter().map(String::from).collect(), false) else { panic!(); };
-    assert_eq!(mode, RunMode::Hot); assert_eq!(args, ["--hot"]); assert_eq!(conditions, ["custom"]); assert_eq!(flags, ["--conditions", "custom", "--hot"]);
-    let Command::Run(_, args, _, flags, mode) = parse_command(vec!["run", "entry.ts", "--hot"].into_iter().map(String::from).collect(), false) else { panic!(); };
-    assert_eq!(mode, RunMode::Once); assert_eq!(args, ["--hot"]); assert!(flags.is_empty());
-    let Command::Run(_, _, conditions, _, mode) = parse_command(vec!["--conditions", "--hot", "entry.ts"].into_iter().map(String::from).collect(), false) else { panic!(); };
-    assert_eq!(mode, RunMode::Once); assert_eq!(conditions, ["--hot"]);
+    let Command::Run(_, args, conditions, flags, run_flags) = parse_command(vec!["run", "--conditions", "custom", "--hot", "--", "entry.ts", "--hot"].into_iter().map(String::from).collect(), false) else { panic!(); };
+    assert_eq!(run_flags.mode, RunMode::Hot); assert_eq!(args, ["--hot"]); assert_eq!(conditions, ["custom"]); assert_eq!(flags, ["--conditions", "custom", "--hot"]);
+    let Command::Run(_, args, _, flags, run_flags) = parse_command(vec!["run", "entry.ts", "--hot"].into_iter().map(String::from).collect(), false) else { panic!(); };
+    assert_eq!(run_flags.mode, RunMode::Once); assert_eq!(args, ["--hot"]); assert!(flags.is_empty());
+    let Command::Run(_, _, conditions, _, run_flags) = parse_command(vec!["--conditions", "--hot", "entry.ts"].into_iter().map(String::from).collect(), false) else { panic!(); };
+    assert_eq!(run_flags.mode, RunMode::Once); assert_eq!(conditions, ["--hot"]);
+    let Command::Run(_, _, _, _, run_flags) = parse_command(vec!["--experimental-stream-iter", "-e", "1"].into_iter().map(String::from).collect(), false) else { panic!(); };
+    assert!(run_flags.experimental_stream_iter);
+    let Command::Run(_, _, conditions, _, run_flags) = parse_command(vec!["--conditions", "--experimental-stream-iter", "-e", "1"].into_iter().map(String::from).collect(), false) else { panic!(); };
+    assert!(!run_flags.experimental_stream_iter); assert_eq!(conditions, ["--experimental-stream-iter"]);
 }
 fn unsupported() {
     for argv in [vec!["--hot", "-e", "1"], vec!["--hot", "test"], vec!["--hot", "run", "-"], vec!["--watch", "entry.ts"], vec!["--hot", "build", "entry.ts"]] {

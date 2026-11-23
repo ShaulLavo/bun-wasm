@@ -6,6 +6,7 @@
     "internal:streams/fast-utf8-stream",
     "node:querystring",
     "node:punycode",
+    "node:stream/iter",
     "node:wasi",
     "node-fetch",
     "undici",
@@ -13,7 +14,13 @@
     "vercel_fetch"
   ],
   "runtimeProvided": [
+    "internal:errors",
+    "internal:streams/add-abort-signal",
+    "internal:streams/destroy",
     "internal:streams/duplex",
+    "internal:streams/end-of-stream",
+    "internal:streams/readable",
+    "internal:streams/writable",
     "internal:tls",
     "internal:validators",
     "internal:webstreams_adapters"

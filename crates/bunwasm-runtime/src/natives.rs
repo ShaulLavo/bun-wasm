@@ -808,6 +808,10 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
             st.exec_argv.iter().map(|s| Val::from(s.as_str())).collect(),
         ))
     });
+    let st = state.clone();
+    t.add("experimentalStreamIter", move |_| {
+        Ok(Val::Bool(st.experimental_stream_iter))
+    });
     // Host-owned metadata, independent of the caller-controlled preview1 argv[0] and PATH.
     t.add("execPath", |_| {
         Ok(std::env::var("BUNWASM_EXEC_PATH")

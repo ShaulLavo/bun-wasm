@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use crate::data::{Args, DataFn, NativeError, NativeResult, Record, Val};
-use crate::{Entry, Options, State, host, modules, natives, new_state, ops, resolve, split_api};
+use crate::{Entry, Options, State, host, modules, natives, new_state, ops, split_api};
 
 type Run = extern "C" fn(u32) -> i32;
 
@@ -89,7 +89,7 @@ fn source(state: &State, args: Args<'_>) -> NativeResult {
         let (name, source) = modules::eval_entry(state, name);
         return Ok(Val::Array(vec![name.into(), source.into()]));
     }
-    if matches!(mode, "module" | "record") && resolve::builtin_name(name).is_some() {
+    if matches!(mode, "module" | "record") && state.is_builtin_name(name) {
         return Ok(Val::Array(vec!["builtin".into(), "".into()]));
     }
     let (code, format) = state.load_source(name)?;
@@ -120,7 +120,7 @@ fn resolve(state: &State, args: Args<'_>) -> NativeResult {
     let specifier = args.str(0)?;
     let referrer = args.str(1)?;
     let name = state.resolve_module_name(specifier, referrer)?;
-    let builtin = resolve::builtin_name(name.as_str()).is_some();
+    let builtin = state.is_builtin_name(name.as_str());
     Ok(Val::Array(vec![name.as_str().into(), builtin.into()]))
 }
 
@@ -247,6 +247,7 @@ pub(crate) fn run(options: Options) -> i32 {
         &options.args,
         &options.conditions,
         &options.exec_argv,
+        options.experimental_stream_iter,
         options.mode,
         options.transpiler,
     );

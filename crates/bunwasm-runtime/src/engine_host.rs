@@ -26,7 +26,6 @@ use std::rc::Rc;
 use crate::data::{Args, DataFn, NativeError, Record, Val};
 use crate::modules;
 use crate::natives::Table;
-use crate::resolve;
 use crate::{Entry, State};
 
 #[cfg(test)]
@@ -438,7 +437,7 @@ fn json_string(s: &str) -> String {
 /// the `import` keyword of an `import(...)` call. Other formats only report
 /// the format; the host builds a wrapper module for them.
 fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
-    if resolve::builtin_name(path).is_some() {
+    if state.is_builtin_name(path) {
         return Ok(Record::new().set("format", "builtin").into());
     }
     let (code, format) = state.load_source(path)?;
@@ -480,7 +479,7 @@ fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
 /// Other formats only report the format, as in [`module_source`]; the host builds their
 /// records from the CommonJS handoff.
 fn module_record(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
-    if resolve::builtin_name(path).is_some() {
+    if state.is_builtin_name(path) {
         return Ok(Record::new().set("format", "builtin").into());
     }
     let (code, format) = state.load_source(path)?;

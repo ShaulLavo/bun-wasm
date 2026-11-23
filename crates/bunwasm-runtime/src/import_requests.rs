@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 
 use crate::data::NativeError;
-use crate::resolve::{self, Kind, Resolved};
+use crate::resolve::{Kind, Resolved};
 use crate::{State, modules};
 
 const REQUEST: &str = "bunwasm:request:";
@@ -114,7 +114,7 @@ impl State {
         mode: ImportMode,
     ) -> Result<ModuleName, NativeError> {
         let path = self.module_path(referrer);
-        let from = if path.is_empty() || resolve::builtin_name(&path).is_some() {
+        let from = if path.is_empty() || self.is_builtin_name(&path) {
             format!("{}/", self.cwd())
         } else {
             path

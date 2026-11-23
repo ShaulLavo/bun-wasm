@@ -117,6 +117,8 @@ pub struct Options {
     pub conditions: Vec<String>,
     /// Runtime flags exposed through `process.execArgv`.
     pub exec_argv: Vec<String>,
+    /// True when `--experimental-stream-iter` was parsed as an explicit runtime option.
+    pub experimental_stream_iter: bool,
     pub transpiler: Box<dyn Transpiler>,
 }
 
@@ -159,23 +161,26 @@ pub(crate) struct State {
     start: Instant,
     argv: Vec<String>,
     exec_argv: Vec<String>,
+    experimental_stream_iter: bool,
     mode: RunMode,
 }
 
 impl State {
     #[cfg(test)]
     fn new(argv: Vec<String>, transpiler: Box<dyn Transpiler>) -> Self {
-        Self::with_conditions(argv, Vec::new(), Vec::new(), transpiler)
+        Self::with_conditions(argv, Vec::new(), Vec::new(), false, transpiler)
     }
 
     fn with_conditions(
         argv: Vec<String>,
         conditions: Vec<String>,
         exec_argv: Vec<String>,
+        experimental_stream_iter: bool,
         transpiler: Box<dyn Transpiler>,
     ) -> Self {
         State {
-            resolver: resolve::Resolver::with_conditions(conditions),
+            resolver: resolve::Resolver::with_conditions(conditions)
+                .with_experimental_stream_iter(experimental_stream_iter),
             import_requests: RefCell::new(import_requests::ImportRequests::default()),
             transpiler,
             main: RefCell::new(String::new()),
@@ -200,8 +205,13 @@ impl State {
             start: Instant::now(),
             argv,
             exec_argv,
+            experimental_stream_iter,
             mode: RunMode::Once,
         }
+    }
+
+    pub(crate) fn is_builtin_name(&self, name: &str) -> bool {
+        self.resolver.builtin_name(name).is_some()
     }
 
     pub(crate) fn cwd(&self) -> String {
@@ -286,10 +296,19 @@ pub fn run(options: Options) -> i32 {
         args,
         conditions,
         exec_argv,
+        experimental_stream_iter,
         transpiler,
         mode,
     } = options;
-    let (state, main_path) = new_state(&entry, &args, &conditions, &exec_argv, mode, transpiler);
+    let (state, main_path) = new_state(
+        &entry,
+        &args,
+        &conditions,
+        &exec_argv,
+        experimental_stream_iter,
+        mode,
+        transpiler,
+    );
     engine_host::init(entry, state, main_path)
 }
 
@@ -317,6 +336,7 @@ fn new_state(
     args: &[String],
     conditions: &[String],
     exec_argv: &[String],
+    experimental_stream_iter: bool,
     mode: RunMode,
     transpiler: Box<dyn Transpiler>,
 ) -> (Rc<State>, String) {
@@ -343,8 +363,13 @@ fn new_state(
     if mode == RunMode::Hot {
         transpiler.use_module_records();
     }
-    let mut state =
-        State::with_conditions(argv, conditions.to_vec(), exec_argv.to_vec(), transpiler);
+    let mut state = State::with_conditions(
+        argv,
+        conditions.to_vec(),
+        exec_argv.to_vec(),
+        experimental_stream_iter,
+        transpiler,
+    );
     state.mode = mode;
     let state = Rc::new(state);
     *state.main.borrow_mut() = main_path.clone();

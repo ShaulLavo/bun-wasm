@@ -65,6 +65,7 @@ fn natives(engine: &QuickJs, reads: &Rc<Reads>) -> Value {
         &[],
         &[],
         &[],
+        false,
         crate::RunMode::Once,
         Box::new(crate::PassthroughTranspiler),
     );

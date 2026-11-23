@@ -15,7 +15,7 @@ test("CLI dispatch distinguishes Node files, Bun commands, run aliases and eval 
     const end = source.indexOf("// Referenced so the linker", start);
     const definitions = `
       mod bunwasm_runtime { pub const BUN_VERSION: &str = "test"; pub const BUN_REVISION: &str = "test"; }
-      #[derive(Clone, Copy, PartialEq, Eq)] enum RunMode { Once, Hot }
+      #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] enum RunMode { #[default] Once, Hot }
       enum Entry { File(String), Eval(String), Test(Vec<String>) }
       mod tool_args { pub fn before_command(_: &[String]) -> Option<()> { None } }
       const HELP: &str = "help";
@@ -23,34 +23,36 @@ test("CLI dispatch distinguishes Node files, Bun commands, run aliases and eval 
     const controls = `
       fn args(values: &[&str]) -> Vec<String> { values.iter().map(|value| value.to_string()).collect() }
       fn main() {
-        assert!(matches!(parse(args(&["test", "./sample.test.ts"]), "bun"), Command::Run(Entry::Test(values), _, _, _, RunMode::Once) if values == args(&["./sample.test.ts"])));
-        assert!(matches!(parse(args(&["-e", "console.log(42)", "tail"]), "node"), Command::Run(Entry::Eval(code), values, _, _, RunMode::Once) if code == "console.log(42)" && values == args(&["tail"])));
-        assert!(matches!(parse(args(&["-p", "21 * 2"]), "nodejs"), Command::Run(Entry::Eval(code), _, _, _, RunMode::Once) if code.contains("21 * 2") && code.contains("console.log")));
+        assert!(matches!(parse(args(&["test", "./sample.test.ts"]), "bun"), Command::Run(Entry::Test(values), _, _, _, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if values == args(&["./sample.test.ts"])));
+        assert!(matches!(parse(args(&["-e", "console.log(42)", "tail"]), "node"), Command::Run(Entry::Eval(code), values, _, _, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if code == "console.log(42)" && values == args(&["tail"])));
+        assert!(matches!(parse(args(&["-p", "21 * 2"]), "nodejs"), Command::Run(Entry::Eval(code), _, _, _, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if code.contains("21 * 2") && code.contains("console.log")));
         for name in ["test", "build", "run", "help", "alias", "app.js"] {
-          assert!(matches!(parse(args(&[name, "tail"]), "/bin/node"), Command::Run(Entry::File(file), values, _, _, RunMode::Once) if std::path::Path::new(&file).is_absolute() && file.ends_with(name) && values == args(&["tail"])));
+          assert!(matches!(parse(args(&[name, "tail"]), "/bin/node"), Command::Run(Entry::File(file), values, _, _, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if std::path::Path::new(&file).is_absolute() && file.ends_with(name) && values == args(&["tail"])));
         }
-        assert!(matches!(parse(args(&["app.js"]), "bun"), Command::Run(Entry::File(file), _, _, _, RunMode::Once) if std::path::Path::new(&file).is_absolute()));
-        assert!(matches!(parse(args(&["run", "app.js"]), "bun"), Command::Run(Entry::File(file), _, _, _, RunMode::Once) if file == "app.js"));
-        assert!(matches!(parse(args(&["run", "test"]), "bun"), Command::Run(Entry::File(file), _, _, _, RunMode::Once) if file == "test"));
+        assert!(matches!(parse(args(&["app.js"]), "bun"), Command::Run(Entry::File(file), _, _, _, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if std::path::Path::new(&file).is_absolute()));
+        assert!(matches!(parse(args(&["run", "app.js"]), "bun"), Command::Run(Entry::File(file), _, _, _, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if file == "app.js"));
+        assert!(matches!(parse(args(&["run", "test"]), "bun"), Command::Run(Entry::File(file), _, _, _, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if file == "test"));
         assert!(matches!(parse(args(&["build", "app.js", "--outdir", "out"]), "bun"), Command::Build(values) if values == args(&["app.js", "--outdir", "out"])));
         assert!(matches!(parse(args(&["install", "--frozen-lockfile"]), "bun"), Command::Install(command, values) if command == "install" && values == args(&["--frozen-lockfile"])));
-        assert!(matches!(parse(args(&["--no-install", "--smol", "run", "-e", "42"]), "bun"), Command::Run(Entry::Eval(code), _, _, _, RunMode::Once) if code == "42"));
+        assert!(matches!(parse(args(&["--no-install", "--smol", "run", "-e", "42"]), "bun"), Command::Run(Entry::Eval(code), _, _, _, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if code == "42"));
         assert!(matches!(parse(args(&["run", "-e", "bruh", "-b", "entry.ts", "foo", "-a"]), "bun"),
-          Command::Run(Entry::File(file), values, _, exec_argv, RunMode::Once) if file == "entry.ts" && values == args(&["foo", "-a"]) && exec_argv == args(&["-e", "bruh", "-b"])));
+          Command::Run(Entry::File(file), values, _, exec_argv, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if file == "entry.ts" && values == args(&["foo", "-a"]) && exec_argv == args(&["-e", "bruh", "-b"])));
+        assert!(matches!(parse(args(&["--experimental-stream-iter", "run", "-e", "bruh", "-b", "entry.ts", "foo"]), "bun"),
+          Command::Run(Entry::File(file), values, _, exec_argv, RunFlags { mode: RunMode::Once, experimental_stream_iter: true }) if file == "entry.ts" && values == args(&["foo"]) && exec_argv == args(&["--experimental-stream-iter", "-e", "bruh", "-b"])));
         assert!(matches!(parse(args(&["--bun", "entry.ts"]), "bun"),
-          Command::Run(Entry::File(_), _, _, exec_argv, RunMode::Once) if exec_argv == args(&["--bun"])));
+          Command::Run(Entry::File(_), _, _, exec_argv, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if exec_argv == args(&["--bun"])));
         for mode in ["-e", "-p", "--eval", "--print", "test", "entry.ts"] {
           assert!(matches!(parse(args(&["--conditions=custom", mode, "42"]), "bun"),
-            Command::Run(_, _, conditions, exec_argv, RunMode::Once) if conditions == args(&["custom"]) && exec_argv == args(&["--conditions=custom"])));
+            Command::Run(_, _, conditions, exec_argv, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if conditions == args(&["custom"]) && exec_argv == args(&["--conditions=custom"])));
         }
         assert!(matches!(parse(args(&["-e"]), "node"), Command::Exit(1)));
         assert!(matches!(parse(args(&["--unknown"]), "bun"), Command::Exit(0)));
         assert!(matches!(parse(args(&["--enable-source-maps", "app.js", "--host", "h"]), "bun"),
-          Command::Run(Entry::File(file), values, _, exec_argv, RunMode::Once) if file.ends_with("app.js") && values == args(&["--host", "h"]) && exec_argv == args(&["--enable-source-maps"])));
+          Command::Run(Entry::File(file), values, _, exec_argv, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if file.ends_with("app.js") && values == args(&["--host", "h"]) && exec_argv == args(&["--enable-source-maps"])));
         assert!(matches!(parse(args(&["--enable-source-maps", "--no-warnings", "app.js"]), "/bin/node"),
-          Command::Run(Entry::File(file), _, _, exec_argv, RunMode::Once) if file.ends_with("app.js") && exec_argv == args(&["--enable-source-maps", "--no-warnings"])));
+          Command::Run(Entry::File(file), _, _, exec_argv, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if file.ends_with("app.js") && exec_argv == args(&["--enable-source-maps", "--no-warnings"])));
         assert!(matches!(parse(args(&["--max-old-space-size=100", "-e", "1"]), "bun"),
-          Command::Run(Entry::Eval(code), _, _, exec_argv, RunMode::Once) if code == "1" && exec_argv == args(&["--max-old-space-size=100"])));
+          Command::Run(Entry::Eval(code), _, _, exec_argv, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if code == "1" && exec_argv == args(&["--max-old-space-size=100"])));
       }
     `;
     const input = join(scratch, "parser.rs");

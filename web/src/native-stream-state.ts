@@ -475,6 +475,7 @@ export function installNativeStreamState() {
     const writable = construct(Native.WritableStream, "writable", ["start", "write", "close", "abort"]);
     const transform = construct(Native.TransformStream, "transform", ["start", "transform", "flush", "cancel"]);
     installReadableFrom(readable);
+    Object.defineProperty(readable, Symbol.for("bunwasm.nativeDirectStreamAdapter"), { value: true });
     linkConstructor(Native.ReadableStream, readable);
     linkConstructor(Native.WritableStream, writable);
     linkConstructor(Native.TransformStream, transform);

@@ -571,13 +571,19 @@ fn build(_: Vec<String>) -> i32 {
 mod tool_args;
 
 enum Command {
-    Run(Entry, Vec<String>, Vec<String>, Vec<String>, RunMode),
+    Run(Entry, Vec<String>, Vec<String>, Vec<String>, RunFlags),
     Build(Vec<String>),
     Lint,
     Install(String, Vec<String>),
     X(Vec<String>),
     Init(Vec<String>),
     Exit(i32),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RunFlags {
+    mode: RunMode,
+    experimental_stream_iter: bool,
 }
 
 /// `bun exec <script>`: the script runs in the system shell (bash-web), as package scripts do.
@@ -686,17 +692,17 @@ fn run_command(
     args: Vec<String>,
     conditions: Vec<String>,
     exec_argv: Vec<String>,
-    mode: RunMode,
+    flags: RunFlags,
 ) -> Command {
-    if mode == RunMode::Hot && !matches!(&entry, Entry::File(path) if path != "-") {
+    if flags.mode == RunMode::Hot && !matches!(&entry, Entry::File(path) if path != "-") {
         return usage_error("--hot supports only file-based ESM server entries");
     }
-    Command::Run(entry, args, conditions, exec_argv, mode)
+    Command::Run(entry, args, conditions, exec_argv, flags)
 }
 
 fn node_command(args: Vec<String>) -> Command {
     match parse_command(args, true) {
-        Command::Run(Entry::File(file), args, conditions, exec_argv, mode) => {
+        Command::Run(Entry::File(file), args, conditions, exec_argv, flags) => {
             // Node operands are files even when their names match Bun commands or package scripts.
             let path = std::env::current_dir().unwrap_or_default().join(file);
             Command::Run(
@@ -704,7 +710,7 @@ fn node_command(args: Vec<String>) -> Command {
                 args,
                 conditions,
                 exec_argv,
-                mode,
+                flags,
             )
         }
         command => command,
@@ -724,7 +730,14 @@ fn direct_file(file: &str) -> String {
 }
 
 fn parse_command(args: Vec<String>, run_file: bool) -> Command {
-    parse_command_with_flags(args, run_file, false, Vec::new(), Vec::new(), RunMode::Once)
+    parse_command_with_flags(
+        args,
+        run_file,
+        false,
+        Vec::new(),
+        Vec::new(),
+        RunFlags::default(),
+    )
 }
 
 fn parse_command_with_flags(
@@ -733,12 +746,12 @@ fn parse_command_with_flags(
     after_run: bool,
     conditions: Vec<String>,
     exec_argv: Vec<String>,
-    mode: RunMode,
+    flags: RunFlags,
 ) -> Command {
     let mut rest = args.into_iter();
     let mut conditions = conditions;
     let mut exec_argv = exec_argv;
-    let mut mode = mode;
+    let mut flags = flags;
     while let Some(arg) = rest.next() {
         if run_file && (arg == "-" || !arg.starts_with('-')) {
             return run_command(
@@ -746,7 +759,7 @@ fn parse_command_with_flags(
                 rest.collect(),
                 conditions,
                 exec_argv,
-                mode,
+                flags,
             );
         }
         if arg == "--conditions" {
@@ -763,7 +776,7 @@ fn parse_command_with_flags(
             exec_argv.push(arg);
             continue;
         }
-        if mode == RunMode::Hot
+        if flags.mode == RunMode::Hot
             && matches!(
                 arg.as_str(),
                 "build"
@@ -793,7 +806,12 @@ fn parse_command_with_flags(
         }
         match arg.as_str() {
             "--hot" => {
-                mode = RunMode::Hot;
+                flags.mode = RunMode::Hot;
+                exec_argv.push(arg);
+                continue;
+            }
+            "--experimental-stream-iter" => {
+                flags.experimental_stream_iter = true;
                 exec_argv.push(arg);
                 continue;
             }
@@ -839,7 +857,7 @@ fn parse_command_with_flags(
                     rest.collect(),
                     conditions,
                     exec_argv,
-                    mode,
+                    flags,
                 );
             }
             "-p" | "--print" => {
@@ -855,7 +873,7 @@ fn parse_command_with_flags(
                     Vec::new(),
                     conditions,
                     exec_argv,
-                    mode,
+                    flags,
                 );
             }
             "lint" | "fmt" => return Command::Lint,
@@ -865,7 +883,7 @@ fn parse_command_with_flags(
                     Vec::new(),
                     conditions,
                     exec_argv,
-                    mode,
+                    flags,
                 );
             }
             "build" | "bun" => return Command::Build(rest.collect()),
@@ -880,7 +898,7 @@ fn parse_command_with_flags(
                     rest.collect(),
                     conditions,
                     exec_argv,
-                    mode,
+                    flags,
                 );
             }
             "exec" => {
@@ -892,7 +910,7 @@ fn parse_command_with_flags(
                     vec![script],
                     conditions,
                     exec_argv,
-                    mode,
+                    flags,
                 );
             }
             "upgrade" | "link" | "unlink" | "outdated" | "publish" | "patch" | "patch-commit"
@@ -909,7 +927,7 @@ fn parse_command_with_flags(
                     true,
                     conditions,
                     exec_argv,
-                    mode,
+                    flags,
                 );
             }
             "--" => {
@@ -921,7 +939,7 @@ fn parse_command_with_flags(
                     rest.collect(),
                     conditions,
                     exec_argv,
-                    mode,
+                    flags,
                 );
             }
             // `--bun` changes nothing here, and Bun lists it in process.execArgv.
@@ -941,7 +959,7 @@ fn parse_command_with_flags(
                     rest.collect(),
                     conditions,
                     exec_argv,
-                    mode,
+                    flags,
                 );
             }
         }
@@ -1095,7 +1113,7 @@ fn main() {
         argv
     };
     let command = parse(args, &executable);
-    let (entry, args, conditions, exec_argv, mode) = match command {
+    let (entry, args, conditions, exec_argv, flags) = match command {
         Command::Exit(code) => std::process::exit(code),
         Command::Lint => {
             eprintln!("error: bun lint/fmt requires a host that loads dist/bun-tools.wasm");
@@ -1117,7 +1135,7 @@ fn main() {
                     args,
                     Vec::new(),
                     Vec::new(),
-                    RunMode::Once,
+                    RunFlags::default(),
                 ),
                 Err(error) => {
                     eprintln!("error: {error}");
@@ -1125,8 +1143,8 @@ fn main() {
                 }
             }
         }
-        Command::Run(entry, args, conditions, exec_argv, mode) => {
-            (entry, args, conditions, exec_argv, mode)
+        Command::Run(entry, args, conditions, exec_argv, flags) => {
+            (entry, args, conditions, exec_argv, flags)
         }
     };
     let code = bunwasm_runtime::run(Options {
@@ -1134,8 +1152,9 @@ fn main() {
         args,
         conditions,
         exec_argv,
+        experimental_stream_iter: flags.experimental_stream_iter,
         transpiler: transpiler(),
-        mode,
+        mode: flags.mode,
     });
     // The host engine runs the program after `_start` returns.
     if code == 0 && bunwasm_runtime::host_engine_ready() {
@@ -1219,5 +1238,39 @@ mod tests {
         assert!(entry.ends_with("/entry.ts"));
         assert_eq!(conditions, ["vitest"]);
         assert_eq!(exec_argv, ["--conditions=vitest"]);
+    }
+
+    #[test]
+    fn experimental_stream_iter_only_enables_for_real_option() {
+        let Command::Run(_, _, _, _, enabled) = parse_command(
+            vec!["--experimental-stream-iter".into(), "entry.ts".into()],
+            false,
+        ) else {
+            panic!("expected run");
+        };
+        assert!(enabled.experimental_stream_iter);
+
+        let Command::Run(_, _, conditions, _, as_condition_value) = parse_command(
+            vec![
+                "--conditions".into(),
+                "--experimental-stream-iter".into(),
+                "-e".into(),
+                "0".into(),
+            ],
+            false,
+        ) else {
+            panic!("expected run");
+        };
+        assert_eq!(conditions, ["--experimental-stream-iter"]);
+        assert!(!as_condition_value.experimental_stream_iter);
+
+        let Command::Run(_, script_args, _, _, as_script_arg) = parse_command(
+            vec!["entry.ts".into(), "--experimental-stream-iter".into()],
+            false,
+        ) else {
+            panic!("expected run");
+        };
+        assert_eq!(script_args, ["--experimental-stream-iter"]);
+        assert!(!as_script_arg.experimental_stream_iter);
     }
 }

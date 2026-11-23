@@ -59,7 +59,7 @@ function withoutBuiltinLoaderDeltas(source: string) {
   expect(property.getText(file).replace(/\s/g, "")).toBe('processBindingConstants:{getfs(){returninternal.require("node_fs").fs.constants;},}');
   expect(source[property.end]).toBe(",");
   // Internal modules the runtime serves itself (scripts/bun-builtins.json runtimeProvided).
-  expect(providedMap.getText(file).replace(/\s/g, "")).toBe('construntimeProvided={"internal:streams/duplex":()=>internal.builtin("node:stream").Duplex,"internal:tls":fetchInternal("internal:tls"),"internal:validators":fetchInternal("internal:validators"),"internal:webstreams_adapters":fetchInternal("internal:webstreams_adapters"),};');
+  expect(providedMap.getText(file).replace(/\s/g, "")).toBe('construntimeProvided={"internal:errors":fetchInternal("internal:errors"),"internal:streams/add-abort-signal":fetchInternal("internal:streams/add-abort-signal"),"internal:streams/destroy":fetchInternal("internal:streams/destroy"),"internal:streams/duplex":()=>internal.builtin("node:stream").Duplex,"internal:streams/end-of-stream":fetchInternal("internal:streams/end-of-stream"),"internal:streams/readable":fetchInternal("internal:streams/readable"),"internal:streams/writable":fetchInternal("internal:streams/writable"),"internal:tls":fetchInternal("internal:tls"),"internal:validators":fetchInternal("internal:validators"),"internal:webstreams_adapters":fetchInternal("internal:webstreams_adapters"),};');
   expect(providedMap.end).toBeLessThan(property.pos);
   const providedLookup = "      const provided = runtimeProvided[name];\n      if (provided) return provided();\n";
   expect(source.split(providedLookup)).toHaveLength(2);
@@ -163,12 +163,13 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
 // without the runtime's own frames (docs/bun-patches/runtime-stack-frames.md).
 const originalTokens = {
   stack_trace: "498778015efc8fb62977d849e0e7802dfebfa0cfb7598f74d0c9207f6ed3e34d",
-  // Re-pinned for the thirdparty fetch modules and fast-utf8-stream (internal:validators and makeErrorWithCode delegation).
-  bun_builtins: "fe6167c6bf7442ac85797fcc0e3f19a9a5ddbc015df63fb8b103e6afcc0a4314",
+  // Re-pinned for the thirdparty fetch modules, fast-utf8-stream, and node:stream/iter's
+  // runtime-provided stream/error/validator internals and AbortError/makeErrorWithCode delegation.
+  bun_builtins: "341a3728030e1f67d86136785317e332213bab8e0ba90b35f0cb65c74c7bc6fa",
 };
 // Allow the JSC formatter registration, host adapter dispatch, JSC default text rewrite with
 // its frame caches, hidden runtime frames and QuickJS's stack limit headroom (8193 bytes).
-const originalEmbeddedBytes = { stack_trace: 9100, bun_builtins: 4679 };
+const originalEmbeddedBytes = { stack_trace: 9100, bun_builtins: 5250 };
 
 for (const [label, before, after] of [
   ["true names", "return this.#frame.name || null;", 'return this.#frame.name || "";'],

@@ -19,3 +19,15 @@ createReadStream readable 16 null 1
 createReadStream readable 65535 null 1
 createReadStream readable 65536 null 1
 createReadStream readable 131088 null 1
+objectMode Uint8Array encoding undefined
+finished ALS emit-ctx reg-ctx
+pipeline destroy overrides abort true destroy boom
+pipeline compose abort kept AbortError ABORT_ERR
+stream/iter gated true
+resolve.paths(null) ERR_INVALID_ARG_TYPE: The "request" argument must be of type string. Received null
+ordinary ReadableStream this ok true true
+direct stream direct-ok
+stream/iter enabled {"pathsNull":true,"nodePathsNull":true,"isBuiltinBare":false,"isBuiltinNode":false,"inBuiltinModules":false,"reqOk":true,"impOk":true}
+stream/iter static break {"name":"AbortError","code":"ABORT_ERR"}
+stream/iter condition value {"pathsNull":false,"nodePathsNull":false,"isBuiltinBare":false,"isBuiltinNode":false,"inBuiltinModules":false,"reqOk":false,"impOk":false}
+stream/iter script arg {"pathsNull":false,"nodePathsNull":false,"isBuiltinBare":false,"isBuiltinNode":false,"inBuiltinModules":false,"reqOk":false,"impOk":false}

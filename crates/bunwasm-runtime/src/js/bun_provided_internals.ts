@@ -123,81 +123,101 @@
     return tls;
   }
 
-  function invalidArgType(name: string, expected: string | readonly string[], value: unknown) {
-    const want = Array.isArray(expected) ? expected.join(" or ") : expected;
-    return Object.assign(new TypeError(`The "${name}" argument must be of type ${want}. Received ${internal.describe(value)}`), { code: "ERR_INVALID_ARG_TYPE" });
+  function aggregateTwoErrors(innerError: Error | undefined, outerError: (Error & { errors?: Error[]; code?: string }) | undefined) {
+    if (innerError && outerError && innerError !== outerError) {
+      if (Array.isArray(outerError.errors)) {
+        outerError.errors.push(innerError);
+        return outerError;
+      }
+      const err: AggregateError & { code?: string } = new AggregateError([outerError, innerError], outerError.message);
+      err.code = outerError.code;
+      return err;
+    }
+    return innerError || outerError;
   }
 
-  function invalidArgValue(name: string, value: unknown, reason = "is invalid", range = false) {
-    const Ctor = range ? RangeError : TypeError;
-    return Object.assign(new Ctor(`The argument '${name}' ${reason}. Received ${internal.describe(value)}`), { code: "ERR_INVALID_ARG_VALUE" });
+  function inspectArg(value: unknown): string {
+    if (typeof value === "string") return `'${value}'`;
+    if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined) return String(value);
+    if (typeof value === "bigint") return `${value}n`;
+    return internal.describe(value);
   }
 
-  function outOfRange(name: string, expected: string, value: unknown) {
-    return Object.assign(new RangeError(`The value of "${name}" is out of range. It must be ${expected}. Received ${String(value)}`), { code: "ERR_OUT_OF_RANGE" });
+  function formatExpected(expected: unknown): string {
+    if (!Array.isArray(expected)) return String(expected);
+    if (expected.length === 1) return String(expected[0]);
+    if (expected.length === 2) return `${expected[0]} or ${expected[1]}`;
+    return `one of ${expected.slice(0, -1).join(", ")}, or ${expected[expected.length - 1]}`;
   }
 
-  function makeBuiltinError(code: string, variant: number, args: readonly unknown[]) {
-    if (code === "ERR_INVALID_ARG_TYPE") return invalidArgType(String(args[0]), args[1] as string | readonly string[], args[2]);
-    if (code === "ERR_INVALID_ARG_VALUE") return invalidArgValue(String(args[0]), args[1], args[2] === undefined ? undefined : String(args[2]), variant === 1);
+  function makeAbortError(message?: string, options?: ErrorOptions) {
+    const err = new Error(message ?? "The operation was aborted", options);
+    err.name = "AbortError";
+    return Object.assign(err, { code: "ABORT_ERR" });
+  }
+
+  function makeBuiltinError(code: string, variant: number, args: readonly unknown[]): Error | undefined {
+    if (code === "ERR_INVALID_ARG_TYPE") {
+      const [name, expected, actual] = args;
+      const kind = String(name).includes(".") ? "property" : "argument";
+      return Object.assign(new TypeError(`The "${name}" ${kind} must be ${formatExpected(expected)}. Received ${internal.describe(actual)}`), { code });
+    }
+    if (code === "ERR_INVALID_ARG_VALUE") {
+      const [name, value, reason = "is invalid"] = args;
+      const kind = String(name).includes(".") ? "property" : "argument";
+      const Ctor = variant === 1 ? RangeError : TypeError;
+      return Object.assign(new Ctor(`The ${kind} '${name}' ${reason}. Received ${inspectArg(value)}`), { code });
+    }
+    if (code === "ERR_OUT_OF_RANGE") {
+      const [name, range, received] = args;
+      return Object.assign(new RangeError(`The value of "${name}" is out of range. It must be ${range}. Received ${inspectArg(received)}`), { code });
+    }
+    if (code === "ERR_INVALID_RETURN_VALUE") {
+      const [input, name, value] = args;
+      return Object.assign(new TypeError(`Expected ${input} to be returned from the "${name}" function but got ${internal.describe(value)}.`), { code });
+    }
     if (code === "ERR_INVALID_STATE") {
-      const Ctor = variant === 1 ? TypeError : variant === 2 ? RangeError : Error;
+      const Ctor = variant === 2 ? RangeError : variant === 1 ? TypeError : Error;
       return Object.assign(new Ctor(`Invalid state: ${String(args[0] ?? "")}`), { code });
     }
     if (code === "ERR_OPERATION_FAILED") return Object.assign(new Error(`Operation failed: ${String(args[0] ?? "")}`), { code });
+    if (code === "ERR_STREAM_WRITE_AFTER_END") return Object.assign(new Error("write after end"), { code });
     return undefined;
   }
 
-  function validateBoolean(value: unknown, name: string) {
-    if (typeof value !== "boolean") throw invalidArgType(name, "boolean", value);
-  }
-
-  function validateFunction(value: unknown, name: string) {
-    if (typeof value !== "function") throw invalidArgType(name, "function", value);
-  }
-
-  function validateString(value: unknown, name: string) {
-    if (typeof value !== "string") throw invalidArgType(name, "string", value);
-  }
-
-  function validateObject(value: unknown, name: string, options: number | { nullable?: boolean; allowArray?: boolean; allowFunction?: boolean } = 0) {
-    const nullable = typeof options === "number" ? (options & 1) !== 0 : Boolean(options?.nullable);
-    const allowArray = typeof options === "number" ? (options & 2) !== 0 : Boolean(options?.allowArray);
-    const allowFunction = typeof options === "number" ? (options & 4) !== 0 : Boolean(options?.allowFunction);
-    if ((!nullable && value === null) || (!allowArray && Array.isArray(value)) || (typeof value !== "object" && (!allowFunction || typeof value !== "function"))) {
-      throw invalidArgType(name, "Object", value);
-    }
-  }
-
-  function validateOneOf(value: unknown, name: string, oneOf: readonly unknown[]) {
-    if (!oneOf.includes(value)) {
-      const list = oneOf.map((item) => (typeof item === "string" ? `'${item}'` : String(item))).join(", ");
-      throw invalidArgValue(name, value, `must be one of: ${list}`);
-    }
-  }
-
-  function validateUint32(value: unknown, name: string, positive = false) {
-    if (typeof value !== "number") throw invalidArgType(name, "number", value);
-    if (!Number.isInteger(value)) throw outOfRange(name, "an integer", value);
-    const min = positive ? 1 : 0;
-    if (value < min || value > 4294967295) throw outOfRange(name, `>= ${min} && <= 4294967295`, value);
+  type StreamCore = {
+    validators: Record<string, unknown>;
+    eos: unknown;
+    Stream: { destroy?: (stream: unknown, err?: unknown) => void };
+  };
+  const streamCore = () => internal.require("node_stream_core") as StreamCore;
+  const nodeStream = () => internal.builtin("node:stream") as {
+    Readable: unknown;
+    Writable: unknown;
+    addAbortSignal: unknown;
+  };
+  let cachedValidators: Record<string, unknown> | undefined;
+  function streamValidators() {
+    return (cachedValidators ??= {
+      kValidateObjectNone: 0,
+      kValidateObjectAllowNullable: 1,
+      kValidateObjectAllowArray: 2,
+      kValidateObjectAllowFunction: 4,
+      ...streamCore().validators,
+    });
   }
 
   return {
     "internal:webstreams_adapters": { _ReadableFromWeb: ReadableFromWeb },
     "internal:tls": { nodeClientTlsToNative },
-    "internal:validators": {
-      kValidateObjectNone: 0,
-      kValidateObjectAllowNullable: 1,
-      kValidateObjectAllowArray: 2,
-      kValidateObjectAllowFunction: 4,
-      validateBoolean,
-      validateFunction,
-      validateObject,
-      validateOneOf,
-      validateString,
-      validateUint32,
-    },
+    "internal:errors": { aggregateTwoErrors },
+    get "internal:validators"() { return streamValidators(); },
+    get "internal:streams/readable"() { return nodeStream().Readable; },
+    get "internal:streams/writable"() { return nodeStream().Writable; },
+    get "internal:streams/end-of-stream"() { return streamCore().eos; },
+    get "internal:streams/add-abort-signal"() { return { addAbortSignal: nodeStream().addAbortSignal }; },
+    get "internal:streams/destroy"() { return { destroyer: streamCore().Stream.destroy }; },
+    makeAbortError,
     makeBuiltinError,
   } as Record<string, unknown>;
 })

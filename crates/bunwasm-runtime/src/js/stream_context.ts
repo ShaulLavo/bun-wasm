@@ -34,13 +34,22 @@
   }
 
   const Stream = streams.ReadableStream;
+  // On browser hosts, native-stream-state.ts installs a marked ReadableStream wrapper that
+  // already adapts type: "direct". On Node hosts it leaves ReadableStream unwrapped, so adapt here.
+  const adaptHostDirect = internal.native.engine === "host" && !internal.native.hostCaps?.nativeDirectStream;
   const ReadableStream: typeof globalThis.ReadableStream = new Proxy(Stream, {
     construct(target, args: unknown[], newTarget: Function): object {
       const source = args[0];
       const context = internal.native.getAsyncContext();
       const constructed = newTarget === ReadableStream ? target : newTarget;
-      if (context === undefined || source === null || typeof source !== "object") return Reflect.construct(target, args, constructed);
-      return Reflect.construct(target, [inContext(source, context)].concat(args.slice(1)), constructed);
+      const wrappedSource = context !== undefined && source !== null && typeof source === "object"
+        ? inContext(source, context)
+        : source;
+      const forwarded = wrappedSource === source ? args : [wrappedSource].concat(args.slice(1));
+      if (adaptHostDirect && wrappedSource !== null && (typeof wrappedSource === "object" || typeof wrappedSource === "function")) {
+        return internal.require("direct_stream").constructNativeReadable(target, forwarded, constructed, wrappedSource, () => {});
+      }
+      return Reflect.construct(target, forwarded, constructed);
     },
   });
   Object.defineProperty(Stream.prototype, "constructor", { value: ReadableStream, writable: true, configurable: true, enumerable: false });

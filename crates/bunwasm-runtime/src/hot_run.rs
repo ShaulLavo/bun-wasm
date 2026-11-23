@@ -24,7 +24,7 @@ impl State {
         if generation == 0 {
             return Err(NativeError::type_error("Invalid hot generation"));
         }
-        if crate::resolve::builtin_name(name).is_some() {
+        if self.is_builtin_name(name) {
             return Ok(Record::new()
                 .set("kind", "builtin")
                 .set("name", name)

@@ -49,6 +49,7 @@ declare namespace BunWasm {
     prepareFunction(args: readonly string[], kind: FunctionKind, hooks: boolean): string;
     resolve(specifier: string, referrer: string, require: boolean): string;
     resolveImport(specifier: string, referrer: string, mode: "inferred" | "text"): string;
+    experimentalStreamIter?(): boolean;
     modulePath(name: string): string;
     importModule(path: string): Promise<unknown>;
     utf8Encode(value: string): Uint8Array<ArrayBuffer>;
@@ -269,11 +270,17 @@ declare namespace BunWasm {
     require(name: "buffer"): { Buffer: BufferConstructor; kMaxLength?: number };
     require(name: "bun"): { isMainThread: boolean; write(path: unknown, data: Uint8Array): Promise<number> };
     require(name: "bun_provided_internals"): Record<string, unknown>;
+    require(name: "direct_stream"): {
+      directSource(source: object, highWaterMark: number, onController: (controller: object, error: (reason: unknown) => void) => void): UnderlyingDefaultSource<Uint8Array>;
+      constructNativeReadable(target: Function, args: unknown[], newTarget: Function, original: unknown, onController: (controller: object, error: (reason: unknown) => void) => void): object;
+    };
+    require(name: "node_stream_core"): Record<string, unknown>;
     builtin(name: "node:stream"): {
       Duplex: unknown;
       Transform: CompressionConstructor;
       Readable: new(options: { read(): void; highWaterMark?: number; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => NodeReadable;
       Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: (error?: unknown) => void): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerWritable;
+      addAbortSignal: unknown;
     };
   }
   interface Internal { web: { Response: { _setUrl(response: Response, url: string): void }; URLSearchParams: new (init: object) => URLSearchParams; ReadableStream: typeof ReadableStream } }
