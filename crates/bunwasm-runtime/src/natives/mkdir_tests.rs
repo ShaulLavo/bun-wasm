@@ -33,12 +33,17 @@ fn returns_the_first_created_directory_and_none_when_existing() {
     let fixture = Fixture::new();
     let first = fixture.path("first");
     let leaf = fixture.path("first/second/third");
-    assert_eq!(mkdir_recursive(&leaf).unwrap(), Some(first));
+    assert_eq!(mkdir_recursive(&leaf, 0o777).unwrap().0, Some(first));
     assert!(fs::metadata(&leaf).unwrap().is_dir());
-    assert_eq!(mkdir_recursive(&leaf).unwrap(), None);
+    assert_eq!(mkdir_recursive(&leaf, 0o777).unwrap().0, None);
     let direct = fixture.path("direct");
-    assert_eq!(mkdir_recursive(&direct).unwrap(), Some(direct));
-    assert_eq!(mkdir_recursive(fixture.0.to_str().unwrap()).unwrap(), None);
+    assert_eq!(mkdir_recursive(&direct, 0o777).unwrap().0, Some(direct));
+    assert_eq!(
+        mkdir_recursive(fixture.0.to_str().unwrap(), 0o777)
+            .unwrap()
+            .0,
+        None
+    );
 }
 
 #[test]
@@ -47,11 +52,11 @@ fn an_existing_file_is_not_an_existing_directory() {
     let file = fixture.path("file");
     fs::write(&file, b"keep").unwrap();
     assert_eq!(
-        mkdir_recursive(&file).unwrap_err().kind(),
+        mkdir_recursive(&file, 0o777).unwrap_err().kind(),
         io::ErrorKind::AlreadyExists
     );
     assert_eq!(
-        mkdir_recursive(&fixture.path("file/child"))
+        mkdir_recursive(&fixture.path("file/child"), 0o777)
             .unwrap_err()
             .kind(),
         io::ErrorKind::NotADirectory
@@ -68,10 +73,10 @@ fn follows_directory_symlinks_but_rejects_file_and_dangling_symlinks() {
     fs::create_dir(&directory).unwrap();
     let link = fixture.path("link");
     symlink(&directory, &link).unwrap();
-    assert_eq!(mkdir_recursive(&link).unwrap(), None);
+    assert_eq!(mkdir_recursive(&link, 0o777).unwrap().0, None);
     let child = fixture.path("link/child/grandchild");
     assert_eq!(
-        mkdir_recursive(&child).unwrap(),
+        mkdir_recursive(&child, 0o777).unwrap().0,
         Some(fixture.path("link/child"))
     );
     assert!(
@@ -84,13 +89,13 @@ fn follows_directory_symlinks_but_rejects_file_and_dangling_symlinks() {
     let file_link = fixture.path("file-link");
     symlink(file, &file_link).unwrap();
     assert_eq!(
-        mkdir_recursive(&file_link).unwrap_err().kind(),
+        mkdir_recursive(&file_link, 0o777).unwrap_err().kind(),
         io::ErrorKind::AlreadyExists
     );
     let dangling = fixture.path("dangling");
     symlink(fixture.path("missing"), &dangling).unwrap();
     assert_eq!(
-        mkdir_recursive(&dangling).unwrap_err().kind(),
+        mkdir_recursive(&dangling, 0o777).unwrap_err().kind(),
         io::ErrorKind::AlreadyExists
     );
     assert!(!fs::exists(fixture.path("missing")).unwrap());

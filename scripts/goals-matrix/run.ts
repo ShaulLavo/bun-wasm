@@ -18,7 +18,7 @@ import { checkReactStartup, reactStartupURL } from "./react-startup";
 import { preflight } from "./preparation";
 import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./platform";
 import { createIphoneTransport, validateIphoneControl } from "./iphone-transport";
-import { appendFile } from "node:fs/promises";
+import { orderedAppender } from "./ordered-append";
 import { appendFileSync } from "node:fs";
 import { playgroundProfile, templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { ownershipReceipt } from "./safari-ownership";
@@ -107,7 +107,7 @@ async function nativeTransport(box: Cell, config: Options, timeoutMs: number, re
   if (box.browser === "iphone-safari" && config.iphoneControlUrl && config.iphoneAgentCommand && config.deviceUDID) return createIphoneTransport({
     control: config.iphoneControlUrl, agent: config.iphoneAgentCommand, deviceUDID: config.deviceUDID, timeoutMs,
     cleanupTimeoutMs: report.deadlines.cleanupTimeoutMs,
-    saveNative: text => appendFile(join(config.output, "logs", boxId(box).replaceAll("/", "-") + ".native.jsonl"), text),
+    saveNative: orderedAppender(join(config.output, "logs", boxId(box).replaceAll("/", "-") + ".native.jsonl")),
   });
   if (box.browser !== "safari" && box.browser !== "iphone-safari") throw new Error("Not a native Safari box");
   const endpoint = box.browser === "safari" ? config.safariEndpoint : config.iphoneEndpoint;
