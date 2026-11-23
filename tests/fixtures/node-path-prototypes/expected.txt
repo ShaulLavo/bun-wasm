@@ -1,0 +1,1 @@
+node:path POSIX results ignore replaced prototypes

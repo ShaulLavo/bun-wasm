@@ -28,31 +28,42 @@
   // POSIX operations are lexical, so they run here on UTF-16 code units without
   // crossing into Wasm. They port Bun's `bun_node_path` POSIX algorithms, which
   // follow Node's lib/path.js (docs/bun-patches/node-path.md). They call only
-  // captured string intrinsics and use no array methods or iterators.
+  // captured string intrinsics and build no arrays, so replaced prototype
+  // methods or inherited index accessors cannot change a result.
 
   function posixIsAbsolute(path: string): boolean {
     return path.length > 0 && charCodeAt(path, 0) === SLASH;
   }
 
+  // Whether the last segment of a normalized result is a kept `..`. Ordinary
+  // segments are never `..`, which always pops or is kept here.
+  function endsWithParent(result: string): boolean {
+    const length = result.length;
+    if (length < 2 || charCodeAt(result, length - 1) !== DOT || charCodeAt(result, length - 2) !== DOT) return false;
+    return length === 2 || charCodeAt(result, length - 3) === SLASH;
+  }
+
+  function popSegment(result: string): string {
+    const separator = lastIndexOf(result, "/");
+    return separator === -1 ? "" : slice(result, 0, separator);
+  }
+
   // Node's normalizeString: resolves `.` and `..` segments and drops empty ones.
-  // Node walks code units and edits a result string; a segment stack gives the
-  // same result with native indexOf and slice, which interpreters run much
-  // faster. A `..` pops the previous segment unless that is itself a kept `..`.
+  // Node walks code units; walking whole segments with native indexOf and
+  // slice gives the same result and runs much faster in interpreters. A `..`
+  // pops the previous segment unless that is itself a kept `..`.
   function normalizeSegments(path: string, allowAboveRoot: boolean): string {
-    const kept: string[] = [];
-    let count = 0;
+    let result = "";
     for (let start = 0; start <= path.length;) {
       const separator = indexOf(path, "/", start);
       const end = separator === -1 ? path.length : separator;
       const segment = slice(path, start, end);
       start = end + 1;
       if (segment === "" || segment === ".") continue;
-      if (segment !== "..") kept[count++] = segment;
-      else if (count > 0 && kept[count - 1] !== "..") count--;
-      else if (allowAboveRoot) kept[count++] = "..";
+      if (segment !== "..") result = result.length > 0 ? result + "/" + segment : segment;
+      else if (result.length > 0 && !endsWithParent(result)) result = popSegment(result);
+      else if (allowAboveRoot) result = result.length > 0 ? result + "/.." : "..";
     }
-    let result = count > 0 ? kept[0]! : "";
-    for (let i = 1; i < count; i++) result += "/" + kept[i];
     return result;
   }
 
@@ -73,10 +84,12 @@
     return absolute ? "/" + tail : tail;
   }
 
-  function posixJoin(paths: readonly string[]): string {
+  // Validates and joins left to right, as validating every argument first and
+  // then joining would.
+  function posixJoin(values: readonly unknown[]): string {
     let joined = "";
-    for (let i = 0; i < paths.length; i++) {
-      const path = paths[i]!;
+    for (let i = 0; i < values.length; i++) {
+      const path = pathArgument(values[i], i);
       if (path.length > 0) joined = joined.length > 0 ? joined + "/" + path : path;
     }
     return joined.length > 0 ? posixNormalize(joined) : ".";
@@ -190,17 +203,38 @@
     return parsed;
   }
 
-  function posixResolve(paths: readonly string[]): string {
+  // Validates right to left and stops at the last absolute argument. Only then
+  // is the guest cwd read.
+  function posixResolve(values: readonly unknown[]): string {
     let tail = "";
     let absolute = false;
-    for (let i = paths.length - 1; i >= -1 && !absolute; i--) {
-      const value = i >= 0 ? paths[i] : process.cwd();
-      if (!value) continue;
+    for (let i = values.length - 1; i >= 0 && !absolute; i--) {
+      const value = pathArgument(values[i], i);
+      if (value.length === 0) continue;
       absolute = charCodeAt(value, 0) === SLASH;
       tail = slice(value, absolute ? 1 : 0) + "/" + tail;
     }
+    if (!absolute) {
+      const cwd: unknown = process.cwd();
+      absolute = cwdIsAbsolute(cwd);
+      if (cwd) tail = cwdTail(cwd, absolute) + "/" + tail;
+    }
     const result = posixNormalize((absolute ? "/" : "") + tail);
     return result.length > 1 && charCodeAt(result, result.length - 1) === SLASH ? slice(result, 0, -1) : result;
+  }
+
+  // A replaced `process.cwd` may return anything. Strings use the captured
+  // intrinsics; other values keep the previous adapter's method calls and their
+  // errors. An empty or falsy cwd is skipped.
+  type CwdLike = { startsWith(search: string): boolean; slice(start: number): string };
+
+  function cwdIsAbsolute(cwd: unknown): boolean {
+    if (!cwd) return false;
+    return typeof cwd === "string" ? charCodeAt(cwd, 0) === SLASH : (cwd as CwdLike).startsWith("/");
+  }
+
+  function cwdTail(cwd: unknown, absolute: boolean): string {
+    return typeof cwd === "string" ? slice(cwd, absolute ? 1 : 0) : (cwd as CwdLike).slice(absolute ? 1 : 0);
   }
 
   function posixRelative(from: string, to: string): string {
@@ -315,10 +349,10 @@
   };
 
   const windowsOperations: typeof posixOperations = {
-    resolve: windowsResolve,
+    resolve: (values: readonly unknown[]) => windowsResolve(resolutionStrings(values)),
     normalize: (value: string) => windowsLexical("normalize", value),
     isAbsolute: windowsIsAbsolute,
-    join: windowsJoin,
+    join: (values: readonly unknown[]) => windowsJoin(strings(values)),
     relative: windowsRelative,
     dirname: (value: string) => windowsLexical("dirname", value),
     basename: (value: string, suffix?: string) => windowsLexical("basename", value, suffix),
@@ -331,24 +365,15 @@
     return typeof value === "string" ? value : validateString(value, `paths[${index}]`);
   }
 
-  // Indexed loops instead of array methods, which user code can replace.
   function strings(values: readonly unknown[]): string[] {
-    const paths: string[] = [];
-    for (let i = 0; i < values.length; i++) paths[i] = pathArgument(values[i], i);
-    return paths;
+    return values.map(pathArgument);
   }
 
-  // Validates right to left; POSIX stops at the last absolute path.
-  function resolutionStrings(windows: boolean, values: readonly unknown[]): string[] {
-    const reversed: string[] = [];
-    let count = 0;
-    for (let i = values.length - 1; i >= 0; i--) {
-      const value = pathArgument(values[i], i);
-      reversed[count++] = value;
-      if (!windows && charCodeAt(value, 0) === SLASH) break;
-    }
+  // Windows resolution validates every argument, right to left.
+  function resolutionStrings(values: readonly unknown[]): string[] {
     const paths: string[] = [];
-    for (let i = 0; i < count; i++) paths[i] = reversed[count - 1 - i]!;
+    for (let i = values.length - 1; i >= 0; i--) paths.push(pathArgument(values[i], i));
+    paths.reverse();
     return paths;
   }
 
@@ -375,10 +400,10 @@
     const namespaced = (value: unknown) => toNamespacedPath(windows, value);
     const operations = windows ? windowsOperations : posixOperations;
     return {
-      resolve: (...values: unknown[]) => operations.resolve(resolutionStrings(windows, values)),
+      resolve: (...values: unknown[]) => operations.resolve(values),
       normalize: (value: unknown) => operations.normalize(validateString(value, "path")),
       isAbsolute: (value: unknown) => operations.isAbsolute(validateString(value, "path")),
-      join: (...values: unknown[]) => operations.join(strings(values)),
+      join: (...values: unknown[]) => operations.join(values),
       relative: (from: unknown, to: unknown) => operations.relative(validateString(from, "from"), validateString(to, "to")),
       toNamespacedPath: namespaced,
       _makeLong: namespaced,

@@ -125,15 +125,37 @@ test("replacing public string and array methods does not change results", () => 
   ];
   const saved = replaced.map(([owner, key]) => Object.getOwnPropertyDescriptor(owner, key)!);
   const broken = { value: () => { throw new Error("replaced"); }, configurable: true, writable: true };
+  // Inherited index accessors intercept writes into new arrays.
+  const inherited = { get: () => "inherited", set() {}, configurable: true };
   // Indexed loops only: destructuring and for-of need the replaced iterator.
   let actual: unknown[] = [];
   try {
     for (let i = 0; i < replaced.length; i++) Object.defineProperty(replaced[i]![0], replaced[i]![1], broken);
+    for (let i = 0; i < 4; i++) Object.defineProperty(Array.prototype, i, inherited);
     actual = cases.map(call);
   } finally {
+    for (let i = 0; i < 4; i++) delete (Array.prototype as unknown as Record<number, unknown>)[i];
     for (let i = 0; i < replaced.length; i++) Object.defineProperty(replaced[i]![0], replaced[i]![1], saved[i]!);
   }
   expect(actual).toEqual(expected);
+});
+
+// The previous adapter called `startsWith` and `slice` on whatever a replaced
+// `process.cwd` returned, and skipped a falsy one.
+test("resolve keeps the previous handling of a replaced process.cwd", () => {
+  const original = process.cwd;
+  try {
+    process.cwd = (() => 42) as unknown as typeof process.cwd;
+    expect(() => guest.resolve("file")).toThrow(TypeError);
+    process.cwd = (() => new String("/boxed")) as unknown as typeof process.cwd;
+    expect(guest.resolve("file")).toBe("/boxed/file");
+    process.cwd = (() => "") as unknown as typeof process.cwd;
+    expect(guest.resolve("file")).toBe("file");
+    process.cwd = (() => null) as unknown as typeof process.cwd;
+    expect(guest.resolve("a", "..")).toBe(".");
+  } finally {
+    process.cwd = original;
+  }
 });
 
 test("relative and resolve use the current directory for relative inputs", () => {
