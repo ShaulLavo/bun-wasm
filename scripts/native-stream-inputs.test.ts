@@ -20,7 +20,7 @@ test("browser interop inputs include executable typed streams without loading Pl
   expect(result.exitCode).toBe(0);
   const sources: unknown = JSON.parse(readFileSync(dump, "utf8"));
   if (!sources || typeof sources !== "object") throw new Error("Expected interop input object");
-  for (const name of ["buffer", "events", "streams", "node_stream_core", "node_stream_web", "node_stream_bindings", "compression_streams"]) {
+  for (const name of ["buffer", "buffer_concat_length", "buffer_encoding_bindings", "buffer_fill_args", "buffer_source", "buffer_transcode", "events", "streams", "node_stream_core", "node_stream_web", "node_stream_bindings", "compression_streams"]) {
     expect(sources).toHaveProperty(name);
   }
   if (!("streams" in sources) || typeof sources.streams !== "string") throw new Error("Missing streams source");
