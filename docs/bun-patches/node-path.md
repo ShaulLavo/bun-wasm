@@ -35,9 +35,15 @@ native Bun). Local changes:
   the adapter's own code below, unchanged.
 - The POSIX code calls `charCodeAt`, `slice`, `indexOf` and `lastIndexOf`
   through intrinsics that `src/js/bootstrap.js` captures before user code
-  runs, and uses indexed loops instead of array methods or iterators. Replacing
-  a public `String.prototype` or `Array.prototype` method therefore cannot
-  change a result, as with the native code it replaces.
+  runs, and builds no arrays: `normalize` keeps its segment stack as a string
+  (popped with `lastIndexOf`, like Node), and `join` and `resolve` validate
+  their arguments while they walk them. Replacing a public `String.prototype`
+  or `Array.prototype` method, or adding inherited index accessors, therefore
+  cannot change a result, as with the native code it replaces. The Windows
+  wrappers keep their previous array code.
+- A replaced `process.cwd` that returns a non-string keeps the previous
+  adapter's handling: a falsy value is skipped, and other values get the same
+  `startsWith` and `slice` calls, so a number still throws `TypeError`.
 - `relative` keeps the native string route's one error: with a relative guest
   cwd, the fixed one-unit offset can split a surrogate pair, and when both
   resolved paths are well-formed Bun rejected that result with
@@ -50,6 +56,8 @@ binding that throws and compares about 39,000 results, from every sequence of
 up to six path tokens and 40,000 sampled pairs, with the host Bun's native
 `node:path`. It also checks the split-surrogate error recorded from the native
 guest and that results survive replaced string, array and `Math` methods.
+`tests/fixtures/node-path-prototypes` repeats the prototype check in every guest
+engine, through the real bootstrap capture.
 
 `crates/bunwasm-runtime/src/node_path.rs` and `src/js/path.ts` are **Host feature**
 original adapters. For Windows operations, after public validation and coercion, the
