@@ -14,7 +14,8 @@ const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-console-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const originals: Record<string, string> = {
   // Re-pinned for console.trace dropping the stack header (docs/bun-patches/error-stack-header.md).
-  console: "ea264a567b6ee497161763587e50074dad401878cedecfe3f54601fdf94f5c6c",
+  // Re-pinned for console._stdout and console._stderr built on first use (docs/bun-patches/process-heap-and-stdio.md).
+  console: "2ea374a1ec442a0378bff1380c4fe671b24dc198ed33eb11c93d15a7b5f69793",
   console_constructor: "d70e5d7de10633d8dc36e2a623d3f6253c9bcc7f785db581152bcf345beebbbf",
 };
 

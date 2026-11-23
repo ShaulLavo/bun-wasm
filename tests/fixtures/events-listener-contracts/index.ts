@@ -118,3 +118,28 @@ assert.deepEqual(await queuedError.next(), { value: ["before error"], done: fals
 await assert.rejects(queuedError.next(), error => error === failure);
 assert.deepEqual(await queuedError.next(), { value: undefined, done: true });
 console.log("FIFO pending, queued, close and error iterator settlement");
+
+const heldWrappers: Function[] = [];
+const totalEmitters = 8;
+let finalizedEmitters = 0;
+const emitterRegistry = new FinalizationRegistry(() => { finalizedEmitters++; });
+(() => {
+  for (let i = 0; i < totalEmitters; i++) {
+    const target = new EventEmitter();
+    target.once("x", () => {});
+    heldWrappers.push(target.rawListeners("x")[0]);
+    target.emit("x");
+    emitterRegistry.register(target, i);
+  }
+})();
+await new Promise<void>((resolve, reject) => {
+  let iterations = 0;
+  setImmediate(function check() {
+    Bun.gc(true);
+    if (finalizedEmitters === totalEmitters) return resolve();
+    if (++iterations > 50) return reject(new Error(`collected ${finalizedEmitters}/${totalEmitters}`));
+    setImmediate(check);
+  });
+});
+assert.equal(heldWrappers.length, totalEmitters);
+console.log("once wrappers release collected emitters");

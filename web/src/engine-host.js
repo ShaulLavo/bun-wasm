@@ -423,6 +423,7 @@ class EngineHost {
     this.timer = null;
     this.timerAt = Infinity;
     this.immediate = false;
+    this.gcYield = false;
     // Module graph: key (path or builtin) -> URL; URL -> path for stack traces.
     this.urls = new Map();
     // promise -> {state, value}, for console.log and Bun.peek.
@@ -444,6 +445,14 @@ class EngineHost {
     if (NativeMessageChannel) {
       this.channel = new NativeMessageChannel();
       this.channel.port1.onmessage = () => {
+        if (this.gcYield) {
+          this.gcYield = false;
+          nativeSetTimeout(() => {
+            this.immediate = false;
+            this.pump();
+          }, 0);
+          return;
+        }
         this.immediate = false;
         this.pump();
       };
@@ -609,7 +618,12 @@ class EngineHost {
         if (host.o.asyncContext) return host.o.asyncContext.set(v);
         host.asyncContext = v;
       },
-      gc: () => nativeGc?.(),
+      gc() {
+        const runGc = typeof host.o.gc === "function" ? host.o.gc : nativeGc;
+        if (!runGc) return;
+        runGc();
+        if (host.o.yieldAfterGc) host.gcYield = true;
+      },
       memoryUsage() {
         const mem = typeof performance === "object" && performance.memory;
         const used = mem ? mem.usedJSHeapSize : 0;
@@ -1141,8 +1155,12 @@ class EngineHost {
     if (ms <= 0) {
       if (this.immediate) return;
       this.immediate = true;
-      if (this.channel) this.channel.port2.postMessage(0);
-      else nativeSetTimeout(() => {
+      if (this.channel && !this.gcYield) {
+        this.channel.port2.postMessage(0);
+        return;
+      }
+      this.gcYield = false;
+      nativeSetTimeout(() => {
         this.immediate = false;
         this.pump();
       }, 0);

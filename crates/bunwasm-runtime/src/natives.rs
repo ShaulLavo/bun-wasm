@@ -445,11 +445,14 @@ fn sync_mode(flags: i32) -> SyncMode {
     SyncMode::None
 }
 
-#[cfg(target_os = "wasi")]
+#[cfg(any(target_os = "wasi", unix))]
 fn sync_fd(fd: i32, mode: SyncMode) -> io::Result<()> {
     let status = match mode {
         SyncMode::None => return Ok(()),
+        #[cfg(target_os = "wasi")]
         SyncMode::Data => unsafe { libc::fdatasync(fd) },
+        #[cfg(not(target_os = "wasi"))]
+        SyncMode::Data => unsafe { libc::fsync(fd) },
         SyncMode::All => unsafe { libc::fsync(fd) },
     };
     if status < 0 {
@@ -458,9 +461,24 @@ fn sync_fd(fd: i32, mode: SyncMode) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "wasi"))]
+#[cfg(not(any(target_os = "wasi", unix)))]
 fn sync_fd(_fd: i32, _mode: SyncMode) -> io::Result<()> {
     Ok(())
+}
+
+fn sync_explicit_fd(state: &State, fd: i32, mode: SyncMode) -> io::Result<()> {
+    if (0..=2).contains(&fd) {
+        let stat = descriptor_metadata(fd)?;
+        #[cfg(target_os = "wasi")]
+        let non_file = matches!(stat.st_mode & 0o170000, 0o010000 | 0o020000 | 0o140000);
+        #[cfg(unix)]
+        let non_file = !stat.is_file();
+        if non_file {
+            return Err(io::Error::from_raw_os_error(libc::EINVAL));
+        }
+        return flush_descriptor_output(state);
+    }
+    sync_fd(fd, mode)
 }
 
 /// Own files opened by this runtime, indexed by their real process descriptor.
@@ -1421,6 +1439,11 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         }
         ok()
     });
+    let st = state.clone();
+    t.add("fsync", move |a| {
+        sync_explicit_fd(&st, a.i32(0)?, SyncMode::All).map_err(|e| io_error(e, "fsync", None))?;
+        ok()
+    });
 }
 
 fn builtin_index(args: Args<'_>) -> Result<usize, NativeError> {
@@ -1725,7 +1748,8 @@ fn install_encoding(t: &mut Table) {
             Ok(s) => Ok(s.into()),
             Err(_) if a.bool(1) => Err(NativeError::type_error(
                 "The encoded data was not valid for encoding utf-8",
-            )),
+            )
+            .prop("code", "ERR_ENCODING_INVALID_ENCODED_DATA")),
             Err(_) => Ok(String::from_utf8_lossy(bytes).into_owned().into()),
         }
     });

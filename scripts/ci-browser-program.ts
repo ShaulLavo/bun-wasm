@@ -30,6 +30,7 @@ export async function verifyBrowserProgram(directory: string, source: Source) {
     if (build !== "quickjs") continue;
     assert("engineOrigin" in receipt, "QuickJS origin required");
     const side = await Bun.file(join(directory, "quickjs.wasm")).bytes();
+    assertShippedGuestHasNoNames("quickjs.wasm", side);
     const originBytes = await Bun.file(join(directory, "quickjs.wasm.engine.json")).bytes();
     const origin = parseProgramReceipt(JSON.parse(new TextDecoder().decode(originBytes)));
     assert.equal(origin.inputs.scope, "quickjs", "QuickJS side receipt required");

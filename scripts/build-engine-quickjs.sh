@@ -92,7 +92,9 @@ args+=("${transfer_fault_wraps[@]}")
 "$WASI_SDK_PATH/bin/wasm-ld" --shared "${link_profile[@]}" --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
   --import-memory=env,memory --import-table --allow-undefined "${args[@]}" \
   -o "$out/engine.implicit.wasm" "$out/engine-init.o" "${group_objects[@]}" "$archive"
-node "$root/scripts/src/engine-explicit-init.ts" quickjs "$out/engine.implicit.wasm" "$out/engine.wasm" "${explicit_profile[@]}"
+node "$root/scripts/src/engine-explicit-init.ts" quickjs "$out/engine.implicit.wasm" "$out/engine.named.wasm" "${explicit_profile[@]}"
+# The shipped side drops the name section; engine.named.wasm keeps it for profilers.
+bun "$root/scripts/wasm-name-sections.ts" strip "$out/engine.named.wasm" "$out/engine.wasm"
 wasm-tools validate "$out/engine.wasm"
 if [[ -n "$inputs" ]]; then
   bun "$root/scripts/guest-engine-receipt.ts" write "$out/engine.wasm" "$inputs"
