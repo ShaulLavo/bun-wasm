@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/node-path-posix.test.ts",
+  "localRuntime": true
+}
