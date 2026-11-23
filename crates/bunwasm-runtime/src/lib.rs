@@ -56,6 +56,7 @@ mod quickjs_embedding;
 mod rejection_queue;
 mod resolve;
 mod semver;
+mod source_column;
 mod sourcemap;
 mod sqlite;
 mod streams;

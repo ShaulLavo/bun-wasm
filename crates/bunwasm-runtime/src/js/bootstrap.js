@@ -31,6 +31,7 @@
     isPromise: native.isPromise,
     isError: native.isError,
     getSourceLine: native.getSourceLine,
+    sourceColumn: native.sourceColumn,
     mapPosition: native.mapPosition,
     isESMNamespace: isModuleNamespace,
     isModuleNamespaceObject: isModuleNamespace,

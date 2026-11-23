@@ -87,6 +87,23 @@ for (const generated of [false, true]) {
   });
 }
 
+test("a host column rule reads the line in place, and hot-run modules read their text", () => {
+  const rules: unknown[][] = [];
+  const lookups: unknown[][] = [];
+  const hooks = {
+    sourceColumn: (...args: unknown[]) => { rules.push(args); return 4; },
+    getSourceLine: (...args: unknown[]) => { lookups.push(args); return "  invoke("; },
+  };
+  expect(inspector("jsc", hooks).parseStack("run@/index.js:17:9")).toEqual([{ name: "run", file: "/index.js", line: 17, column: 4 }]);
+  expect(inspector("spidermonkey", hooks).parseStack("fail@/index.js:5:9")[0]?.column).toBe(4);
+  expect(rules).toEqual([["callee", "/index.js", 17, 9], ["constructor", "/index.js", 5, 9]]);
+  expect(lookups).toEqual([]);
+  const hot = "bunwasm:hot:1:/index.js";
+  expect(inspector("jsc", hooks).parseStack(`run@${hot}:17:9`)[0]?.column).toBe(3);
+  expect(lookups).toEqual([[hot, 17]]);
+  expect(rules).toHaveLength(2);
+});
+
 test("formatting retains the original application exception and parsed frames", () => {
   const error = new Error("original application failure");
   error.name = "TypeError";
