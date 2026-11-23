@@ -31,7 +31,11 @@ fn word_fn<E: Engine>(client: CoreClient, op: u32) -> ValueFn<E> {
 }
 
 pub(crate) fn bootstrap<E: Engine>(e: &E, core: &Rc<Core<E>>) -> Result<E::Value, E::Value> {
-    let table = core.client.natives().map_err(|err| e.error_value(&err))?;
+    let table = core.natives.borrow_mut().take().ok_or_else(|| {
+        e.error_value(&crate::engine::NativeError::error(
+            "core natives already installed",
+        ))
+    })?;
     let id = |index: usize| u32::try_from(index).expect("native ID");
     let lane = crate::value_natives::LaneCommit::find(&table.words);
     let data = table

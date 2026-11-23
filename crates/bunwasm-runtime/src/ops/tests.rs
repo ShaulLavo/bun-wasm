@@ -757,3 +757,68 @@ fn a_word_call_from_a_wrong_session_or_for_an_unknown_operation_runs_nothing() {
     let odd = transport.alloc(WordFrame::SIZE as u32 + 8, Frame::ALIGN);
     assert_eq!(transport.dispatch(&dispatch, odd), Status::BadCall);
 }
+
+/// The transport, dispatcher and frame of the running word call, for a word native that
+/// tries to reuse its own frame.
+type ActiveWord = (Rc<abi::Transport>, Rc<Dispatcher>, u32);
+
+thread_local! {
+    static ACTIVE_WORD: RefCell<Option<ActiveWord>> = const { RefCell::new(None) };
+}
+
+/// Enters its own frame again and frees it, returning both statuses as `entry * 10 + free`.
+fn reuse_active_frame(_: &[u32; WORD_ARGS]) -> i64 {
+    ACTIVE_WORD.with(|active| {
+        let active = active.borrow();
+        let (transport, dispatch, frame) = active.as_ref().expect("active word call");
+        let entry = transport.dispatch(dispatch, *frame) as i64;
+        let free = match transport.free(*frame, WordFrame::SIZE as u32, Frame::ALIGN) {
+            Ok(()) => Status::Ok,
+            Err(status) => status,
+        };
+        entry * 10 + free as i64
+    })
+}
+
+fn panicking_word(_: &[u32; WORD_ARGS]) -> i64 {
+    panic!("word native unwinds");
+}
+
+fn active_word_call(word: WordFn) -> (Rc<abi::Transport>, Rc<Dispatcher>, u32) {
+    let transport = Rc::new(abi::Transport::default());
+    let dispatch = Rc::new(dispatcher(|_| Ok(Val::Undefined)).with_words(vec![word]));
+    let frame = transport.alloc(WordFrame::SIZE as u32, Frame::ALIGN);
+    write_word_frame(&transport, frame, 0, 1, [0; WORD_ARGS]);
+    let active = (transport.clone(), dispatch.clone(), frame);
+    ACTIVE_WORD.with(|slot| slot.replace(Some(active)));
+    (transport, dispatch, frame)
+}
+
+#[test]
+fn a_running_word_frame_cannot_be_entered_again_or_freed() {
+    let (transport, dispatch, frame) = active_word_call(reuse_active_frame);
+    assert_eq!(transport.dispatch(&dispatch, frame), Status::Ok);
+    let bad = Status::BadCall as i64;
+    assert_eq!(word_result(&transport, frame), bad * 10 + bad);
+    ACTIVE_WORD.with(|slot| slot.take());
+    // The call returned, so its frame is free to reuse and to release.
+    write_word_frame(&transport, frame, 0, 1, [0; WORD_ARGS]);
+    transport
+        .free(frame, WordFrame::SIZE as u32, Frame::ALIGN)
+        .unwrap();
+    assert_eq!(transport.live_allocations(), 0);
+}
+
+#[test]
+fn a_word_frame_is_released_when_its_native_unwinds() {
+    let (transport, dispatch, frame) = active_word_call(panicking_word);
+    ACTIVE_WORD.with(|slot| slot.take());
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        transport.dispatch(&dispatch, frame)
+    }));
+    assert!(unwound.is_err());
+    transport
+        .free(frame, WordFrame::SIZE as u32, Frame::ALIGN)
+        .unwrap();
+    assert_eq!(transport.live_allocations(), 0);
+}

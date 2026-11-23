@@ -135,12 +135,23 @@ impl Reply {
     }
 }
 
+/// Operations below `DATA_NATIVE` are the split API's own, numbered from zero; this many at most.
+const API_OPS: u32 = 64;
+
+/// Word operations from this number on are the split API's own, after every word native.
+pub(crate) const WORD_API: u32 = 1 << 31;
+
 /// Process-local plain-data operations. No engine methods or VM handles.
 pub(crate) struct Dispatcher {
     session: NonZeroU32,
-    functions: std::collections::HashMap<u32, DataFn>,
+    /// Split API operations, indexed by operation number.
+    api: Vec<Option<DataFn>>,
+    /// Data natives, indexed by operation number less `DATA_NATIVE`.
+    natives: Vec<Option<DataFn>>,
     /// Word natives by operation number.
     words: Vec<WordFn>,
+    /// Split API words, by operation number less `WORD_API`.
+    api_words: Vec<WordFn>,
 }
 
 impl Dispatcher {
@@ -148,20 +159,50 @@ impl Dispatcher {
         if entries.is_empty() {
             return None;
         }
-        let count = entries.len();
-        let functions: std::collections::HashMap<_, _> = entries.into_iter().collect();
-        if functions.len() != count {
-            return None;
-        }
-        Some(Self {
+        let mut dispatcher = Self {
             session,
-            functions,
+            api: Vec::new(),
+            natives: Vec::new(),
             words: Vec::new(),
-        })
+            api_words: Vec::new(),
+        };
+        for (op, function) in entries {
+            let (table, index) = dispatcher.table(op)?;
+            if table.len() <= index {
+                table.resize(index + 1, None);
+            }
+            // A duplicate operation number is a broken registry.
+            if table[index].replace(function).is_some() {
+                return None;
+            }
+        }
+        Some(dispatcher)
+    }
+
+    /// The table and index that hold `op`, or `None` for a number no operation can have.
+    fn table(&mut self, op: u32) -> Option<(&mut Vec<Option<DataFn>>, usize)> {
+        if let Some(index) = op.checked_sub(DATA_NATIVE) {
+            return Some((&mut self.natives, index as usize));
+        }
+        (op < API_OPS).then_some((&mut self.api, op as usize))
+    }
+
+    fn function(&self, op: u32) -> Option<&DataFn> {
+        let slot = match op.checked_sub(DATA_NATIVE) {
+            Some(index) => self.natives.get(index as usize),
+            None => self.api.get(op as usize),
+        };
+        slot?.as_ref()
     }
 
     pub fn with_words(mut self, words: Vec<WordFn>) -> Self {
         self.words = words;
+        self
+    }
+
+    /// The split API's own words, numbered from `WORD_API`.
+    pub fn with_api_words(mut self, words: Vec<WordFn>) -> Self {
+        self.api_words = words;
         self
     }
 
@@ -171,19 +212,35 @@ impl Dispatcher {
         if session != self.session.get() {
             return None;
         }
-        self.words.get(op as usize).map(|function| function(words))
+        let function = match op.checked_sub(WORD_API) {
+            Some(index) => self.api_words.get(index as usize),
+            None => self.words.get(op as usize),
+        };
+        function.map(|function| function(words))
     }
 
     #[cfg(test)]
     pub fn op(&self) -> u32 {
-        *self.functions.keys().next().expect("nonempty registry")
+        let api = self.api.iter().position(Option::is_some);
+        let native = || self.natives.iter().position(Option::is_some);
+        match api {
+            Some(op) => op as u32,
+            None => DATA_NATIVE + native().expect("nonempty registry") as u32,
+        }
+    }
+
+    /// How many data operations the registry holds.
+    #[cfg(any(test, not(feature = "engine-split")))]
+    fn len(&self) -> usize {
+        let count = |table: &[Option<DataFn>]| table.iter().flatten().count();
+        count(&self.api) + count(&self.natives)
     }
 
     pub fn dispatch(&self, op: u32, session: u32, request: &[u8]) -> Reply {
         if session != self.session.get() {
             return Reply::Failed(Status::BadCall);
         }
-        let Some(function) = self.functions.get(&op).cloned() else {
+        let Some(function) = self.function(op) else {
             return Reply::Failed(Status::BadCall);
         };
         let args = match codec::decode(request) {

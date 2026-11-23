@@ -60,6 +60,14 @@ section bytes unchanged. The required explicit order is
 Memory initialization must precede data relocation. The caller runs this list
 once, after core constructors. Do not also invoke the old implicit start path.
 
+The producer does not run `wasm-opt` on the side, unlike the core and the JSC side.
+QuickJS's recursive C paths reserve shadow stack in proportion to their host frames
+([stack limits](../stack-limits.md#quickjs)), and Binaryen changes those frames. On
+2026-11-23, `-O1`, `-O2` and `-Os` (with or without inlining) each cut the side by 9 to 12
+percent, and each let `tests/fixtures/stack-overflow` and `getter-dispatch` trap with
+"call stack exhausted" instead of throwing `RangeError`. Optimizing the side first needs
+those reservations re-measured on the optimized build.
+
 The smoke tests a real VM, patched helpers, pending jobs, interrupts, shared-stack
 nesting, owned ops echo, cross-boundary allocation, real core growth, and the
 guest memory maximum. The result and exact module hashes are written to the selected
@@ -76,6 +84,20 @@ libc for Rust and QuickJS allocations, plus the shared memory, table and stack.
 The same entry also carries word calls, which use one frame allocated at startup
 and no request or reply buffer; [Shared-group MessagePort lanes](original-adapter-group-lane.md#word-natives)
 records them.
+
+Per-call costs (2026-11-23). The client keeps one data frame and one request buffer
+between calls. A call that runs while another holds them, such as a nested callback,
+allocates its own. A request encodes in one pass into the kept buffer and may be a
+prefix of it; only a request that does not fit is measured first. Requests over
+64 KiB get an exact buffer that is freed after the call. Core looks up live
+allocations newest first, without a reference-counted box per allocation. A running
+call, word or data, counts a pin on its frame (and a data call on its request) in the
+allocation's own slot, so pinning allocates nothing. A pinned allocation cannot be
+freed, a pinned frame cannot be entered again, and the pin is released when the call
+returns or unwinds. Data operations dispatch by index. Taking the nextTick flag and flushing
+stdout are split API word calls (`split_api::WORD_TAKE_TICK`, `WORD_FLUSH`)
+because every job drain makes them. Core hands its description over once, and
+the engine keeps its native table until the bootstrap installs it.
 
 `crates/bunwasm-cli/entry-split.c` is an original command-entry shim, not copied
 CRT source. Waffle initializes core constructors before side memory,

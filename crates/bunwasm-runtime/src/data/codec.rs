@@ -49,15 +49,27 @@ impl Sink for Measure {
 struct Fill<'a> {
     out: &'a mut [u8],
     pos: usize,
+    /// Set when the encoding stopped because `out` was too short.
+    short: bool,
+}
+
+impl<'a> Fill<'a> {
+    fn new(out: &'a mut [u8]) -> Self {
+        Self {
+            out,
+            pos: 0,
+            short: false,
+        }
+    }
 }
 
 impl Sink for Fill<'_> {
     fn put(&mut self, bytes: &[u8]) -> Result<()> {
         let end = self.pos + bytes.len();
-        let slot = self
-            .out
-            .get_mut(self.pos..end)
-            .ok_or(CodecError::Invalid("encoding exceeds destination"))?;
+        let Some(slot) = self.out.get_mut(self.pos..end) else {
+            self.short = true;
+            return Err(CodecError::Invalid("encoding exceeds destination"));
+        };
         slot.copy_from_slice(bytes);
         self.pos = end;
         Ok(())
@@ -88,7 +100,7 @@ pub(crate) fn encoded_error_len(error: &NativeError) -> Result<usize> {
 }
 
 pub(crate) fn encode_error_into(error: &NativeError, out: &mut [u8]) -> Result<()> {
-    let mut fill = Fill { out, pos: 0 };
+    let mut fill = Fill::new(out);
     walk_error(error, &mut fill)?;
     if fill.pos != fill.out.len() {
         return Err(CodecError::Invalid("encoding shorter than destination"));
@@ -162,12 +174,27 @@ pub(crate) fn encoded_len(value: &Val) -> Result<usize> {
 
 /// Encodes `value` into `out`, which must be exactly `encoded_len(value)` bytes long.
 pub(crate) fn encode_into(value: &Val, out: &mut [u8]) -> Result<()> {
-    let mut fill = Fill { out, pos: 0 };
+    let mut fill = Fill::new(out);
     walk(value, &mut fill)?;
     if fill.pos != fill.out.len() {
         return Err(CodecError::Invalid("encoding shorter than destination"));
     }
     Ok(())
+}
+
+/// Encodes `value` at the front of `out` in one pass and returns its length, or `None` when
+/// `out` is too short for it. A caller with a reusable buffer skips the measuring pass.
+#[allow(
+    dead_code,
+    reason = "Engine clients encode requests with it; core encodes exact replies."
+)]
+pub(crate) fn encode_prefix(value: &Val, out: &mut [u8]) -> Result<Option<usize>> {
+    let mut fill = Fill::new(out);
+    match walk(value, &mut fill) {
+        Ok(()) => Ok(Some(fill.pos)),
+        Err(_) if fill.short => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// One allocation of exactly the encoded length.
@@ -598,10 +625,7 @@ mod tests {
             Err(CodecError::Invalid("length exceeds u32"))
         );
         let mut out = [0; 4];
-        let mut fill = Fill {
-            out: &mut out,
-            pos: 0,
-        };
+        let mut fill = Fill::new(&mut out);
         assert_eq!(
             length(&mut fill, len),
             Err(CodecError::Invalid("length exceeds u32"))
@@ -612,10 +636,7 @@ mod tests {
     #[test]
     fn fill_never_writes_past_its_destination() {
         let mut out = [9; 3];
-        let mut fill = Fill {
-            out: &mut out,
-            pos: 0,
-        };
+        let mut fill = Fill::new(&mut out);
         assert_eq!(
             fill.put(&[1, 2, 3, 4]),
             Err(CodecError::Invalid("encoding exceeds destination"))

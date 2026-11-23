@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crate::data::{NativeError, NativeResult, Val, WORD_ARGS, codec, drop_tree};
 use crate::ops;
 use crate::transport::{
@@ -49,39 +51,23 @@ impl CoreClient {
         let args = Val::Array(args);
         let request = request(&args);
         drop_tree(args);
-        let request = request?;
-        let Some(frame) = TransportBuffer::new(24) else {
+        let (request, request_len) = request?;
+        let Some(frame) = Spare::FRAME.take(ops::Frame::SIZE as u32) else {
+            Spare::REQUEST.keep(request);
             return allocation_failed();
         };
-        let words = [op, self.session, request.pointer, request.bytes, 0, 0];
-        unsafe {
-            std::ptr::copy_nonoverlapping(words.as_ptr(), frame.pointer as *mut u32, words.len());
-        }
-        let status = match unsafe { bun_core_dispatch(frame.pointer) } {
-            0 => ops::Status::Ok,
-            1 => ops::Status::NativeError,
-            3 => ops::Status::ResourceLimit,
-            status => panic!("terminal core transport failure {status}"),
+        let words = [op, self.session, request.pointer, request_len, 0, 0];
+        // SAFETY: core allocated Frame::SIZE bytes, 8-aligned, at frame.pointer, and this call
+        // holds the frame alone until it is kept again.
+        let (status, pointer, bytes) = unsafe {
+            let frame = frame.pointer as *mut u32;
+            std::ptr::copy_nonoverlapping(words.as_ptr(), frame, words.len());
+            let status = bun_core_dispatch(frame as u32);
+            (status, frame.add(4).read(), frame.add(5).read())
         };
-        let pointer = unsafe { (frame.pointer as *const u32).add(4).read() };
-        let bytes = unsafe { (frame.pointer as *const u32).add(5).read() };
-        if status == ops::Status::ResourceLimit {
-            // Core failed to allocate the request copy or the reply and wrote no reply.
-            assert!(
-                pointer == 0 && bytes == 0,
-                "core resource limit with a reply"
-            );
-            return allocation_failed();
-        }
-        let reply = TransportBuffer { pointer, bytes };
-        // Decode the reply where core wrote it; copying it out would hold the payload twice.
-        let bytes: &[u8] = if reply.bytes == 0 {
-            &[]
-        } else {
-            // SAFETY: core allocated reply.bytes initialized bytes at reply.pointer for this reply.
-            unsafe { std::slice::from_raw_parts(reply.pointer as *const u8, reply.bytes as usize) }
-        };
-        ops::Reply::decode(status, bytes)
+        Spare::REQUEST.keep(request);
+        Spare::FRAME.keep(frame);
+        reply(status, pointer, bytes)
     }
 
     pub(crate) fn native(self, id: u32, args: Vec<Val>) -> NativeResult {
@@ -89,21 +75,122 @@ impl CoreClient {
     }
 }
 
-/// Encodes the request straight into core-owned memory of exactly its encoded length, so the
-/// only copies alive are the argument values and this one request.
-fn request(args: &Val) -> Result<TransportBuffer, NativeError> {
+/// Decodes the reply core wrote for a data call, and frees it.
+fn reply(status: u32, pointer: u32, bytes: u32) -> NativeResult {
+    let status = match status {
+        0 => ops::Status::Ok,
+        1 => ops::Status::NativeError,
+        3 => ops::Status::ResourceLimit,
+        status => panic!("terminal core transport failure {status}"),
+    };
+    if status == ops::Status::ResourceLimit {
+        // Core failed to allocate the reply and wrote none.
+        assert!(
+            pointer == 0 && bytes == 0,
+            "core resource limit with a reply"
+        );
+        return allocation_failed();
+    }
+    let reply = TransportBuffer { pointer, bytes };
+    // Decode the reply where core wrote it; copying it out would hold the payload twice.
+    let bytes: &[u8] = if reply.bytes == 0 {
+        &[]
+    } else {
+        // SAFETY: core allocated reply.bytes initialized bytes at reply.pointer for this reply.
+        unsafe { std::slice::from_raw_parts(reply.pointer as *const u8, reply.bytes as usize) }
+    };
+    ops::Reply::decode(status, bytes)
+}
+
+/// A core buffer the client keeps between calls: allocating one per call costs about as much
+/// as a small call itself. Calls nest (a core native can call back into the engine, which calls
+/// core again while the outer call holds its buffers), so a call takes the spare and a nested
+/// call allocates its own. The slot holds a pointer and a size, not a value with a destructor,
+/// so nothing frees core memory at thread exit.
+struct Spare(&'static std::thread::LocalKey<Cell<(u32, u32)>>);
+
+thread_local! {
+    static SPARE_FRAME: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
+    static SPARE_REQUEST: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
+}
+
+/// Requests up to this size encode into a kept buffer. A larger one gets its own exact buffer,
+/// freed after the call, so one large write does not hold its size for the life of the process.
+const SPARE_LIMIT: u32 = 64 << 10;
+/// The smallest kept request buffer: most requests are a path or a few numbers.
+const SPARE_REQUEST_MIN: u32 = 4 << 10;
+
+impl Spare {
+    const FRAME: Self = Self(&SPARE_FRAME);
+    const REQUEST: Self = Self(&SPARE_REQUEST);
+
+    /// The spare when it holds at least `bytes`, otherwise a new buffer of exactly `bytes`.
+    fn take(&self, bytes: u32) -> Option<TransportBuffer> {
+        let (pointer, size) = self.0.with(|slot| slot.replace((0, 0)));
+        if pointer != 0 && size >= bytes {
+            return Some(TransportBuffer {
+                pointer,
+                bytes: size,
+            });
+        }
+        if pointer != 0 {
+            drop(TransportBuffer {
+                pointer,
+                bytes: size,
+            });
+        }
+        TransportBuffer::new(bytes)
+    }
+
+    /// Keeps `buffer` for the next call unless it is over the limit or the slot already holds
+    /// one at least as large. Whatever is not kept is freed.
+    fn keep(&self, buffer: TransportBuffer) {
+        let (pointer, bytes) = self.0.with(Cell::get);
+        if buffer.bytes > SPARE_LIMIT || (pointer != 0 && bytes >= buffer.bytes) {
+            return;
+        }
+        let buffer = std::mem::ManuallyDrop::new(buffer);
+        self.0.with(|slot| slot.set((buffer.pointer, buffer.bytes)));
+        if pointer != 0 {
+            drop(TransportBuffer { pointer, bytes });
+        }
+    }
+}
+
+/// Encodes the request in one pass into the kept buffer when it fits. Otherwise it measures the
+/// request and encodes it into a buffer that holds it. Returns the buffer and the request's
+/// length, which may be shorter than the buffer.
+fn request(args: &Val) -> Result<(TransportBuffer, u32), NativeError> {
     let encode_error = |_| NativeError::error("encode core request");
-    let len = codec::encoded_len(args).map_err(encode_error)?;
-    let Some(request) = TransportBuffer::new(u32::try_from(len).expect("request size")) else {
+    let Some(mut spare) = Spare::REQUEST.take(SPARE_REQUEST_MIN) else {
         return allocation_failed();
     };
-    // SAFETY: core allocated request.bytes initialized bytes at request.pointer for this call
-    // alone, and core reads them only after dispatch.
-    let bytes = unsafe {
-        std::slice::from_raw_parts_mut(request.pointer as *mut u8, request.bytes as usize)
+    let encoded = codec::encode_prefix(args, buffer_bytes(&mut spare));
+    if let Some(len) = encoded.map_err(encode_error)? {
+        return Ok((spare, u32::try_from(len).expect("request size")));
+    }
+    Spare::REQUEST.keep(spare);
+    let len = codec::encoded_len(args).map_err(encode_error)?;
+    let len = u32::try_from(len).expect("request size");
+    // A request that outgrew the spare but stays under the limit gets a larger kept buffer.
+    let size = match len.checked_next_power_of_two() {
+        Some(size) if size <= SPARE_LIMIT => size,
+        _ => len,
     };
+    let Some(mut request) = Spare::REQUEST.take(size) else {
+        return allocation_failed();
+    };
+    let bytes = &mut buffer_bytes(&mut request)[..len as usize];
     codec::encode_into(args, bytes).map_err(encode_error)?;
-    Ok(request)
+    Ok((request, len))
+}
+
+/// The whole of a buffer core allocated for this client, borrowed for as long as the buffer is.
+fn buffer_bytes(buffer: &mut TransportBuffer) -> &mut [u8] {
+    // SAFETY: core allocated buffer.bytes initialized bytes at buffer.pointer. The client owns
+    // the buffer, and the exclusive borrow keeps this the only view of it; core reads it only
+    // during a later dispatch.
+    unsafe { std::slice::from_raw_parts_mut(buffer.pointer as *mut u8, buffer.bytes as usize) }
 }
 
 fn allocation_failed<T>() -> Result<T, NativeError> {
@@ -117,19 +204,24 @@ pub(crate) struct NativeTable {
     pub(crate) constants: Vec<(String, Val)>,
 }
 
+/// What core tells the engine once, at startup: the program to run and the natives to install.
+pub(crate) struct Description {
+    pub(crate) entry: crate::driver::Entry,
+    pub(crate) main: String,
+    pub(crate) natives: NativeTable,
+}
+
 fn malformed() -> NativeError {
     NativeError::error("invalid core operation reply")
 }
 
-fn field(value: Val, key: &str) -> Result<Val, NativeError> {
-    let Val::Object(fields) = value else {
-        return Err(malformed());
-    };
-    fields
-        .into_iter()
-        .find(|(name, _)| name == key)
-        .map(|(_, value)| value)
-        .ok_or_else(malformed)
+/// Moves the field named `key` out of a record's fields.
+fn field(fields: &mut Vec<(String, Val)>, key: &str) -> Result<Val, NativeError> {
+    let index = fields
+        .iter()
+        .position(|(name, _)| name == key)
+        .ok_or_else(malformed)?;
+    Ok(fields.swap_remove(index).1)
 }
 
 fn string(value: Val) -> Result<String, NativeError> {
@@ -157,37 +249,44 @@ fn pair(value: Val) -> Result<(String, String), NativeError> {
     Ok((string(first)?, string(second)?))
 }
 
-impl CoreClient {
-    pub(crate) fn entry(self) -> Result<(crate::driver::Entry, String), NativeError> {
-        let description = self.call(crate::split_api::DESCRIBE, vec![])?;
-        let main = string(field(description.clone(), "main")?)?;
-        let Val::Array(entry) = field(description, "entry")? else {
-            return Err(malformed());
-        };
-        let mut entry = entry.into_iter();
-        let (Some(kind), Some(value), None) = (entry.next(), entry.next(), entry.next()) else {
-            return Err(malformed());
-        };
-        let entry = match string(kind)?.as_str() {
-            "file" => crate::driver::Entry::File(string(value)?),
-            "eval" => crate::driver::Entry::Eval(string(value)?),
-            "test" => crate::driver::Entry::Test(strings(value)?),
-            _ => return Err(malformed()),
-        };
-        Ok((entry, main))
+fn entry(value: Val) -> Result<crate::driver::Entry, NativeError> {
+    let Val::Array(entry) = value else {
+        return Err(malformed());
+    };
+    let mut entry = entry.into_iter();
+    let (Some(kind), Some(value), None) = (entry.next(), entry.next(), entry.next()) else {
+        return Err(malformed());
+    };
+    match string(kind)?.as_str() {
+        "file" => Ok(crate::driver::Entry::File(string(value)?)),
+        "eval" => Ok(crate::driver::Entry::Eval(string(value)?)),
+        "test" => Ok(crate::driver::Entry::Test(strings(value)?)),
+        _ => Err(malformed()),
     }
+}
 
-    pub(crate) fn natives(self) -> Result<NativeTable, NativeError> {
-        let description = self.call(crate::split_api::DESCRIBE, vec![])?;
-        let functions = strings(field(description.clone(), "functions")?)?;
-        let words = strings(field(description.clone(), "words")?)?;
-        let Val::Object(constants) = field(description, "constants")? else {
+impl CoreClient {
+    /// Reads core's description. Core hands it over once.
+    pub(crate) fn describe(self) -> Result<Description, NativeError> {
+        let Val::Object(mut fields) = self.call(crate::split_api::DESCRIBE, vec![])? else {
             return Err(malformed());
         };
-        Ok(NativeTable {
-            functions,
-            words,
-            constants,
+        let main = string(field(&mut fields, "main")?)?;
+        let entry = entry(field(&mut fields, "entry")?)?;
+        let functions = strings(field(&mut fields, "functions")?)?;
+        let words = strings(field(&mut fields, "words")?)?;
+        let Val::Object(constants) = field(&mut fields, "constants")? else {
+            return Err(malformed());
+        };
+        drop_tree(Val::Object(fields));
+        Ok(Description {
+            entry,
+            main,
+            natives: NativeTable {
+                functions,
+                words,
+                constants,
+            },
         })
     }
 
@@ -260,15 +359,14 @@ impl CoreClient {
         Ok(string(self.call(crate::split_api::MAIN_PATH, vec![])?)? == name)
     }
 
+    /// Whether a `process.nextTick` callback was queued since the last check. Called on every
+    /// job drain, so it is a word call.
     pub(crate) fn take_tick(self) -> bool {
-        self.call(crate::split_api::TAKE_TICK, vec![])
-            .expect("take nextTick")
-            == Val::Bool(true)
+        self.word(crate::split_api::WORD_TAKE_TICK, [0; WORD_ARGS]) != 0
     }
 
     pub(crate) fn flush(self) {
-        self.call(crate::split_api::FLUSH, vec![])
-            .expect("flush stdout");
+        self.word(crate::split_api::WORD_FLUSH, [0; WORD_ARGS]);
     }
 
     pub(crate) fn idle(self, ms: i32) {
