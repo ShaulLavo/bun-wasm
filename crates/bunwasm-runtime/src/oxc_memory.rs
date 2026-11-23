@@ -1,9 +1,9 @@
 use std::borrow::Cow;
-use std::fs::File;
-use std::io::{self, Read};
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
+
+use super::binary_digest::file_sha256;
 
 struct Binding {
     name: &'static str,
@@ -33,19 +33,6 @@ static BINDINGS: [Binding; 3] = [
         initial: "981 ",
     },
 ];
-
-fn file_digest(path: &Path) -> io::Result<String> {
-    let mut file = File::open(path)?;
-    let mut digest = Sha256::new();
-    let mut buffer = [0; 8192];
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            return Ok(format!("{:x}", digest.finalize()));
-        }
-        digest.update(&buffer[..count]);
-    }
-}
 
 fn binding(path: &str) -> Option<&'static Binding> {
     if !path.ends_with(".wasi.cjs") {
@@ -80,7 +67,7 @@ pub(super) fn adapt<'a>(source: &'a str, path: &str) -> Cow<'a, str> {
         return Cow::Borrowed(source);
     }
     let wasm = directory.join(format!("{}.wasm32-wasi.wasm", binding.name));
-    if file_digest(&wasm).ok().as_deref() != Some(binding.wasm) {
+    if file_sha256(&wasm).ok().as_deref() != Some(binding.wasm) {
         return Cow::Borrowed(source);
     }
     // Use the maintained Oxc profile's 256 MiB shared-memory maximum.

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chromium, firefox, type Browser, type Page } from "playwright";
-import { installPageLoadObserver, type PageLoadState } from "../sandbox/tests/page-load-support";
+import { installPageLoadObserver, installStorageReadCounter, type PageLoadState, type StorageRead } from "../sandbox/tests/page-load-support";
 
 declare const __pageLoad: { state(app: string): PageLoadState };
 
@@ -64,4 +64,49 @@ async function checkReadiness(browser: Browser): Promise<void> {
 
 test("page readiness comes from the page's marks, or from #status on builds without them", async () => {
   for (const browser of browsers) await checkReadiness(browser);
+}, 60_000);
+
+declare const __storageReads: StorageRead[];
+
+/** Stores a Waffle-shaped chunk manifest and chunk, then reads and digests them once. */
+async function storageReads(browser: Browser): Promise<StorageRead[]> {
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await page.goto(`${server.url.origin}/marked`);
+    await page.evaluate(installStorageReadCounter);
+    return await page.evaluate(async () => {
+      const name = `bun-wasm-read-counter-${crypto.randomUUID()}`;
+      const opened = indexedDB.open(name, 1);
+      opened.onupgradeneeded = () => opened.result.createObjectStore("data");
+      const database = await new Promise<IDBDatabase>((resolve, reject) => { opened.onsuccess = () => resolve(opened.result); opened.onerror = () => reject(opened.error); });
+      const settled = (transaction: IDBTransaction) => new Promise<void>((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error); });
+      const write = database.transaction("data", "readwrite");
+      write.objectStore("data").put({ version: 2, size: 5, chunkSize: 65536, count: 1 }, "file");
+      write.objectStore("data").put({ bytes: new Uint8Array(5), checksum: new Uint8Array(32) }, ["file", 0]);
+      await settled(write);
+      const read = database.transaction("data");
+      read.objectStore("data").get("file");
+      read.objectStore("data").get(["file", 0]);
+      await settled(read);
+      await crypto.subtle.digest("SHA-256", new Uint8Array(5));
+      database.close();
+      indexedDB.deleteDatabase(name);
+      return __storageReads;
+    });
+  } finally {
+    await context.close();
+  }
+}
+
+test("the storage read counter names each chunk manifest's file size and each chunk read", async () => {
+  for (const browser of browsers) {
+    const reads = await storageReads(browser);
+    expect(reads.map(({ kind, bytes, file, chunk }) => ({ kind, bytes, file, chunk }))).toEqual([
+      { kind: "get", bytes: 0, file: 5, chunk: undefined },
+      { kind: "get", bytes: 37, file: undefined, chunk: 0 },
+      { kind: "digest", bytes: 5, file: undefined, chunk: undefined },
+    ]);
+    for (const read of reads) expect(read.end).toBeGreaterThanOrEqual(read.start);
+  }
 }, 60_000);

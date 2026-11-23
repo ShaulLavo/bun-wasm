@@ -76,7 +76,7 @@ printf 'console.log("hello from bun-wasm");\n' > index.ts
 | `bun run quality` | Lint, types, unused code, duplicates and Rust checks ([Code quality](code-quality.md)). |
 | `bun run check && bun test ./tests/package/*.test.ts` | The `bun-wasm` package. |
 | `bun scripts/refresh-compatibility-docs.ts --check` | The generated tables in the compatibility records. |
-| `bun sandbox/tests/page-load-profile.ts --out <dir>` | Not a gate: cold and warm page-load waterfalls of the built playground and sandbox in Chromium and Firefox, from the pages' `bunwasm:stage:*` marks. `--variant name=<web dist>,<sandbox dist>` compares builds interleaved. Keep `--profiles` off `/work`, whose disk makes Firefox storage 50 to 100 times slower. |
+| `bun sandbox/tests/page-load-profile.ts --out <dir>` | Not a gate: cold and warm page-load waterfalls of the built playground and sandbox in Chromium and Firefox, from the pages' `bunwasm:stage:*` marks. `--variant name=<web dist>,<sandbox dist>` compares builds interleaved. `--template <id>` picks the sandbox template. Each run also counts the IndexedDB reads and SHA-256 digests of every page worker per boot stage, naming the most-read stored files by their size, and keeps the raw reads in `<run>.reads.json`. Keep `--profiles` off `/work`, whose disk makes Firefox storage 50 to 100 times slower. |
 
 `scripts/test.sh --update` regenerates a fixture's `expected.txt` with native Bun. Review the diff before you commit it. To add a fixture, create `tests/fixtures/<name>/` with an `index.ts` and an `expected.txt`. The header of `scripts/test.sh` documents the optional files.
 

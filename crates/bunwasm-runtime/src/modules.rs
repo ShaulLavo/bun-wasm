@@ -7,6 +7,8 @@
 //! importers through a tiny generated wrapper module that re-exports the keys
 //! of an object handed over through the wrapper's `import.meta.m`.
 
+#[path = "binary_digest.rs"]
+mod binary_digest;
 #[path = "esbuild_packet.rs"]
 mod esbuild_packet;
 #[path = "magic_string_encoded.rs"]

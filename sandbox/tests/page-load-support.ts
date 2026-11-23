@@ -31,6 +31,60 @@ export function installPageLoadObserver(): void {
   Object.assign(globalThis, { __pageLoad: { state } });
 }
 
+/** One IndexedDB read request or SHA-256 digest, on the epoch clock shared by every realm. */
+export interface StorageRead {
+  kind: "get" | "getAll" | "cursor" | "digest"; start: number; end: number; bytes: number;
+  /** The logical file size a Waffle chunk manifest names, which identifies the file read. */
+  file?: number;
+  /** The chunk index of a Waffle chunk record read. */
+  chunk?: number;
+}
+
+/**
+ * A worker script, run through `worker.evaluate`: records every IndexedDB read request and
+ * SHA-256 digest the worker starts, so a profile can split storage reads by startup stage.
+ * Waffle's filesystem worker reads file payloads through these.
+ */
+export function installStorageReadCounter(): void {
+  const scope = globalThis as typeof globalThis & { __storageReads?: StorageRead[] };
+  if (scope.__storageReads) return;
+  const reads: StorageRead[] = scope.__storageReads = [];
+  const now = () => performance.timeOrigin + performance.now();
+  const size = (value: unknown): number => {
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value.byteLength;
+    if (Array.isArray(value)) return value.reduce((sum: number, item) => sum + size(item), 0);
+    if (!value || typeof value !== "object") return 0;
+    return Object.values(value).reduce((sum: number, item) => sum + (item instanceof ArrayBuffer || ArrayBuffer.isView(item) ? item.byteLength : 0), 0);
+  };
+  const manifest = (value: unknown): number | undefined =>
+    value && typeof value === "object" && "chunkSize" in value && "size" in value && typeof value.size === "number" ? value.size : undefined;
+  const track = (kind: StorageRead["kind"], request: IDBRequest) => {
+    const start = now();
+    request.addEventListener("success", () => {
+      const key: unknown = Reflect.get(request, "__key");
+      reads.push({ kind, start, end: now(), bytes: kind === "cursor" ? 0 : size(request.result), file: kind === "get" ? manifest(request.result) : undefined, chunk: Array.isArray(key) && typeof key[1] === "number" ? key[1] : undefined });
+    });
+    return request;
+  };
+  const store = IDBObjectStore.prototype;
+  const { get, getAll, openCursor } = store;
+  store.get = function (...args: Parameters<IDBObjectStore["get"]>) {
+    const request = get.apply(this, args);
+    Reflect.set(request, "__key", args[0]);
+    return track("get", request);
+  };
+  store.getAll = function (...args: Parameters<IDBObjectStore["getAll"]>) { return track("getAll", getAll.apply(this, args)); };
+  store.openCursor = function (...args: Parameters<IDBObjectStore["openCursor"]>) { return track("cursor", openCursor.apply(this, args)) as IDBRequest<IDBCursorWithValue | null>; };
+  const subtle = crypto.subtle;
+  const digest = subtle.digest.bind(subtle);
+  subtle.digest = async (algorithm, data) => {
+    const start = now();
+    const result = await digest(algorithm, data);
+    reads.push({ kind: "digest", start, end: now(), bytes: data.byteLength });
+    return result;
+  };
+}
+
 export function requireUniqueNames(names: readonly string[]): void {
   const repeated = names.find((name, index) => names.indexOf(name) !== index);
   if (repeated !== undefined) throw new Error(`Variant ${repeated || "(unnamed)"} is named twice; each needs its own name`);
