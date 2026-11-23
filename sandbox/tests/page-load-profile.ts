@@ -10,11 +10,11 @@
 //
 // Build web/dist and sandbox/dist first. Variants run interleaved, so host load affects each
 // alike. Results: <out>/<run>.json and <out>/SUMMARY.md, with per-stage medians.
-import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium, firefox, type BrowserContext, type BrowserType, type Page } from "playwright";
+import { ChildGroup, installPageLoadObserver, onInterrupt, requireUniqueNames, type PageLoadState } from "./page-load-support";
 
 const args = process.argv.slice(2);
 const option = (name: string, fallback: string) => args.includes(`--${name}`) ? args[args.indexOf(`--${name}`) + 1]! : fallback;
@@ -26,6 +26,7 @@ const runs = Number(option("runs", "1"));
 const timeout = Number(option("timeout", "300000"));
 const variants = args.flatMap((arg, index) => arg === "--variant" ? [parseVariant(args[index + 1] ?? "")] : []);
 if (!variants.length) variants.push({ name: "", roots: { web: join(repo, "web/dist"), sandbox: join(repo, "sandbox/dist") } });
+requireUniqueNames(variants.map(variant => variant.name));
 const types: Record<string, BrowserType> = { chromium, firefox };
 
 type App = "web" | "sandbox";
@@ -54,19 +55,27 @@ function parseVariant(text: string): Variant {
 }
 
 await mkdir(out, { recursive: true });
-const servers = new Map<string, { process: ChildProcess; url: string }>();
+const servers = new Map<string, string>();
+const children = new ChildGroup();
+let activeContext: BrowserContext | undefined;
 // Browser profiles stay off /work: its VDO volume makes Firefox's IndexedDB and CacheStorage
 // fsyncs 50-100x slower than an ordinary SSD (a cold indexedDB.open takes 9 s instead of 90 ms).
 const profiles = await mkdtemp(join(option("profiles", tmpdir()), "bun-wasm-page-load-"));
+let teardown: Promise<void> | undefined;
+const cleanup = () => teardown ??= (async () => {
+  await activeContext?.close().catch(() => {});
+  await children.stop();
+  await rm(profiles, { recursive: true, force: true });
+})();
+onInterrupt(cleanup);
 const visits: Visit[] = [];
 try {
-  for (const variant of variants) {
-    for (const app of new Set(targets.map(target => target.app))) servers.set(`${variant.name}:${app}`, await serve(variant.roots[app]));
+  for (const { variant, app } of variants.flatMap(variant => Array.from(new Set(targets.map(target => target.app)), app => ({ variant, app })))) {
+    servers.set(`${variant.name}:${app}`, await serve(variant.roots[app]));
   }
   for (const { attempt, browser, target, variant } of plan()) visits.push(...await profile(browser, target, variant, attempt));
 } finally {
-  for (const { process } of servers.values()) process.kill("SIGTERM");
-  await rm(profiles, { recursive: true, force: true });
+  await cleanup();
 }
 await writeFile(join(out, "SUMMARY.md"), summary(visits));
 console.log(summary(visits));
@@ -77,8 +86,8 @@ function plan(): { attempt: number; browser: string; target: Target; variant: Va
   return attempts.flatMap(attempt => browsers.flatMap(browser => targets.flatMap(target => variants.map(variant => ({ attempt, browser, target, variant })))));
 }
 
-async function serve(root: string): Promise<{ process: ChildProcess; url: string }> {
-  const child = spawn("bun", [join(repo, "web/serve.ts")], { env: { ...process.env, ROOT: root, PORT: "0" }, stdio: ["ignore", "pipe", "inherit"] });
+async function serve(root: string): Promise<string> {
+  const child = children.spawn("bun", [join(repo, "web/serve.ts")], { env: { ...process.env, ROOT: root, PORT: "0" }, stdio: ["ignore", "pipe", "inherit"] });
   const url = await new Promise<string>((resolveUrl, reject) => {
     let output = "";
     child.once("exit", code => reject(new Error(`serve.ts exited ${code}`)));
@@ -90,7 +99,7 @@ async function serve(root: string): Promise<{ process: ChildProcess; url: string
   });
   // The first request pays for the server's own startup; keep it out of the first cold visit.
   await (await fetch(`${url}/index.html`)).arrayBuffer();
-  return { process: child, url };
+  return url;
 }
 
 async function profile(browser: string, target: Target, variant: Variant, attempt: number): Promise<Visit[]> {
@@ -101,10 +110,11 @@ async function profile(browser: string, target: Target, variant: Variant, attemp
   try {
     for (const visit of ["cold", "warm"]) {
       const run = `${variant.name ? `${variant.name}-` : ""}${browser}-${target.app}-${target.engine}-${visit}-${attempt}`;
-      const context = await type.launchPersistentContext(directory, { headless: true, viewport: { width: 1440, height: 900 } });
+      const context = activeContext = await type.launchPersistentContext(directory, { headless: true, viewport: { width: 1440, height: 900 } });
       try {
-        results.push(await load(context, run, target, servers.get(`${variant.name}:${target.app}`)!.url));
+        results.push(await load(context, run, target, servers.get(`${variant.name}:${target.app}`)!));
       } finally {
+        activeContext = undefined;
         await context.close();
       }
     }
@@ -115,6 +125,7 @@ async function profile(browser: string, target: Target, variant: Variant, attemp
 }
 
 async function load(context: BrowserContext, run: string, target: Target, base: string): Promise<Visit> {
+  await context.addInitScript(installPageLoadObserver);
   const page = context.pages()[0] ?? await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(String(error)));
@@ -135,13 +146,12 @@ async function load(context: BrowserContext, run: string, target: Target, base: 
   return visit;
 }
 
+declare const __pageLoad: { state(app: string): PageLoadState };
+
 /** True when the app reached its first usable state, or a startup error it will not leave. */
 function readyState(app: string): boolean {
-  const statuses = performance.getEntriesByName("bunwasm:status") as PerformanceMark[];
-  const last = String(statuses.at(-1)?.detail ?? "");
-  if (/could not|not in this build|failed|error/i.test(last)) return true;
-  if (app === "sandbox") return performance.getEntriesByName("bunwasm:preview").length > 0;
-  return statuses.some(mark => String(mark.detail).startsWith("bun.wasm ready"));
+  const { ready, error } = __pageLoad.state(app);
+  return ready !== null || error !== null;
 }
 
 async function snapshot(page: Page, run: string, app: App): Promise<Visit> {
@@ -155,14 +165,8 @@ async function snapshot(page: Page, run: string, app: App): Promise<Visit> {
       transfer: entry.transferSize, encoded: entry.encodedBodySize, decoded: entry.decodedBodySize,
     }));
     const [navigation] = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
-    const ready = app === "sandbox"
-      ? performance.getEntriesByName("bunwasm:preview")[0]
-      : (performance.getEntriesByName("bunwasm:status") as PerformanceMark[]).find(mark => String(mark.detail).startsWith("bun.wasm ready"));
-    const end = ready ? ready.startTime + ready.duration : null;
-    const statuses = performance.getEntriesByName("bunwasm:status") as PerformanceMark[];
-    const last = String(statuses.at(-1)?.detail ?? "");
     return {
-      ready: end, error: end === null && /could not|not in this build|failed|error/i.test(last) ? last : null, entries, resources,
+      ...__pageLoad.state(app), entries, resources,
       navigation: (navigation ? { responseEnd: navigation.responseEnd, domContentLoaded: navigation.domContentLoadedEventEnd, load: navigation.loadEventEnd } : {}) as Record<string, number>,
     };
   }, app);

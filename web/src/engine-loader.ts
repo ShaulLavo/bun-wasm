@@ -86,31 +86,24 @@ export async function loadWasm(url: string, progress: (text: string) => void, as
   const lookup = performance.now();
   const cached = build ? await cachedEngine(key, build) : null;
   measureStartup("cache-lookup", lookup, { name, hit: cached !== null });
+  const restored = cached && build ? await loadCachedWasm(url, key, cached, build, progress) : null;
+  if (restored) return restored;
   let size = 0;
-  if (cached) {
-    progress("compiling cached bun.wasm…");
-    const started = performance.now();
-    const compiled = await compileCached(cached, key);
-    if (compiled) {
-      const { bytes, module } = compiled;
-      size = bytes.length;
-      performance.mark("bunwasm:engine-cache-hit");
-      measureStartup("compile", started, { cached: true });
-      const kind = programKind(module);
-      if (kind !== "single") return loadProgramSide(url, kind, { bytes, build }, progress, false);
-      return { module, size, build };
-    }
-  }
   progress("downloading bun.wasm…");
   const started = performance.now();
   const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
   // The build hash in the query gives every build its own URL, so a CDN edge that still holds the
   // previous build right after a deploy can't serve it in place of this one.
-  let res = await fetch(build ? `${gzUrl}?v=${build}` : gzUrl);
-  const gzipped = res.ok;
-  if (!gzipped) res = await fetch(url);
-  if (res.status === 404) throw new WasmMissing(`${url}: HTTP 404`);
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+  let fetched: Awaited<ReturnType<typeof fetchArtifact>>;
+  try {
+    fetched = await fetchArtifact(build ? `${gzUrl}?v=${build}` : gzUrl, url, url);
+  } catch (error) {
+    const stored = build ? await cachedEngine(key, build, true) : null;
+    const fallback = stored && build ? await loadCachedWasm(url, key, stored, build, progress) : null;
+    if (fallback) return fallback;
+    throw error;
+  }
+  const { response: res, gzipped } = fetched;
   const total = Number(res.headers.get("content-length")) || 0;
   let received = 0;
   let lastProgress = 0;
@@ -163,6 +156,31 @@ export async function loadWasm(url: string, progress: (text: string) => void, as
   const engine = { module, size };
   if (build) setTimeout(() => void cacheIfExpected(key, build, bytes), 0);
   return { ...engine, build };
+}
+
+/** The compressed artifact when the host has it, else the raw file. Throws WasmMissing on 404. */
+async function fetchArtifact(compressed: string, raw: string, label: string): Promise<{ response: Response; gzipped: boolean }> {
+  let response = await fetch(compressed);
+  const gzipped = response.ok;
+  if (!gzipped) response = await fetch(raw);
+  if (response.status === 404) throw new WasmMissing(`${label}: HTTP 404`);
+  if (!response.ok) throw new Error(`${label}: HTTP ${response.status}`);
+  if (!response.body) throw new Error(`${label}: empty response body`);
+  return { response, gzipped };
+}
+
+/** Compiles a build-checked cache entry; null (and evicted) when its bytes do not compile. */
+async function loadCachedWasm(url: string, key: string, cached: Response, build: string, progress: (text: string) => void) {
+  progress("compiling cached bun.wasm…");
+  const started = performance.now();
+  const compiled = await compileCached(cached, key);
+  if (!compiled) return null;
+  const { bytes, module } = compiled;
+  performance.mark("bunwasm:engine-cache-hit");
+  measureStartup("compile", started, { cached: true });
+  const kind = programKind(module);
+  if (kind !== "single") return loadProgramSide(url, kind, { bytes, build }, progress, false);
+  return { module, size: bytes.length, build };
 }
 
 async function compileCached(response: Response, key: string) {
@@ -222,27 +240,21 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
   const lookup = performance.now();
   const cached = build === null ? null : await cachedEngine(key, build);
   measureStartup("cache-lookup", lookup, { name, hit: cached !== null });
-  if (cached && build !== null) {
-    const reading = performance.now();
-    const bytes = new Uint8Array(await cached.arrayBuffer());
-    measureStartup("cache-read", reading, { name, bytes: bytes.length });
-    const verifying = performance.now();
-    try { await verifyArtifact(name, bytes, build); }
-    catch (error) { await evictEngine(key); throw error; }
-    measureStartup("verify", verifying, { name, cached: true });
-    progress(`verified cached ${name} (${mb(bytes.length)})…`);
-    return { bytes, build };
-  }
+  if (cached && build !== null) return readVerifiedCache(key, name, cached, build, progress);
   const downloading = performance.now();
   progress(`downloading ${name}…`);
   const compressed = new URL(requested);
   if (!compressed.pathname.endsWith(".gz")) compressed.pathname += ".gz";
   if (build !== null) compressed.searchParams.set("v", build);
-  let response = await fetch(compressed.href);
-  const gzipped = response.ok;
-  if (!gzipped) response = await fetch(requested.href);
-  if (response.status === 404) throw new WasmMissing(`${url}: HTTP 404`);
-  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  let fetched: Awaited<ReturnType<typeof fetchArtifact>>;
+  try {
+    fetched = await fetchArtifact(compressed.href, requested.href, url);
+  } catch (error) {
+    const stored = build === null ? null : await cachedEngine(key, build, true);
+    if (stored && build !== null) return readVerifiedCache(key, name, stored, build, progress);
+    throw error;
+  }
+  const { response, gzipped } = fetched;
   if (!response.body) throw new Error(`${url}: empty response body`);
   const body = gzipped ? response.body.pipeThrough(new DecompressionStream("gzip")) : response.body;
   const bytes = new Uint8Array(await new Response(body).arrayBuffer());
@@ -257,6 +269,19 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
       if (stored) performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
     });
   }
+  return { bytes, build };
+}
+
+/** Cached bytes count only after the same digest check as a download; a mismatch is evicted. */
+async function readVerifiedCache(key: string, name: string, cached: Response, build: string, progress: (text: string) => void): Promise<{ bytes: Uint8Array<ArrayBuffer>; build: string }> {
+  const reading = performance.now();
+  const bytes = new Uint8Array(await cached.arrayBuffer());
+  measureStartup("cache-read", reading, { name, bytes: bytes.length });
+  const verifying = performance.now();
+  try { await verifyArtifact(name, bytes, build); }
+  catch (error) { await evictEngine(key); throw error; }
+  measureStartup("verify", verifying, { name, cached: true });
+  progress(`verified cached ${name} (${mb(bytes.length)})…`);
   return { bytes, build };
 }
 

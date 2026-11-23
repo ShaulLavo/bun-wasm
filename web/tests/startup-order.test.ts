@@ -85,6 +85,96 @@ test("the sandbox loads process services while its workspace is still seeding", 
   expect(page.runs[0]?.args).toEqual(["install"]);
 });
 
+test("a quota failure installing base programs recovers storage and installs again", async () => {
+  const page = await models(undefined, { "package.json": JSON.stringify({ scripts: { dev: "vite", build: "vite build" } }), "index.ts": "example" });
+  cleanups.push(page.cleanup);
+  let attempts = 0;
+  page.boundary.programsReady = async () => {
+    if (++attempts === 1) throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    return { path: "/bin" };
+  };
+  // Persistent mode: storage recovery exists only with a stored workspace.
+  const sandbox = new page.Sandbox("?mode=fast");
+  sandbox.start();
+  method<() => void>(sandbox, "terminalOpened")();
+  await until(() => page.runs.length === 1);
+  expect(page.storageEvents).toContain("recover");
+  expect(attempts).toBe(2);
+  expect(page.runs[0]?.args).toEqual(["install"]);
+});
+
+test("base programs install only after the stored workspace is restored and checkpointed", async () => {
+  const fixture = filesystemFixture();
+  fixture.control.holdWrites = true;
+  const page = await models(fixture, { "package.json": JSON.stringify({ scripts: { dev: "vite", build: "vite build" } }), "index.ts": "example" });
+  cleanups.push(page.cleanup);
+  page.boundary.programsReady = async () => {
+    // Writing executable markers while restoreSource rewrites the workspace failed with EEXIST.
+    page.storageEvents.push(`programs after ${fixture.control.checkpoints} checkpoints`);
+    return { path: "/bin" };
+  };
+  const sandbox = new page.Sandbox("?mode=fast");
+  sandbox.start();
+  method<() => void>(sandbox, "terminalOpened")();
+  await until(() => fixture.writes.length === 1);
+  for (let turns = 0; turns < 20; turns++) await turn();
+  expect(page.storageEvents.some(event => event.startsWith("programs"))).toBe(false);
+  releaseWrites(fixture);
+  await until(() => page.runs.length === 1);
+  const programs = page.storageEvents.findIndex(event => event.startsWith("programs"));
+  expect(programs).toBeGreaterThan(page.storageEvents.indexOf("initialized"));
+  // One checkpoint seeds the template; the pre-install checkpoint precedes the markers.
+  expect(page.storageEvents[programs]).toBe(`programs after ${fixture.control.checkpoints} checkpoints`);
+});
+
+test("a shell that fails while the engine downloads ends startup without an unhandled rejection", async () => {
+  const engine = deferred<ReturnType<typeof engineModule>>();
+  const page = await models(undefined, undefined, () => engine.promise);
+  cleanups.push(page.cleanup);
+  const unhandled: unknown[] = [];
+  const record = (reason: unknown) => { unhandled.push(reason); };
+  process.on("unhandledRejection", record);
+  try {
+    Object.assign(page.boundary.BrowserSession, { create: async () => { throw new Error("shell worker failed"); } });
+    const playground = new page.Playground("");
+    method<() => void>(playground, "terminalOpened")();
+    await playground.start();
+    expect(playground.failure).toBe("startup");
+    expect(playground.status.text).toContain("shell worker failed");
+    await turn();
+  } finally {
+    engine.resolve(engineModule());
+    await turn();
+    process.off("unhandledRejection", record);
+  }
+  expect(unhandled).toEqual([]);
+});
+
+test("input typed during startup is dropped when another tab takes the workspace", async () => {
+  const engine = deferred<ReturnType<typeof engineModule>>();
+  const page = await models(undefined, undefined, () => engine.promise);
+  cleanups.push(page.cleanup);
+  const delivered: string[] = [];
+  let disposed = 0;
+  const create = page.boundary.BrowserSession.create;
+  Object.assign(page.boundary.BrowserSession, {
+    create: async (options: Parameters<typeof create>[0]) => ({ ...await create(options), input: (data: string) => { delivered.push(data); }, dispose: async () => { disposed++; } }),
+  });
+  const playground = new page.Playground("");
+  method<() => void>(playground, "terminalOpened")();
+  const started = playground.start();
+  await until(() => page.sessionCreates.length === 1);
+  const listeners = (playground.term as unknown as { dataListeners: ((data: string) => void)[] }).dataListeners;
+  for (const listener of listeners) listener("bun run index.ts\r");
+  page.fixture.fs.ownershipLost = true;
+  page.fixture.fs.onOwnershipLost?.();
+  engine.resolve(engineModule());
+  await started;
+  expect(delivered).toEqual([]);
+  expect(playground.ready).toBe(false);
+  expect(disposed).toBe(1);
+});
+
 test("typed input waits for the gate and keeps its order", () => {
   const gate = new InputGate();
   const delivered: string[] = [];

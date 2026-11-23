@@ -367,8 +367,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     term.loadAddon(this.fit);
     linkLocalUrls(term, this.previews);
     const moduleScope = registerModuleScope();
-    // The first command needs these, and none reads the project: load them while storage opens.
-    for (const pending of [browserPrograms.ready(), runtime.processes(), import("../../web/src/runner")]) pending.catch(() => {});
+    // The first command needs this code, and none of it writes the workspace, so it loads while
+    // storage opens. Installing base programs writes markers, which must wait for restoration.
+    browserPrograms.preload();
+    for (const pending of [runtime.processes(), import("../../web/src/runner")]) pending.catch(() => {});
     const editor = new Editor(fs, {
       app: APP,
       save: (path, text, revision) => this.save(fs, path, text, revision),
@@ -439,11 +441,15 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const visibleStart = this.firstStart ? 0 : performance.now();
     this.firstStart = false;
     this.setStatus("waiting for module service worker…");
-    // The checkpoint must finish before install writes; the services it overlaps are independent.
+    // Base programs install after the restored workspace is checkpointed, as before. A quota
+    // failure there is not remembered, so storage recovery retries it.
+    const programsInstalled = this.retryStorage(() => fs.flush()).then(() => {
+      stage("flushed");
+      return this.retryStorage(() => browserPrograms.ready());
+    }).then(value => { stage("programs-ready"); return value; });
     const [scoped, programs] = await Promise.all([
       workspace.moduleScope.then(value => { stage("module-scope-ready"); return value; }),
-      browserPrograms.ready().then(value => { stage("programs-ready"); return value; }),
-      this.retryStorage(() => fs.flush()).then(() => stage("flushed")),
+      programsInstalled,
       runtime.processes().then(() => stage("processes-ready")),
     ]);
     if (revision !== this.serverRevision) return;

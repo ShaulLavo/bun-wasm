@@ -210,8 +210,11 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     fs.onStateChange = state => {
       if (state.status === "waiting") this.setStatus("Waiting for this workspace to close in another tab. It will open here automatically.");
     };
+    // Typing waits for Bun's registration; a tab that loses the workspace drops it for good.
+    const input = new InputGate();
     fs.onOwnershipLost = () => {
       this.failure = "ownership";
+      input.close();
       this.changed();
     };
     // Network work that reads no workspace runs while the workspace storage opens.
@@ -265,7 +268,6 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
 
     // The shell starts while the engine downloads. Its PATH names Bun's static bin directory,
     // and typing waits for Bun's registration below, so no command can run before Bun exists.
-    const input = new InputGate();
     term.onData(data => input.write(data));
     const shellReady = (async () => {
       const [programs, { BrowserSession }, prompts] = await Promise.all([programsReady, sessionModule, promptModule]);
@@ -291,33 +293,25 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       return shell;
     })();
     const engine = this.engine;
+    const registering = this.registerBun(runtime, network, moduleScope, wasmReady);
+    let shell: Awaited<typeof shellReady>;
     let registration: Awaited<ReturnType<typeof registerPlaygroundBun>>;
     let size: number;
     try {
-      const [scoped, wasm] = await Promise.all([moduleScope, wasmReady]);
-      if (wasm instanceof Error) throw wasm;
-      size = wasm.size;
-      const loadTools = createToolsLoader();
-      registration = await registerPlaygroundBun({ runtime, engine, module: wasm.module, profile: this.profile,
-        loadModule: (provider, profile) => loadEngineProgram(provider, profile, () => {}).then(loaded => loaded.module),
-        launcher: provider => async (context, service) => {
-          const { bunLauncher } = await import("../bun-launcher");
-          return bunLauncher(provider, {
-            runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
-            // web/build.ts emits the notification helper at the page root in both modes.
-            notificationWorkerUrl: new URL("./notification-worker.js", location.href).href,
-            loadTools,
-          })(context, service);
-        },
-      });
-      stage("bun-registered");
-      // Mutations are already visible to every worker; the checkpoint only makes them durable.
-      await Promise.all([shellReady, fs.flush().then(() => stage("flushed"))]);
+      // Both branches are observed from here, so whichever fails first ends startup at once.
+      [shell, { registration, size }] = await Promise.all([shellReady, registering]);
     } catch (error) {
-      void shellReady.then(shell => shell.dispose()).catch(() => {});
+      void shellReady.then(started => started.dispose()).catch(() => {});
+      void registering.then(registered => registered.registration.dispose()).catch(() => {});
       throw error;
     }
-    const shell = await shellReady;
+    if (fs.ownershipLost) {
+      // Another tab took the workspace during startup: nothing here may run against it.
+      this.shell = undefined;
+      registration.dispose();
+      await shell.dispose();
+      return;
+    }
     input.open(data => shell.input(data));
     addEventListener("pagehide", (event: PageTransitionEvent) => {
       if (event.persisted) return;
@@ -328,6 +322,35 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     this.ready = !fs.ownershipLost;
     this.setStatus(`bun.wasm ready · ${ENGINES[engine].name} · ${mb(size)}`, "ok");
     if (this.ready) whenIdle(warmFirstCommand);
+  }
+
+  /** Registers Bun once its engine and module scope are ready, then checkpoints the workspace. */
+  private async registerBun(runtime: Runtime, network: BunNetworkOptions, moduleScope: Promise<boolean>, wasmReady: ReturnType<Playground["loadEngine"]>) {
+    const [scoped, wasm] = await Promise.all([moduleScope, wasmReady]);
+    if (wasm instanceof Error) throw wasm;
+    const loadTools = createToolsLoader();
+    const registration = await registerPlaygroundBun({ runtime, engine: this.engine, module: wasm.module, profile: this.profile,
+      loadModule: (provider, profile) => loadEngineProgram(provider, profile, () => {}).then(loaded => loaded.module),
+      launcher: provider => async (context, service) => {
+        const { bunLauncher } = await import("../bun-launcher");
+        return bunLauncher(provider, {
+          runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
+          // web/build.ts emits the notification helper at the page root in both modes.
+          notificationWorkerUrl: new URL("./notification-worker.js", location.href).href,
+          loadTools,
+        })(context, service);
+      },
+    });
+    stage("bun-registered");
+    try {
+      // Mutations are already visible to every worker; the checkpoint only makes them durable.
+      await runtime.filesystem.flush();
+    } catch (error) {
+      registration.dispose();
+      throw error;
+    }
+    stage("flushed");
+    return { registration, size: wasm.size };
   }
 
   private async loadEngine(): Promise<Awaited<ReturnType<typeof loadWasm>> | Error> {
@@ -369,19 +392,29 @@ async function seedExamples(fs: Filesystem): Promise<void> {
   await fs.flush();
 }
 
-/** Holds terminal input until its consumer opens, then delivers it in order. */
+/** Holds terminal input until its consumer opens, then delivers it in order. Closing is final. */
 export class InputGate {
   private readonly queued: string[] = [];
   private consumer: ((data: string) => void) | undefined;
+  private closed = false;
 
   write(data: string): void {
+    if (this.closed) return;
     if (this.consumer) this.consumer(data);
     else this.queued.push(data);
   }
 
   open(consumer: (data: string) => void): void {
+    if (this.closed) return;
     this.consumer = consumer;
     for (const data of this.queued.splice(0)) consumer(data);
+  }
+
+  /** Drops queued input and everything typed later. */
+  close(): void {
+    this.closed = true;
+    this.consumer = undefined;
+    this.queued.length = 0;
   }
 }
 
