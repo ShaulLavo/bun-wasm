@@ -305,6 +305,46 @@ test("non-WebAssembly bytes at the logical URL with no twin reach verification i
   await expect(tools[1](garbage)).rejects.toThrow("bun-tools.wasm integrity mismatch");
 });
 
+/** A logical answer that is an index page whose stream fails again when discarded. */
+function lateFailingIndex(): Response {
+  return new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode("<!doctype html>")); },
+    cancel() { throw new TypeError("late decode error"); },
+  }), { headers: { "content-type": "application/wasm" } });
+}
+
+test.each(loaders)("a held logical body that fails when discarded does not hide a healthy twin for the %s", async (_loader, load) => {
+  const loaded = await load(async url => url.includes(".gz") ? new Response(Bun.gzipSync(wasm)) : lateFailingIndex());
+  expect(loaded.size).toBe(wasm.length);
+});
+
+const unusableTwins: [string, () => Response][] = [
+  ["a 204", () => new Response(null, { status: 204 })],
+  ["an HTML 200", () => new Response("<!doctype html>", { headers: { "content-type": "text/html" } })],
+  ["a 404", () => new Response(null, { status: 404 })],
+];
+
+test.each(unusableTwins)("%s twin keeps the held logical bytes for verification", async (_label, twin) => {
+  const [, tools] = loaders;
+  const answer = async (url: string) => url.includes(".gz") ? twin() : new Response("not a module", { headers: { "content-type": "application/wasm" } });
+  await expect(tools[1](answer)).rejects.toThrow("bun-tools.wasm integrity mismatch");
+});
+
+const twinCancellations: [string, () => Response][] = [
+  ["a held index page", () => new Response("<!doctype html>", { headers: { "content-type": "text/html" } })],
+  ["a 404", () => new Response(null, { status: 404 })],
+];
+
+test.each(twinCancellations)("a cancelled twin fetch after %s stays cancelled", async (_label, logical) => {
+  for (const [, load] of loaders) {
+    const answer = async (url: string) => {
+      if (url.includes(".gz")) throw new DOMException("The operation was aborted.", "AbortError");
+      return logical();
+    };
+    await expect(load(answer)).rejects.toMatchObject({ name: "AbortError" });
+  }
+});
+
 test("a module that does not compile is not downloaded again from its twin", async () => {
   const fetched: string[] = [];
   const broken = Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0, 1, 5]);

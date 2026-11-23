@@ -9,13 +9,15 @@ import { dirname, join, resolve } from "node:path";
 import { templates } from "./src/template-catalog";
 import { templateFiles } from "./template-files";
 import { stageSharedPrograms } from "../scripts/stage-program-profiles";
-import { sortedBuilds, stageGuestWasm } from "../scripts/stage-guest-wasm";
+import { brotliQuality, sortedBuilds, stageGuestWasm } from "../scripts/stage-guest-wasm";
 import { settleAll } from "../scripts/stage-wasm-sidecars";
 
 const here = import.meta.dir;
 const web = resolve(here, "../web");
 const out = join(here, "dist");
 
+// An invalid setting fails before the previous build is removed.
+brotliQuality();
 rmSync(out, { recursive: true, force: true });
 
 // Bundle each browser realm independently and mirror worker chunks into its scope.

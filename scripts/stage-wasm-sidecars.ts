@@ -26,21 +26,53 @@ export async function writeWasmWithSidecars(path: string, bytes: Uint8Array, wri
   await replaceFiles([[path, bytes], [`${path}.gz`, gz], [`${path}.br`, br]], write);
 }
 
+type Mover = (from: string, to: string) => Promise<void>;
+
 /**
  * Write every output to a temporary file first and rename them into place only after all writes
- * succeeded. On failure every writer has settled and every temporary file is gone.
+ * succeeded. On failure every writer has settled, every temporary file is gone, and the targets
+ * hold exactly what they held before: no new file beside an old one.
  */
-export async function replaceFiles(outputs: readonly [string, Uint8Array][], write: Writer = writeFile): Promise<void> {
+export async function replaceFiles(outputs: readonly [string, Uint8Array][], write: Writer = writeFile, move: Mover = rename): Promise<void> {
   const suffix = `.${process.pid}-${randomUUID()}.tmp`;
-  await Promise.all(Array.from(new Set(outputs.map(([target]) => dirname(target))), directory => mkdir(directory, { recursive: true })));
+  const targets = outputs.map(([target]) => target);
+  await Promise.all(Array.from(new Set(targets.map(target => dirname(target))), directory => mkdir(directory, { recursive: true })));
   try {
     await writeAll(outputs, suffix, write);
-    await requireFileTargets(outputs.map(([target]) => target));
-    for (const [target] of outputs) await rename(target + suffix, target);
+    await requireFileTargets(targets);
+    await swapIntoPlace(targets, suffix, move);
+  } finally {
+    await Promise.all(targets.map(target => rm(target + suffix, { force: true })));
+  }
+}
+
+/** Move each previous file aside, then each new one in; any failed rename puts the previous set back. */
+async function swapIntoPlace(targets: readonly string[], suffix: string, move: Mover): Promise<void> {
+  const swap = { previous: `${suffix}.previous`, kept: [] as string[], placed: [] as string[] };
+  try {
+    for (const target of targets) await placeOne(target, suffix, swap, move);
   } catch (error) {
-    await Promise.all(outputs.map(([target]) => rm(target + suffix, { force: true })));
+    await Promise.all(swap.placed.map(target => rm(target, { force: true })));
+    for (const target of swap.kept) await rename(target + swap.previous, target);
     throw error;
   }
+  await Promise.all(swap.kept.map(target => rm(target + swap.previous, { force: true })));
+}
+
+async function placeOne(target: string, suffix: string, swap: { previous: string; kept: string[]; placed: string[] }, move: Mover): Promise<void> {
+  if (await present(target)) {
+    await move(target, target + swap.previous);
+    swap.kept.push(target);
+  }
+  await move(target + suffix, target);
+  swap.placed.push(target);
+}
+
+async function present(path: string): Promise<boolean> {
+  return lstat(path).then(() => true, (error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  });
 }
 
 /** Wait for every write, so none can recreate a temporary file after cleanup, then report the first failure. */

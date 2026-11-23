@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveSiteSpiderMonkey, verifySiteGuests } from "../scripts/site-guest-preflight";
 import { requireSharedProgramInputs } from "../scripts/stage-program-profiles";
+import { brotliQuality } from "../scripts/stage-guest-wasm";
 import { templates } from "../sandbox/src/template-catalog";
 
 const root = resolve(import.meta.dir, "..");
@@ -22,6 +23,9 @@ async function build(app: string): Promise<void> {
   await run(app, ["bun", "run", "build"]);
 }
 
+// Deployed guests ship Brotli quality 11 unless overridden; an invalid override fails before any build starts.
+process.env.BUN_WASM_BROTLI_QUALITY ??= "11";
+brotliQuality();
 const spiderMonkey = resolveSiteSpiderMonkey(root);
 await verifySiteGuests(root, process.env, spiderMonkey);
 // The public site never ships a guest with debug names. Set the profiling override to "0"
@@ -35,9 +39,8 @@ if (spiderMonkey) process.env.SPIDERMONKEY_WASM = spiderMonkey;
 const guests = Bun.spawn(["bash", "scripts/build-bash-web-shell.sh"], { cwd: root, stdout: "inherit", stderr: "inherit" });
 if ((await guests.exited) !== 0) throw new Error("scripts/build-bash-web-shell.sh failed");
 process.env.BASH_WEB_GUESTS = "required";
-// Deployed guests ship Brotli quality 11, about 13% smaller than the quick default
-// (scripts/stage-guest-wasm.ts). Both apps stage the same guests, so they share one cache.
-process.env.BUN_WASM_BROTLI_QUALITY ??= "11";
+// Quality 11 is about 13% smaller than the quick default (scripts/stage-guest-wasm.ts). Both apps
+// stage the same guests, so they share one cache.
 const compressionCache = mkdtempSync(join(tmpdir(), "bun-wasm-site-brotli-"));
 process.env.BUN_WASM_COMPRESSION_CACHE = compressionCache;
 try {

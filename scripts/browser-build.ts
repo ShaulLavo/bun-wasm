@@ -2,10 +2,10 @@ import { storageObservationPlugin } from "./storage-fs-build";
 import { baseProgramAssets } from "./base-program-build";
 import { relative, join, resolve, isAbsolute, dirname } from "node:path";
 import { existsSync, realpathSync, readFileSync } from "node:fs";
-import { unlink } from "node:fs/promises";
+import { unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { pinnedBashWeb, verifiedGuests } from "./bash-web-guests";
-import { writeWasmWithSidecars } from "./stage-wasm-sidecars";
+import { settleAll, writeWasmWithSidecars, type Writer } from "./stage-wasm-sidecars";
 
 const runtimeName = "waffle";
 const scopedRuntimeName = "@waffle-os/runtime";
@@ -228,10 +228,15 @@ export async function buildShellAssets(consumer: string, outdir: string) {
   const dist = resolve(consumer, process.env.BASH_WEB_GUESTS_DIR ?? "../dist");
   const guests = verifiedGuests(dist, pinnedBashWeb(consumer));
   if (guests) {
-    await Promise.all(guests.map(async ({ program, path }) => writeWasmWithSidecars(join(outdir, "programs", program), await Bun.file(path).bytes())));
+    await writeShellGuests(guests, outdir);
     return;
   }
   const missing = `no bash-web guests in ${dist}; run scripts/build-bash-web-shell.sh`;
   if (process.env.BASH_WEB_GUESTS === "required") throw new Error(missing);
   console.warn(`${missing}. Package scripts, Bun.$, bun exec and #!/usr/bin/env bins will not run.`);
+}
+
+/** Stage the shell and env guests concurrently; a failure is reported only after the other finished writing. */
+export async function writeShellGuests(guests: readonly { program: string; path: string }[], outdir: string, write: Writer = writeFile): Promise<void> {
+  await settleAll(guests.map(async ({ program, path }) => writeWasmWithSidecars(join(outdir, "programs", program), await Bun.file(path).bytes(), write)));
 }

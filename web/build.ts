@@ -10,13 +10,15 @@ import { previewWebsocketScript } from "./preview-build";
 import { buildBrowserEntries, buildClassicWorker, buildShellAssets } from "../scripts/browser-build";
 import { dirname, join, resolve } from "node:path";
 import { stageSharedPrograms } from "../scripts/stage-program-profiles";
-import { sortedBuilds, stageGuestWasm } from "../scripts/stage-guest-wasm";
+import { brotliQuality, sortedBuilds, stageGuestWasm } from "../scripts/stage-guest-wasm";
 import { settleAll } from "../scripts/stage-wasm-sidecars";
 
 const here = import.meta.dir;
 const out = join(here, "dist");
 const wasmSource = resolve(here, process.env.BUN_WASM ?? "../dist/bun.wasm");
 
+// An invalid setting fails before the previous build is removed.
+brotliQuality();
 rmSync(out, { recursive: true, force: true });
 
 // Bundle each browser realm independently and mirror worker chunks into its scope.

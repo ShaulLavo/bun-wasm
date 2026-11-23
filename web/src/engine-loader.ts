@@ -197,14 +197,36 @@ async function fromArtifact<T>(url: string, build: string | null, label: string,
 async function fallBack<T>(href: string, logical: Miss, label: string, consume: (artifact: Artifact) => Promise<T>): Promise<T> {
   const { held } = logical;
   if (!held) return consume(gzipArtifact(await fetch(href), logical, label));
-  const twin = await fetch(href).catch(() => undefined);
-  if (twin?.ok) {
-    await held.body.cancel();
-    return consume(gzipArtifact(twin, logical, label));
+  const twin = await fetch(href).catch((error: unknown) => {
+    if (final(error)) throw error;
+    return undefined;
+  });
+  const usable = await consumeTwin(twin, logical, label, consume);
+  if (usable) {
+    void dispose(held.body);
+    return usable.value;
   }
-  await twin?.body?.cancel();
   // With no usable twin the logical bytes go on to verification, which names what is wrong with them.
   return consume(held);
+}
+
+/** The twin consumed, or undefined when it is missing, empty or does not decode. Cancellation stays final. */
+async function consumeTwin<T>(twin: Response | undefined, logical: Miss, label: string, consume: (artifact: Artifact) => Promise<T>): Promise<{ value: T } | undefined> {
+  if (!twin?.ok || !twin.body) {
+    await dispose(twin?.body);
+    return undefined;
+  }
+  try {
+    return { value: await consume(gzipArtifact(twin, logical, label)) };
+  } catch (error) {
+    if (final(error)) throw error;
+    return undefined;
+  }
+}
+
+/** Discarding a body is best-effort: its own late error must not replace the result in hand. */
+async function dispose(body: ReadableStream | null | undefined): Promise<void> {
+  if (body) await body.cancel().catch(() => {});
 }
 
 /** The logical URL consumed, or why the `.gz` twin should be tried. Cancellation and compile errors stay final. */
@@ -212,7 +234,7 @@ async function attempt<T>(href: string, consume: (artifact: Artifact) => Promise
   try {
     const response = await fetch(href);
     if (!response.ok || !response.body) {
-      await response.body?.cancel();
+      await dispose(response.body);
       return { status: response.ok ? 404 : response.status };
     }
     const { body, wasm } = await replayHead(response.body);
