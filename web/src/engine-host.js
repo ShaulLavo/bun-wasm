@@ -126,6 +126,7 @@ const nativePromiseHasInstance = Function.prototype.call.bind(Function.prototype
 const NativeString = globalThis.String;
 const PENDING = Object.freeze({ state: "pending", value: undefined });
 const nativeProcess = typeof process === "object" && process && process.versions && process.versions.node ? process : null;
+const nativeProcessNextTick = nativeProcess && typeof nativeProcess.nextTick === "function" ? nativeProcess.nextTick.bind(nativeProcess) : null;
 const nativeAddEventListener = typeof globalThis.addEventListener === "function" ? globalThis.addEventListener.bind(globalThis) : null;
 
 const utf8 = new NativeTextEncoder();
@@ -1077,16 +1078,18 @@ class EngineHost {
         stop();
       }
     };
+    const scheduleRejectionFlush = nativeProcessNextTick || nativeQueueMicrotask;
+    const runRejection = fn => (this.ticks ? this.ticks.runRejectionCallback(fn, scheduleRejectionFlush) : fn());
     const onRejection = (reason, promise) => {
       if (this.exited || reason instanceof ExitSignal) return;
       if (handledWhileReporting.has(promise)) return;
       if (this.transfer(reason)) return;
-      if (!this.guard(() => report(reason, promise))) this.exit(1);
+      if (!runRejection(() => this.guard(() => report(reason, promise)))) this.exit(1);
     };
     // The host reports a late handler on a promise it reported; the runtime emits
     // 'rejectionHandled' when that report reached an 'unhandledRejection' listener.
     const onHandled = (promise) => {
-      if (!this.exited) this.guard(() => this.internal.handleRejectionHandled(promise));
+      if (!this.exited) runRejection(() => this.guard(() => this.internal.handleRejectionHandled(promise)));
     };
     if (nativeProcess) {
       nativeProcess.on("unhandledRejection", onRejection);

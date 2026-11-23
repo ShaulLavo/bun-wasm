@@ -6,13 +6,18 @@
 // including inside Promise.prototype.then or chained native `await` reactions)
 // schedule a host macrotask checkpoint and drain at the start of the next turn,
 // once V8's microtask queue is completely empty and ahead of the next timer or
-// immediate. Ticks queued outside any guest task before the host loop starts
+// immediate. Ticks queued during a host unhandledRejection / rejectionHandled
+// callback drain right after that rejection pass finishes (via host
+// process.nextTick on Node or an ahead-of-listener queueMicrotask in browsers),
+// before follow-up Promise microtasks queued inside the rejection listeners.
+// Ticks queued outside any guest task before the host loop starts
 // fall back to queueMicrotask so standalone host harnesses still drain them.
 
 export interface TickScheduler {
   readonly queued: boolean;
   schedule(): void;
   runTask<T>(fn: () => T): T;
+  runRejectionCallback<T>(fn: () => T, scheduleAfterPass: (callback: () => void) => void): T;
   drainBeforeTurn(): boolean;
   drainNow(): void;
   reset(): void;
@@ -29,13 +34,36 @@ export function createTickScheduler(
   let scheduledInTask = false;
   let afterGuestTask = false;
   let deferredToTurn = false;
+  let rejectionDepth = 0;
+  let rejectionFlushScheduled = false;
+  let rejectionTickPending = false;
 
   function drainNow(): void {
     if (!queued || isExited()) return;
     queued = false;
     scheduledInTask = false;
     deferredToTurn = false;
+    rejectionTickPending = false;
     runTicks();
+  }
+
+  function flushRejectionTicks(): void {
+    rejectionFlushScheduled = false;
+    if (!rejectionTickPending || !queued || isExited()) {
+      rejectionTickPending = false;
+      return;
+    }
+    rejectionTickPending = false;
+    taskDepth++;
+    try {
+      drainNow();
+    } finally {
+      taskDepth--;
+      if (taskDepth === 0) {
+        if (scheduledInTask && queued && !isExited()) drainNow();
+        afterGuestTask = true;
+      }
+    }
   }
 
   return {
@@ -43,7 +71,14 @@ export function createTickScheduler(
       return queued;
     },
     schedule() {
-      if (queued || isExited()) return;
+      if (isExited()) return;
+      if (rejectionDepth > 0) {
+        queued = true;
+        deferredToTurn = false;
+        rejectionTickPending = true;
+        return;
+      }
+      if (queued) return;
       queued = true;
       if (taskDepth > 0) {
         scheduledInTask = true;
@@ -68,6 +103,18 @@ export function createTickScheduler(
         }
       }
     },
+    runRejectionCallback<T>(fn: () => T, scheduleAfterPass: (callback: () => void) => void): T {
+      if (!rejectionFlushScheduled && !isExited()) {
+        rejectionFlushScheduled = true;
+        scheduleAfterPass(flushRejectionTicks);
+      }
+      rejectionDepth++;
+      try {
+        return fn();
+      } finally {
+        rejectionDepth--;
+      }
+    },
     drainBeforeTurn(): boolean {
       if (!deferredToTurn || !queued || isExited()) {
         afterGuestTask = false;
@@ -89,6 +136,9 @@ export function createTickScheduler(
       scheduledInTask = false;
       afterGuestTask = false;
       deferredToTurn = false;
+      rejectionDepth = 0;
+      rejectionFlushScheduled = false;
+      rejectionTickPending = false;
     },
   };
 }
