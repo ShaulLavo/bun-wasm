@@ -32,7 +32,10 @@ for (const path of ["hermes/engine.wasm", "dist/bun-hermes.wasm", "dist/bun-herm
 }
 
 test("split closure retains the verified shell, network and program-family WASM assets", () => {
-  const dependencies = ["web/programs/shell-engine.wasm", "web/programs/env.wasm", "web/network.wasm", "web/chunks/network.wasm", "web/__bunwasm/network.wasm", "web/__bunwasm/chunks/network.wasm"];
+  const dependencies = ["web/network.wasm", "web/chunks/network.wasm", "web/__bunwasm/network.wasm", "web/__bunwasm/chunks/network.wasm"];
+  for (const guest of ["shell-engine", "env"]) {
+    for (const suffix of ["", ".gz", ".br"]) dependencies.push(`web/programs/${guest}.wasm${suffix}`);
+  }
   for (const family of ["coreutils", "findutils", "grep", "ripgrep", "sed"]) {
     for (const suffix of ["", ".gz", ".br"]) dependencies.push(`web/programs/base/waffle-${family}/dist/${family}.wasm${suffix}`);
   }
@@ -43,7 +46,7 @@ test("split closure retains the verified shell, network and program-family WASM 
 });
 
 test("dependency WASM does not admit extra engine payloads or unknown dependency families", () => {
-  for (const path of ["web/bun-spidermonkey.wasm.gz", "web/unknown-engine.wasm", "web/quickjs.wasm", "web/quickjs.wasm.br", "web/programs/unknown.wasm", "web/programs/base/waffle-unknown/dist/unknown.wasm.gz", "web/__bunwasm/bun-spidermonkey.wasm.gz"]) {
+  for (const path of ["web/bun-spidermonkey.wasm.gz", "web/unknown-engine.wasm", "web/quickjs.wasm", "web/quickjs.wasm.br", "web/programs/unknown.wasm", "web/programs/shell-engine.wasm.zst", "web/programs/base/waffle-unknown/dist/unknown.wasm.gz", "web/__bunwasm/bun-spidermonkey.wasm.gz"]) {
     expect(() => requireClosureFiles("split", producerArtifactPaths("split").concat([path]).map(path => ({ path })))).toThrow(`Unexpected producer manifest artifact: ${path}`);
   }
 });

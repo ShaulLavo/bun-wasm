@@ -5,6 +5,7 @@ import { existsSync, realpathSync, readFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { pinnedBashWeb, verifiedGuests } from "./bash-web-guests";
+import { writeWasmWithSidecars } from "./stage-wasm-sidecars";
 
 const runtimeName = "waffle";
 const scopedRuntimeName = "@waffle-os/runtime";
@@ -217,8 +218,8 @@ export function buildClassicWorker(entrypoint: string, outdir: string, define?: 
  * bash-web publishes no prebuilt guests, so they come from scripts/build-bash-web-shell.sh in
  * BASH_WEB_GUESTS_DIR (default ../dist), checked against its receipt and the consumer's bash-web pin.
  * A stale or partial set always fails. A missing set fails when BASH_WEB_GUESTS=required (site
- * deploys); test builds without guests only skip the shell. bash-web's loaders fetch the guests
- * themselves, so they ship raw.
+ * deploys); test builds without guests only skip the shell. bash-web's loaders fetch the logical
+ * raw URL themselves, so each guest ships raw with `.br` and `.gz` twins that the host negotiates.
  */
 export async function buildShellAssets(consumer: string, outdir: string) {
   const plugins = process.env.BUN_WASM_STORAGE_DIAGNOSTICS === "1" ? browserBuildConfig([join(consumer, "src/main.ts")], outdir).plugins : undefined;
@@ -227,7 +228,7 @@ export async function buildShellAssets(consumer: string, outdir: string) {
   const dist = resolve(consumer, process.env.BASH_WEB_GUESTS_DIR ?? "../dist");
   const guests = verifiedGuests(dist, pinnedBashWeb(consumer));
   if (guests) {
-    for (const { program, path } of guests) await Bun.write(join(outdir, "programs", program), Bun.file(path));
+    await Promise.all(guests.map(async ({ program, path }) => writeWasmWithSidecars(join(outdir, "programs", program), await Bun.file(path).bytes())));
     return;
   }
   const missing = `no bash-web guests in ${dist}; run scripts/build-bash-web-shell.sh`;

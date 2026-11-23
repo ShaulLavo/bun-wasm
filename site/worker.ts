@@ -33,7 +33,8 @@ function negotiationError(status: number, metadata: Headers): Response {
 export default {
   async fetch(request: Request, env: SiteEnv): Promise<Response> {
     const url = new URL(request.url);
-    const program = url.pathname.startsWith("/programs/base/") || url.pathname.startsWith("/playground/programs/base/");
+    // Every program WASM (the bash-web shell and env guests, Waffle's base families) may ship `.br` and `.gz` twins.
+    const program = url.pathname.startsWith("/programs/") || url.pathname.startsWith("/playground/programs/");
     if (!program || !url.pathname.endsWith(".wasm") || !["GET", "HEAD"].includes(request.method)) return env.ASSETS.fetch(request);
     const headers = new Headers(request.headers);
     headers.set("accept-encoding", "identity");
