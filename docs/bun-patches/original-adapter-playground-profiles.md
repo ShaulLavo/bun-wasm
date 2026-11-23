@@ -67,14 +67,20 @@ render fail with an out-of-memory error. The 1,280 MiB maximum leaves about 23%
 above the Nuxt measurement. These are backing capacities, not resident-memory
 measurements. Native iPhone workflow qualification is separate.
 
-JSC uses a 1,280 MiB iPhone group maximum and retains its 1 GiB cumulative member
-allowance. Its complete instrumented Chrome workflows reach 760,545,280 bytes for
-Angular and 996,737,024 bytes for Vite React. The maximum leaves about 35% above
-the larger measured capacity. Desktop keeps its original policy.
+JSC uses a 1,536 MiB (24,576-page) iPhone group maximum and retains its 1 GiB
+cumulative member allowance. Its complete instrumented Chrome workflows reach
+760,545,280 bytes for Angular, 996,737,024 bytes for Vite React, and
+1,414,397,952 bytes (21,582 pages) for Nuxt build (1,317,666,816 bytes during
+Nitro dev render). The earlier 1,280 MiB cap from PR #892 was sized from
+Angular and Vite React only and made Nuxt's Nitro build exhaust memory at
+20,478 pages. The 1,536 MiB maximum leaves about 13.9% headroom above Nuxt's
+peak. Desktop keeps its original policy.
 
-SpiderMonkey also uses a 1,280 MiB iPhone group maximum with the original 1 GiB
-member allowance. Its complete Angular Chrome workflow reaches 1,033,568,256
-bytes, leaving about 30% growth room. Desktop keeps its original policy.
+SpiderMonkey also uses a 1,536 MiB (24,576-page) iPhone group maximum with the
+original 1 GiB member allowance. Its complete instrumented Chrome workflows
+reach 1,033,568,256 bytes for Angular and 1,358,168,064 bytes (20,724 pages)
+for Nuxt build (1,309,016,064 bytes during Nitro dev render), leaving about
+18.6% headroom above Nuxt's peak. Desktop keeps its original policy.
 
 The same host adapter sets the native Browser tool-memory fact for iPhone and
 removes it from other engine environments. The byte-qualified Rolldown loader
