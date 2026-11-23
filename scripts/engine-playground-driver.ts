@@ -109,7 +109,9 @@ export function servedProgram(context: BrowserContext, child: Child, base: strin
       const asset = new URL(file.name, base);
       return url.origin === asset.origin && url.pathname.replace(/\.gz$/, "") === asset.pathname;
     });
-    if (!file || response.status() === 404 && url.pathname.endsWith(".gz")) return;
+    // A plain static host misses the logical URL and the loader falls back to the `.gz` twin;
+    // a negotiating host serves the logical URL, which Playwright reports decoded.
+    if (!file || [404, 406].includes(response.status()) && !url.pathname.endsWith(".gz")) return;
     const identity = url.pathname.endsWith(".gz") ? file.gzip : file.raw;
     const observation = response.body().then(bytes => {
       assert.ok(response.ok(), `artifact HTTP ${response.status()}`);

@@ -65,7 +65,8 @@ async function withTools(bytes: Uint8Array, expected: string, source: "download"
         async delete() { cached = undefined; return true; },
       }; },
     },
-    async fetch() { downloads++; return new Response(Bun.gzipSync(new Uint8Array(bytes))); },
+    // A negotiating host: fetch has already decoded the native Content-Encoding.
+    async fetch() { downloads++; return new Response(new Uint8Array(bytes), { headers: { "content-type": "application/wasm", "content-encoding": "br" } }); },
   };
   try {
     for (const [name, value] of Object.entries(globals)) Object.defineProperty(globalThis, name, { configurable: true, value });

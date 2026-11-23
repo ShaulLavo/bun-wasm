@@ -3,6 +3,7 @@
 // ROOT=<dir> serves another build (the sandbox: `ROOT=dist bun ../web/serve.ts`).
 // Cache-Control follows the build's _headers, as on Cloudflare. LATENCY_MS=<n> delays every
 // response by n milliseconds, to measure what network round trips cost a remote user.
+// TLS_CERT=<pem> TLS_KEY=<pem> serves HTTPS: browsers offer Brotli only there, so plain HTTP gets gzip.
 import { existsSync, readFileSync } from "node:fs";
 import { join, normalize, resolve } from "node:path";
 import { brotliDecompressSync } from "node:zlib";
@@ -63,28 +64,31 @@ async function wasmResponse(path: string, acceptEncoding: string | null, headers
   headers["content-type"] = "application/wasm";
   for (const encoding of preference) {
     const source = available.get(encoding);
-    if (source) return wasmRepresentation(encoding, source, headers);
+    if (source) return wasmRepresentation(encoding, source, available.get("gzip"), headers);
   }
   return new Response(null, { status: 406, headers });
 }
 
-async function wasmRepresentation(encoding: Encoding, source: Representation, headers: Record<string, string>): Promise<Response> {
+async function wasmRepresentation(encoding: Encoding, source: Representation, gzip: Representation | undefined, headers: Record<string, string>): Promise<Response> {
   if (encoding === "identity" && source.encoding !== "identity") {
     const bytes = new Uint8Array(await source.file.arrayBuffer());
     const body = source.encoding === "gzip" ? Bun.gunzipSync(bytes) : brotliDecompressSync(bytes);
     return new Response(body, { headers });
   }
-  if (encoding !== "identity") headers["content-encoding"] = encoding;
-  if (encoding === "gzip") {
-    // gzip's trailer holds the uncompressed size (mod 2^32), for the progress bar.
-    const trailer = new DataView(await source.file.slice(source.file.size - 4).arrayBuffer());
+  if (encoding === "identity") return new Response(source.file, { headers });
+  headers["content-encoding"] = encoding;
+  if (gzip?.encoding === "gzip") {
+    // The gzip twin's trailer holds the uncompressed size (mod 2^32), for the progress bar.
+    const trailer = new DataView(await gzip.file.slice(gzip.file.size - 4).arrayBuffer());
     headers["x-uncompressed-length"] = String(trailer.getUint32(0, true));
   }
   return new Response(source.file, { headers });
 }
 
+const tls = process.env.TLS_CERT && process.env.TLS_KEY ? { cert: Bun.file(process.env.TLS_CERT), key: Bun.file(process.env.TLS_KEY) } : undefined;
 const server = Bun.serve({
   port,
+  tls,
   hostname: process.env.HOST ?? "127.0.0.1",
   websocket: previewOwner.websocket,
   async fetch(req, server) {

@@ -30,19 +30,32 @@ function negotiationError(status: number, metadata: Headers): Response {
   return new Response(null, { status, headers });
 }
 
+/**
+ * The logical URL's metadata: the raw file's when it ships, else its first twin's. Programs ship raw
+ * beside `.br` and `.gz` twins; Bun guests ship only the twins (jsc-engine.wasm is 34 MB raw, over
+ * the 25 MiB asset limit). Undefined when no representation exists.
+ */
+async function logicalMetadata(env: SiteEnv, url: URL, headers: Headers): Promise<Response | undefined> {
+  const metadataHeaders = new Headers(headers);
+  for (const field of ["range", "if-range", "if-none-match", "if-modified-since", "if-match", "if-unmodified-since"]) metadataHeaders.delete(field);
+  for (const suffix of ["", ".br", ".gz"]) {
+    const target = new URL(url);
+    target.pathname += suffix;
+    const response = await env.ASSETS.fetch(new Request(target, { method: "HEAD", headers: metadataHeaders }));
+    if (response.status === 200) return response;
+  }
+  return undefined;
+}
+
 export default {
   async fetch(request: Request, env: SiteEnv): Promise<Response> {
     const url = new URL(request.url);
-    // Every program WASM (the bash-web shell and env guests, Waffle's base families) may ship `.br` and `.gz` twins.
-    const program = url.pathname.startsWith("/programs/") || url.pathname.startsWith("/playground/programs/");
-    if (!program || !url.pathname.endsWith(".wasm") || !["GET", "HEAD"].includes(request.method)) return env.ASSETS.fetch(request);
+    // Every program and Bun guest WASM may ship `.br` and `.gz` twins (wrangler.jsonc routes them here).
+    if (!url.pathname.endsWith(".wasm") || !["GET", "HEAD"].includes(request.method)) return env.ASSETS.fetch(request);
     const headers = new Headers(request.headers);
     headers.set("accept-encoding", "identity");
-    const metadataHeaders = new Headers(headers);
-    for (const field of ["range", "if-range", "if-none-match", "if-modified-since", "if-match", "if-unmodified-since"]) metadataHeaders.delete(field);
-    const metadata = await env.ASSETS.fetch(new Request(request, { method: "HEAD", headers: metadataHeaders }));
-    // Waffle's package closure includes the canonical raw program beside its optional sidecars.
-    if (metadata.status !== 200) return env.ASSETS.fetch(request);
+    const metadata = await logicalMetadata(env, url, headers);
+    if (!metadata) return env.ASSETS.fetch(request);
     const originalEncoding = request.cf?.clientAcceptEncoding;
     const preference = acceptedEncodings(typeof originalEncoding === "string" ? originalEncoding : request.headers.get("accept-encoding"));
     if (!preference) return negotiationError(400, metadata.headers);

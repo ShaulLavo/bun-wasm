@@ -69,13 +69,13 @@ test("shipped build and selectors cannot stage or register a dormant Hermes arti
 
 test("web staging ignores dormant files and preserves both required paired-side guards", async () => {
   const source = read("web/build.ts");
-  const start = source.indexOf('if (!(await copyWasm(wasmSource, "bun.wasm")))');
-  const end = source.indexOf("await buildShellAssets", start);
+  const start = source.indexOf('if (!copyWasm(wasmSource, "bun.wasm"))');
+  const end = source.indexOf("const staging = guests.map", start);
   if (start < 0 || end < 0) throw new Error("Missing web guest staging boundary");
   const stage = new Function("copyWasm", "existsSync", "resolve", "join", "dirname", "here", "process", "wasmSource", `return (async () => {${source.slice(start, end)}})();`);
   const copy = async (missing?: string) => {
     const names: string[] = [];
-    await stage(async (_source: string, name: string) => { names.push(name); return name !== missing; }, () => true,
+    await stage((_source: string, name: string) => { names.push(name); return name !== missing; }, () => true,
       resolve, join, (path: string) => resolve(path, ".."), "/synthetic/web", { env: { HERMES_WASM: "/old/bun-hermes.wasm" } }, "/synthetic/bun.wasm");
     return names;
   };

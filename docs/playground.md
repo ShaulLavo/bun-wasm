@@ -12,8 +12,9 @@ bun run build                       # -> web/dist/ (static files)
 BUN_WASM=/path/to/x.wasm bun run build   # use another wasm instead of ../dist/bun.wasm
 ```
 
-The build gzips each engine's wasm from `../dist` into `dist/<name>.wasm.gz`; the page decompresses
-it. If one is missing the build still succeeds and that engine says it is missing. `?wasm=<url>`
+The build compresses each engine's wasm from `../dist` into `dist/<name>.wasm.br` and `.gz` twins;
+`serve.ts` sends one with a native `Content-Encoding` at the plain `<name>.wasm` URL, and on a host
+without that negotiation the page decompresses the `.gz` twin itself. If one is missing the build still succeeds and that engine says it is missing. `?wasm=<url>`
 loads a different module at runtime; `?trace` logs every WASI call to the worker's console.
 
 ## Run Vite with React

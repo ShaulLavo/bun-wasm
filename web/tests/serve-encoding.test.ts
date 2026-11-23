@@ -96,7 +96,8 @@ test.each(negotiation)("negotiates Accept-Encoding %s without changing the decod
   expect(body).toEqual(wasm);
   expect(response.body).toEqual(expected === "br" ? brotli : expected === "gzip" ? gzip : wasm);
   expect(response.headers["content-length"]).toBe(String(response.body.length));
-  expect(response.headers["x-uncompressed-length"]).toBe(expected === "gzip" ? String(wasm.length) : undefined);
+  // The gzip twin's trailer gives the decoded size for either encoding, for the loader's progress text.
+  expect(response.headers["x-uncompressed-length"]).toBe(expected ? String(wasm.length) : undefined);
 });
 
 test.each(["*;q=0", "br;q=0,gzip;q=0,identity;q=0", "identity;q=0,deflate"])("returns 406 when every representation is refused by %s", async encoding => {
@@ -139,6 +140,8 @@ test.each(availability)("serves only actual variants for %s with %s", async (nam
   if (status !== 200) return;
   expect(response.headers["content-type"]).toBe("application/wasm");
   expect(response.body).toEqual(expected === "br" ? brotli : expected === "gzip" ? gzip : wasm);
+  // Without a gzip twin there is no trailer to read the decoded size from.
+  expect(response.headers["x-uncompressed-length"]).toBe(expected === "gzip" ? String(wasm.length) : undefined);
 });
 
 test("does not read unrelated program bodies or refused compressed variants", async () => {

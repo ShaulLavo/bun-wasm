@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 import { spawnSync } from "node:child_process";
+import { brotliDecompressSync } from "node:zlib";
 import { markStarted } from "waffle/proc/outcome";
 import { workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { prepareProgram, programMetadata } from "../src/assets.ts";
@@ -139,7 +140,8 @@ test("browser loader verifies both SpiderMonkey files and preserves the executab
     const source = programMetadata(loaded.module).linkPlan;
     if (!source) throw new Error("Browser loader lost the paired link plan");
     expect(await initializedValue(source)).toBe(42);
-    expect(requests).toEqual(["/bun-spidermonkey.wasm.gz", "/spidermonkey-engine.wasm.gz", "/bun-spidermonkey.wasm", "/spidermonkey-engine.wasm"]);
+    // The host serves the logical URLs, so the loader never asks for a `.gz` twin.
+    expect(requests).toEqual(["/bun-spidermonkey.wasm", "/spidermonkey-engine.wasm"]);
   });
 });
 
@@ -261,12 +263,12 @@ test("SpiderMonkey telemetry admits snapshots without inventing counters or call
 
 async function stageSpiderMonkey(env: Record<string, string>, missing?: string): Promise<string[]> {
   const source = readFileSync(new URL("../web/build.ts", import.meta.url), "utf8");
-  const start = source.indexOf('if (!(await copyWasm(wasmSource, "bun.wasm")))');
-  const end = source.indexOf("await buildShellAssets", start);
+  const start = source.indexOf('if (!copyWasm(wasmSource, "bun.wasm"))');
+  const end = source.indexOf("const staging = guests.map", start);
   if (start < 0 || end < 0) throw new Error("Missing web guest staging boundary");
   const stage = new Function("copyWasm", "existsSync", "resolve", "join", "dirname", "here", "process", "wasmSource", `return (async () => {${source.slice(start, end)}})();`);
   const names: string[] = [];
-  await stage(async (path: string, name: string) => {
+  await stage((path: string, name: string) => {
     names.push(name);
     if (path === missing) return false;
     return true;
@@ -318,18 +320,20 @@ test("the actual optional web staging hashes and compresses both tiny SpiderMonk
     mkdirSync(out);
     const source = readFileSync(new URL("../web/build.ts", import.meta.url), "utf8");
     const start = source.indexOf("const engineBuilds:");
-    const end = source.indexOf("await buildShellAssets", start);
-    if (start < 0 || end < 0) throw new Error("Missing web asset copy boundary");
+    const settled = "await Promise.all(staging);";
+    const end = source.indexOf(settled, start) + settled.length;
+    if (start < 0 || end <= start) throw new Error("Missing web asset copy boundary");
     const code = new Bun.Transpiler({ loader: "ts" }).transformSync(source.slice(start, end));
-    const stage = new Function("Bun", "existsSync", "join", "dirname", "resolve", "statSync", "out", "here", "process", "wasmSource", "stageSharedPrograms", "stageGuestWasm", `return (async () => {${code}; return engineBuilds;})();`);
+    const stage = new Function("Bun", "existsSync", "join", "dirname", "resolve", "statSync", "out", "here", "process", "wasmSource", "stageSharedPrograms", "stageGuestWasm", "buildShellAssets", `return (async () => {${code}; return engineBuilds;})();`);
     const builds = await stage(Bun, existsSync, join, dirname, resolve, statSync, out, root, {
       env: { SPIDERMONKEY_WASM: join(root, programProfile(kind).core) },
-    }, join(root, "missing-quickjs.wasm"), (directory: string, builds: Record<string, string>) => stageSharedPrograms(directory, builds, { quickjs: undefined, jsc: undefined }), stageGuestWasm);
+    }, join(root, "missing-quickjs.wasm"), (directory: string, builds: Record<string, string>) => stageSharedPrograms(directory, builds, { quickjs: undefined, jsc: undefined }), stageGuestWasm, async () => {});
     expect(Object.keys(builds).sort()).toEqual(["bun-spidermonkey.wasm", "spidermonkey-engine.wasm"]);
     for (const name of [programProfile(kind).core, programProfile(kind).side]) {
       const raw = readFileSync(join(root, name));
       expect(builds[name]).toBe(new Bun.CryptoHasher("sha256").update(raw).digest("hex"));
       expect(Bun.gunzipSync(readFileSync(join(out, `${name}.gz`)))).toEqual(raw);
+      expect(brotliDecompressSync(readFileSync(join(out, `${name}.br`)))).toEqual(raw);
     }
   });
 });

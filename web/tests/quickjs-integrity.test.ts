@@ -7,6 +7,12 @@ import { linkedFixtureValue } from "../../tests/package/linked-fixture";
 
 const digest = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
+/** A negotiating host: the `.gz` twin as requested, else the logical URL with a native encoding fetch already decoded. */
+function hosted(url: string, bytes: Uint8Array<ArrayBuffer>): Response {
+  if (new URL(url, "https://example.test/").pathname.endsWith(".gz")) return new Response(Bun.gzipSync(bytes));
+  return new Response(bytes, { headers: { "content-type": "application/wasm", "content-encoding": "br" } });
+}
+
 for (const kind of pairedEngineKinds) test(`${kind} downloads its side while the core response is pending`, async () => {
   const profile = programProfile(kind);
   const core = Promise.withResolvers<void>();
@@ -53,13 +59,12 @@ async function customPair(filename: string, manifest: Record<string, string> | u
     Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: Parameters<typeof fetch>[0]) => {
       const url = String(input);
       requested.push(url);
-      const bytes = url.endsWith(`${profile.side}.gz`) ? side : core;
-      return new Response(Bun.gzipSync(bytes));
+      return hosted(url, new URL(url).pathname.endsWith(`/${profile.side}`) ? side : core);
     } });
     const result = await loadWasm(`https://cdn.test/build/${filename}`, () => {});
     expect(result.build).toBeNull();
     expect(linkedFixtureValue(programMetadata(result.module).linkPlan)).toBe(42);
-    expect(requested).toEqual([`https://cdn.test/build/${filename.replace(/\.gz$/, "")}.gz`, `https://cdn.test/build/${profile.side}.gz`]);
+    expect(requested).toEqual([`https://cdn.test/build/${filename}`, `https://cdn.test/build/${profile.side}`]);
   } finally {
     restoreGlobals(originals);
   }
@@ -101,7 +106,7 @@ async function withPair(source: "download" | "cache", changed: string | undefine
       downloads++;
       const name = new URL(url, "https://example.test/").pathname.slice(1).replace(/\.gz$/, "");
       await beforeResponse?.(name);
-      return new Response(Bun.gzipSync(bytesFor(name)));
+      return hosted(url, bytesFor(name));
     },
   };
   try {
@@ -141,11 +146,11 @@ test("cached generic custom URL still prepares the declared JSC side", async () 
       return key === url ? new Response(core, { headers: { "x-bunwasm-build": digest(core) } }) : undefined;
     } } });
     Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: string) => {
-      requested.push(input); return new Response(Bun.gzipSync(side));
+      requested.push(input); return hosted(input, side);
     } });
     const loaded = await loadWasm(url, () => {});
     expect(linkedFixtureValue(programMetadata(loaded.module).linkPlan)).toBe(42);
     expect(loaded.size).toBe(core.length + side.length);
-    expect(requested).toEqual(["https://cdn.test/jsc-engine.wasm.gz"]);
+    expect(requested).toEqual(["https://cdn.test/jsc-engine.wasm"]);
   } finally { restoreGlobals(originals); }
 });

@@ -4,6 +4,21 @@ import { WasmMissing, loadEngineProgram, loadWasm } from "../src/engine-loader";
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const build = new Bun.CryptoHasher("sha256").update(wasm).digest("hex");
 
+type Host = "negotiating" | "plain";
+
+/**
+ * A negotiating host (site/worker.ts, web/serve.ts) answers the logical URL with a native
+ * Content-Encoding, which fetch has already decoded. A plain static host has only the `.gz` twin.
+ */
+function guestHost(kind: Host, fetched: string[] = [], bytes: Uint8Array<ArrayBuffer> = wasm, headers: Record<string, string> = {}) {
+  return async (url: string) => {
+    fetched.push(String(url));
+    if (new URL(String(url), "https://engine-cache.test/").pathname.endsWith(".gz")) return new Response(Bun.gzipSync(bytes));
+    if (kind === "plain") return new Response(null, { status: 404 });
+    return new Response(bytes, { headers: { "content-type": "application/wasm", "content-encoding": "br", ...headers } });
+  };
+}
+
 async function withCache(check: (cache: {
   started: Promise<void>;
   release(error?: Error): void;
@@ -26,7 +41,7 @@ async function withCache(check: (cache: {
   const values = {
     location: new URL("https://engine-cache.test/"),
     caches: { match: async () => undefined, open: async () => cache },
-    fetch: async () => new Response(Bun.gzipSync(wasm)),
+    fetch: guestHost("negotiating"),
     __bunwasmBuilds: { "bun-tools.wasm": build },
   };
   for (const [name, value] of Object.entries(values)) Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
@@ -105,7 +120,9 @@ function pageGlobals(values: Record<string, unknown>): () => void {
   return () => { for (const [name, descriptor] of previous) restore(name, descriptor); };
 }
 
-for (const storage of ["without", "with"] as const) test(`the Browser engine's second page load compiles from the engine cache ${storage} localStorage`, async () => {
+const storageHosts = (["without", "with"] as const).flatMap(storage => (["negotiating", "plain"] as const).map(host => [storage, host] as const));
+
+for (const [storage, host] of storageHosts) test(`the Browser engine's second page load compiles from the engine cache ${storage} localStorage from a ${host} host`, async () => {
   const cache = memoryCaches();
   const fetched: string[] = [];
   const marks = new Map<string, string>();
@@ -117,14 +134,16 @@ for (const storage of ["without", "with"] as const) test(`the Browser engine's s
       removeItem: (key: string) => { marks.delete(key); },
     } : undefined,
     caches: cache.caches,
-    fetch: async (url: string) => { fetched.push(String(url)); return new Response(Bun.gzipSync(wasm)); },
+    fetch: guestHost(host, fetched),
     __bunwasmBuilds: { "bun-browser.wasm": build },
   });
   try {
     const key = "https://engine-cache.test/app/bun-browser.wasm";
     const first = await loadEngineProgram("browser", "split", () => {});
     expect(first.build).toBe(build);
-    expect(fetched.map(url => new URL(url, location.href).href)).toEqual([`https://engine-cache.test/app/bun-browser.wasm.gz?v=${build}`]);
+    const logical = `https://engine-cache.test/app/bun-browser.wasm?v=${build}`;
+    const requests = host === "negotiating" ? [logical] : [logical, `https://engine-cache.test/app/bun-browser.wasm.gz?v=${build}`];
+    expect(fetched.map(url => new URL(url, location.href).href)).toEqual(requests);
     // A first visit with a usable marker store never waits on CacheStorage before downloading.
     expect(cache.lookups).toEqual(storage === "with" ? [] : [key]);
     await cache.stored();
@@ -133,7 +152,7 @@ for (const storage of ["without", "with"] as const) test(`the Browser engine's s
     const second = await loadEngineProgram("browser", "split", () => {});
     expect(second.module).toBeInstanceOf(WebAssembly.Module);
     expect(second.size).toBe(wasm.length);
-    expect(fetched).toHaveLength(1);
+    expect(fetched).toHaveLength(requests.length);
     expect(cache.lookups.at(-1)).toBe(key);
   } finally {
     restoreGlobals();
@@ -168,10 +187,10 @@ for (const { name, asset, load, failure } of failureCases) test(`${name}: a mark
       removeItem: (item: string) => { marks.delete(item); },
     },
     caches: cache.caches,
-    fetch: async () => {
+    fetch: async (url: string) => {
       fetched++;
       if (!online) return failures[failure]();
-      return new Response(Bun.gzipSync(wasm));
+      return guestHost("negotiating")(url);
     },
     __bunwasmBuilds: { [asset]: build },
   });
@@ -212,4 +231,61 @@ for (const { name, asset, load } of lostMarkerCases) test(`${name}: a missing as
   } finally {
     restoreGlobals();
   }
+});
+
+/** Loads the Browser engine without a build fingerprint, so nothing is cached between cases. */
+async function loadUncached(fetch: (url: string) => Promise<Response>, url = "bun-browser.wasm", progress: (text: string) => void = () => {}) {
+  const restoreGlobals = pageGlobals({
+    location: new URL("https://engine-cache.test/app/"),
+    caches: memoryCaches().caches,
+    fetch,
+    __bunwasmBuilds: {},
+  });
+  try { return await loadWasm(url, progress); } finally { restoreGlobals(); }
+}
+
+const logicalFailures: [string, () => Response][] = [
+  ["404", () => new Response(null, { status: 404 })],
+  ["406", () => new Response(null, { status: 406 })],
+  ["a single-page index", () => new Response("<!doctype html>", { headers: { "content-type": "text/html; charset=utf-8" } })],
+  ["500", () => new Response(null, { status: 500 })],
+];
+
+test.each(logicalFailures)("a logical URL answered with %s falls back to the gzip twin the page decompresses", async (_label, answer) => {
+  const fetched: string[] = [];
+  const loaded = await loadUncached(async url => {
+    fetched.push(new URL(url).pathname);
+    return url.includes(".gz") ? new Response(Bun.gzipSync(wasm)) : answer();
+  });
+  expect(loaded.size).toBe(wasm.length);
+  expect(fetched).toEqual(["/app/bun-browser.wasm", "/app/bun-browser.wasm.gz"]);
+});
+
+test("a failed logical URL with no twin reports its own status, and two misses report a missing asset", async () => {
+  const missingTwin = (status: number) => async (url: string) => new Response(null, { status: url.includes(".gz") ? 404 : status });
+  await expect(loadUncached(missingTwin(500))).rejects.toThrow("bun-browser.wasm: HTTP 500");
+  for (const status of [404, 406]) await expect(loadUncached(missingTwin(status))).rejects.toBeInstanceOf(WasmMissing);
+});
+
+test("an explicit gzip URL is fetched once as given and decompressed", async () => {
+  const fetched: string[] = [];
+  const loaded = await loadUncached(async url => { fetched.push(new URL(url).pathname); return new Response(Bun.gzipSync(wasm)); }, "custom/bun-browser.wasm.gz");
+  expect(loaded.size).toBe(wasm.length);
+  expect(fetched).toEqual(["/app/custom/bun-browser.wasm.gz"]);
+});
+
+// A valid module with a 1 MiB custom section, large enough for the progress text to name sizes.
+const large = new Uint8Array(Buffer.concat([wasm, Buffer.from([0, 0x80, 0x80, 0x40]), Buffer.alloc(1024 * 1024)]));
+
+test.each([
+  ["no decoded size", { "content-length": "1000" }, null],
+  ["a decoded size", { "content-length": "1000", "x-uncompressed-length": String(large.length) }, "1.0 MB"],
+] as const)("natively decoded progress with %s never divides by the encoded length", async (_label, headers, total) => {
+  const messages: string[] = [];
+  const loaded = await loadUncached(guestHost("negotiating", [], large, headers), undefined, text => messages.push(text));
+  expect(loaded.size).toBe(large.length);
+  const downloads = messages.filter(text => text.startsWith("downloading bun.wasm… "));
+  expect(downloads.length).toBeGreaterThan(0);
+  if (total === null) for (const text of downloads) expect(text).not.toContain(" / ");
+  else expect(downloads.at(-1)).toBe(`downloading bun.wasm… 1.0 MB / ${total}`);
 });

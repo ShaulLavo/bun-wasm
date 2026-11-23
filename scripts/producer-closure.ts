@@ -31,7 +31,7 @@ export function producerArtifactPaths(profile: ProgramProfile): string[] {
   return paths.concat(engines.flatMap(engine => {
     const names = programProfile(engine);
     return [`${engine}/engine.wasm`, `${engine}/engine.wasm.engine.json`, `dist/${names.core}`, `dist/${names.core}.build.json`, `dist/${names.side}`, `dist/${names.side}.engine.json`, `${engine}-smoke.log`].concat(profile === "split" ? [`${engine}-node-smoke.log`] : []);
-  }), profile === "split" ? ["dist/bun-jsc.wasm.embedding.json", "dist/bash-web-shell.wasm", "dist/bash-web-env.wasm", "dist/bash-web-guests.json", "web/index.html", "web/engine-builds.json", "hook-controls.log", "hook-smoke.json"] : ["core/cxx-runtime-members.json", "worker-proof.log"], profile === "split" ? publicationAssets.map(name => `web/${name}.gz`) : []);
+  }), profile === "split" ? ["dist/bun-jsc.wasm.embedding.json", "dist/bash-web-shell.wasm", "dist/bash-web-env.wasm", "dist/bash-web-guests.json", "web/index.html", "web/engine-builds.json", "hook-controls.log", "hook-smoke.json"] : ["core/cxx-runtime-members.json", "worker-proof.log"], profile === "split" ? publicationAssets.flatMap(name => [`web/${name}.gz`, `web/${name}.br`]) : []);
 }
 function isWebClosureAsset(path: string): boolean {
   if (!path.startsWith("web/")) return false;

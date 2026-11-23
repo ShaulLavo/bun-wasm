@@ -270,8 +270,7 @@ function rootClient(request: RunRequest, deliver: (message: object) => void) {
 
 function expectedPairUrls(engine: "quickjs" | "jsc", builds: Readonly<Record<string, string>>) {
   const names = [ENGINES[engine].wasm, programProfile(engine).side];
-  return names.map(name => `http://localhost/${name}.gz?v=${builds[name]}`)
-    .concat(names.map(name => `http://localhost/${name}`));
+  return names.map(name => `http://localhost/${name}?v=${builds[name]}`);
 }
 
 const engines: Engine[] = ["quickjs", "jsc", "browser"];
@@ -346,7 +345,7 @@ for (const engine of engines) {
       expect(loaded.size).toBe(available.length);
       expect(urls).toEqual(available.filter(selected => selected !== engine).flatMap(selected => selected === "quickjs" || selected === "jsc"
         ? expectedPairUrls(selected, builds)
-        : [`http://localhost/${ENGINES[selected].wasm}.gz`, `http://localhost/${ENGINES[selected].wasm}`]));
+        : [`http://localhost/${ENGINES[selected].wasm}`]));
     } finally {
       try { await state.dispose(); }
       finally {
@@ -945,7 +944,7 @@ test("page lint/fmt roots lazily compile verified tools once and clear the selec
   const linked = await prepareQuickjsProgram(core, side);
   const build = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
   const originalBuilds = Object.getOwnPropertyDescriptor(globalThis, "__bunwasmBuilds");
-  const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => new Response(Bun.gzipSync(bytes)), { preconnect: globalThis.fetch.preconnect }));
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => new Response(bytes, { headers: { "content-type": "application/wasm" } }), { preconnect: globalThis.fetch.preconnect }));
   const compile = spyOn(WebAssembly, "compile");
   try {
     Object.defineProperty(globalThis, "__bunwasmBuilds", { configurable: true, value: { "bun-tools.wasm": build } });

@@ -10,7 +10,7 @@ import { previewWebsocketScript } from "./preview-build";
 import { buildBrowserEntries, buildClassicWorker, buildShellAssets } from "../scripts/browser-build";
 import { dirname, join, resolve } from "node:path";
 import { stageSharedPrograms } from "../scripts/stage-program-profiles";
-import { stageGuestWasm } from "../scripts/stage-guest-wasm";
+import { sortedBuilds, stageGuestWasm } from "../scripts/stage-guest-wasm";
 
 const here = import.meta.dir;
 const out = join(here, "dist");
@@ -62,52 +62,57 @@ function commandChunks(metafile: Metafile): string[] {
   return Array.from(new Set(reachableChunks(metafile, ["./worker.js"]).concat(lazy.map(path => path.slice(2)), reachableChunks(metafile, lazy)))).sort();
 }
 
-// Each wasm gets a .gz twin; serve.ts sends that when the browser accepts gzip.
+// Each wasm ships as .br and .gz twins (scripts/stage-guest-wasm.ts). Every pair is checked before
+// any guest stages; then they compress concurrently, since Brotli quality 11 for a site deploy
+// takes tens of seconds per guest.
 const engineBuilds: Record<string, string> = {};
-await stageSharedPrograms(out, engineBuilds);
+const guests: { source: string; name: string }[] = [];
 
-async function copyWasm(source: string, name: string): Promise<boolean> {
+function copyWasm(source: string, name: string): boolean {
   if (!existsSync(source)) return false;
-  await stageGuestWasm(source, name, out, engineBuilds);
-  console.log(`${name}: copied ${source} (${(statSync(source).size / 1024 / 1024).toFixed(1)} MB)`);
+  guests.push({ source, name });
   return true;
 }
-if (!(await copyWasm(wasmSource, "bun.wasm"))) {
+if (!copyWasm(wasmSource, "bun.wasm")) {
   console.warn(`bun.wasm: ${wasmSource} not found; the site will say bun.wasm is missing (or pass ?wasm=<url>).`);
 }
 const quickjsSource = join(dirname(wasmSource), "quickjs.wasm");
-if (existsSync(wasmSource) && !(await copyWasm(quickjsSource, "quickjs.wasm"))) {
+if (existsSync(wasmSource) && !copyWasm(quickjsSource, "quickjs.wasm")) {
   throw new Error(`QuickJS core requires its matching side module: ${quickjsSource}`);
 }
 const jscSource = resolve(here, process.env.JSC_WASM ?? "../dist/bun-jsc.wasm");
-if (!(await copyWasm(jscSource, "bun-jsc.wasm"))) {
+if (!copyWasm(jscSource, "bun-jsc.wasm")) {
   console.warn(`bun-jsc.wasm: ${jscSource} not found; the JavaScriptCore engine option will fail to load.`);
 }
 const jscEngineSource = join(dirname(jscSource), "jsc-engine.wasm");
-if (existsSync(jscSource) && !(await copyWasm(jscEngineSource, "jsc-engine.wasm"))) {
+if (existsSync(jscSource) && !copyWasm(jscEngineSource, "jsc-engine.wasm")) {
   throw new Error(`JSC core requires its matching side module: ${jscEngineSource}`);
 }
 if (process.env.SPIDERMONKEY_WASM) {
   const source = resolve(here, process.env.SPIDERMONKEY_WASM);
-  if (!(await copyWasm(source, "bun-spidermonkey.wasm"))) throw new Error(`SpiderMonkey core is missing: ${source}`);
+  if (!copyWasm(source, "bun-spidermonkey.wasm")) throw new Error(`SpiderMonkey core is missing: ${source}`);
   const side = join(dirname(source), "spidermonkey-engine.wasm");
-  if (!(await copyWasm(side, "spidermonkey-engine.wasm"))) throw new Error(`SpiderMonkey core requires its matching side module: ${side}`);
+  if (!copyWasm(side, "spidermonkey-engine.wasm")) throw new Error(`SpiderMonkey core requires its matching side module: ${side}`);
 }
 const browserSource = resolve(here, process.env.BUN_BROWSER_WASM ?? "../dist/bun-browser.wasm");
-if (!(await copyWasm(browserSource, "bun-browser.wasm"))) {
+if (!copyWasm(browserSource, "bun-browser.wasm")) {
   console.warn(`bun-browser.wasm: ${browserSource} not found; the Browser (native) engine option will fail to load.`);
 }
 
 const toolsSource = resolve(here, process.env.BUN_TOOLS_WASM ?? "../dist/bun-tools.wasm");
-if (!(await copyWasm(toolsSource, "bun-tools.wasm"))) {
+if (!copyWasm(toolsSource, "bun-tools.wasm")) {
   console.warn(`bun-tools.wasm: ${toolsSource} not found; lint and fmt will not be available.`);
 }
+const staging = guests.map(async ({ source, name }) => {
+  await stageGuestWasm(source, name, out, engineBuilds);
+  console.log(`${name}: copied ${source} (${(statSync(source).size / 1024 / 1024).toFixed(1)} MB)`);
+}).concat([stageSharedPrograms(out, engineBuilds), buildShellAssets(here, out)]);
+await Promise.all(staging);
 
-await buildShellAssets(here, out);
-
-await Bun.write(join(out, "engine-builds.json"), JSON.stringify(engineBuilds));
+const builds = sortedBuilds(engineBuilds);
+await Bun.write(join(out, "engine-builds.json"), JSON.stringify(builds));
 const index = await Bun.file(join(here, "index.html")).text();
-const startup = `globalThis.__bunwasmBuilds=${JSON.stringify(engineBuilds)};globalThis.__bunwasmCommandChunks=${JSON.stringify(commandChunks(result.metafile!))}`;
+const startup = `globalThis.__bunwasmBuilds=${JSON.stringify(builds)};globalThis.__bunwasmCommandChunks=${JSON.stringify(commandChunks(result.metafile!))}`;
 await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>${startup}</script>`));
 
 for (const output of result.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);

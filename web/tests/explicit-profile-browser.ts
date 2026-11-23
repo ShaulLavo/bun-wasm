@@ -158,8 +158,10 @@ async function mismatch(base: string, root: string): Promise<void> {
     requests.push(url.pathname);
     if (url.pathname === "/") return route.fulfill({ body: html, contentType: "text/html", headers: { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp" } });
     if (!url.pathname.startsWith("/profiles/shared-group/")) return route.continue();
-    const name = url.pathname.slice("/profiles/shared-group/".length);
-    return route.fulfill({ body: Buffer.from(await Bun.file(join(root, name)).arrayBuffer()), contentType: "application/wasm" });
+    const file = Bun.file(join(root, url.pathname.slice("/profiles/shared-group/".length)));
+    // The static root has only `.gz` twins, so the loader's logical request falls back to them.
+    if (!await file.exists()) return route.fulfill({ status: 404 });
+    return route.fulfill({ body: Buffer.from(await file.arrayBuffer()), contentType: "application/wasm" });
   });
   await page.goto(`${base}?engine=quickjs&profile=shared-group&mode=memory&prompt=off`);
   await page.waitForFunction(() => document.querySelector("#status")?.textContent?.includes("profile mismatch"), undefined, { timeout: 60_000 });

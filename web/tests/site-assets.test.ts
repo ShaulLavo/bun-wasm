@@ -19,6 +19,12 @@ const shell = Buffer.concat([wasm, Buffer.from([0, 0x80, 0x80, 0x04]), Buffer.al
 const shellBrotli = brotliCompressSync(shell);
 const shellGzip = gzipSync(shell);
 const shellPaths = ["/programs/shell-engine.wasm", "/playground/programs/shell-engine.wasm"];
+// Bun guests ship only their twins: jsc-engine.wasm is over the 25 MiB asset limit raw.
+const guest = Buffer.concat([wasm, Buffer.from([0, 0x80, 0x80, 0x02]), Buffer.alloc(32 * 1024)]);
+const guestBrotli = brotliCompressSync(guest);
+const guestGzip = gzipSync(guest);
+const guestPaths = ["/bun-browser.wasm", "/playground/bun-browser.wasm", "/profiles/shared-group/bun.wasm", "/playground/profiles/shared-group/quickjs.wasm"];
+const networkPaths = ["/network.wasm", "/__bunwasm/chunks/network.wasm"];
 let root: string;
 let origin: string;
 let nativeOrigin: string;
@@ -89,6 +95,15 @@ beforeAll(async () => {
   await Bun.write(join(assets, program), wasm);
   await Bun.write(join(assets, program + ".br"), brotli);
   await Bun.write(join(assets, program + ".gz"), gzip);
+  for (const path of guestPaths) {
+    await Bun.write(join(assets, path + ".br"), guestBrotli);
+    await Bun.write(join(assets, path + ".gz"), guestGzip);
+  }
+  // Waffle's network.wasm stays on native routing, so even a stray twin beside it is never selected.
+  for (const path of networkPaths) {
+    await Bun.write(join(assets, path), wasm);
+    await Bun.write(join(assets, path + ".br"), "not the network module");
+  }
   await Bun.write(join(assets, "_headers"), await Bun.file(join(import.meta.dir, "../_headers")).text()
     + `\n${program}\n  Cache-Control: public, max-age=60\n  Vary: Origin\n  X-Logical-Asset: preserved\n${program}.br\n  Cache-Control: no-store\n  X-Sidecar-Only: not-logical\n`);
   const original = await Bun.file(join(import.meta.dir, "../../site/wrangler.jsonc")).text();
@@ -224,6 +239,71 @@ test.each(shellPaths)("Worker keeps HEAD, Range and refusal semantics for the sh
   expect(refused.status).toBe(406);
   expect(refused.body.length).toBe(0);
   expect(refused.headers["vary"]?.toLowerCase()).toContain("accept-encoding");
+});
+
+const guestCases = guestPaths.flatMap(path => (["worker", "public"] as const).flatMap(host => ([["br, gzip", "br"], ["gzip, deflate", "gzip"], ["br;q=0, gzip", "gzip"]] as const)
+  .map(([accept, expected]) => [path, host, accept, expected] as const)));
+
+test.each(guestCases)("a twin-only Bun guest at %s through the %s host answers %s with its precompressed twin", async (path, host, accept, expected) => {
+  const response = await get(`${path}?v=fixture-build`, accept, { origin: host === "public" ? publicOrigin : origin });
+  expect(response.status).toBe(200);
+  expect(response.headers["content-encoding"]).toBe(expected);
+  expect(response.headers["content-type"]).toBe("application/wasm");
+  expect(response.headers["vary"]?.toLowerCase()).toContain("accept-encoding");
+  expect(response.headers["cache-control"]).toContain("no-transform");
+  expect(response.headers["cross-origin-embedder-policy"]).toBe("require-corp");
+  expect(response.headers["cross-origin-resource-policy"]).toBe("same-origin");
+  if (response.headers["content-length"] !== undefined) expect(response.headers["content-length"]).toBe(String(response.body.length));
+  expect(response.body).toEqual(expected === "br" ? guestBrotli : guestGzip);
+  expect(expected === "br" ? brotliDecompressSync(response.body) : gunzipSync(response.body)).toEqual(guest);
+});
+
+test.each(guestPaths)("a twin-only Bun guest at %s keeps HEAD, Range, validator and refusal semantics", async path => {
+  const head = await get(path, "br", { method: "HEAD" });
+  expect(head.status).toBe(200);
+  expect(head.body.length).toBe(0);
+  expect(head.headers["content-encoding"]).toBe("br");
+  expect(head.headers["content-type"]).toBe("application/wasm");
+  if (head.headers["content-length"] !== undefined) expect(head.headers["content-length"]).toBe(String(guestBrotli.length));
+  const range = await get(path, "gzip", { headers: { range: "bytes=0-3" } });
+  const native = await get(path + ".gz", "identity", { origin: nativeOrigin, headers: { range: "bytes=0-3" } });
+  expect(range.status).toBe(native.status);
+  expect(range.headers["content-range"]).toBe(native.headers["content-range"]);
+  expect(range.headers["content-encoding"]).toBe("gzip");
+  expect(range.body).toEqual(native.body);
+  const encoded = await get(path, "br");
+  expect(encoded.headers["etag"]).toBeString();
+  const revalidated = await get(path, "br", { headers: { "if-none-match": String(encoded.headers["etag"]) } });
+  expect(revalidated.status).toBe(304);
+  expect(revalidated.headers["vary"]?.toLowerCase()).toContain("accept-encoding");
+  // No raw file ships, so a client that accepts only identity is refused rather than sent encoded bytes.
+  for (const accept of ["identity", "br;q=0, gzip;q=0"]) {
+    const refused = await get(path, accept);
+    expect(refused.status).toBe(406);
+    expect(refused.body.length).toBe(0);
+    expect(refused.headers["content-encoding"]).toBeUndefined();
+    expect(refused.headers["vary"]?.toLowerCase()).toContain("accept-encoding");
+    expect(refused.headers["cross-origin-embedder-policy"]).toBe("require-corp");
+  }
+  expect((await get(path, "br;q=2")).status).toBe(400);
+});
+
+test.each(["/bun-jsc.wasm", "/playground/jsc-engine.wasm"])("a guest with no representation at %s keeps the native missing response", async path => {
+  const [worker, publicHost, native] = await Promise.all([get(path, "identity"), get(path, "identity", { origin: publicOrigin }), get(path, "identity", { origin: nativeOrigin })]);
+  for (const response of [worker, publicHost]) {
+    expect(response.status).toBe(native.status);
+    expect(response.body).toEqual(native.body);
+    expect(response.headers["content-type"]).toBe(native.headers["content-type"]);
+    expect((await get(path, "br, gzip", { origin: response === worker ? origin : publicOrigin })).status).toBe(native.status);
+  }
+});
+
+test.each(networkPaths)("public routing leaves Waffle's %s on native asset handling", async path => {
+  const [publicHost, native] = await Promise.all([get(path, "br, gzip", { origin: publicOrigin }), get(path, "br, gzip", { origin: nativeOrigin })]);
+  expect(publicHost.status).toBe(200);
+  expect(publicHost.headers["content-encoding"]).toBe(native.headers["content-encoding"]);
+  expect(publicHost.headers["vary"]).toBe(native.headers["vary"]);
+  expect(publicHost.body).toEqual(native.body);
 });
 
 test.each(["br,gzip", "br;q=0,gzip"])("raw-only programs retain native compression for %s", async accept => {
