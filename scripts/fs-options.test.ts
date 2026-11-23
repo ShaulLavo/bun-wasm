@@ -388,9 +388,14 @@ test("recursive readdir error paths and Dirent parentPath match Bun for sync and
   expect(syncErr?.path).toBe(walk);
   expect(syncErr?.syscall).toBe("scandir");
 
+  // The async walk reports the first looping link it opens, through `sub` or
+  // its `alias` symlink. Which comes first is the filesystem's directory order:
+  // XFS lists small directories in creation order, tmpfs in reverse, and ext4
+  // by name hash, so both paths are correct.
+  const loops = [path.join(walk, "sub", "loop"), path.join(walk, "alias", "loop")];
   const cbErr = await new Promise<NodeJS.ErrnoException | null>(resolve => fs.readdir(walk, { recursive: true }, resolve));
   expect(cbErr?.code).toBe("ELOOP");
-  expect(cbErr?.path).toBe(path.join(walk, "sub", "loop"));
+  expect(loops).toContain(cbErr?.path);
   expect(cbErr?.syscall).toBe("open");
 
   let promErr: NodeJS.ErrnoException | undefined;
@@ -400,7 +405,7 @@ test("recursive readdir error paths and Dirent parentPath match Bun for sync and
     promErr = err as NodeJS.ErrnoException;
   }
   expect(promErr?.code).toBe("ELOOP");
-  expect(promErr?.path).toBe(path.join(walk, "sub", "loop"));
+  expect(loops).toContain(promErr?.path);
   expect(promErr?.syscall).toBe("open");
 });
 
