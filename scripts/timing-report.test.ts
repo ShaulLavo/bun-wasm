@@ -118,7 +118,7 @@ function reportTransport(archive?: Uint8Array, badLog = false, diagnostic = line
   return async url => {
     const path = new URL(String(url)).pathname;
     if (path.endsWith("/actions/runs/1")) return Response.json(run);
-    if (path.endsWith("/jobs")) return Response.json({ total_count: 3, jobs: [{ name: "Web host unit and types", id: 11, conclusion: "success" }, { name: "Web browser (20-preview)", id: 12, conclusion: "success" }, { name: "Rust", id: 13, conclusion: "success" }] });
+    if (path.endsWith("/jobs")) return Response.json({ total_count: 3, jobs: [{ name: "Web host unit and types", id: 11, conclusion: "success" }, { name: "Web browser", id: 12, conclusion: "success" }, { name: "Rust", id: 13, conclusion: "success" }] });
     if (path.endsWith("/jobs/11/logs")) return new Response(badLog ? TIMING_PREFIX + "broken" : diagnostic);
     if (path.endsWith("/jobs/12/logs")) return new Response(line(sample("http-stream-cancel", 260)));
     if (path.endsWith("/runs")) return Response.json({ workflow_runs: archive ? [{ id: 8, event: "workflow_run", head_branch: "main" }] : [] });

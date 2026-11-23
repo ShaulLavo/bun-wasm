@@ -68,10 +68,20 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   let disposeLookup: (() => void) | undefined;
   let released = false;
   let sharedRoute: SharedObjectRoute | undefined;
+  const releaseNetwork = () => {
+    const owned = helper;
+    helper = undefined;
+    owned?.dispose();
+  };
   const unregister = context.registerRevocation(() => {
     revoked = true;
     observeMemoryOutcome(memoryTelemetryId, () => readOutcome(context.outcome));
     sharedRoute?.close();
+    // A killed process frees its ports when the kill is decided, as a native kernel does. Its
+    // Worker can outlive that by far (WebKit cannot terminate one parked in a Wasm wait), and a
+    // replacement server on the same port must not wait for it. An ordinary exit keeps its
+    // session until physical cleanup, so responses it already wrote still drain.
+    if (readOutcome(context.outcome)?.kind === "signaled") releaseNetwork();
   });
   const active = () => !released && !revoked && !options.runtime.disposed && !readOutcome(context.outcome);
   const cleanup = () => {
@@ -80,7 +90,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     endMemorySnapshot(memoryTelemetryId, () => readOutcome(context.outcome));
     unregister();
     const failures: unknown[] = [];
-    try { helper?.dispose(); }
+    try { releaseNetwork(); }
     catch (error) { failures.push(error); }
     try { socketRoot?.release(); }
     catch (error) { failures.push(error); }

@@ -1,5 +1,5 @@
 {
   "owner": "native",
   "path": "tests/fixtures/webcrypto-chacha20-poly1305",
-  "engines": ["quickjs", "jsc", "spidermonkey"]
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
 }

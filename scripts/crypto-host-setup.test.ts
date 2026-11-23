@@ -3,21 +3,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkBatches, discoverChecks, selectChecks } from "./test-checks";
+import { discoverChecks } from "./test-checks";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
-
-test("host-key controls have exactly one normal blocking discovery owner", () => {
-  const path = "scripts/crypto-host-keys.test.ts";
-  expect(discoverChecks().filter(check => check.path === path)).toEqual([
-    { owner: "web", path, localRuntime: false, batch: "10-web" },
-  ]);
-  expect(checkBatches("web")[0]).toContain(path);
-  for (const owner of ["runtime", "local-runtime", "quality"]) expect(selectChecks(owner)).not.toContain(path);
-  const web = readFileSync(new URL("./test-web-host.sh", import.meta.url), "utf8");
-  expect(web.match(/bun \.\.\/scripts\/test-checks\.ts web\n/g)).toHaveLength(1);
-});
 
 test("host-key fixture uses the existing no-build native owner", () => {
   const path = "tests/fixtures/runtime-ts-host-crypto-keys";

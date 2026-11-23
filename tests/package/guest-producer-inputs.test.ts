@@ -31,7 +31,7 @@ test("fixture Git failures preserve the command and subprocess result", async ()
 
 function quickjsNativeProducerFragment(): string {
   const parsed: unknown = Bun.YAML.parse(workflow);
-  const steps = workflowField(workflowField(workflowField(parsed, "jobs"), "rust"), "steps");
+  const steps = workflowField(workflowField(workflowField(parsed, "jobs"), "ordinary-build"), "steps");
   if (!Array.isArray(steps)) throw new Error("Expected native workflow steps");
   const step = steps.find(step => typeof step === "object" && step !== null && "name" in step && step.name === "Build native fixtures after the cache checkpoint");
   const native = workflowField(step, "run");
@@ -48,7 +48,7 @@ function workflowField(value: unknown, key: string): unknown {
 
 function jscPathSetup(jsc: boolean): string {
   const parsed: unknown = Bun.YAML.parse(workflow);
-  const steps = workflowField(workflowField(workflowField(parsed, "jobs"), "rust"), "steps");
+  const steps = workflowField(workflowField(workflowField(parsed, "jobs"), "ordinary-build"), "steps");
   if (!Array.isArray(steps)) throw new Error("Expected native workflow steps");
   const matches: unknown[] = steps.filter(step => typeof step === "object" && step !== null && "name" in step && step.name === "Configure private JSC build paths");
   expect(matches).toHaveLength(1);

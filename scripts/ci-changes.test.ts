@@ -294,7 +294,7 @@ test.each(["pull_request", "push"])("shared proof changes select only the dedica
 });
 
 const workflow = expandedCiWorkflow();
-const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-identity:\n")[0]!;
+const quality = workflow.split("\n  quality:\n")[1]!.split("\n  web-unit:\n")[0]!;
 
 for (const path of ["scripts/check-encoded-slice.ts", "tests/encoded-slice/probe.rs"]) {
   test.each(["pull_request", "push"])(`${path} selects the blocking EncodedSlice native proof for %s`, event => {
@@ -305,7 +305,7 @@ for (const path of ["scripts/check-encoded-slice.ts", "tests/encoded-slice/probe
 }
 
 test("the EncodedSlice proof blocks native CI once after existing tool and vendor setup", () => {
-  const rust = workflow.split("\n  native-quality:\n")[1]!.split("\n  rust:\n")[0]!;
+  const rust = workflow.split("\n  native-quality:\n")[1]!.split("\n  ordinary-build:\n")[0]!;
   const name = "      - name: Blocking EncodedSlice address regression";
   const step = rust.split(name)[1]?.split("\n      - ")[0];
   expect(step?.trim()).toBe("shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}\n        run: |\n          source env.sh\n          bun scripts/check-encoded-slice.ts");
@@ -488,7 +488,7 @@ function sharedBrowserSelection(path: string, event: string): string {
 }
 
 for (const path of [
-  "web/src/runner.ts", "web/src/worker.ts", "web/src/worker-main.ts", "web/src/subprocess-broker.ts",
+  "web/src/runner.ts", "web/src/worker.ts", "web/src/worker-main.ts", "web/src/early-instance.ts", "web/src/subprocess-broker.ts",
   "web/src/memory-telemetry.ts", "web/src/net/trampoline.ts", "src/assets.ts",
   "scripts/browser-build.ts", "web/package.json", "web/bun.lock",
 ]) {

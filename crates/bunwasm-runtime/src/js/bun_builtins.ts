@@ -29,6 +29,7 @@
   const runtimeProvided: Record<string, () => unknown> = {
     "internal:streams/duplex": () => internal.builtin("node:stream").Duplex,
     "internal:tls": fetchInternal("internal:tls"),
+    "internal:validators": fetchInternal("internal:validators"),
     "internal:webstreams_adapters": fetchInternal("internal:webstreams_adapters"),
   };
 
@@ -111,9 +112,13 @@
     makeTypeError: (message: string) => new TypeError(message),
     throwTypeError(message: string) { throw new TypeError(message); },
     throwRangeError(message: string) { throw new RangeError(message); },
-    makeErrorWithCode(id: number, ..._args: unknown[]) {
+    makeErrorWithCode(id: number, ...args: unknown[]) {
       const code = native.bunBuiltinErrorCode(id);
       if (code === "ERR_INVALID_URI") return Object.assign(new URIError("URI malformed"), { code });
+      const variant = (id > 0 && native.bunBuiltinErrorCode(id - 1) === code ? 1 : 0) + (id > 1 && native.bunBuiltinErrorCode(id - 2) === code ? 1 : 0);
+      const make = internal.require("bun_provided_internals").makeBuiltinError as ((code: string, variant: number, args: unknown[]) => Error | undefined) | undefined;
+      const error = make?.(code, variant, args);
+      if (error) return error;
       throw unsupported(`error constructor ${code}`);
     },
   };

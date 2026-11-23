@@ -61,15 +61,19 @@ if (( shared_group )); then
 fi
 "$GUEST_CARGO" build --locked --offline "${build_std[@]}" --release --target wasm32-wasip1 -j "${CARGO_BUILD_JOBS:-4}" -p bunwasm-cli "${features[@]}"
 raw="$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm"
+# -g keeps the name section in the unshipped bun-core.named.wasm, for profilers and symbolizers.
+# The core every program ships drops it (about 2.2 MB raw; scripts/wasm-name-sections.ts).
+named="$out/bun-core.named.wasm"
 if (( shared_group )); then
   bun "$root/scripts/src/program-profile.ts" link-proof "$BUN_WASM_CORE_LINK_MAP" "$out/cxx-runtime-members.json"
   node "$root/scripts/src/engine-explicit-init.ts" core "$raw" "$out/bun-core.explicit.wasm" --group
   wasm-opt -O2 -g --strip-dwarf --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
-    --enable-mutable-globals --enable-threads "$out/bun-core.explicit.wasm" -o "$core"
+    --enable-mutable-globals --enable-threads "$out/bun-core.explicit.wasm" -o "$named"
 else
   wasm-opt -O2 -g --strip-dwarf --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
-    --enable-mutable-globals "$raw" -o "$core"
+    --enable-mutable-globals "$raw" -o "$named"
 fi
+bun "$root/scripts/wasm-name-sections.ts" strip "$named" "$core"
 wasm-tools validate "$core"
 bun "$root/scripts/guest-core-receipt.ts" write "$core" "$inputs"
 sha256sum "$core" > "$out/artifact-sha256.txt"

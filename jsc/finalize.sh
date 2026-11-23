@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Post-link step every wasm binary containing JSC needs: spill pointer-sized wasm locals to the
 # C stack so JSC's conservative stack scan sees them. Without it the GC frees live cells (wasm
-# locals live outside linear memory). Then optimize and strip DWARF, keeping the name section
-# (function names in wasm stack traces; about +3% gzipped).
+# locals live outside linear memory). Then optimize and strip DWARF, keeping the name section:
+# the interpreter frame check and profilers read it. The JSC side producer ships a copy without
+# it (scripts/build-engine-jsc.sh).
 # Usage: jsc/finalize.sh in.wasm out.wasm
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 [[ $# -eq 2 ]] || { echo "usage: finalize.sh in.wasm out.wasm" >&2; exit 2; }

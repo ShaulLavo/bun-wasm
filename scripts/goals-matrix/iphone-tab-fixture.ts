@@ -1,10 +1,10 @@
 import { object } from "./evidence";
 
-type FixtureButton = { kind: string; index: number; parentIndex: number; label: string; ref: string; identifier?: string; selected?: boolean };
+type FixtureButton = { kind: string; index: number; parentIndex: number; label: string; ref: string; identifier?: string; selected?: boolean; rect?: object };
 export function tabOverview(labels: string[], count = labels.length) {
   const nodes: FixtureButton[] = labels.flatMap((label, index) => [
     { kind: "button", index: index * 2, parentIndex: 90, label, ref: `e${index * 2 + 1}`, identifier: "TabOverviewItemView?IsPinned=false" },
-    { kind: "button", index: index * 2 + 1, parentIndex: index * 2, label: "Close", ref: `e${index * 2 + 2}` },
+    { kind: "button", index: index * 2 + 1, parentIndex: index * 2, label: "Close", ref: `e${index * 2 + 2}`, rect: { x: index * 30, y: 40, width: 22, height: 22 } },
   ]);
   nodes.push({ kind: "button", index: 90, parentIndex: 99, label: `${count} Tabs, Tab Group`, ref: "e99", identifier: "CapsuleTabGroup", selected: true });
   nodes.push({ kind: "button", index: 91, parentIndex: 99, label: "Done", ref: "e100", identifier: "DoneButton" });
@@ -24,8 +24,14 @@ export function tabMoreMenu() {
   ] };
 }
 
-export function tabBatch(snapshot: unknown, commands = ["press", "snapshot"]) {
-  return JSON.stringify({ success: true, data: { total: commands.length, executed: commands.length, results: commands.map((command, index) => ({ step: index + 1, command, ok: true, data: command === "snapshot" ? snapshot : {} })) } });
+export function tabBatch(snapshot: unknown, commands = ["press", "snapshot"], press: unknown = {}) {
+  return JSON.stringify({ success: true, data: { total: commands.length, executed: commands.length, results: commands.map((command, index) => ({ step: index + 1, command, ok: true, data: command === "snapshot" ? snapshot : press })) } });
+}
+
+export function tabClosePress(title: string, index: number) {
+  return { x: index * 30 + 11, y: 51, targetKind: "ref", ref: `e${index * 2 + 2}`, refLabel: "Close",
+    resolution: { source: "ref", phase: "pre-action", kind: "exact" }, settle: { settled: true,
+      diff: { lines: [{ kind: "removed", text: `@e${index * 2 + 1} [button] ${JSON.stringify(title)}` }] } } };
 }
 
 export function tabAgentScript(config: { closed: string; title: string; unrelated: string; log?: string; hangOnCleanup?: boolean }) {

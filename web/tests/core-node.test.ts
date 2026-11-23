@@ -1,5 +1,8 @@
-import { expect, test } from 'bun:test';
+import { expect, setDefaultTimeout, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+
+// Every test here starts a Node process or copies a package. The limit only catches a hang, and a busy machine needs seconds.
+setDefaultTimeout(120_000);
 
 test('plain Node can consume the JS memory helper through the existing host adapters', () => {
   const source = `await import(${JSON.stringify(new URL('../scripts/node-process.ts', import.meta.url).href)});`;
@@ -45,8 +48,8 @@ test('unbundled headless hosts load with their installed runtime package', async
   const dir = await mkdtemp(join(base, 'bun-wasm-node-clean-'));
   try {
     for (const path of ['package.json', 'web/package.json', 'scripts/bash-web-guests.ts', 'scripts/bash-web-release-inputs.json', 'web/scripts/node-shell.ts',
-      'web/src/native-wasm-lifetime.ts', 'web/src/wasm-call-trap.ts', 'web/src/crypto-inputs.js', 'web/src/crypto-host.js', 'web/src/content-modules.ts', 'web/src/module-records.ts', 'web/src/promise-reactions.ts', 'web/src/stack-programs.ts',
-      'web/src/tool-command.ts', 'web/scripts/node-host.mjs', 'web/scripts/node-host.ts', 'web/scripts/async-context.ts', 'web/scripts/node-worker.ts', 'web/scripts/node-linked.ts', 'src/quickjs-program.ts', 'src/engine-kind.ts', 'web/scripts/node-signals.ts', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-process.ts', 'web/scripts/node-install-net.ts', 'web/src/net/trampoline.ts', 'web/src/net/lookup.ts', 'web/src/net/package-fetch.ts', 'web/src/buffer-transfer.ts', 'web/src/engine-host.js', 'web/src/script-evaluation.ts', 'web/src/shared-objects/host.ts', 'web/src/shared-objects/protocol.ts', 'web/src/shared-objects/lane.ts', 'web/src/shared-objects/lane-overflow.ts', 'web/src/shared-objects/native.ts', 'web/src/shared-objects/realm.ts', 'web/src/native-stream-state.ts', 'web/src/native-direct-stream.ts', 'web/src/native-readable-iterator.ts']) {
+      'web/src/native-wasm-lifetime.ts', 'web/src/wasm-call-trap.ts', 'web/src/host-crypto.ts', 'web/src/content-modules.ts', 'web/src/module-records.ts', 'web/src/promise-reactions.ts', 'web/src/stack-programs.ts',
+      'web/src/tool-command.ts', 'web/scripts/node-host.mjs', 'web/scripts/node-host.ts', 'web/scripts/async-context.ts', 'web/scripts/node-worker.ts', 'web/scripts/node-linked.ts', 'src/quickjs-program.ts', 'src/engine-kind.ts', 'web/scripts/node-signals.ts', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-process.ts', 'web/scripts/node-links.ts', 'web/scripts/node-install-net.ts', 'web/src/net/trampoline.ts', 'web/src/net/lookup.ts', 'web/src/net/package-fetch.ts', 'web/src/buffer-transfer.ts', 'web/src/engine-host.js', 'web/src/script-evaluation.ts', 'web/src/shared-objects/host.ts', 'web/src/shared-objects/protocol.ts', 'web/src/shared-objects/lane.ts', 'web/src/shared-objects/lane-overflow.ts', 'web/src/shared-objects/native.ts', 'web/src/shared-objects/realm.ts', 'web/src/native-stream-state.ts', 'web/src/native-direct-stream.ts', 'web/src/native-readable-iterator.ts']) {
       const target = join(dir, path);
       await mkdir(dirname(target), { recursive: true });
       await copyFile(new URL(`../../${path}`, import.meta.url), target);
@@ -72,4 +75,4 @@ test('unbundled headless hosts load with their installed runtime package', async
     expect(launch.stderr).toContain(missing);
     expect(launch.stderr).not.toContain('ERR_MODULE_NOT_FOUND');
   } finally { await rm(dir, { recursive: true, force: true }); }
-});
+}, 30_000);

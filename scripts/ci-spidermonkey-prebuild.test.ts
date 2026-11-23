@@ -1,7 +1,7 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import assert from 'node:assert/strict';
 import { expect, setDefaultTimeout, test } from 'bun:test';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -26,44 +26,17 @@ function command(jobName: string, name: string): string {
   return result.startsWith('|\n') ? result.slice(2).split('\n').map(line => line.slice(10)).join('\n') : result.trim();
 }
 
-const producer = job('shared-spidermonkey-prebuild');
-const consumer = job('shared-sysroot');
+const producer = job('shared-sysroot');
 
-test('one bounded SM library prebuild feeds the original blocking owner and all unchanged consumers', () => {
-  expect(producer).toContain('needs: [selection, shared-prebuild]');
+test('one bounded SM library prebuild feeds the shared producer and consolidated consumers', () => {
+  expect(producer).toContain('needs: selection');
   expect(producer).toContain("needs.selection.outputs.shared-native == 'true'");
-  expect(producer).toContain('timeout-minutes: 30');
-  expect(producer).not.toMatch(/build-native-profile|build-bun-core|build-engine|test-checks|build-libcxx/);
-  expect(consumer).toContain('needs: [selection, shared-prebuild, shared-spidermonkey-prebuild]');
-  expect(consumer).toContain('!cancelled() && needs.selection.result');
-  expect(consumer).toContain('timeout-minutes: 30');
-  expect(consumer).not.toContain('spidermonkey/build-shared-group.sh');
-  expect(consumer).not.toContain('id: shared-spidermonkey-cache');
-  for (const name of ['Consume the discovered shared native checks sequentially', 'Consume the discovered shared Browser checks sequentially']) {
-    expect(workflow.match(new RegExp(`name: ${name}\\n`, 'g'))).toHaveLength(1);
-    expect(job('shared-consumers')).toContain(`name: ${name}\n`);
-  }
-  expect(command('shared-spidermonkey-prebuild', 'Import only the verified shared sysroot for SpiderMonkey')).not.toContain('tar --posix -xOf "$transfer" prebuild.tar.zst |');
-  const upload = producer.split('          name: shared-spidermonkey-prebuild\n')[1]!.split('      - name:')[0]!;
-  for (const path of ['/native/', '/receipt/', '/prebuild.json']) expect(upload).toContain(path);
-  expect(upload).not.toMatch(/firefox|\/obj\/|\/target\//);
-  for (const name of ['Configure private shared sysroot paths', 'Install pinned shared build tools', 'Install pinned WASI SDK']) {
-    expect(command('shared-spidermonkey-prebuild', name)).toBe(command('shared-prebuild', name));
-  }
-});
-
-test.each(['failure', 'cancelled', 'skipped'])('a selected %s SM producer fails SharedPIC before linking', result => {
-  const guard = command('shared-sysroot', 'Require the shared SpiderMonkey library producer');
-  expect(spawnSync('bash', ['-euo', 'pipefail', '-c', guard], { env: { ...process.env, SM_PREBUILD_RESULT: result } }).status).not.toBe(0);
-  expect(consumer.indexOf('name: Require the shared SpiderMonkey library producer')).toBeLessThan(consumer.indexOf('name: Produce the shared native profile once'));
-});
-
-test('successful SM production is admitted and an unselected SM prebuild leaves the libc proof running', () => {
-  const guard = command('shared-sysroot', 'Require the shared SpiderMonkey library producer');
-  expect(spawnSync('bash', ['-euo', 'pipefail', '-c', guard], { env: { ...process.env, SM_PREBUILD_RESULT: 'success' } }).status).toBe(0);
-  expect(consumer).toContain("(needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true')");
-  expect(consumer.split('name: Require the shared SpiderMonkey library producer\n')[1]).toStartWith("        if: needs.selection.outputs.shared-native == 'true'\n");
-  expect(consumer).toContain('bash scripts/test-shared-sysroot.sh');
+  expect(producer).toContain('timeout-minutes: 55');
+  expect(producer).toContain('spidermonkey/build-shared-group.sh');
+  expect(producer).toContain('id: shared-spidermonkey-cache');
+  expect(workflow.match(/name: Consume the discovered shared native and Browser checks\n/g)).toHaveLength(1);
+  expect(job('shared-consumers')).toContain('name: Consume the discovered shared native and Browser checks\n');
+  expect(producer).toContain('bash scripts/test-shared-sysroot.sh');
 });
 
 test.each(['scripts/ci-spidermonkey-prebuild.ts', 'scripts/ci-spidermonkey-prebuild.test.ts', 'checks/quality-ci-spidermonkey-prebuild.json'])('%s selects both original owners', path => {
@@ -72,12 +45,13 @@ test.each(['scripts/ci-spidermonkey-prebuild.ts', 'scripts/ci-spidermonkey-prebu
   expect(selectChecks('quality')).toContain('scripts/ci-spidermonkey-prebuild.test.ts');
 });
 
-test('exact cache identity covers recipes, tool bytes, pinned SDK and native host packages', () => {
-  const identify = command('shared-spidermonkey-prebuild', 'Identify shared SpiderMonkey native inputs');
-  for (const input of ['bun-wasm-sysroot.json', 'libc.a', 'bin/clang++', 'bin/cbindgen', 'sha256sum "$(command -v "$tool")"', 'dpkg-query -W', 'rustc -vV']) expect(identify).toContain(input);
+test('exact cache identity covers recipes, tool bytes, pinned SDK and compiler versions without dpkg-query cache busting', () => {
+  const identify = command('shared-sysroot', 'Identify shared SpiderMonkey native inputs');
+  for (const input of ['bun-wasm-sysroot.json', 'libc.a', 'bin/clang++', 'bin/cbindgen', 'sha256sum "$(command -v "$tool")"', 'rustc -vV', 'llvm-readobj --version', 'python3 --version', 'autoconf2.13 --version']) expect(identify).toContain(input);
+  expect(identify).not.toContain('dpkg-query -W');
   expect(sharedSpiderMonkeyRecipes()).toMatch(/^[0-9a-f]{64}$/);
-  expect(producer).not.toContain('restore-keys:');
-  expect(producer).toContain('spidermonkey-shared-group-v2-');
+  expect(producer).not.toContain('restore-keys:\n            spidermonkey-shared-group');
+  expect(producer).toContain('spidermonkey-shared-group-v3-');
 });
 
 const recipeBindings = ['env.sh', 'Cargo.lock', 'rust-toolchain.toml', 'package.json', 'bun.lock',
@@ -85,7 +59,9 @@ const recipeBindings = ['env.sh', 'Cargo.lock', 'rust-toolchain.toml', 'package.
   'spidermonkey/spidermonkey-wasi.patch', 'spidermonkey/spidermonkey-shared-group.patch',
   'crates/bunwasm-spidermonkey/build.rs', 'scripts/src/program-profile.ts', 'src/engine-kind.ts',
   'scripts/ci-spidermonkey-prebuild.ts', 'scripts/ci-bootstrap-tools.ts', 'scripts/ci-install.ts',
-  'scripts/ci-stage-release-packages.ts', 'scripts/ci-release-download.ts', 'scripts/ci-build-tools.ts', 'scripts/waffle-release-inputs.json', 'scripts/build-wasi-sysroot.ts',
+  'scripts/ci-stage-release-packages.ts', 'scripts/ci-release-download.ts', 'scripts/ci-build-tools.ts', 'scripts/ci-binaryen.ts',
+  'scripts/waffle-release-inputs.json', 'scripts/build-wasi-sysroot.ts', 'scripts/build-shared-wasi-libc.sh',
+  'scripts/test-shared-sysroot.sh', 'scripts/build-jsc.sh',
   '.github/scripts/apt-main-archive.sh'];
 
 function recipeFixture(run: (root: string, source: string) => void): void {
@@ -109,21 +85,11 @@ function recipeFixture(run: (root: string, source: string) => void): void {
 
 test('consumer supervision, routing and reports leave the compiled recipe unchanged', () => recipeFixture((root, source) => {
   const original = sharedSpiderMonkeyRecipes(root);
-  const supervision = "${{ matrix.engine == 'spidermonkey' && 1320 || 420 }}";
-  expect(source.includes(supervision)).toBe(true);
-  const before = source.replaceAll(supervision, supervision.replace('1320', '660'));
-  expect(before).not.toBe(source);
-  writeFileSync(join(root, '.github/workflows/ci.yml'), before);
-  expect(sharedSpiderMonkeyRecipes(root)).toBe(original);
-  const updated = before.replaceAll('&& 660 ||', '&& 1320 ||');
-  expect(updated).not.toBe(before);
-  writeFileSync(join(root, '.github/workflows/ci.yml'), updated);
-  expect(sharedSpiderMonkeyRecipes(root)).toBe(original);
-  const consumerStart = updated.indexOf('\n  shared-sysroot:\n');
-  const consumer = updated.slice(consumerStart).replace('runs-on: ubuntu-latest', 'runs-on: [self-hosted, linux]')
-    .replace('name: Shared PIC program producer', 'name: Consumer report');
-  expect(consumer).not.toBe(updated.slice(consumerStart));
-  writeFileSync(join(root, '.github/workflows/ci.yml'), updated.slice(0, consumerStart) + consumer);
+  const consumerStart = source.indexOf('\n  shared-consumers:\n');
+  const consumer = source.slice(consumerStart).replace('runs-on: ubuntu-latest', 'runs-on: [self-hosted, linux]')
+    .replace('SHARED_CHECK_SECONDS: 1800', 'SHARED_CHECK_SECONDS: 900');
+  expect(consumer).not.toBe(source.slice(consumerStart));
+  writeFileSync(join(root, '.github/workflows/ci.yml'), source.slice(0, consumerStart) + consumer);
   expect(sharedSpiderMonkeyRecipes(root)).toBe(original);
 }));
 
@@ -143,7 +109,7 @@ function object(value: unknown): Record<string, unknown> {
 }
 
 function producerSteps(value: unknown): unknown[] {
-  const producer = object(object(object(value).jobs)['shared-spidermonkey-prebuild']);
+  const producer = object(object(object(value).jobs)['shared-sysroot']);
   assert(Array.isArray(producer.steps));
   return producer.steps;
 }
@@ -166,10 +132,9 @@ test('every producer setup/build step and its environment remains part of the re
     ['CARGO_INCREMENTAL: "0"', 'CARGO_INCREMENTAL: "1"'],
     ['CI_NODE_VERSION: \'26.13.1\'', 'CI_NODE_VERSION: \'26.13.2\''],
     ['wasi-sdk-34.0-x86_64-linux', 'wasi-sdk-35.0-x86_64-linux'],
-    ['JOBS: "2"', 'JOBS: "3"'],
+    ['JOBS: "4"', 'JOBS: "3"'],
   ] satisfies [string, string][]) {
-    // Scope identical setup strings to the producer, except the global Node pin.
-    const start = before.startsWith('CI_NODE_VERSION') ? 0 : source.indexOf('\n  shared-spidermonkey-prebuild:\n');
+    const start = before.startsWith('CI_NODE_VERSION') ? 0 : source.indexOf('\n  shared-sysroot:\n');
     const updated = source.slice(0, start) + source.slice(start).replace(before, after);
     expect(updated).not.toBe(source);
     writeFileSync(join(root, '.github/workflows/ci.yml'), updated);
@@ -180,7 +145,7 @@ test('every producer setup/build step and its environment remains part of the re
 test('canonical YAML and producer metadata preserve identity; missing boundaries fail closed', () => recipeFixture((root, source) => {
   const original = sharedSpiderMonkeyRecipes(root);
   const parsed: unknown = Bun.YAML.parse(source);
-  const producer = object(object(object(parsed).jobs)['shared-spidermonkey-prebuild']);
+  const producer = object(object(object(parsed).jobs)['shared-sysroot']);
   producer.name = 'Producer display name';
   producer['timeout-minutes'] = 60;
   writeFileSync(join(root, '.github/workflows/ci.yml'), Bun.YAML.stringify(parsed));
@@ -229,17 +194,17 @@ test('the maintained native-input command changes identity for tool, SDK and sys
   try {
     const tools = join(root, 'tools'), cargo = join(root, 'cargo'), sysroot = join(root, 'sysroot');
     for (const path of ['bin', 'tools/wasi-sdk/bin', 'cargo/bin', 'sysroot/lib/wasm32-wasip1', 'host']) mkdirSync(join(root, path), { recursive: true });
-    const programs = ['rustc', 'cargo', 'clang', 'clang++', 'llvm-readobj', 'python3', 'autoconf2.13', 'make', 'perl', 'dpkg-query'];
+    const programs = ['rustc', 'cargo', 'clang', 'clang++', 'llvm-readobj', 'python3', 'autoconf2.13', 'make', 'perl'];
     const binary = '#!/bin/sh\nprintf "fixture tool\\n"\n';
     for (const program of programs) writeFileSync(join(root, 'bin', program), binary, { mode: 0o755 });
     for (const path of ['tools/wasi-sdk/bin/clang++', 'cargo/bin/cbindgen', 'host/clang', 'host/clang++']) writeFileSync(join(root, path), binary, { mode: 0o755 });
     for (const path of ['bun-wasm-sysroot.json', 'lib/wasm32-wasip1/libc.a']) writeFileSync(join(sysroot, path), 'fixture sysroot');
-    const input = command('shared-spidermonkey-prebuild', 'Identify shared SpiderMonkey native inputs').replaceAll('/usr/bin/clang', join(root, 'host/clang'));
+    const input = command('shared-sysroot', 'Identify shared SpiderMonkey native inputs').replaceAll('/usr/bin/clang', join(root, 'host/clang'));
     const output = join(root, 'output');
     const identity = () => {
       writeFileSync(output, '');
       execFileSync('bash', ['-euo', 'pipefail', '-c', input], { env: { ...process.env, WASM_TOOLS: tools, WASI_SDK_PATH: join(tools, 'wasi-sdk'),
-        CARGO_HOME: cargo, BUN_WASM_SYSROOT: sysroot, PATH: join(root, 'bin') + ':' + process.env.PATH,
+        CARGO_HOME: cargo, BUN_WASM_SYSROOT: sysroot, JSC_BUILD_DIR: join(root, 'jsc'), PATH: join(root, 'bin') + ':' + process.env.PATH,
         RUNNER_TEMP: root, GITHUB_ENV: join(root, 'environment'), GITHUB_OUTPUT: output } });
       const result = readFileSync(output, 'utf8').match(/^hash=([a-f0-9]{64})$/m)?.[1];
       assert(result);

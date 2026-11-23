@@ -40,9 +40,10 @@ every case. It does not rebuild or deploy a site.
    with that device's host ID and UDID. Keep its exact absolute bound
    `agent-device` command. The runner uses it for Safari, taps, and tab cleanup.
 
-The runner verifies the same supervised FIFO ticket before each case. It does
-not acquire another Mac ticket. The wrapper checks owner availability and refuses
-an active SafariDriver. Do not run this check alongside a native Safari campaign.
+The runner verifies the same supervised FIFO ticket before every native command.
+A probe error pauses input until a second probe confirms the ticket. The wrapper
+checks owner availability and refuses an active SafariDriver. Do not run this
+check alongside a native Safari campaign.
 
 ## Run the smoke
 
@@ -67,7 +68,7 @@ source when the source file omits `assets`. The remaining options above are
 required. Other devices, engines, and case selections are rejected.
 
 Startup, dev, render, and click each have a five-minute hang cap. Install has a
-ten-minute hang cap. The maintained cleanup phase has a twenty-second hang cap.
+ten-minute hang cap. The cleanup phase has a one-minute hang cap.
 Every phase records its actual duration. A slow successful outcome passes.
 
 ## Check the deployed site

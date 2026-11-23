@@ -1,9 +1,11 @@
-// Bun internal modules that the generated thirdparty builtins (node-fetch,
-// undici) require, implemented over bun-wasm's own node:stream so their
-// streams are the same classes user code sees. Adapted from Bun's
-// src/js/internal/webstreams_adapters.ts (ReadableFromWeb) and
-// src/js/internal/tls.ts (nodeClientTlsToNative); see
-// docs/bun-patches/bun-thirdparty-fetch-builtins.md.
+// Bun internal modules that generated builtins (node-fetch, undici,
+// fast-utf8-stream) require, implemented over bun-wasm's own node:stream and
+// error helpers so their classes match what user code sees. Adapted from Bun's
+// src/js/internal/webstreams_adapters.ts (ReadableFromWeb),
+// src/js/internal/tls.ts (nodeClientTlsToNative), and
+// src/js/internal/validators.ts; see
+// docs/bun-patches/bun-thirdparty-fetch-builtins.md and
+// docs/bun-patches/bun-fast-utf8-stream.md.
 (function (internal: BunWasm.Internal) {
   "use strict";
   type ReadableOptions = { objectMode?: boolean; highWaterMark?: number; encoding?: string; signal?: AbortSignal; responseBody?: boolean };
@@ -121,8 +123,81 @@
     return tls;
   }
 
+  function invalidArgType(name: string, expected: string | readonly string[], value: unknown) {
+    const want = Array.isArray(expected) ? expected.join(" or ") : expected;
+    return Object.assign(new TypeError(`The "${name}" argument must be of type ${want}. Received ${internal.describe(value)}`), { code: "ERR_INVALID_ARG_TYPE" });
+  }
+
+  function invalidArgValue(name: string, value: unknown, reason = "is invalid", range = false) {
+    const Ctor = range ? RangeError : TypeError;
+    return Object.assign(new Ctor(`The argument '${name}' ${reason}. Received ${internal.describe(value)}`), { code: "ERR_INVALID_ARG_VALUE" });
+  }
+
+  function outOfRange(name: string, expected: string, value: unknown) {
+    return Object.assign(new RangeError(`The value of "${name}" is out of range. It must be ${expected}. Received ${String(value)}`), { code: "ERR_OUT_OF_RANGE" });
+  }
+
+  function makeBuiltinError(code: string, variant: number, args: readonly unknown[]) {
+    if (code === "ERR_INVALID_ARG_TYPE") return invalidArgType(String(args[0]), args[1] as string | readonly string[], args[2]);
+    if (code === "ERR_INVALID_ARG_VALUE") return invalidArgValue(String(args[0]), args[1], args[2] === undefined ? undefined : String(args[2]), variant === 1);
+    if (code === "ERR_INVALID_STATE") {
+      const Ctor = variant === 1 ? TypeError : variant === 2 ? RangeError : Error;
+      return Object.assign(new Ctor(`Invalid state: ${String(args[0] ?? "")}`), { code });
+    }
+    if (code === "ERR_OPERATION_FAILED") return Object.assign(new Error(`Operation failed: ${String(args[0] ?? "")}`), { code });
+    return undefined;
+  }
+
+  function validateBoolean(value: unknown, name: string) {
+    if (typeof value !== "boolean") throw invalidArgType(name, "boolean", value);
+  }
+
+  function validateFunction(value: unknown, name: string) {
+    if (typeof value !== "function") throw invalidArgType(name, "function", value);
+  }
+
+  function validateString(value: unknown, name: string) {
+    if (typeof value !== "string") throw invalidArgType(name, "string", value);
+  }
+
+  function validateObject(value: unknown, name: string, options: number | { nullable?: boolean; allowArray?: boolean; allowFunction?: boolean } = 0) {
+    const nullable = typeof options === "number" ? (options & 1) !== 0 : Boolean(options?.nullable);
+    const allowArray = typeof options === "number" ? (options & 2) !== 0 : Boolean(options?.allowArray);
+    const allowFunction = typeof options === "number" ? (options & 4) !== 0 : Boolean(options?.allowFunction);
+    if ((!nullable && value === null) || (!allowArray && Array.isArray(value)) || (typeof value !== "object" && (!allowFunction || typeof value !== "function"))) {
+      throw invalidArgType(name, "Object", value);
+    }
+  }
+
+  function validateOneOf(value: unknown, name: string, oneOf: readonly unknown[]) {
+    if (!oneOf.includes(value)) {
+      const list = oneOf.map((item) => (typeof item === "string" ? `'${item}'` : String(item))).join(", ");
+      throw invalidArgValue(name, value, `must be one of: ${list}`);
+    }
+  }
+
+  function validateUint32(value: unknown, name: string, positive = false) {
+    if (typeof value !== "number") throw invalidArgType(name, "number", value);
+    if (!Number.isInteger(value)) throw outOfRange(name, "an integer", value);
+    const min = positive ? 1 : 0;
+    if (value < min || value > 4294967295) throw outOfRange(name, `>= ${min} && <= 4294967295`, value);
+  }
+
   return {
     "internal:webstreams_adapters": { _ReadableFromWeb: ReadableFromWeb },
     "internal:tls": { nodeClientTlsToNative },
+    "internal:validators": {
+      kValidateObjectNone: 0,
+      kValidateObjectAllowNullable: 1,
+      kValidateObjectAllowArray: 2,
+      kValidateObjectAllowFunction: 4,
+      validateBoolean,
+      validateFunction,
+      validateObject,
+      validateOneOf,
+      validateString,
+      validateUint32,
+    },
+    makeBuiltinError,
   } as Record<string, unknown>;
 })

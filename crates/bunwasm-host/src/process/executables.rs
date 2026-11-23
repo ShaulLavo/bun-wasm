@@ -398,19 +398,5 @@ fn host(path: &Path, dirs: &[(PathBuf, String)]) -> Option<PathBuf> {
 
 fn map_io(error: io::Error) -> i32 {
     // Preserve native filesystem failures in WASI's errno domain.
-    match error.raw_os_error() {
-        Some(libc::EPERM) => -63,
-        Some(libc::ENOENT) => NOENT,
-        Some(libc::EINTR) => -27,
-        Some(libc::EIO) => IO,
-        Some(libc::ENOMEM) => -48,
-        Some(libc::EACCES) => ACCES,
-        Some(libc::ENOTDIR) => NOTDIR,
-        Some(libc::EMFILE) => -33,
-        Some(libc::ENFILE) => -41,
-        Some(libc::ENAMETOOLONG) => -37,
-        Some(libc::ELOOP) => -32,
-        Some(libc::EOVERFLOW) => -61,
-        _ => IO,
-    }
+    -super::wasi::links::wasi_errno(&error)
 }

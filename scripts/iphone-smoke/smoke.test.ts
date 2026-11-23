@@ -1,5 +1,5 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
-import { chmod, mkdtemp, mkdir, rm } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withPlayground, completeAttempt } from "../goals-matrix/test-fixture";
@@ -11,6 +11,7 @@ import { deviceUDID, smokeOptions, phaseTimeoutMs, installTimeoutMs } from "./op
 import { completedCase, unsafeToContinue } from "./model";
 import { smokeCases, smokePhases } from "./cases";
 import { queueTicket } from "./admission";
+import { safariTabJournal } from "./tab-journal";
 import { runSmoke } from "./run";
 import { templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { engineFiles, profileEngineFiles } from "../goals-matrix/engines";
@@ -74,45 +75,78 @@ test("requires every input and rejects unknown, repeated and noncanonical flags"
   expect(() => smokeOptions(["--root", "/prepared"])).toThrow("--name=value");
 });
 test("Mac queue admission requires the same supervised holder throughout", () => {
-  const holder = { id: "ticket-1", thread: "coordinator", mode: "run", phase: "held", group_id: 123 };
-  expect(queueTicket({ holder }, "coordinator")).toBe("ticket-1");
-  expect(() => queueTicket({ holder: null }, "coordinator")).toThrow();
-  expect(() => queueTicket({ holder }, "other")).toThrow("does not hold");
-  expect(() => queueTicket({ holder }, "coordinator", "ticket-2")).toThrow("changed");
-  expect(() => queueTicket({ holder: { ...holder, mode: "split" } }, "coordinator")).toThrow();
+  const status = queueStatus();
+  expect(queueTicket(status, "coordinator")).toBe("ticket-1");
+  expect(() => queueTicket({ ownerBusy: false, lock: { kind: "free" }, holder: null }, "coordinator")).toThrow("no queue holder");
+  expect(() => queueTicket(status, "other")).toThrow("does not hold");
+  expect(() => queueTicket(status, "coordinator", "ticket-2")).toThrow("changed");
+  expect(() => queueTicket({ ...status, holder: { ...status.holder, mode: "split" } }, "coordinator")).toThrow("supervised exclusive");
+  expect(() => queueTicket({ ...status, holder: { ...status.holder, share: "CI" } }, "coordinator")).toThrow("supervised exclusive");
+  expect(() => queueTicket({ ...status, lock: { kind: "queue", ticket: "different" } }, "coordinator")).toThrow("inconsistent");
 });
-async function admissionBoundary(root: string, availabilityExit: number): Promise<{ code: number; output: string; error: string }> {
-  const mesh = join(root, "bin/mesh"), bun = join(root, ".bun/bin/bun");
-  const checker = join(root, ".agents/skills/machine-fleet/scripts/availability.py");
-  await Bun.write(mesh, '#!/bin/sh\nexec /bin/sh -c "$6"\n');
-  await Bun.write(bun, '#!/bin/sh\n: > "$HOME/queue-queried"\nprintf \'%s\\n\' "$QUEUE_JSON"\n');
-  await Bun.write(checker, 'import json, os, sys\nprint(json.dumps({"ownerBusy": False}))\nsys.exit(int(os.environ["AVAILABILITY_EXIT"]))\n');
-  await chmod(mesh, 0o755); await chmod(bun, 0o755);
+function queueStatus(id = "ticket-1", ownerBusy = false) {
+  return { ownerBusy, lock: { kind: "queue", ticket: id }, holder: { id, thread: "coordinator", mode: "run", phase: "held", group_id: 123, share: null } };
+}
+async function admissionBoundary(root: string, probes: string[]): Promise<{ code: number; output: string; error: string; calls: number }> {
+  const mesh = join(root, "bin/mesh"), calls = join(root, "calls");
+  await Bun.write(mesh, `#!${process.execPath}
+import {appendFileSync,readFileSync} from 'node:fs';
+const calls = ${JSON.stringify(calls)};
+appendFileSync(calls, 'x');
+const result = ${JSON.stringify(probes)}[readFileSync(calls).length-1];
+if (process.argv[2] !== 'ssh' || !process.argv[7]?.endsWith('mac-queue.ts" status')) throw new Error('Unexpected status command');
+if (result === 'transport error') { process.stderr.write('mesh socket reset\\n'); process.exit(42); }
+process.stdout.write(result ?? 'unexpected extra probe');
+`);
+  await chmod(mesh, 0o755);
   const admission = new URL("./admission.ts", import.meta.url).href;
-  const child = Bun.spawn([process.execPath, "--eval", `const {verifyMacAdmission} = await import(${JSON.stringify(admission)}); process.stdout.write(await verifyMacAdmission("coordinator"));`], {
-    env: { ...process.env, HOME: root, PATH: join(root, "bin") + ":" + process.env.PATH,
-      AVAILABILITY_EXIT: String(availabilityExit), QUEUE_JSON: JSON.stringify({ holder: { id: "ticket-1", thread: "coordinator", mode: "run", phase: "held", group_id: 123 } }) },
+  const child = Bun.spawn([process.execPath, "--eval", `const {verifyMacAdmission} = await import(${JSON.stringify(admission)}); process.stdout.write(await verifyMacAdmission("coordinator", "ticket-1"));`], {
+    env: { ...process.env, PATH: join(root, "bin") + ":" + process.env.PATH },
     stdout: "pipe", stderr: "pipe",
   });
   try {
     const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    return { code, output, error };
+    return { code, output, error, calls: (await Bun.file(calls).text()).length };
   } finally { if (child.exitCode === null) child.kill(); await child.exited; }
 }
-test("Mac admission parses queue status after the availability checker prints its JSON", async () => {
+test("a probe failure waits for fresh evidence of the same reservation and reports the real error", async () => {
   await scratch(async root => {
-    const result = await admissionBoundary(root, 0);
+    const result = await admissionBoundary(root, ["transport error", JSON.stringify(queueStatus())]);
     expect(result.code, result.error).toBe(0);
     expect(result.output).toBe("ticket-1");
-    expect(await Bun.file(join(root, "queue-queried")).exists()).toBe(true);
+    expect(result.error).toContain("mesh socket reset");
+    expect(result.calls).toBe(2);
   });
 });
-test("Mac admission preserves availability failure and never queries the queue", async () => {
+test("persistent probe errors report both the transport error and the malformed response", async () => {
   await scratch(async root => {
-    const result = await admissionBoundary(root, 75);
+    const result = await admissionBoundary(root, ["transport error", "invalid json"]);
     expect(result.code).not.toBe(0);
-    expect(result.error).toContain("exited 75");
-    expect(await Bun.file(join(root, "queue-queried")).exists()).toBe(false);
+    expect(result.error).toContain("admission is unverified");
+    expect(result.error).toContain("mesh socket reset");
+    expect(result.error).toContain("SyntaxError");
+    expect(result.calls).toBe(2);
+  });
+});
+test.each([[queueStatus("ticket-2"), "changed"], [queueStatus("ticket-1", true), "reserved by its owner"]] as const)("confirmed Mac admission loss stops without retry", async (status, error) => {
+  await scratch(async root => {
+    const result = await admissionBoundary(root, [JSON.stringify(status), JSON.stringify(queueStatus())]);
+    expect(result.code).not.toBe(0);
+    expect(result.error).toContain(error);
+    expect(result.calls).toBe(1);
+  });
+});
+test("Safari journal persists exact recorded titles across smoke processes", async () => {
+  await scratch(async root => {
+    const directory = join(root, "tabs"), title = "Goals " + crypto.randomUUID();
+    const journal = safariTabJournal(directory);
+    expect(await journal.pending()).toEqual(new Set());
+    await journal.record(title);
+    await Bun.write(join(directory, "Unrelated tab"), "");
+    await symlink(join(directory, title), join(directory, "Goals " + crypto.randomUUID()));
+    expect(await safariTabJournal(directory).pending()).toEqual(new Set([title]));
+    await journal.forget(title);
+    expect(await journal.pending()).toEqual(new Set());
   });
 });
 test("smoke cannot pass synthetic input, missing phases, another simulator or incomplete cleanup", () => {

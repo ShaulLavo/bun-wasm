@@ -39,8 +39,9 @@ async function closeOwnedTab(safari: ReturnType<typeof iphoneSafari>, nodes: Ret
   const read = isOrdinary ? ordinarySnapshot : privateSnapshot;
   const before = read(nodes);
   const ref = ownedTabClose(before, title);
-  nodes = await safari.snapshot(ref);
-  proveTabClosed(before, read(nodes), title);
+  const closed = await safari.batch(ref);
+  nodes = closed.nodes;
+  proveTabClosed(before, read(nodes), title, closed.press);
   if (isOrdinary) return nodes;
   nodes = await safari.ordinary(nodes);
   proveTabsUnchanged(normal, ordinarySnapshot(nodes));

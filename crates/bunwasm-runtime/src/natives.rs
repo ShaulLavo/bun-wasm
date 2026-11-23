@@ -342,11 +342,14 @@ fn sync_mode(flags: i32) -> SyncMode {
     SyncMode::None
 }
 
-#[cfg(target_os = "wasi")]
+#[cfg(any(target_os = "wasi", unix))]
 fn sync_fd(fd: i32, mode: SyncMode) -> io::Result<()> {
     let status = match mode {
         SyncMode::None => return Ok(()),
+        #[cfg(target_os = "wasi")]
         SyncMode::Data => unsafe { libc::fdatasync(fd) },
+        #[cfg(not(target_os = "wasi"))]
+        SyncMode::Data => unsafe { libc::fsync(fd) },
         SyncMode::All => unsafe { libc::fsync(fd) },
     };
     if status < 0 {
@@ -355,9 +358,24 @@ fn sync_fd(fd: i32, mode: SyncMode) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "wasi"))]
+#[cfg(not(any(target_os = "wasi", unix)))]
 fn sync_fd(_fd: i32, _mode: SyncMode) -> io::Result<()> {
     Ok(())
+}
+
+fn sync_explicit_fd(state: &State, fd: i32, mode: SyncMode) -> io::Result<()> {
+    if (0..=2).contains(&fd) {
+        let stat = descriptor_metadata(fd)?;
+        #[cfg(target_os = "wasi")]
+        let non_file = matches!(stat.st_mode & 0o170000, 0o010000 | 0o020000 | 0o140000);
+        #[cfg(unix)]
+        let non_file = !stat.is_file();
+        if non_file {
+            return Err(io::Error::from_raw_os_error(libc::EINVAL));
+        }
+        return flush_descriptor_output(state);
+    }
+    sync_fd(fd, mode)
 }
 
 /// Own files opened by this runtime, indexed by their real process descriptor.
@@ -366,6 +384,9 @@ fn sync_fd(_fd: i32, _mode: SyncMode) -> io::Result<()> {
 pub struct FdTable {
     files: HashMap<i32, File>,
     sync_modes: HashMap<i32, SyncMode>,
+    /// Standard descriptors the program closed. The host's own streams stay open; the guest sees
+    /// them as closed, so a later write fails with EBADF as it would after `close(2)`.
+    closed_stdio: [bool; 3],
 }
 
 fn synchronize_descriptor(state: &State, fd: i32, written: usize) -> io::Result<()> {
@@ -1027,6 +1048,13 @@ fn write_descriptor(state: &State, args: Args<'_>) -> NativeResult {
             .map(|n| Val::Num(n as f64))
             .map_err(|e| io_error(e, "write", None));
     }
+    if (1..=2).contains(&fd) && state.fds.borrow().closed_stdio[fd as usize] {
+        return Err(io_error(
+            io::Error::from_raw_os_error(libc::EBADF),
+            "write",
+            None,
+        ));
+    }
     if fd == 1 {
         state
             .write_stdout(bytes)
@@ -1055,6 +1083,14 @@ fn write_descriptor(state: &State, args: Args<'_>) -> NativeResult {
 fn close_descriptor(state: &State, args: Args<'_>) -> NativeResult {
     let fd = args.i32(0)?;
     if (0..=2).contains(&fd) {
+        let mut fds = state.fds.borrow_mut();
+        if std::mem::replace(&mut fds.closed_stdio[fd as usize], true) {
+            return Err(io_error(
+                io::Error::from_raw_os_error(libc::EBADF),
+                "close",
+                None,
+            ));
+        }
         return ok();
     }
     let mut fds = state.fds.borrow_mut();
@@ -1123,6 +1159,11 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         if result < 0 {
             return Err(io_error(io::Error::last_os_error(), "ftruncate", None));
         }
+        ok()
+    });
+    let st = state.clone();
+    t.add("fsync", move |a| {
+        sync_explicit_fd(&st, a.i32(0)?, SyncMode::All).map_err(|e| io_error(e, "fsync", None))?;
         ok()
     });
 }
@@ -1429,7 +1470,8 @@ fn install_encoding(t: &mut Table) {
             Ok(s) => Ok(s.into()),
             Err(_) if a.bool(1) => Err(NativeError::type_error(
                 "The encoded data was not valid for encoding utf-8",
-            )),
+            )
+            .prop("code", "ERR_ENCODING_INVALID_ENCODED_DATA")),
             Err(_) => Ok(String::from_utf8_lossy(bytes).into_owned().into()),
         }
     });

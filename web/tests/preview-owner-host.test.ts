@@ -510,6 +510,10 @@ for (const secondaryFirst of [false, true]) test(`owned root hostname routes sec
   await client.register(49153);
   expect((await fetch(endpoint, { headers: { origin: root } })).status).toBe(200);
   client.unregister(3137);
+  // Unregister has no reply, and until the host has released the root hostname a request to it is
+  // still served, or reset when its kept-alive connection is closed. The host handles one owner's
+  // control frames in order, so a register that completes proves the unregister finished first.
+  await client.register(3139);
   expect((await fetch(endpoint, { headers: { origin: sibling } })).status).toBe(403);
   const siblingEndpoint = new URL(endpoint); siblingEndpoint.hostname = new URL(sibling).hostname;
   expect((await fetch(siblingEndpoint, { headers: { origin: sibling } })).status).toBe(200);

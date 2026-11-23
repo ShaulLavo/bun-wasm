@@ -4,6 +4,8 @@ use crate::process::{self, Cancellation, FinalOutcome, Runtime, Stdio};
 use std::sync::Arc;
 use wasmtime::{Config, Engine, Memory, MemoryType, Module, StoreLimitsBuilder, WasmParams};
 
+mod links;
+
 #[test]
 fn bash_54a_terminal_geometry_phase_and_no_prompt_contract() {
     use wasm_encoder::{
