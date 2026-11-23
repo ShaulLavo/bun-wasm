@@ -24,7 +24,8 @@ pub fn embed(manifest: &Path, out: &Path) {
     let override_dir = std::env::var_os("BUNWASM_JS_OVERRIDE_DIR").map(std::path::PathBuf::from);
     // Debugging aid: keep every token at its source line and column (types erased only).
     println!("cargo:rerun-if-env-changed=BUNWASM_JS_PRESERVE_POSITIONS");
-    let minify = std::env::var_os("BUNWASM_JS_PRESERVE_POSITIONS").is_none();
+    let minify =
+        std::env::var_os("BUNWASM_JS_PRESERVE_POSITIONS").is_none_or(|value| value.is_empty());
     fs::create_dir_all(out.join("runtime-js")).expect("create transpiled runtime directory");
     // Files whose whitespace and comments are removed, and TypeScript files that only lose their types.
     let mut compact = Vec::new();

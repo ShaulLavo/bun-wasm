@@ -152,21 +152,60 @@ test("minifying keeps a module that is not strict, and strict mode where it is d
   expect(strict()).toBeUndefined();
 });
 
-test("minifying skips erased declarations and keeps license comments", () => {
+test("minifying skips erased declarations and keeps notices, including ordinary comments", () => {
   const { exitCode, output } = compact([
-    "/* Not a license. */",
+    "/* Nothing special here. */",
     ";",
     "/*! Copyright (c) Example. Keep this notice. */",
+    "/*",
+    " * Permission is hereby granted. Portions Copyright Someone Else.",
+    " */",
+    "// MIT-licensed port, one line.",
     "(function () { return 1; })",
+    "/*! Trailing notice. */",
     "",
   ].join("\n"));
   expect(exitCode).toBe(0);
-  expect(output).toBe("/*! Copyright (c) Example. Keep this notice. */\n(function(){return 1})\n");
+  expect(output).toBe([
+    "/*! Copyright (c) Example. Keep this notice. */",
+    "/*\n * Permission is hereby granted. Portions Copyright Someone Else.\n */",
+    "// MIT-licensed port, one line.",
+    "(function(){return 1})",
+    "/*! Trailing notice. */",
+    "",
+  ].join("\n"));
+});
+
+test("minifying keeps the notices of the shipped modules that carry them", () => {
+  for (const name of ["http2_request", "http2_response", "tls_identity"]) {
+    const output = join(source, `${name}.min.js`);
+    const result = Bun.spawnSync(["bun", join(root, "scripts/transpile-runtime.ts"), "--minify-whitespace", join(root, `crates/bunwasm-runtime/src/js/${name}.ts`), output], { stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(readFileSync(output, "utf8")).toMatch(/Copyright (Node\.js contributors|Joyent)/);
+  }
+});
+
+test("minifying leaves a parenthesized or escaped string that looks like a directive alone", () => {
+  const { exitCode, output } = compact('(function () { ("use strict"); const text = "\\x75se strict"; return [this === globalThis, text]; })\n');
+  expect(exitCode).toBe(0);
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  const [sloppy, text] = (0, eval)(output).call(undefined);
+  expect(sloppy).toBe(true);
+  expect(text).toBe("use strict");
+  expect(output).not.toMatch(/^\(function\(\)\{"use strict"/);
+});
+
+test("minifying accepts comments at the end of a directive and a bare-CR line comment", () => {
+  const { exitCode, output } = compact('// first\r(function () {\n  "use strict" // keep\n  return this;\n})\n');
+  expect(exitCode).toBe(0);
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  expect((0, eval)(output).call(undefined)).toBeUndefined();
 });
 
 test("minifying rejects a module that does not start with its factory", () => {
   expect(compact("const first = 1;\n(function () { return first; })\n").exitCode).not.toBe(0);
   expect(compact("(function () { return 1; })\n;trailing();\n").exitCode).not.toBe(0);
+  expect(compact("(42)\n").exitCode).not.toBe(0);
 });
 
 test("builtin helper prepares runnable globals from the TypeScript factory", async () => {

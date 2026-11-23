@@ -14,12 +14,15 @@ constructs requiring runtime generation, such as enums and parameter properties.
 
 Second, Bun's transpiler (`--minify-whitespace`) removes whitespace and comments from
 every module, `.js` ones included, except `intl.js` and `tz_data.js`. That step changes
-no syntax and no names: identifiers, function names, messages and `toString()` output
-keep their source spelling, and bare expressions stay. Bun drops `"use strict"`
-directives, so the script swaps their text for a placeholder and back. A `/*!` license
-comment stays. A module that does not start with its factory expression, or whose
-reprinted output would not be smaller, is rejected or kept as it was. The generated
-`bun_wrap`, `direct_stream` and `dev_html_client` modules go through the same step.
+no names: identifiers, function names and messages keep their source spelling. Bun
+reprints the code, so `Function.prototype.toString()` returns the reprinted text (string
+escapes may be normalized) and a bare no-op expression statement is dropped. Bun also
+drops `"use strict"` directives, so the script swaps each directive statement for a
+random marker and back. Leading comments that mention a copyright, license or permission
+stay, as do `/*!` comments. A module that does not start with a factory expression that
+evaluates to a function is rejected; one whose reprinted output would not be smaller is
+kept as it was. The generated `bun_wrap`, `direct_stream` and `dev_html_client` modules
+go through the same step.
 
 A `.js` and `.ts` file with the same stem is a build error. `BUNWASM_JS_OVERRIDE_DIR`
 replaces sources by filename, including their extension; overrides take the same two

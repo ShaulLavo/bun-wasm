@@ -15,7 +15,7 @@ const builder = join(scratch, "embed");
 function runBuild(override?: string, directory = manifest, destination = out) {
   return commands.run(builder, [], {
     phase: "embed", timeout: 4_000,
-    env: { ...process.env, CARGO_MANIFEST_DIR: directory, OUT_DIR: destination, BUNWASM_JS_OVERRIDE_DIR: override ?? "" },
+    env: { ...process.env, CARGO_MANIFEST_DIR: directory, OUT_DIR: destination, BUNWASM_JS_OVERRIDE_DIR: override ?? "", BUNWASM_JS_PRESERVE_POSITIONS: "" },
   });
 }
 
