@@ -229,6 +229,18 @@ test("minifying accepts a trailing notice after a factory that holds comment-lik
   expect(output).toBe('(function(){return"/*"})\n/*! Notice */\n');
 });
 
+test("minifying keeps the lookups Bun would otherwise bake in at build time", () => {
+  const { exitCode, output } = compact("(function () { return [process.env.NODE_ENV, process.browser, process.env.BUN_ENV]; })\n");
+  expect(exitCode).toBe(0);
+  for (const name of ["process.env.NODE_ENV", "process.browser", "process.env.BUN_ENV"]) expect(output).toContain(name);
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  const seen = (0, eval)(`(function (process) { return ${output.trim()}.call(undefined); })`)({ env: { NODE_ENV: "guest", BUN_ENV: "bun" }, browser: "guest-browser" });
+  expect(seen).toEqual(["guest", "guest-browser", "bun"]);
+  // `typeof require` would become "function", so the build refuses it.
+  expect(compact('(function () { return typeof require; })\n').exitCode).not.toBe(0);
+  expect(compact('(function () { return "typeof require"; })\n').exitCode).toBe(0);
+});
+
 test("minifying parses the factory but never runs it, and refuses what is not a function", () => {
   const { exitCode, output } = compact("(function () { return guestOnlyGlobal.make(); })\n");
   expect(exitCode).toBe(0);
@@ -291,6 +303,10 @@ test("minifying keeps every directive prologue of every runtime module, as a rea
     const after = readFileSync(join(source, `all-${name}.js`), "utf8");
     const expected = directivePrologues(before);
     expect(directivePrologues(after), name).toEqual(expected);
+    // Bun substitutes some environment lookups while printing; the guest must still read them when it runs.
+    for (const lookup of ["process.env.NODE_ENV", "process.browser", "process.env.BUN_ENV", "__dirname", "__filename"]) {
+      expect(after.split(lookup).length, `${name} ${lookup}`).toBeGreaterThanOrEqual(before.split(lookup).length);
+    }
     directives += expected.flat().length;
   }
   expect(directives).toBeGreaterThan(100);
@@ -314,7 +330,9 @@ test("no sloppy runtime module declares a function inside a nested block, where 
     const nested: string[] = [];
     const visit = (node: ts.Node) => {
       const parent = node.parent;
-      const inBlock = ts.isFunctionDeclaration(node) && parent && ts.isBlock(parent) && !ts.isFunctionLike(parent.parent);
+      // A declaration is at function or script level, or it sits in a nested block, a switch clause or an unbraced `if`.
+      const topLevel = parent && (ts.isSourceFile(parent) || (ts.isBlock(parent) && ts.isFunctionLike(parent.parent)));
+      const inBlock = ts.isFunctionDeclaration(node) && !topLevel;
       if (inBlock && !inStrictCode(node)) nested.push(node.name?.text ?? "default");
       ts.forEachChild(node, visit);
     };
