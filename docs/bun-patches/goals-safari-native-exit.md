@@ -51,12 +51,7 @@ The optional native wrapper also registers a synchronous local snapshot reader
 with the existing exit owner. `native.ts` reads the existing `native-safari.ts`
 launch shape. These original host additions copy no upstream code or ABI. First-invalid,
 wrapper-signal cancellation, and before/after bounded teardown settlement record
-the already retained driver child PID, exit code and signal. Desktop Safari starts
-through LaunchServices and has no child handle, so its entry records the launch
-attribution instead: its state (`requested`, `ended` with its outcome, `lost`,
-`refused` or `owned`), and for the last two the request time and the PID with its
-kernel birth, as microsecond strings. The retained instance handle is not part of
-the snapshot.
+the already retained driver and application child PID, exit code and signal.
 Available cached driver root and application start identities are copied into
 each record. The driver spawn bound is rounded to seconds; cached process start
 times are distinct from the WebContent kernel birth. No process lookup, native observer, browser request or log query is
