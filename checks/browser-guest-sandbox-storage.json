@@ -87,6 +87,7 @@
     "sandbox/src/workspace-storage.ts",
     "sandbox/tests/storage-browser.ts",
     "sandbox/build.ts",
+    "scripts/app-output.ts",
     "sandbox/template-files.ts",
     "sandbox/index.html",
     "sandbox/package.json",

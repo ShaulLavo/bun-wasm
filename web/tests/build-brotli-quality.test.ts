@@ -32,7 +32,11 @@ test("app builds write to BUN_WASM_APP_OUT only when it names a directory", () =
   expect(appOutput(app, {})).toBe(join(app, "dist"));
   for (const blank of ["", " ", "\t\n"]) expect(appOutput(app, { BUN_WASM_APP_OUT: blank })).toBe(join(app, "dist"));
   expect(appOutput(app, { BUN_WASM_APP_OUT: "/work/tmp/bun-wasm-app-out" })).toBe("/work/tmp/bun-wasm-app-out");
-  expect(appOutput(app, { BUN_WASM_APP_OUT: " relative/out " })).toBe(resolve("relative/out"));
+  expect(appOutput(app, { BUN_WASM_APP_OUT: "relative/out" })).toBe(resolve("relative/out"));
+  // A named path is never trimmed: "output " is not its sibling "output", which the build would remove.
+  expect(appOutput(app, { BUN_WASM_APP_OUT: "/work/tmp/output " })).toBe("/work/tmp/output ");
+  expect(appOutput(app, { BUN_WASM_APP_OUT: " relative/out " })).toBe(resolve(" relative/out "));
+  expect(appOutput(app, { BUN_WASM_APP_OUT: " relative/out " })).not.toBe(resolve("relative/out"));
 });
 
 test.each(["web/build.ts", "sandbox/build.ts"])("%s takes its output directory from appOutput before removing anything", async path => {
