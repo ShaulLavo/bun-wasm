@@ -335,12 +335,14 @@ function inStrictCode(node: ts.Node): boolean {
   return false;
 }
 
-/** `node` without the wrappers that erasure or the printer drops: parentheses, `as`, `satisfies`, `!` and `<T>` casts. */
+const isWrapper = (node: ts.Expression): node is ts.Expression & { expression: ts.Expression } =>
+  ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isNonNullExpression(node)
+  || ts.isTypeAssertionExpression(node) || ts.isExpressionWithTypeArguments(node);
+
+/** `node` without the wrappers that erasure or the printer drops: parentheses, `as`, `satisfies`, `!`, `<T>` casts and `f<T>` instantiations. */
 function unwrapped(node: ts.Expression): ts.Expression {
   let current = node;
-  while (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isSatisfiesExpression(current) || ts.isNonNullExpression(current) || ts.isTypeAssertionExpression(current)) {
-    current = current.expression;
-  }
+  while (isWrapper(current)) current = current.expression;
   return current;
 }
 
@@ -388,9 +390,13 @@ test("the `__proto__: __proto__` finder sees every spelling that Bun reprints as
     expect(protoSelfAssignments(`const o = ${wrapped};`, "js"), wrapped).toBe(1);
     expect(compact(`(function (__proto__) { return ${wrapped}; })\n`).output, wrapped).toMatch(/[{,]__proto__\}/);
   }
-  for (const wrapped of ["{ __proto__: __proto__ as object }", "{ __proto__: __proto__ satisfies object }", "{ __proto__: __proto__! }", "{ __proto__: <object>__proto__ }"]) {
+  for (const wrapped of ["{ __proto__: __proto__ as object }", "{ __proto__: __proto__ satisfies object }", "{ __proto__: __proto__! }", "{ __proto__: <object>__proto__ }", "{ __proto__: __proto__<string> }"]) {
     expect(protoSelfAssignments(`const o = ${wrapped};`, "ts"), wrapped).toBe(1);
   }
+  // Through the real pipeline: type erasure leaves a bare `__proto__`, and the reprint collapses it.
+  const typed = join(source, "proto-typed.ts");
+  writeFileSync(typed, "(function (__proto__: <T>() => T) { return { __proto__: __proto__<string> }; })\n");
+  expect(compact(emit(typed)).output).toMatch(/[{,]__proto__\}/);
   expect(protoSelfAssignments("const o = other < { __proto__: __proto__ } > (0);", "js")).toBe(1);
   for (const harmless of ["{ __proto__: null }", "{ __proto__: base }", "{ ['__proto__']: __proto__ }", "{ other: __proto__ }"]) {
     expect(protoSelfAssignments(`const o = ${harmless};`, "js"), harmless).toBe(0);
