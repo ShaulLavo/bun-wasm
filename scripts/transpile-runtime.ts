@@ -41,18 +41,28 @@ function skipFiller(text: string, from: number): { end: number; notices: string 
 
 const regexAfterWord = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
 const regexAfterPunctuation = "(,=:[!&|?{};+-*%<>~^";
-const continuesStatement = "([.+-*/%<>=!&|^?,:`";
+// A line break before one of these does not end a statement. `!`, `~`, `++` and `--` cannot continue an
+// expression, so a string followed by them on the next line is a whole statement.
+const continuesStatement = "([.+-*/%<>=&|^?,:`";
 
 /**
  * Finds the string statements of `text` that can be directives, as [start, end) ranges, and where its
  * last token ends. It tracks strings, templates, comments and regular expressions, so a quote or `/*` in
  * one of them is never read as code. A string is a directive candidate when it is a whole statement:
  * it follows `{`, `;` or `}` and is followed by `;`, `}`, the end, or a line break that does not
- * continue the expression. `("use strict")` and `x = "use strict"` are not.
+ * continue the expression. `x = "use strict"` is not. A parenthesized string statement is refused: Bun
+ * would print it as a bare string and could turn it into a directive.
+ * This is a lexer for the runtime's own modules, not a full parser; `tests` compare its result with
+ * a real parser for every module.
  */
 function scanDirectives(text: string, from: number): { ranges: [number, number][]; codeEnd: number } {
   const ranges: [number, number][] = [];
-  let pos = from, codeEnd = from, previous = "";
+  let pos = from, codeEnd = from, previous = "", before = "";
+  const set = (token: string) => {
+    before = previous;
+    previous = token;
+  };
+  const boundary = (token: string) => token === "{" || token === ";" || token === "}";
   const trivia = (): boolean => {
     let newline = false;
     for (;;) {
@@ -103,14 +113,19 @@ function scanDirectives(text: string, from: number): { ranges: [number, number][
   };
   // A string token; records it when it is a whole statement, which makes it a directive candidate.
   const stringToken = (quote: string, start: number) => {
-    const statement = previous === "{" || previous === ";" || previous === "}";
+    const statement = boundary(previous);
+    const parenthesized = previous === "(" && (before === "" || boundary(before));
     string(quote);
     const end = pos;
-    if (!statement) return;
     const newline = trivia(), next = text[pos];
     pos = end;
-    const terminated = next === undefined || next === ";" || next === "}" || (newline && !continuesStatement.includes(next));
+    if (parenthesized && next === ")") throw new Error(`Parenthesized string statement at offset ${start} is not supported`);
+    // After a line break `++` and `--` start the next statement instead of continuing this one.
+    const prefixOperator = (next === "+" || next === "-") && text[pos + 1] === next;
+    const terminated = statement && (next === undefined || next === ";" || next === "}" || (newline && (prefixOperator || !continuesStatement.includes(next))));
     if (terminated) ranges.push([start, end]);
+    // A string that is a whole statement ends it, so the next string can be a statement too.
+    set(terminated ? ";" : "string");
   };
   const code = (inTemplate: boolean) => {
     let braces = 0;
@@ -121,31 +136,35 @@ function scanDirectives(text: string, from: number): { ranges: [number, number][
       const start = pos;
       if (char === '"' || char === "'") {
         stringToken(char, start);
-        previous = "string";
         codeEnd = pos;
       } else if (char === "`") {
         template();
-        previous = "template";
+        set("template");
         codeEnd = pos;
       } else if (char === "/") {
-        if (previous === "" || regexAfterWord.has(previous) || (previous.length === 1 && regexAfterPunctuation.includes(previous))) {
+        const keyword = regexAfterWord.has(previous) && before !== ".";
+        if (previous === "" || keyword || (previous.length === 1 && regexAfterPunctuation.includes(previous))) {
           regex();
-          previous = "regex";
+          set("regex");
         } else {
           pos++;
-          previous = "/";
+          set("/");
         }
         codeEnd = pos;
       } else if (/[\w$]/.test(char) || char.charCodeAt(0) > 0x7f) {
         while (pos < text.length && (/[\w$]/.test(text[pos]!) || text.charCodeAt(pos) > 0x7f)) pos++;
-        previous = text.slice(start, pos);
+        set(text.slice(start, pos));
         codeEnd = pos;
       } else {
         pos++;
         if (char === "}" && inTemplate && braces === 0) return;
         if (char === "{") braces++;
         if (char === "}") braces--;
-        previous = char;
+        // `++` and `--` end an operand (`n++ / 2`), so a `/` after them is a division.
+        if ((char === "+" || char === "-") && text[pos] === char) {
+          pos++;
+          set(char + char);
+        } else set(char);
         if (char !== ";") codeEnd = pos;
       }
     }
@@ -180,8 +199,11 @@ function minify(input: string): string {
   const output = transpiler.transformSync(`globalThis.factory = ${factory}`);
   if (!output.startsWith(prefix) || !output.endsWith(";")) throw new Error("Unexpected compact runtime output");
   const body = output.slice(prefix.length, -1).replaceAll(marker, directive);
-  // The loader calls the result, so it must be a function or arrow expression; it is parsed here, never run.
-  if (!/^(async\b|function\b|\(|[\w$]+\s*=>)/.test(body)) throw new Error("Runtime module must be a function expression");
+  // The loader calls the result, so it must be one function or arrow expression with a block body, not
+  // a call of one; it is parsed here, never run.
+  if (!/^(async\b|function\b|\([^()]*\)\s*=>|[\w$]+\s*=>)/.test(body) || !body.endsWith("}")) {
+    throw new Error("Runtime module must be a function expression with a block body");
+  }
   new Function(`return (${body}\n)`);
   const text = `${leading.notices}(${body})\n${trailing.notices}`;
   // Already-compact vendored bundles can grow when reprinted.

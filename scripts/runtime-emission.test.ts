@@ -1,7 +1,8 @@
 import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import ts from "typescript-api";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -185,14 +186,16 @@ test("minifying keeps the notices of the shipped modules that carry them", () =>
   }
 });
 
-test("minifying leaves a parenthesized or escaped string that looks like a directive alone", () => {
-  const { exitCode, output } = compact('(function () { ("use strict"); const text = "\\x75se strict"; return [this === globalThis, text]; })\n');
+test("minifying leaves an escaped string that looks like a directive alone and refuses a parenthesized one", () => {
+  const { exitCode, output } = compact('(function () { const text = "\\x75se strict"; return [this === globalThis, text]; })\n');
   expect(exitCode).toBe(0);
   // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
   const [sloppy, text] = (0, eval)(output).call(undefined);
   expect(sloppy).toBe(true);
   expect(text).toBe("use strict");
-  expect(output).not.toMatch(/^\(function\(\)\{"use strict"/);
+  // Bun prints a parenthesized string statement bare, which can make it a directive.
+  expect(compact('(function () { ("other"); "use strict"; return this; })\n').exitCode).not.toBe(0);
+  expect(compact('(function () { ("use strict"); return this; })\n').exitCode).not.toBe(0);
 });
 
 test("minifying finds directives exactly: comments, line breaks, templates and parentheses", () => {
@@ -203,8 +206,11 @@ test("minifying finds directives exactly: comments, line breaks, templates and p
     [`"use strict"\rreturn this;`, undefined],
     [`"use strict"${lineSeparator}return this;`, undefined],
     ["'use strict'\nreturn this;", undefined],
-    ['("use strict"); return this === globalThis;', true],
-    ['(/* before */ "use strict" /* after */); return this === globalThis;', true],
+    ['"use strict"\n!0; return this;', undefined],
+    ['"use strict"\n++n; var n = 0; return this;', undefined],
+    ['"custom"\n"use strict"\nreturn this;', undefined],
+    ['let n = 1; n++ / 2; return this === globalThis && ({ return: 4 }).return / 2 === 2;', true],
+    ['return typeof "use strict" === "string" ? this === globalThis : false;', true],
     ['return `a ${"x"} \'use strict\'; b`;', "a x 'use strict'; b"],
     ['const re = /"use strict"[\'/]/; return [re.test(\'"use strict"/\'), "/*"];', [true, "/*"]],
     ['"use strict"; return (function () { return this; })();', undefined],
@@ -223,10 +229,13 @@ test("minifying accepts a trailing notice after a factory that holds comment-lik
   expect(output).toBe('(function(){return"/*"})\n/*! Notice */\n');
 });
 
-test("minifying parses the factory but never runs it", () => {
-  const { exitCode, output } = compact("(function () { return guestOnlyGlobal.make(); })()\n");
+test("minifying parses the factory but never runs it, and refuses what is not a function", () => {
+  const { exitCode, output } = compact("(function () { return guestOnlyGlobal.make(); })\n");
   expect(exitCode).toBe(0);
   expect(output).toContain("guestOnlyGlobal");
+  // A call of a function is not a factory, and neither is a value.
+  expect(compact("(function () { return 7; })()\n").exitCode).not.toBe(0);
+  expect(compact("((1 + 2) * 3)\n").exitCode).not.toBe(0);
 });
 
 test("minifying runs side by side in one output directory", async () => {
@@ -243,6 +252,75 @@ test("minifying accepts comments at the end of a directive and a bare-CR line co
   expect(exitCode).toBe(0);
   // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
   expect((0, eval)(output).call(undefined)).toBeUndefined();
+});
+
+/** Every directive prologue in `code`, in source order, one entry per function body or block that has one. */
+function directivePrologues(code: string): string[][] {
+  const file = ts.createSourceFile("module.js", code, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const found: string[][] = [];
+  const visit = (node: ts.Node) => {
+    const statements = ts.isSourceFile(node) || ts.isBlock(node) ? node.statements : undefined;
+    if (statements) {
+      const directives = [];
+      for (const statement of statements) {
+        if (!ts.isExpressionStatement(statement) || !ts.isStringLiteral(statement.expression) || statement.expression.parent !== statement) break;
+        directives.push(statement.expression.text);
+      }
+      if (directives.length > 0) found.push(directives);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
+test("minifying keeps every directive prologue of every runtime module, as a real parser sees them", () => {
+  const sources = readdirSync(join(root, "crates/bunwasm-runtime/src/js"))
+    .filter(name => /\.(js|ts)$/.test(name) && !name.endsWith(".d.ts") && !/^(intl|tz_data)\./.test(name));
+  expect(sources.length).toBeGreaterThan(150);
+  const pairs = sources.flatMap(name => [join(root, "crates/bunwasm-runtime/src/js", name), join(source, `all-${name}.js`)]);
+  const result = Bun.spawnSync(["bun", join(root, "scripts/transpile-runtime.ts"), "--batch", ...pairs, "--minify-whitespace"], { stdout: "pipe", stderr: "pipe" });
+  expect(result.exitCode, result.stderr.toString().slice(-2000)).toBe(0);
+  let directives = 0;
+  for (const name of sources) {
+    const original = join(source, `erased-${name}.js`);
+    const erased = name.endsWith(".ts")
+      ? Bun.spawnSync(["node", join(root, "scripts/transpile-runtime.ts"), join(root, "crates/bunwasm-runtime/src/js", name), original], { stdout: "pipe", stderr: "pipe" })
+      : undefined;
+    const before = erased ? readFileSync(original, "utf8") : readFileSync(join(root, "crates/bunwasm-runtime/src/js", name), "utf8");
+    const after = readFileSync(join(source, `all-${name}.js`), "utf8");
+    const expected = directivePrologues(before);
+    expect(directivePrologues(after), name).toEqual(expected);
+    directives += expected.flat().length;
+  }
+  expect(directives).toBeGreaterThan(100);
+});
+
+/** Whether `node` sits in code that a "use strict" directive of an enclosing function or the script makes strict. */
+function inStrictCode(node: ts.Node): boolean {
+  for (let scope: ts.Node | undefined = node.parent; scope; scope = scope.parent) {
+    const body = ts.isFunctionLike(scope) ? (scope as ts.FunctionLikeDeclaration).body : ts.isSourceFile(scope) ? scope : undefined;
+    const statements = body && (ts.isBlock(body) || ts.isSourceFile(body)) ? body.statements : [];
+    const first = statements[0];
+    if (first && ts.isExpressionStatement(first) && ts.isStringLiteral(first.expression) && first.expression.text === "use strict") return true;
+  }
+  return false;
+}
+
+test("no sloppy runtime module declares a function inside a nested block, where Bun's reprint scopes it differently", () => {
+  const directory = join(root, "crates/bunwasm-runtime/src/js");
+  for (const name of readdirSync(directory).filter(entry => /\.(js|ts)$/.test(entry) && !entry.endsWith(".d.ts") && !/^(intl|tz_data)\./.test(entry))) {
+    const file = ts.createSourceFile(name, readFileSync(join(directory, name), "utf8"), ts.ScriptTarget.Latest, true, name.endsWith(".ts") ? ts.ScriptKind.TS : ts.ScriptKind.JS);
+    const nested: string[] = [];
+    const visit = (node: ts.Node) => {
+      const parent = node.parent;
+      const inBlock = ts.isFunctionDeclaration(node) && parent && ts.isBlock(parent) && !ts.isFunctionLike(parent.parent);
+      if (inBlock && !inStrictCode(node)) nested.push(node.name?.text ?? "default");
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    expect(nested, name).toEqual([]);
+  }
 });
 
 test("minifying rejects a module that does not start with its factory", () => {

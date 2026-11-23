@@ -19,9 +19,9 @@ reprints the code, so `Function.prototype.toString()` returns the reprinted text
 escapes may be normalized) and a bare no-op expression statement is dropped. Bun also
 drops `"use strict"` directives, so the script swaps each directive statement for a
 random marker and back. Leading comments that mention a copyright, license or permission
-stay, as do `/*!` comments. A module that does not start with a factory expression that
-evaluates to a function is rejected; one whose reprinted output would not be smaller is
-kept as it was. The generated `bun_wrap`, `direct_stream` and `dev_html_client` modules
+stay, as do `/*!` comments. The build rejects a module that is not one function or arrow
+expression with a block body, and a parenthesized string statement (Bun would print it
+bare). A module whose reprinted output would not be smaller is kept as it was. The generated `bun_wrap`, `direct_stream` and `dev_html_client` modules
 go through the same step.
 
 A `.js` and `.ts` file with the same stem is a build error. `BUNWASM_JS_OVERRIDE_DIR`

@@ -17,9 +17,13 @@ The same script then minifies every embedded runtime module except `intl.js` and
 with the host `Bun.Transpiler` (`minifyWhitespace` only: no syntax or identifier minification).
 This is an original adapter around that API; no Bun source is copied or changed. It keeps the
 `"use strict"` directives Bun would drop and every leading comment that carries a copyright,
-license or permission notice, and it fails the build if a module does not start with a factory
-expression that evaluates to a function. Existing `.js` sources are minified too, so they are no
-longer embedded byte for byte.
+license or permission notice. It finds directives with a small lexer for our own modules, not a full
+parser, and refuses a parenthesized string statement. It fails the build if a module does not start
+with one function or arrow expression that has a block body (the expression is parsed, never run).
+`scripts/runtime-emission.test.ts` compares every module's directive prologues before and after
+minifying with TypeScript's parser, and checks that no sloppy module declares a function in a nested
+block, since Bun's reprint scopes those differently. Existing `.js` sources are minified too, so they
+are no longer embedded byte for byte.
 It removes about 722 KB raw, 140 KB gzip and 100 KB brotli from each guest.
 Shipped stack frames therefore carry positions in the compacted code; `BUNWASM_JS_PRESERVE_POSITIONS=1`
 builds the position-preserving form.
