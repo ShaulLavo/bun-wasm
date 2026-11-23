@@ -749,6 +749,9 @@
         "internal/freelist": internal.require("bun_builtins").require("internal:freelist"),
         "internal/fixed_queue": internal.require("bun_builtins").require("internal:fixed_queue").FixedQueue,
       },
+      get jscInternals() {
+        return internal.require("jsc_internals");
+      },
     }),
     "node:test": () => internal.require("node_test"),
     "bun:test": () => internal.require("bun_test").exports,

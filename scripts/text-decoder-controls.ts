@@ -16,6 +16,7 @@ export function runtimeTextDecoder(codec?: DecoderCodec) {
     loadPolyfill(name: string): unknown {
       if (name === "web") return evaluate(readFileSync(process.env.BUN_WASM_TEXT_DECODER_WEB_SOURCE ?? resolve(directory, "web.js"), "utf8"));
       if (name === "text_decoder") return evaluate(readFileSync(resolve(directory, "text_decoder.ts"), "utf8"));
+      if (name === "buffer_source") return evaluate(readFileSync(resolve(directory, "buffer_source.ts"), "utf8"));
       if (name === "url_errors" || name === "url_pairs" || name === "object_urls") return evaluate(readFileSync(resolve(directory, `${name}.ts`), "utf8"));
       if (name === "web_brand") return () => () => {};
       if (name === "streams") return () => ({ ReadableStream });
