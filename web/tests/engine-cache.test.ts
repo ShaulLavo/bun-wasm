@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { loadEngineProgram, loadWasm } from "../src/engine-loader";
+import { WasmMissing, loadEngineProgram, loadWasm } from "../src/engine-loader";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const build = new Bun.CryptoHasher("sha256").update(wasm).digest("hex");
@@ -145,7 +145,15 @@ const lostMarkerCases = [
   { name: "verified tools", asset: "bun-tools.wasm", load: () => loadWasm("bun-tools.wasm", () => {}) },
 ] as const;
 
-for (const { name, asset, load } of lostMarkerCases) test(`${name}: a marker that cannot be written still leaves the cached bytes for an offline load`, async () => {
+/** How the network fails on the last load: before any headers, or after them, mid-body. */
+const failures = {
+  headers: async (): Promise<Response> => { throw new TypeError("Failed to fetch"); },
+  body: async () => new Response(new ReadableStream({ start(controller) { controller.error(new TypeError("network error")); } })),
+};
+
+const failureCases = lostMarkerCases.flatMap(entry => (["headers", "body"] as const).map(failure => ({ ...entry, failure })));
+
+for (const { name, asset, load, failure } of failureCases) test(`${name}: a marker that cannot be written still leaves the cached bytes when the network fails at the ${failure}`, async () => {
   const key = `https://engine-cache.test/app/${asset}`;
   const cache = memoryCaches();
   const marks = new Map<string, string>([[`bunwasm-engine-cache:${key}`, "0".repeat(64)]]);
@@ -162,7 +170,7 @@ for (const { name, asset, load } of lostMarkerCases) test(`${name}: a marker tha
     caches: cache.caches,
     fetch: async () => {
       fetched++;
-      if (!online) throw new TypeError("Failed to fetch");
+      if (!online) return failures[failure]();
       return new Response(Bun.gzipSync(wasm));
     },
     __bunwasmBuilds: { [asset]: build },
@@ -181,6 +189,26 @@ for (const { name, asset, load } of lostMarkerCases) test(`${name}: a marker tha
     expect(offline.build).toBe(build);
     expect(cache.lookups).toEqual([key]);
     expect(fetched).toBe(3);
+  } finally {
+    restoreGlobals();
+  }
+});
+
+for (const { name, asset, load } of lostMarkerCases) test(`${name}: a missing asset is reported as missing even with cached bytes`, async () => {
+  const key = `https://engine-cache.test/app/${asset}`;
+  const cache = memoryCaches();
+  cache.entries.set(key, { headers: new Headers({ "x-bunwasm-build": build, "content-type": "application/wasm" }), bytes: wasm });
+  const restoreGlobals = pageGlobals({
+    location: new URL("https://engine-cache.test/app/"),
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    caches: cache.caches,
+    fetch: async () => new Response(null, { status: 404 }),
+    __bunwasmBuilds: { [asset]: build },
+  });
+  try {
+    const outcome = await load().then(() => () => {}, (error: unknown) => () => { throw error; });
+    expect(outcome).toThrow(WasmMissing);
+    expect(cache.lookups).toEqual([]);
   } finally {
     restoreGlobals();
   }

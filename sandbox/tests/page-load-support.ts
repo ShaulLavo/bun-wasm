@@ -36,29 +36,56 @@ export function requireUniqueNames(names: readonly string[]): void {
   if (repeated !== undefined) throw new Error(`Variant ${repeated || "(unnamed)"} is named twice; each needs its own name`);
 }
 
+interface Tracked { readonly child: ChildProcess; readonly ended: Promise<void>; done: boolean }
+
 /** Children tracked from the moment they spawn, so teardown reaches one whose start failed. */
 export class ChildGroup {
-  private readonly children = new Set<ChildProcess>();
+  private readonly children = new Set<Tracked>();
 
   spawn(command: string, args: readonly string[], options: SpawnOptions): ChildProcess {
     const child = spawn(command, args, options);
-    this.children.add(child);
+    // A child that never starts (ENOENT) emits error and close but no exit; any of them ends it.
+    const ended = new Promise<void>(resolveEnded => {
+      for (const event of ["exit", "close", "error"] as const) child.once(event, () => resolveEnded());
+    });
+    const tracked: Tracked = { child, ended, done: false };
+    void ended.then(() => { tracked.done = true; });
+    this.children.add(tracked);
     return child;
   }
 
   stop(graceMs = 10_000): Promise<void> {
-    return Promise.all(Array.from(this.children, child => stopChild(child, graceMs))).then(() => {});
+    return Promise.all(Array.from(this.children, tracked => stopChild(tracked, graceMs))).then(() => {});
   }
 }
 
-/** Stops a child and waits for it to exit; one that ignores SIGTERM past `graceMs` is killed. */
-async function stopChild(child: ChildProcess, graceMs: number): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise<void>(resolveExit => child.once("exit", () => resolveExit()));
+/** Stops a child and waits for it to end; one that ignores SIGTERM past `graceMs` is killed. */
+async function stopChild({ child, ended, done }: Tracked, graceMs: number): Promise<void> {
+  if (done || child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
   const timer = setTimeout(() => child.kill("SIGKILL"), graceMs);
-  await exited;
+  await ended;
   clearTimeout(timer);
+}
+
+/** Browser contexts tracked from the launch call, so an interrupted launch is closed too. */
+export class ContextGroup<Context extends { close(): Promise<void> }> {
+  private readonly contexts = new Set<Promise<Context>>();
+
+  async open<T>(launch: () => Promise<Context>, use: (context: Context) => Promise<T>): Promise<T> {
+    const launching = launch();
+    this.contexts.add(launching);
+    try {
+      return await use(await launching);
+    } finally {
+      this.contexts.delete(launching);
+      await launching.then(context => context.close(), () => {});
+    }
+  }
+
+  close(): Promise<void> {
+    return Promise.all(Array.from(this.contexts, launching => launching.then(context => context.close(), () => {}))).then(() => {});
+  }
 }
 
 /** Runs `cleanup` once on SIGINT, SIGTERM or SIGHUP, then exits with the signal's status. */

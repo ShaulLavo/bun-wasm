@@ -88,22 +88,34 @@ export async function loadWasm(url: string, progress: (text: string) => void, as
   measureStartup("cache-lookup", lookup, { name, hit: cached !== null });
   const restored = cached && build ? await loadCachedWasm(url, key, cached, build, progress) : null;
   if (restored) return restored;
+  let streamed: Awaited<ReturnType<typeof streamWasm>>;
+  try {
+    streamed = await streamWasm(url, build, progress);
+  } catch (error) {
+    // A failure anywhere in the download, headers or body, can still be served from build-checked
+    // bytes a first-visit marker skipped. A missing asset stays missing.
+    const stored = build && !(error instanceof WasmMissing) ? await cachedEngine(key, build, true) : null;
+    const fallback = stored && build ? await loadCachedWasm(url, key, stored, build, progress) : null;
+    if (fallback) return fallback;
+    throw error;
+  }
+  const { module, bytes } = streamed;
+  const kind = programKind(module);
+  if (kind !== "single") return loadProgramSide(url, kind, { bytes, build: null }, progress, false);
+  recordProgramMemory(module, bytes);
+  if (build) setTimeout(() => void cacheIfExpected(key, build, bytes), 0);
+  return { module, size: bytes.length, build };
+}
+
+/** Downloads and stream-compiles a module, keeping its bytes. */
+async function streamWasm(url: string, build: string | null, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; bytes: Uint8Array<ArrayBuffer> }> {
   let size = 0;
   progress("downloading bun.wasm…");
   const started = performance.now();
   const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
   // The build hash in the query gives every build its own URL, so a CDN edge that still holds the
   // previous build right after a deploy can't serve it in place of this one.
-  let fetched: Awaited<ReturnType<typeof fetchArtifact>>;
-  try {
-    fetched = await fetchArtifact(build ? `${gzUrl}?v=${build}` : gzUrl, url, url);
-  } catch (error) {
-    const stored = build ? await cachedEngine(key, build, true) : null;
-    const fallback = stored && build ? await loadCachedWasm(url, key, stored, build, progress) : null;
-    if (fallback) return fallback;
-    throw error;
-  }
-  const { response: res, gzipped } = fetched;
+  const { response: res, body: downloaded, gzipped } = await fetchArtifact(build ? `${gzUrl}?v=${build}` : gzUrl, url, url);
   const total = Number(res.headers.get("content-length")) || 0;
   let received = 0;
   let lastProgress = 0;
@@ -121,8 +133,7 @@ export async function loadWasm(url: string, progress: (text: string) => void, as
       progress("decompressing and compiling bun.wasm…");
     },
   });
-  if (!res.body) throw new Error(`${url}: empty response body`);
-  let body = res.body.pipeThrough(counter);
+  let body = downloaded.pipeThrough(counter);
   const decompressing = performance.now();
   if (gzipped) body = body.pipeThrough(new DecompressionStream("gzip"));
   const chunks: Uint8Array<ArrayBuffer>[] = [];
@@ -143,7 +154,6 @@ export async function loadWasm(url: string, progress: (text: string) => void, as
   // Streaming completion includes download and decompression waits. No direct compile span is available.
   const module = await WebAssembly.compileStreaming(response);
   measureStartup("compile", compiling, { streaming: true });
-  const kind = programKind(module);
   const bytes = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) {
@@ -151,22 +161,18 @@ export async function loadWasm(url: string, progress: (text: string) => void, as
     offset += chunk.byteLength;
   }
   chunks.length = 0;
-  if (kind !== "single") return loadProgramSide(url, kind, { bytes, build: null }, progress, false);
-  recordProgramMemory(module, bytes);
-  const engine = { module, size };
-  if (build) setTimeout(() => void cacheIfExpected(key, build, bytes), 0);
-  return { ...engine, build };
+  return { module, bytes };
 }
 
 /** The compressed artifact when the host has it, else the raw file. Throws WasmMissing on 404. */
-async function fetchArtifact(compressed: string, raw: string, label: string): Promise<{ response: Response; gzipped: boolean }> {
+async function fetchArtifact(compressed: string, raw: string, label: string): Promise<{ response: Response; body: ReadableStream<Uint8Array<ArrayBuffer>>; gzipped: boolean }> {
   let response = await fetch(compressed);
   const gzipped = response.ok;
   if (!gzipped) response = await fetch(raw);
   if (response.status === 404) throw new WasmMissing(`${label}: HTTP 404`);
   if (!response.ok) throw new Error(`${label}: HTTP ${response.status}`);
   if (!response.body) throw new Error(`${label}: empty response body`);
-  return { response, gzipped };
+  return { response, body: response.body, gzipped };
 }
 
 /** Compiles a build-checked cache entry; null (and evicted) when its bytes do not compile. */
@@ -246,18 +252,17 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
   const compressed = new URL(requested);
   if (!compressed.pathname.endsWith(".gz")) compressed.pathname += ".gz";
   if (build !== null) compressed.searchParams.set("v", build);
-  let fetched: Awaited<ReturnType<typeof fetchArtifact>>;
+  let downloaded: Awaited<ReturnType<typeof downloadBytes>>;
   try {
-    fetched = await fetchArtifact(compressed.href, requested.href, url);
+    downloaded = await downloadBytes(compressed.href, requested.href, url);
   } catch (error) {
-    const stored = build === null ? null : await cachedEngine(key, build, true);
+    // Headers or body failed: build-checked cached bytes still serve. A missing asset stays missing,
+    // and verification below stays outside, so an integrity mismatch is never masked.
+    const stored = build === null || error instanceof WasmMissing ? null : await cachedEngine(key, build, true);
     if (stored && build !== null) return readVerifiedCache(key, name, stored, build, progress);
     throw error;
   }
-  const { response, gzipped } = fetched;
-  if (!response.body) throw new Error(`${url}: empty response body`);
-  const body = gzipped ? response.body.pipeThrough(new DecompressionStream("gzip")) : response.body;
-  const bytes = new Uint8Array(await new Response(body).arrayBuffer());
+  const { bytes, gzipped } = downloaded;
   measureStartup("download", downloading, { name, bytes: bytes.length, gzipped });
   const verifying = performance.now();
   if (build !== null) await verifyArtifact(name, bytes, build);
@@ -270,6 +275,13 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
     });
   }
   return { bytes, build };
+}
+
+/** The whole artifact, decompressed when the host served the gzip twin. */
+async function downloadBytes(compressed: string, raw: string, label: string): Promise<{ bytes: Uint8Array<ArrayBuffer>; gzipped: boolean }> {
+  const { body, gzipped } = await fetchArtifact(compressed, raw, label);
+  const decoded = gzipped ? body.pipeThrough(new DecompressionStream("gzip")) : body;
+  return { bytes: new Uint8Array(await new Response(decoded).arrayBuffer()), gzipped };
 }
 
 /** Cached bytes count only after the same digest check as a download; a mismatch is evicted. */

@@ -1,52 +1,11 @@
+// Process cleanup for sandbox/tests/page-load-profile.ts. Its page observer needs a browser and
+// is checked in scripts/page-load-observer-browser.test.ts.
 import { expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium } from "playwright";
-import { ChildGroup, installPageLoadObserver, requireUniqueNames, type PageLoadState } from "../../sandbox/tests/page-load-support";
-
-declare const __pageLoad: { state(app: string): PageLoadState };
-
-const pages: Record<string, string> = {
-  // A playground from before the stage marks: only #status says when it is ready.
-  "/unmarked": `<span id="status" data-kind="">loading…</span><script>setTimeout(() => {
-    const status = document.querySelector("#status"); status.textContent = "bun.wasm ready · Browser"; status.dataset.kind = "ok";
-  }, 30)</script>`,
-  "/marked": `<span id="status" data-kind="">loading…</span><script>setTimeout(() => {
-    performance.mark("bunwasm:status", { detail: "bun.wasm ready · Browser" });
-    globalThis.markedAt = performance.getEntriesByName("bunwasm:status")[0].startTime;
-  }, 30)</script>`,
-  "/failed": `<span id="status" data-kind="">loading…</span><script>setTimeout(() => {
-    const status = document.querySelector("#status"); status.textContent = "could not load bun.wasm"; status.dataset.kind = "error";
-  }, 30)</script>`,
-};
-
-test("page readiness comes from the page's marks, or from #status on builds without them", async () => {
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => new Response(pages[new URL(request.url).pathname] ?? "", { headers: { "content-type": "text/html" } }) });
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const context = await browser.newContext();
-    await context.addInitScript(installPageLoadObserver);
-    const page = await context.newPage();
-    const state = async (path: string) => {
-      await page.goto(`${server.url.origin}${path}`);
-      await page.waitForFunction(() => __pageLoad.state("web").ready !== null || __pageLoad.state("web").error !== null, undefined, { timeout: 10_000 });
-      return page.evaluate(() => ({ ...__pageLoad.state("web"), markedAt: Reflect.get(globalThis, "markedAt") as number | undefined }));
-    };
-    const unmarked = await state("/unmarked");
-    expect(unmarked.ready).toBeGreaterThan(0);
-    expect(unmarked.error).toBeNull();
-    const marked = await state("/marked");
-    expect(marked.ready).toBe(marked.markedAt!);
-    const failed = await state("/failed");
-    expect(failed.ready).toBeNull();
-    expect(failed.error).toBe("could not load bun.wasm");
-  } finally {
-    await browser.close();
-    await server.stop(true);
-  }
-}, 60_000);
+import { ChildGroup, ContextGroup, requireUniqueNames } from "../../sandbox/tests/page-load-support";
 
 test("variants with the same name are refused before anything starts", () => {
   expect(() => requireUniqueNames(["before", "after"])).not.toThrow();
@@ -59,6 +18,27 @@ test("a server that ignores SIGTERM is killed and its exit awaited", async () =>
   await new Promise<void>(resolveUp => child.stdout!.once("data", () => resolveUp()));
   await group.stop(200);
   expect(child.signalCode).toBe("SIGKILL");
+});
+
+test("a server that never spawns does not hold up teardown", async () => {
+  const group = new ChildGroup();
+  const child = group.spawn(join(tmpdir(), "bun-wasm-page-load-missing-server"), [], { stdio: "ignore" });
+  const failed = new Promise<Error>(resolveError => child.once("error", resolveError));
+  expect((await failed).message).toContain("ENOENT");
+  const stopped = await Promise.race([group.stop(200).then(() => true), Bun.sleep(5000).then(() => false)]);
+  expect(stopped).toBe(true);
+});
+
+test("teardown closes a browser context that is still launching", async () => {
+  const group = new ContextGroup<{ close(): Promise<void> }>();
+  const launch = Promise.withResolvers<{ close(): Promise<void> }>();
+  let closed = 0;
+  const visit = group.open(() => launch.promise, async () => "visited");
+  const teardown = group.close();
+  launch.resolve({ close: async () => { closed++; } });
+  await teardown;
+  expect(await visit).toBe("visited");
+  expect(closed).toBeGreaterThan(0);
 });
 
 test("interrupting the profiler stops the servers it started", async () => {

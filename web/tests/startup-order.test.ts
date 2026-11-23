@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { deferred, filesystemFixture, method, models, turn } from "./ui-model-helpers";
 import { InputGate } from "../src/playground/playground";
 import { ENGINE_BIN } from "../../src/executable-paths";
+import { PACKAGE_CONTINUATION } from "../../src/package-continuation-binding.ts";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -168,11 +169,83 @@ test("input typed during startup is dropped when another tab takes the workspace
   for (const listener of listeners) listener("bun run index.ts\r");
   page.fixture.fs.ownershipLost = true;
   page.fixture.fs.onOwnershipLost?.();
+  // Disposed while the engine is still downloading, not when Bun registration settles.
+  await until(() => disposed === 1);
   engine.resolve(engineModule());
   await started;
   expect(delivered).toEqual([]);
   expect(playground.ready).toBe(false);
   expect(disposed).toBe(1);
+});
+
+test("a shell that finishes starting after a takeover is disposed without waiting for the engine", async () => {
+  const engine = deferred<ReturnType<typeof engineModule>>();
+  const page = await models(undefined, undefined, () => engine.promise);
+  cleanups.push(page.cleanup);
+  const starting = deferred<void>();
+  let disposed = 0;
+  const create = page.boundary.BrowserSession.create;
+  Object.assign(page.boundary.BrowserSession, {
+    create: async (options: Parameters<typeof create>[0]) => {
+      const shell = await create(options);
+      await starting.promise;
+      return { ...shell, dispose: async () => { disposed++; } };
+    },
+  });
+  const playground = new page.Playground("");
+  method<() => void>(playground, "terminalOpened")();
+  const started = playground.start();
+  await until(() => page.sessionCreates.length === 1);
+  page.fixture.fs.ownershipLost = true;
+  page.fixture.fs.onOwnershipLost?.();
+  starting.resolve();
+  await until(() => disposed === 1);
+  engine.resolve(engineModule());
+  await started;
+  expect(disposed).toBe(1);
+  expect(playground.failure).toBe("ownership");
+});
+
+test("after the shell fails, late download progress and the engine change nothing", async () => {
+  const engine = deferred<ReturnType<typeof engineModule>>();
+  let progress: ((text: string) => void) | undefined;
+  const page = await models(undefined, undefined, report => { progress = report; return engine.promise; });
+  cleanups.push(page.cleanup);
+  Object.assign(page.boundary.BrowserSession, { create: async () => { throw new Error("shell worker failed"); } });
+  const playground = new page.Playground("");
+  method<() => void>(playground, "terminalOpened")();
+  await playground.start();
+  progress?.("downloading bun.wasm… 1.0 MB");
+  expect(playground.status).toEqual({ text: "Error: shell worker failed", kind: "error" });
+  engine.resolve(engineModule());
+  for (let turns = 0; turns < 20; turns++) await turn();
+  expect(page.fixture.files.has(PACKAGE_CONTINUATION)).toBe(false);
+  expect(playground.status.kind).toBe("error");
+});
+
+test("input the shell rejects during replay is reported and startup still finishes", async () => {
+  const engine = deferred<ReturnType<typeof engineModule>>();
+  const page = await models(undefined, undefined, () => engine.promise);
+  cleanups.push(page.cleanup);
+  const delivered: string[] = [];
+  const create = page.boundary.BrowserSession.create;
+  Object.assign(page.boundary.BrowserSession, {
+    create: async (options: Parameters<typeof create>[0]) => ({ ...await create(options), input: (data: string) => {
+      if (data.length > 1000) throw new RangeError("input chunk is too large");
+      delivered.push(data);
+    } }),
+  });
+  const playground = new page.Playground("");
+  method<() => void>(playground, "terminalOpened")();
+  const started = playground.start();
+  await until(() => page.sessionCreates.length === 1);
+  const listeners = (playground.term as unknown as { dataListeners: ((data: string) => void)[] }).dataListeners;
+  for (const listener of listeners) listener("x".repeat(2000));
+  for (const listener of listeners) listener("ls\r");
+  engine.resolve(engineModule());
+  await started;
+  expect(playground.ready).toBe(true);
+  expect(delivered).toEqual(["ls\r"]);
 });
 
 test("typed input waits for the gate and keeps its order", () => {

@@ -14,7 +14,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium, firefox, type BrowserContext, type BrowserType, type Page } from "playwright";
-import { ChildGroup, installPageLoadObserver, onInterrupt, requireUniqueNames, type PageLoadState } from "./page-load-support";
+import { ChildGroup, ContextGroup, installPageLoadObserver, onInterrupt, requireUniqueNames, type PageLoadState } from "./page-load-support";
 
 const args = process.argv.slice(2);
 const option = (name: string, fallback: string) => args.includes(`--${name}`) ? args[args.indexOf(`--${name}`) + 1]! : fallback;
@@ -57,13 +57,13 @@ function parseVariant(text: string): Variant {
 await mkdir(out, { recursive: true });
 const servers = new Map<string, string>();
 const children = new ChildGroup();
-let activeContext: BrowserContext | undefined;
+const contexts = new ContextGroup<BrowserContext>();
 // Browser profiles stay off /work: its VDO volume makes Firefox's IndexedDB and CacheStorage
 // fsyncs 50-100x slower than an ordinary SSD (a cold indexedDB.open takes 9 s instead of 90 ms).
 const profiles = await mkdtemp(join(option("profiles", tmpdir()), "bun-wasm-page-load-"));
 let teardown: Promise<void> | undefined;
 const cleanup = () => teardown ??= (async () => {
-  await activeContext?.close().catch(() => {});
+  await contexts.close();
   await children.stop();
   await rm(profiles, { recursive: true, force: true });
 })();
@@ -91,6 +91,7 @@ async function serve(root: string): Promise<string> {
   const url = await new Promise<string>((resolveUrl, reject) => {
     let output = "";
     child.once("exit", code => reject(new Error(`serve.ts exited ${code}`)));
+    child.once("error", reject);
     child.stdout!.on("data", (chunk: Buffer) => {
       output += chunk.toString();
       const match = / at (http:\/\/\S+?)\/? \(/.exec(output);
@@ -110,18 +111,20 @@ async function profile(browser: string, target: Target, variant: Variant, attemp
   try {
     for (const visit of ["cold", "warm"]) {
       const run = `${variant.name ? `${variant.name}-` : ""}${browser}-${target.app}-${target.engine}-${visit}-${attempt}`;
-      const context = activeContext = await type.launchPersistentContext(directory, { headless: true, viewport: { width: 1440, height: 900 } });
-      try {
-        results.push(await load(context, run, target, servers.get(`${variant.name}:${target.app}`)!));
-      } finally {
-        activeContext = undefined;
-        await context.close();
-      }
+      results.push(await visitOnce(type, directory, run, target, servers.get(`${variant.name}:${target.app}`)!));
     }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
   return results;
+}
+
+/** One browser launch on the profile: a fresh one is cold, a reused one warm. */
+async function visitOnce(type: BrowserType, directory: string, run: string, target: Target, base: string): Promise<Visit> {
+  return contexts.open(
+    () => type.launchPersistentContext(directory, { headless: true, viewport: { width: 1440, height: 900 } }),
+    context => load(context, run, target, base),
+  );
 }
 
 async function load(context: BrowserContext, run: string, target: Target, base: string): Promise<Visit> {

@@ -60,6 +60,12 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   private runPending = false;
   private message: Status = { text: "", kind: "" };
   private disposePreviewLinks?: () => void;
+  private startupFailed = false;
+
+  /** Startup failed or another tab took the workspace: no late branch may publish or register. */
+  private get abandoned(): boolean {
+    return this.startupFailed || this.fs?.ownershipLost === true;
+  }
 
   constructor(search: string) {
     super();
@@ -95,6 +101,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     try {
       await this.boot();
     } catch (error) {
+      this.startupFailed = true;
       console.error(error);
       this.unreadable = this.fast && !this.fs?.ownershipLost && unreadableWorkspace(error, this.fs?.state);
       this.message = this.unreadable
@@ -212,9 +219,17 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     };
     // Typing waits for Bun's registration; a tab that loses the workspace drops it for good.
     const input = new InputGate();
+    // A shell started during an abandoned startup is disposed as soon as it exists, once.
+    let startedShell: BrowserSession | undefined;
+    let retiring: Promise<void> | undefined;
+    const retireShell = () => {
+      if (startedShell) retiring ??= startedShell.dispose().catch(() => {});
+      return retiring;
+    };
     fs.onOwnershipLost = () => {
       this.failure = "ownership";
       input.close();
+      if (!this.ready) void retireShell();
       this.changed();
     };
     // Network work that reads no workspace runs while the workspace storage opens.
@@ -277,7 +292,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
         file: true,
         logger: (message: string, error?: unknown) => console.warn(`[prompt] ${message}`, error ?? ""),
       });
-      const shell = this.shell = await BrowserSession.create({
+      const shell = await BrowserSession.create({
         runtime, cwd: HOME,
         env: { ...engineEnv, HOME, USER: "user", PATH: `${ENGINE_BIN[this.engine]}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
         cols: term.cols, rows: term.rows,
@@ -289,6 +304,10 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
         onState: (state, detail) => this.shellChanged(state, detail),
       });
       stage("shell-created");
+      startedShell = shell;
+      // Ownership may be gone, or the other branch failed, while it started: no engine wait.
+      if (this.abandoned) void retireShell();
+      else this.shell = shell;
       term.onResize(({ cols, rows }) => shell.resize(cols, rows));
       return shell;
     })();
@@ -301,18 +320,24 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       // Both branches are observed from here, so whichever fails first ends startup at once.
       [shell, { registration, size }] = await Promise.all([shellReady, registering]);
     } catch (error) {
-      void shellReady.then(started => started.dispose()).catch(() => {});
+      this.startupFailed = true;
+      void retireShell();
       void registering.then(registered => registered.registration.dispose()).catch(() => {});
+      // A takeover is reported as such, not as the startup failure it caused.
+      if (fs.ownershipLost) return;
       throw error;
     }
     if (fs.ownershipLost) {
       // Another tab took the workspace during startup: nothing here may run against it.
       this.shell = undefined;
       registration.dispose();
-      await shell.dispose();
+      await retireShell();
       return;
     }
-    input.open(data => shell.input(data));
+    // Replayed and live input share one path: a rejected chunk is reported, never fatal.
+    input.open(data => {
+      try { shell.input(data); } catch (error) { this.report(error); }
+    });
     addEventListener("pagehide", (event: PageTransitionEvent) => {
       if (event.persisted) return;
       void shell.dispose().finally(registration.dispose).catch(console.error);
@@ -328,6 +353,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   private async registerBun(runtime: Runtime, network: BunNetworkOptions, moduleScope: Promise<boolean>, wasmReady: ReturnType<Playground["loadEngine"]>) {
     const [scoped, wasm] = await Promise.all([moduleScope, wasmReady]);
     if (wasm instanceof Error) throw wasm;
+    if (this.abandoned) throw new Error("Playground startup was abandoned before Bun registration");
     const loadTools = createToolsLoader();
     const registration = await registerPlaygroundBun({ runtime, engine: this.engine, module: wasm.module, profile: this.profile,
       loadModule: (provider, profile) => loadEngineProgram(provider, profile, () => {}).then(loaded => loaded.module),
@@ -357,7 +383,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const unavailable = engineUnavailable(this.engine, this.profile);
     if (unavailable) return new Error(unavailable);
     try {
-      return await loadEngineProgram(this.engine, this.profile, (text) => this.setStatus(text), this.params.get("wasm") ?? undefined);
+      // Late download progress must not replace the error of a startup that already failed.
+      return await loadEngineProgram(this.engine, this.profile, (text) => { if (!this.abandoned) this.setStatus(text); }, this.params.get("wasm") ?? undefined);
     } catch (err) {
       return new Error(err instanceof WasmMissing
         ? `${String(err)}. ${engineBuildHint(this.engine)}`

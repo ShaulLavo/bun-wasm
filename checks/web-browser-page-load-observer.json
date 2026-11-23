@@ -1,0 +1,5 @@
+{
+  "owner": "web-browser",
+  "path": "scripts/page-load-observer-browser.test.ts",
+  "batch": "10-interface"
+}
