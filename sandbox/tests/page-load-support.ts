@@ -101,11 +101,13 @@ export function installStorageReadCounter(): number {
   };
   const subtle = crypto.subtle;
   const digest = subtle.digest.bind(subtle);
-  const sha256 = (algorithm: AlgorithmIdentifier) => (typeof algorithm === "string" ? algorithm : algorithm.name).toUpperCase() === "SHA-256";
+  const sha256 = (algorithm: AlgorithmIdentifier) => String(typeof algorithm === "string" ? algorithm : algorithm?.name).toUpperCase() === "SHA-256";
   subtle.digest = async (algorithm, data) => {
+    // Classified at the call, as digest() reads it: the caller may reuse and change the object.
+    const counted = sha256(algorithm);
     const start = now();
     const result = await digest(algorithm, data);
-    if (sha256(algorithm)) reads.push({ kind: "sha256", start, end: now(), bytes: data.byteLength });
+    if (counted) reads.push({ kind: "sha256", start, end: now(), bytes: data.byteLength });
     return result;
   };
   return installedAt;
@@ -117,6 +119,7 @@ export interface WorkerCoverage {
   status: "observed" | "unavailable";
   /** Epoch ms the worker was reported and its counter installed; reads before `installedAt` are missed. */
   createdAt: number;
+  /** Present whenever the counter was installed, also when its reads could not be read back. */
   installedAt?: number;
   /** Why an unavailable worker's reads are missing: closed, blocked, or a failed evaluation. */
   reason?: string;
@@ -141,7 +144,7 @@ export class StorageReadObserver {
 
   watch(worker: Worker): void {
     const entry: WatchedWorker = { worker, createdAt: Date.now(), installed: Promise.resolve(new Error("not installed")), closed: false };
-    entry.installed = worker.evaluate(installStorageReadCounter).catch((error: unknown) => error instanceof Error ? error : new Error(String(error)));
+    entry.installed = worker.evaluate(installStorageReadCounter).catch(asError);
     worker.on("close", () => { entry.closed = true; });
     this.watched.push(entry);
   }
@@ -153,34 +156,47 @@ export class StorageReadObserver {
   }
 }
 
-async function collectWorker(entry: WatchedWorker, waitMs: number): Promise<{ reads: StorageRead[]; coverage: WorkerCoverage }> {
+type Collected = { reads: StorageRead[]; coverage: WorkerCoverage };
+const firstLine = (error: Error) => error.message.split("\n")[0];
+const asError = (error: unknown) => error instanceof Error ? error : new Error(String(error));
+
+async function collectWorker(entry: WatchedWorker, waitMs: number): Promise<Collected> {
   const base = { url: entry.worker.url(), createdAt: entry.createdAt };
-  const unavailable = (reason: string) => ({ reads: [], coverage: { ...base, status: "unavailable" as const, reason, reads: 0 } });
-  if (entry.closed) return unavailable("closed before collection");
+  if (entry.closed) return unavailable(base, "closed before collection");
   const timeout = new Promise<"blocked">(resolve => setTimeout(resolve, waitMs, "blocked"));
   const installed = await Promise.race([entry.installed, timeout]);
-  if (installed === "blocked") return unavailable(`counter not installed within ${waitMs} ms`);
-  if (installed instanceof Error) return unavailable(`counter not installed: ${installed.message.split("\n")[0]}`);
-  const reads = await Promise.race([
-    entry.worker.evaluate(() => (globalThis as { __storageReads?: StorageRead[] }).__storageReads ?? []).catch((error: unknown) => error instanceof Error ? error : new Error(String(error))),
-    timeout,
-  ]);
-  if (reads === "blocked") return unavailable(`reads not collected within ${waitMs} ms`);
-  if (reads instanceof Error) return unavailable(entry.closed ? "closed before collection" : `reads not collected: ${reads.message.split("\n")[0]}`);
-  return { reads, coverage: { ...base, status: "observed", installedAt: installed, reads: reads.length } };
+  if (installed === "blocked") return unavailable(base, `counter not installed within ${waitMs} ms`);
+  if (installed instanceof Error) return unavailable(base, `counter not installed: ${firstLine(installed)}`);
+  // From here the counter is known to be installed, so every outcome keeps its timestamp.
+  const covered = { ...base, installedAt: installed };
+  const reads = await Promise.race([readBack(entry.worker), timeout]);
+  if (reads === "blocked") return unavailable(covered, `reads not collected within ${waitMs} ms`);
+  if (reads instanceof Error) return unavailable(covered, entry.closed ? "closed before collection" : `reads not collected: ${firstLine(reads)}`);
+  if (!Array.isArray(reads)) return unavailable(covered, "counter buffer missing");
+  return { reads, coverage: { ...covered, status: "observed", reads: reads.length } };
+}
+
+/** The worker's read buffer as it is: a missing buffer is not an empty one. */
+function readBack(worker: Worker): Promise<StorageRead[] | null | Error> {
+  return worker.evaluate(() => (globalThis as { __storageReads?: StorageRead[] }).__storageReads ?? null).catch(asError);
+}
+
+function unavailable(base: Omit<WorkerCoverage, "status" | "reads" | "reason">, reason: string): Collected {
+  return { reads: [], coverage: { ...base, status: "unavailable", reason, reads: 0 } };
 }
 
 /** IndexedDB reads and SHA-256 digests that started between the previous stage and this one. */
 export interface StoragePhase { phase: string; until: number; reads: number; bytes: number; readMs: number; digests: number; digestMs: number; files: Record<number, number> }
 
 /**
- * Buckets reads by the boot stage each one started in, on the page's clock. Readiness bounds the
- * last startup phase, also for builds without stage marks; work after it is `after-ready`. A
- * visit that never became ready leaves `after-last-stage` instead.
+ * Buckets reads by the boot stage each one started in, on the page's clock. Readiness ends
+ * startup, also for builds without stage marks: everything after it, including stages marked
+ * later, is `after-ready`. A visit that never became ready leaves `after-last-stage` instead.
  */
 export function storagePhases(entries: readonly { name: string; end: number }[], ready: number | null, origin: number, reads: readonly StorageRead[]): StoragePhase[] {
   const stages = entries.filter(entry => entry.name.startsWith("bunwasm:stage:") || entry.name === "bunwasm:dev-server" || entry.name === "bunwasm:preview")
     .map(entry => ({ phase: entry.name.replace(/^bunwasm:(stage:)?/, ""), until: entry.end }))
+    .filter(stage => ready === null || stage.until <= ready)
     .sort((a, b) => a.until - b.until);
   const last = stages.at(-1)?.until ?? Number.NEGATIVE_INFINITY;
   const bounded = ready !== null && ready > last ? stages.concat([{ phase: "ready", until: ready }]) : stages;

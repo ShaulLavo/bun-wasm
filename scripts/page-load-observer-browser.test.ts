@@ -68,39 +68,58 @@ test("page readiness comes from the page's marks, or from #status on builds with
 
 declare const __storageReads: StorageRead[];
 
-/** Stores a Waffle-shaped chunk manifest and chunk, then reads and digests them once. */
+/**
+ * A page script: stores a Waffle-shaped chunk manifest and chunk, reads them, walks them with a
+ * cursor and digests with several algorithms, then returns what the counter recorded.
+ */
+async function exerciseStorage(): Promise<StorageRead[]> {
+  const settled = (request: IDBRequest | IDBTransaction) => new Promise<void>((resolve, reject) => {
+    if (request instanceof IDBTransaction) request.oncomplete = () => resolve();
+    else request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+  const name = `bun-wasm-read-counter-${crypto.randomUUID()}`;
+  const opened = indexedDB.open(name, 1);
+  opened.onupgradeneeded = () => opened.result.createObjectStore("data");
+  await settled(opened);
+  const database = opened.result;
+  const write = database.transaction("data", "readwrite");
+  write.objectStore("data").put({ version: 2, size: 5, chunkSize: 65536, count: 1 }, "file");
+  write.objectStore("data").put({ bytes: new Uint8Array(5), checksum: new Uint8Array(32) }, ["file", 0]);
+  await settled(write);
+  const read = database.transaction("data");
+  read.objectStore("data").get("file");
+  read.objectStore("data").get(["file", 0]);
+  await settled(read);
+  // Two rows: one entry each, and none for the cursor's final empty result.
+  const walk = database.transaction("data");
+  const cursor = walk.objectStore("data").openCursor();
+  cursor.onsuccess = () => cursor.result?.continue();
+  await settled(walk);
+  await crypto.subtle.digest("SHA-256", new Uint8Array(5));
+  await crypto.subtle.digest({ name: "sha-256" }, new Uint8Array(6));
+  await crypto.subtle.digest("SHA-1", new Uint8Array(7));
+  // A reused algorithm object changed after the call: digest() already used the original name.
+  const reused = { name: "SHA-1" };
+  const sha1 = crypto.subtle.digest(reused, new Uint8Array(8));
+  reused.name = "SHA-256";
+  await sha1;
+  const changed = { name: "SHA-256" };
+  const sha256 = crypto.subtle.digest(changed, new Uint8Array(9));
+  changed.name = "SHA-1";
+  await sha256;
+  database.close();
+  indexedDB.deleteDatabase(name);
+  return __storageReads;
+}
+
 async function storageReads(browser: Browser): Promise<StorageRead[]> {
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
     await page.goto(`${server.url.origin}/marked`);
     await page.evaluate(installStorageReadCounter);
-    return await page.evaluate(async () => {
-      const name = `bun-wasm-read-counter-${crypto.randomUUID()}`;
-      const opened = indexedDB.open(name, 1);
-      opened.onupgradeneeded = () => opened.result.createObjectStore("data");
-      const database = await new Promise<IDBDatabase>((resolve, reject) => { opened.onsuccess = () => resolve(opened.result); opened.onerror = () => reject(opened.error); });
-      const settled = (transaction: IDBTransaction) => new Promise<void>((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error); });
-      const write = database.transaction("data", "readwrite");
-      write.objectStore("data").put({ version: 2, size: 5, chunkSize: 65536, count: 1 }, "file");
-      write.objectStore("data").put({ bytes: new Uint8Array(5), checksum: new Uint8Array(32) }, ["file", 0]);
-      await settled(write);
-      const read = database.transaction("data");
-      read.objectStore("data").get("file");
-      read.objectStore("data").get(["file", 0]);
-      await settled(read);
-      // Two rows: one entry each, and none for the cursor's final empty result.
-      const walk = database.transaction("data");
-      const cursor = walk.objectStore("data").openCursor();
-      cursor.onsuccess = () => cursor.result?.continue();
-      await settled(walk);
-      await crypto.subtle.digest("SHA-256", new Uint8Array(5));
-      await crypto.subtle.digest({ name: "sha-256" }, new Uint8Array(6));
-      await crypto.subtle.digest("SHA-1", new Uint8Array(7));
-      database.close();
-      indexedDB.deleteDatabase(name);
-      return __storageReads;
-    });
+    return await page.evaluate(exerciseStorage);
   } finally {
     await context.close();
   }
@@ -117,6 +136,7 @@ test("the storage read counter names each chunk manifest's file size, each chunk
       { kind: "cursor", bytes: 37, file: undefined, chunk: undefined },
       { kind: "sha256", bytes: 5, file: undefined, chunk: undefined },
       { kind: "sha256", bytes: 6, file: undefined, chunk: undefined },
+      { kind: "sha256", bytes: 9, file: undefined, chunk: undefined },
     ]);
     for (const read of reads) expect(read.end).toBeGreaterThanOrEqual(read.start);
     // The second row's time starts at its continue() call, after the first row arrived.
@@ -156,6 +176,14 @@ async function startWorkers(page: Page): Promise<number> {
   });
 }
 
+/** A page script: asks the counted worker for one more digest and waits until it is done. */
+function digestOnce(): Promise<void> {
+  const counted = Reflect.get(globalThis, "counted") as Worker;
+  const done = new Promise<void>(resolve => { counted.onmessage = () => resolve(); });
+  counted.postMessage("digest");
+  return done;
+}
+
 async function checkWorkerCoverage(browser: Browser): Promise<void> {
   const context = await browser.newContext();
   try {
@@ -167,11 +195,7 @@ async function checkWorkerCoverage(browser: Browser): Promise<void> {
     // The counter lands after the worker started. Collecting waits for it; then digest again.
     const first = await observer.collect(5_000);
     expect(first.workers.find(worker => worker.url.endsWith("/counted.js"))?.status).toBe("observed");
-    await page.evaluate(() => new Promise<void>(resolve => {
-      const counted = Reflect.get(globalThis, "counted") as Worker;
-      counted.onmessage = () => resolve();
-      counted.postMessage("digest");
-    }));
+    await page.evaluate(digestOnce);
     const { reads, workers } = await observer.collect(500);
     const byName = Object.fromEntries(workers.map(worker => [worker.url.split("/").pop(), worker]));
     expect(Object.keys(byName).toSorted()).toEqual(["closing.js", "counted.js"]);
