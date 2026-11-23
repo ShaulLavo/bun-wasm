@@ -43,7 +43,7 @@ test("shared compose passes its explicit profile to original side capture and pr
       const receipt = await writeGuestBuildReceipt(selected, path, inputs);
       expect(receipt.profile).toBe("shared-group");
       expect(() => verifyGuestBuildReceipt(core, receipt)).not.toThrow();
-      await expect(verifyGuestCompanions(receipt, join(options.repository, "dist"))).resolves.toBeUndefined();
+      expect(await verifyGuestCompanions(receipt, join(options.repository, "dist"))).toEqual(new Uint8Array(side));
       expect(await readFile(`${sidePath}.engine.json`, "utf8")).toBe(original);
       expect(() => verifyGuestBuildReceipt(core, { ...receipt, profile: undefined })).toThrow(/profile/);
       await expect(prepareGuestBuildInputs(selected)).rejects.toThrow(/profile differs/);
