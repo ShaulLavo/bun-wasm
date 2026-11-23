@@ -433,9 +433,14 @@ test("recursive readdir error paths and Dirent parentPath match Bun for sync and
   expect(syncErr?.path).toBe(walk);
   expect(syncErr?.syscall).toBe("scandir");
 
+  // The loop is reachable through `sub` and through its `alias` symlink, so the
+  // async error may name either. Native Bun walks on worker threads and reports
+  // whichever error a worker records first; the guest walks entries in the
+  // order the filesystem lists them. Both paths are correct.
+  const loops = [path.join(walk, "sub", "loop"), path.join(walk, "alias", "loop")];
   const cbErr = await new Promise<NodeJS.ErrnoException | null>(resolve => fs.readdir(walk, { recursive: true }, resolve));
   expect(cbErr?.code).toBe("ELOOP");
-  expect(cbErr?.path).toBe(path.join(walk, "sub", "loop"));
+  expect(loops).toContain(cbErr?.path ?? "");
   expect(cbErr?.syscall).toBe("open");
 
   let promErr: NodeJS.ErrnoException | undefined;
@@ -445,7 +450,7 @@ test("recursive readdir error paths and Dirent parentPath match Bun for sync and
     promErr = err as NodeJS.ErrnoException;
   }
   expect(promErr?.code).toBe("ELOOP");
-  expect(promErr?.path).toBe(path.join(walk, "sub", "loop"));
+  expect(loops).toContain(promErr?.path ?? "");
   expect(promErr?.syscall).toBe("open");
 });
 
