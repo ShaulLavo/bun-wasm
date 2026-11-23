@@ -1,6 +1,6 @@
 import { BUN_MEMORY_GROUP_POLICY, type Engine } from "../../src/engine-kind.ts";
 
-const iphoneGroupPages: Readonly<Record<Engine, number>> = { quickjs: 20480, jsc: 20480, spidermonkey: 20480, browser: 32768 };
+const iphoneGroupPages: Readonly<Record<Engine, number>> = { quickjs: 20480, jsc: 24576, spidermonkey: 24576, browser: 32768 };
 
 export function memoryGroupPolicy(engine: Engine, userAgent: string) {
   if (!/\biPhone\b/.test(userAgent)) return BUN_MEMORY_GROUP_POLICY;
