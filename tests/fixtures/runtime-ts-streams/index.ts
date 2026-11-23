@@ -60,6 +60,16 @@ assert.equal(await text(decoder(), [new DataView(bytes.buffer, 1, 4)]), "A");
 assert.equal(await text(decoder("utf-8", { ignoreBOM: true }), [bytes.subarray(1, 5)]), "\ufeffA");
 assert.equal(await text(decoder(), [new Uint8Array([0xf0, 0x9f]), new Uint8Array([0x98, 0x80])]), "😀");
 assert.equal(await text(decoder(), [new Uint8Array([0xc3])]), "�");
+const shadowed = Uint8Array.of(65);
+Object.defineProperty(shadowed, "byteLength", { value: 0 });
+assert.equal(
+  await text(decoder(), [shadowed]),
+  process.env.BUNWASM_TEST_HOST === "node" ? "" : "A",
+);
+const detachedAb = new ArrayBuffer(4);
+const detachedDv = new DataView(detachedAb);
+detachedAb.transfer();
+assert.equal(await text(decoder(), [detachedDv]), "");
 console.log("views, BOM, split bytes and flush");
 
 const encoder = new TextEncoderStream();
@@ -107,6 +117,8 @@ async function writeFailure(stream: TextDecoderStream | TextEncoderStream, chunk
 assert.deepEqual(await writeFailure(new TextEncoderStream(), { toString() { throw sentinel; } }), [sentinel, sentinel, sentinel]);
 const failure = await writeFailure(decoder("utf-8", { fatal: true }), new Uint8Array([0xff]));
 assert.ok(failure[0] instanceof TypeError);
+assert.equal((failure[0] as TypeError & { code?: string }).code, "ERR_ENCODING_INVALID_ENCODED_DATA");
+assert.equal(failure[0].message, "The encoded data was not valid for encoding utf-8");
 assert.equal(failure[0], failure[1]); assert.equal(failure[0], failure[2]);
 console.log("write error identity and unlock");
 
@@ -117,6 +129,8 @@ const fatalClosed = fatalWriter.closed.catch(error => error);
 await fatalWriter.write(new Uint8Array([0xc3]));
 const flushError = await fatalWriter.close().catch(error => error);
 assert.ok(flushError instanceof TypeError);
+assert.equal((flushError as TypeError & { code?: string }).code, "ERR_ENCODING_INVALID_ENCODED_DATA");
+assert.equal(flushError.message, "The encoded data was not valid for encoding utf-8");
 assert.equal(await fatalReading, flushError); assert.equal(await fatalClosed, flushError);
 fatalReader.releaseLock(); fatalWriter.releaseLock();
 console.log("flush error identity");

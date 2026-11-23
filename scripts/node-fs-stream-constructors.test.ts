@@ -15,6 +15,7 @@ const fsSource = hostFs.readFileSync(new URL("node_fs.js", runtimeSource), "utf8
 const streamSource = hostFs.readFileSync(new URL("node_stream_core.js", runtimeSource), "utf8");
 const optionsSource = hostFs.readFileSync(new URL("fs_options.ts", runtimeSource), "utf8");
 const helperSource = hostFs.readFileSync(new URL("fs_stream_constructors.ts", runtimeSource), "utf8");
+const buffersReaddirSource = hostFs.readFileSync(new URL("fs_buffers_readdir.ts", runtimeSource), "utf8");
 type Filesystem = typeof import("node:fs");
 type Streams = typeof import("node:stream");
 
@@ -41,6 +42,7 @@ function productionFilesystem(root: string, options?: { failFsync?: Error; failW
   assert.ok(core && typeof core === "object" && "Stream" in core);
   const optionsFactory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${optionsSource}`));
   const helperFactory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${helperSource}`));
+  const buffersReaddirFactory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${buffersReaddirSource}`), context);
   const factory: unknown = runInNewContext(fsSource, context);
   assert.ok(typeof factory === "function");
   const runtime: unknown = factory({
@@ -80,6 +82,7 @@ function productionFilesystem(root: string, options?: { failFsync?: Error; failW
       if (name === "fs_file_handle") return loadFileHandleModule();
       if (name === "fs_options") return optionsFactory({});
       if (name === "fs_stream_constructors") return helperFactory();
+      if (name === "fs_buffers_readdir") return buffersReaddirFactory();
       return require(name);
     },
     builtin: (name: string) => name === "node:stream" ? core.Stream : require(name),
