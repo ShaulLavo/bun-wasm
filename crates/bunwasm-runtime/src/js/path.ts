@@ -35,34 +35,48 @@
     return path.length > 0 && charCodeAt(path, 0) === SLASH;
   }
 
-  // Whether the last segment of a normalized result is a kept `..`. Ordinary
-  // segments are never `..`, which always pops or is kept here.
-  function endsWithParent(result: string): boolean {
-    const length = result.length;
-    if (length < 2 || charCodeAt(result, length - 1) !== DOT || charCodeAt(result, length - 2) !== DOT) return false;
-    return length === 2 || charCodeAt(result, length - 3) === SLASH;
-  }
+  // Kept segments as [start, end) offsets into the normalized path; a kept `..`
+  // above the root has start -1. A typed array has no inherited index
+  // accessors, and reusing it avoids an allocation per call.
+  let bounds = new Int32Array(64);
 
-  function popSegment(result: string): string {
-    const separator = lastIndexOf(result, "/");
-    return separator === -1 ? "" : slice(result, 0, separator);
+  function isDotSegment(path: string, start: number, length: number): boolean {
+    if (length === 1) return charCodeAt(path, start) === DOT;
+    return length === 2 && charCodeAt(path, start) === DOT && charCodeAt(path, start + 1) === DOT;
   }
 
   // Node's normalizeString: resolves `.` and `..` segments and drops empty ones.
-  // Node walks code units; walking whole segments with native indexOf and
-  // slice gives the same result and runs much faster in interpreters. A `..`
-  // pops the previous segment unless that is itself a kept `..`.
+  // Node walks code units and edits a result string; a stack of segment
+  // offsets gives the same result in linear time with native indexOf, which
+  // interpreters run much faster. A `..` pops the previous segment unless that
+  // is itself a kept `..`.
   function normalizeSegments(path: string, allowAboveRoot: boolean): string {
-    let result = "";
+    // Kept segments are nonempty and separated, so at most length / 2 + 1.
+    if (bounds.length < path.length + 2) bounds = new Int32Array(path.length + 2);
+    let count = 0;
     for (let start = 0; start <= path.length;) {
       const separator = indexOf(path, "/", start);
       const end = separator === -1 ? path.length : separator;
-      const segment = slice(path, start, end);
+      const segmentStart = start;
       start = end + 1;
-      if (segment === "" || segment === ".") continue;
-      if (segment !== "..") result = result.length > 0 ? result + "/" + segment : segment;
-      else if (result.length > 0 && !endsWithParent(result)) result = popSegment(result);
-      else if (allowAboveRoot) result = result.length > 0 ? result + "/.." : "..";
+      if (end === segmentStart) continue;
+      if (!isDotSegment(path, segmentStart, end - segmentStart)) {
+        bounds[2 * count] = segmentStart;
+        bounds[2 * count + 1] = end;
+        count++;
+      } else if (end - segmentStart === 1) {
+        // A `.` segment adds nothing.
+      } else if (count > 0 && bounds[2 * count - 2] !== -1) {
+        count--;
+      } else if (allowAboveRoot) {
+        bounds[2 * count] = -1;
+        count++;
+      }
+    }
+    let result = "";
+    for (let i = 0; i < count; i++) {
+      const segment = bounds[2 * i] === -1 ? ".." : slice(path, bounds[2 * i]!, bounds[2 * i + 1]!);
+      result = i === 0 ? segment : result + "/" + segment;
     }
     return result;
   }
@@ -228,13 +242,14 @@
   // errors. An empty or falsy cwd is skipped.
   type CwdLike = { startsWith(search: string): boolean; slice(start: number): string };
 
-  function cwdIsAbsolute(cwd: unknown): boolean {
-    if (!cwd) return false;
-    return typeof cwd === "string" ? charCodeAt(cwd, 0) === SLASH : (cwd as CwdLike).startsWith("/");
+  // `value` keeps the previous expressions, whose text engines quote in errors.
+  function cwdIsAbsolute(value: unknown): boolean {
+    if (!value) return false;
+    return typeof value === "string" ? charCodeAt(value, 0) === SLASH : (value as CwdLike).startsWith("/");
   }
 
-  function cwdTail(cwd: unknown, absolute: boolean): string {
-    return typeof cwd === "string" ? slice(cwd, absolute ? 1 : 0) : (cwd as CwdLike).slice(absolute ? 1 : 0);
+  function cwdTail(value: unknown, absolute: boolean): string {
+    return typeof value === "string" ? slice(value, absolute ? 1 : 0) : (value as CwdLike).slice(absolute ? 1 : 0);
   }
 
   function posixRelative(from: string, to: string): string {
@@ -365,14 +380,19 @@
     return typeof value === "string" ? value : validateString(value, `paths[${index}]`);
   }
 
+  // The Windows wrappers keep the previous adapter's code exactly, including
+  // what replaced array methods could observe.
   function strings(values: readonly unknown[]): string[] {
-    return values.map(pathArgument);
+    return values.map((value, index) => validateString(value, `paths[${index}]`));
   }
 
   // Windows resolution validates every argument, right to left.
   function resolutionStrings(values: readonly unknown[]): string[] {
     const paths: string[] = [];
-    for (let i = values.length - 1; i >= 0; i--) paths.push(pathArgument(values[i], i));
+    for (let i = values.length - 1; i >= 0; i--) {
+      const value = validateString(values[i], `paths[${i}]`);
+      paths.push(value);
+    }
     paths.reverse();
     return paths;
   }

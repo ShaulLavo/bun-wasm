@@ -43,6 +43,8 @@ function corpus(): string[] {
     "/foo/bar//baz/asdf/quux/..", "../../x/./y/", "/a/b/c/../../../../d", "a/b/../../..", "./", "../",
     "/..", "//..", "///a//b", "foo.", ".foo.", "..foo", "foo..", "file.tar.gz", "/dir/.hidden",
     "日本/é/é.txt", "😀/𐀀.😀", "a\0b.txt", "﻿a/﻿b.﻿c", "a".repeat(5000) + "/b.c",
+    "dir/".repeat(2000) + "x/../".repeat(2000), "../".repeat(500) + "a/".repeat(500) + "../".repeat(700),
+    "/" + "a/b/../".repeat(1000) + "..",
   ]);
 }
 
