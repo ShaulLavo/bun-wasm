@@ -14,6 +14,11 @@ const brotli = brotliCompressSync(wasm);
 const gzip = gzipSync(wasm);
 const rawOnly = Buffer.concat([wasm, Buffer.from([0, 0x80, 0x80, 0x08]), Buffer.alloc(128 * 1024)]);
 const program = "/programs/base/waffle-coreutils/dist/ls.wasm";
+// The bash-web shell guest sits directly under programs/, outside Waffle's base families.
+const shell = Buffer.concat([wasm, Buffer.from([0, 0x80, 0x80, 0x04]), Buffer.alloc(64 * 1024, 7)]);
+const shellBrotli = brotliCompressSync(shell);
+const shellGzip = gzipSync(shell);
+const shellPaths = ["/programs/shell-engine.wasm", "/playground/programs/shell-engine.wasm"];
 let root: string;
 let origin: string;
 let nativeOrigin: string;
@@ -76,6 +81,11 @@ beforeAll(async () => {
   await Bun.write(join(assets, program.replace("ls.wasm", "large.wasm.br")), brotliCompressSync(large));
   await Bun.write(join(assets, "/playground" + program), wasm);
   await Bun.write(join(assets, "/playground" + program + ".br"), brotli);
+  for (const path of shellPaths) {
+    await Bun.write(join(assets, path), shell);
+    await Bun.write(join(assets, path + ".br"), shellBrotli);
+    await Bun.write(join(assets, path + ".gz"), shellGzip);
+  }
   await Bun.write(join(assets, program), wasm);
   await Bun.write(join(assets, program + ".br"), brotli);
   await Bun.write(join(assets, program + ".gz"), gzip);
@@ -183,6 +193,37 @@ test("Worker handles nested playground URLs and queries without changing logical
   expect(response.status).toBe(200);
   expect(response.headers["content-encoding"]).toBe("br");
   expect(response.body).toEqual(brotli);
+});
+
+const shellCases = shellPaths.flatMap(path => ([["br, gzip, identity", "br"], ["gzip, identity", "gzip"], ["identity", undefined]] as const).map(([accept, expected]) => [path, accept, expected] as const));
+
+test.each(shellCases)("Worker sends the precompressed shell guest at %s for %s", async (path, accept, expected) => {
+  const response = await get(path, accept);
+  expect(response.status).toBe(200);
+  expect(response.headers["content-encoding"]).toBe(expected);
+  expect(response.headers["content-type"]).toBe("application/wasm");
+  expect(response.headers["vary"]?.toLowerCase()).toContain("accept-encoding");
+  expect(response.headers["cache-control"]?.includes("no-transform")).toBe(expected !== undefined);
+  expect(response.headers["cross-origin-embedder-policy"]).toBe("require-corp");
+  expect(response.body).toEqual(expected === "br" ? shellBrotli : expected === "gzip" ? shellGzip : shell);
+});
+
+test.each(shellPaths)("Worker keeps HEAD, Range and refusal semantics for the shell guest at %s", async path => {
+  const head = await get(path, "br", { method: "HEAD" });
+  expect(head.status).toBe(200);
+  expect(head.body.length).toBe(0);
+  expect(head.headers["content-encoding"]).toBe("br");
+  if (head.headers["content-length"] !== undefined) expect(head.headers["content-length"]).toBe(String(shellBrotli.length));
+  const range = await get(path, "br", { headers: { range: "bytes=0-3" } });
+  const native = await get(path + ".br", "identity", { origin: nativeOrigin, headers: { range: "bytes=0-3" } });
+  expect(range.status).toBe(native.status);
+  expect(range.headers["content-range"]).toBe(native.headers["content-range"]);
+  expect(range.headers["content-encoding"]).toBe("br");
+  expect(range.body).toEqual(native.body);
+  const refused = await get(path, "br;q=0, gzip;q=0, identity;q=0");
+  expect(refused.status).toBe(406);
+  expect(refused.body.length).toBe(0);
+  expect(refused.headers["vary"]?.toLowerCase()).toContain("accept-encoding");
 });
 
 test.each(["br,gzip", "br;q=0,gzip"])("raw-only programs retain native compression for %s", async accept => {

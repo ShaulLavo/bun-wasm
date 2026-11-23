@@ -20,7 +20,17 @@ Prepare the Browser, QuickJS, JSC and tools guests using the commands in
 any engine side modules. Existing qualified guests can be selected with absolute
 `BUN_BROWSER_WASM`, `BUN_WASM`, `JSC_WASM` and `BUN_TOOLS_WASM` paths. The
 [site preflight](guest-build-receipts.md#site-publication-builds) rejects stale
-embedded runtime files. Run it before the build:
+embedded runtime files.
+
+`site/build.ts` also requires `SHARED_QUICKJS_PROGRAM` and `SHARED_JSC_PROGRAM`, the
+shared-group programs that worker templates use. Build them against a shared-PIC
+sysroot (`bun scripts/build-wasi-sysroot.ts --shared-pic` with `BUN_WASM_SYSROOT`
+pointing at it), then run `bun scripts/build-native-profile.ts shared-group OUT ENGINE`
+once per engine; JSC also needs `JSC_PROFILE=shared-group bash scripts/build-jsc.sh`
+first. Point each variable at the program directory the producer writes: QuickJS
+lands in `OUT/program`, JSC in `OUT/program-jsc`.
+
+Run the preflight before the build:
 
 ```sh
 bun scripts/site-guest-preflight.ts
@@ -50,6 +60,21 @@ Waffle version and picker entries. Open every template with
 `/?template=<id>&engine=browser` and record project opening separately from dev
 server startup and preview rendering. Framework failures do not remove entries
 or block publishing the sandbox.
+
+Then run the iPhone smoke's three cells against the live site in Chrome for Testing:
+
+```sh
+bun scripts/chrome-live-smoke.ts --output=/work/tmp/bun-wasm-chrome-live
+```
+
+It reads `/deployment.json`, writes each cell's log and `result.json`, and exits 0 only
+when startup, install, dev, render, click and cleanup pass in every cell. Hot reload,
+build and preview are recorded but not judged. `--base-url` checks another origin.
+
+Program WASM files under `programs/` (the bash-web shell and env guests and Waffle's
+base programs) ship with `.br` and `.gz` twins. The Worker (`site/worker.ts`) and
+`web/serve.ts` pick one by `Accept-Encoding` and send it with a native
+`Content-Encoding`, so the browser downloads the smaller file at the ordinary URL.
 
 To inspect the current deployment or restore a previous version:
 
