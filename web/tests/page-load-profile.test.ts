@@ -103,6 +103,25 @@ test("a visit's close and teardown share one context.close(), and both see it fa
   expect(calls).toBe(1);
 });
 
+test("a context that fails to close while teardown waits on another is closed once and reported", async () => {
+  const group = new ContextGroup<{ close(): Promise<void> }>();
+  const [usingA, closingA, closingB] = [Promise.withResolvers<void>(), Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+  const failure = new Error("B close failed");
+  let callsB = 0;
+  const visitA = group.open(async () => ({ close: () => closingA.promise }), () => usingA.promise);
+  const visitB = group.open(async () => ({ close: () => { callsB++; return closingB.promise; } }), async () => "visited");
+  await Bun.sleep(1);
+  // Teardown waits on A first; B's visit close fails meanwhile, before teardown reaches B.
+  const teardown = group.closeAll().then(() => [], (error: unknown) => error instanceof AggregateError ? error.errors : [error]);
+  closingB.reject(failure);
+  expect(await outcome(visitB)).toThrow("B close failed");
+  closingA.resolve();
+  usingA.resolve();
+  expect(await teardown).toEqual([failure]);
+  expect(callsB).toBe(1);
+  expect(await outcome(visitA)).not.toThrow();
+});
+
 test("each teardown step runs even when an earlier one fails", async () => {
   const steps: string[] = [];
   const result = await outcome(runAll([

@@ -77,8 +77,11 @@ async function stopChild({ child, ended, done }: Tracked, graceMs: number): Prom
 export class ContextGroup<Context extends { close(): Promise<void> }> {
   private readonly launches = new Set<Promise<Context>>();
   private readonly lifetimes = new Set<Promise<void>>();
-  /** One close per launch, shared by its visit and by teardown: `close()` never runs twice. */
-  private readonly closes = new Map<Promise<Context>, Promise<void>>();
+  /**
+   * One close per launch, shared by its visit and by teardown, and never forgotten: a teardown
+   * step queued behind another context still gets this context's original outcome.
+   */
+  private readonly closes = new WeakMap<Promise<Context>, Promise<void>>();
   private closing: Promise<void> | undefined;
 
   open<T>(launch: () => Promise<Context>, use: (context: Context) => Promise<T>): Promise<T> {
@@ -88,7 +91,7 @@ export class ContextGroup<Context extends { close(): Promise<void> }> {
     const lifetime = this.visit(launching, use);
     const settled = lifetime.then(() => {}, () => {});
     this.lifetimes.add(settled);
-    void settled.then(() => { this.launches.delete(launching); this.lifetimes.delete(settled); this.closes.delete(launching); });
+    void settled.then(() => { this.launches.delete(launching); this.lifetimes.delete(settled); });
     return lifetime;
   }
 
