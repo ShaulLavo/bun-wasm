@@ -256,6 +256,13 @@ pub trait Engine: Sized + 'static {
     fn object_type_counts(&self) -> Option<Self::Value> {
         None
     }
+    /// Physical string storage width for `bun:internal-for-testing` (`jscInternals`).
+    /// `Some(Ok(true))` for 8-bit storage, `Some(Ok(false))` for 16-bit storage,
+    /// `Some(Err(()))` when `value` is not a string, or `None` when the engine does
+    /// not expose physical string representation.
+    fn string_is_8bit(&self, _value: &Self::Value) -> Option<Result<bool, ()>> {
+        None
+    }
     /// The heap size the most recent collection measured, where the engine keeps one apart
     /// from its memory record (`Bun.gc()`'s result).
     fn heap_size_after_collection(&self) -> Option<f64> {

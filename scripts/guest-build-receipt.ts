@@ -114,9 +114,10 @@ export function requiredGuestCompanions(receipt: GuestBuildReceipt): readonly { 
   return [{ name: programProfile(program.kind).side, identity: program.side }];
 }
 
-export async function verifyGuestCompanions(receipt: GuestBuildReceipt, directory: string): Promise<void> {
+/** Verify a paired guest's engine side and return its bytes (undefined for a single guest). */
+export async function verifyGuestCompanions(receipt: GuestBuildReceipt, directory: string): Promise<Uint8Array | undefined> {
   const { program } = receipt;
-  if (program.kind === "single") return;
+  if (program.kind === "single") return undefined;
   const side = await Bun.file(join(directory, programProfile(program.kind).side)).bytes();
   verifyProgramSide(program.kind, new WebAssembly.Module(side));
   if ((importedMemory(side)?.shared ?? false) !== (receiptProfile(receipt.profile) === "shared-group")) throw new Error("Companion differs from guest receipt profile");
@@ -124,6 +125,7 @@ export async function verifyGuestCompanions(receipt: GuestBuildReceipt, director
   verifyProgramReceipt(side, receipt.engineOrigin, receipt.engineOrigin.inputs);
   const identity = artifactIdentity(side);
   if (identity.artifactSha256 !== program.side.artifactSha256 || identity.artifactBytes !== program.side.artifactBytes) throw new Error("Guest receipt does not match paired engine bytes");
+  return side;
 }
 
 function record(value: unknown): value is Record<string, unknown> {

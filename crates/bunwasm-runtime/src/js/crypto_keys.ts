@@ -16,9 +16,8 @@ declare namespace CryptoKeys {
     algorithm: Algorithm;
     key: KeyMaterial;
     type: KeyType;
-    nativeKey?: ManagedCryptoKey;
   };
-  type Record = Pick<NativeRecord, "algorithm" | "key" | "type" | "nativeKey">;
+  type Record = Pick<NativeRecord, "algorithm" | "key" | "type">;
   type BackendResult = { key?: KeyMaterial; data?: string; verified?: boolean };
   interface Crypto extends BunWasm.CryptoHostBridge {
     record(key: CryptoKey): NativeRecord;
@@ -35,10 +34,19 @@ declare namespace CryptoKeys {
   type WritableConstructor = new(options?: unknown) => Writable;
   interface Internal extends Pick<BunWasm.Internal, "realTimers"> {
     crypto: Crypto;
-    native: BunWasm.Native & { randomBytes(size: number): Uint8Array };
+    native: BunWasm.Native & {
+      randomBytes(size: number): Uint8Array;
+      // node_cipher.rs: Bun's getCipherByName, undefined for an unknown cipher.
+      nodeCrypto: { cipherInfo(name: string): unknown };
+    };
     nodeCryptoIsKeyObject(value: unknown): boolean;
     builtin(name: "node:stream"): { Writable: WritableConstructor };
     require(name: "node_crypto_args"): Args;
+    // node_digest.ts: Bun's digest names onto BoringSSL's short names.
+    require(name: "node_digest"): { hmacName(name: string): string | undefined };
+    // process_warning.ts: process.emitWarning's implementation, which a user cannot replace.
+    require(name: "process_warning"): { emitWarning(process: object, warning: string, type: string, code: string): void };
+    require(name: "process"): object;
   }
   // The part of node_crypto_args.ts this adapter uses.
   type Args = {
@@ -46,6 +54,9 @@ declare namespace CryptoKeys {
     invalidArgValue(name: string, value: unknown, reason?: string): TypeError;
     operationFailed(message: string): Error;
     opensslError(packed: string, library: string, reason: string, code: string): Error;
+    validateInt32(value: unknown, name: string, min?: number, max?: number): number;
+    validateString(value: unknown, name: string): void;
+    validateObject(value: unknown, name: string): void;
   };
   type ExportType = "pkcs8" | "spki" | "pkcs1" | "sec1";
   type ExportOptions = {
@@ -76,11 +87,15 @@ declare namespace CryptoKeys {
     encoding?: string;
   };
   type KeyInput = KeyOptions | Input | KeyObject | CryptoKey;
-  type GeneratePairType = "rsa" | "ec" | "ed25519" | "x25519";
+  type GeneratePairType = "rsa" | "rsa-pss" | "ec" | "ed25519" | "x25519";
   type GeneratePairOptions = {
     modulusLength?: number;
     publicExponent?: number;
     hashAlgorithm?: string;
+    mgf1HashAlgorithm?: unknown;
+    hash?: unknown;
+    mgf1Hash?: unknown;
+    saltLength?: unknown;
     namedCurve?: string;
     privateKeyEncoding?: ExportOptions;
     publicKeyEncoding?: ExportOptions;
@@ -323,22 +338,13 @@ declare namespace CryptoKeys {
       }
       toCryptoKey(algorithm: BunWasm.CryptoAlgorithm, extractable: boolean, keyUsages: KeyUsage[]): CryptoKey {
         const r = nodeRecord(this);
-        const converted = c.importKey(
+        return c.importKey(
           r.type === "secret" ? "raw" : "jwk",
           r.type === "secret" ? c.decode(r.key.k) : { ...r.key },
           algorithm,
           extractable,
           keyUsages,
         );
-        if (!r.nativeKey) return converted;
-        const requested = c.record(converted), original = r.nativeKey;
-        const a = requested.algorithm, b = original.algorithm;
-        const sameAlgorithm = (["name", "namedCurve", "length", "modulusLength"] satisfies (keyof CryptoKeys.Algorithm)[])
-          .every(field => a[field] === b[field]) && a.hash?.name === b.hash?.name;
-        const samePolicy = requested.extractable === original.extractable &&
-          requested.usages.length === original.usages.length &&
-          requested.usages.every(usage => original.usages.includes(usage));
-        return sameAlgorithm && samePolicy ? original : converted;
       }
       get [Symbol.toStringTag]() {
         return "KeyObject";
@@ -658,96 +664,174 @@ declare namespace CryptoKeys {
         callback(null, key);
       });
     }
-    // generateKeyPair's raw encodings, as Bun's parseKeyFormatAndType checks them.
-    function checkRawEncoding(encoding: CryptoKeys.ExportOptions | undefined, isPublic: boolean): void {
-      const format = String(encoding?.format);
-      if (!rawFormats.includes(format)) return;
-      const name = `options.${isPublic ? "public" : "private"}KeyEncoding`;
-      if (isPublic !== (format === "raw-public")) throw args().invalidArgValue(`${name}.format`, encoding!.format);
-      const type: unknown = encoding!.type;
-      if (type !== undefined && (!isPublic || (type !== "compressed" && type !== "uncompressed")))
-        throw args().invalidArgValue(`${name}.type`, type);
-      if (!isPublic && (encoding!.cipher !== undefined || encoding!.passphrase !== undefined))
+    type PairJob = () => CryptoKeys.KeyPair;
+    const encodingFormats = ["pem", "der", "jwk", "raw-public", "raw-private", "raw-seed"];
+    // Bun's parseKeyEncoding (CryptoUtil.cpp) for one of generateKeyPair's output encodings:
+    // a format, a type that fits the key type and the side, and encryption on the private side.
+    function checkPairEncoding(keyType: string, encoding: unknown, side: "public" | "private"): void {
+      if (encoding === undefined || encoding === null) return;
+      const name = `options.${side}KeyEncoding`;
+      if (typeof encoding !== "object" && typeof encoding !== "function") throw args().invalidArgValue(name, encoding);
+      const format: unknown = Reflect.get(encoding, "format");
+      const type: unknown = Reflect.get(encoding, "type");
+      if (typeof format !== "string" || !encodingFormats.includes(format)) throw args().invalidArgValue(`${name}.format`, format);
+      checkPairEncodingType(keyType, format, type, side === "public", name);
+      if (side === "private") checkPairEncryption(encoding, format, type, name);
+    }
+    // Bun's parseKeyFormatAndType and parseKeyType.
+    function checkPairEncodingType(keyType: string, format: string, type: unknown, isPublic: boolean, name: string): void {
+      const invalid = (option: string, value: unknown) => args().invalidArgValue(`${name}.${option}`, value);
+      if (format === "raw-public" || format === "raw-private" || format === "raw-seed") {
+        if (isPublic !== (format === "raw-public")) throw invalid("format", format);
+        if (type !== undefined && (!isPublic || (type !== "compressed" && type !== "uncompressed"))) throw invalid("type", type);
+        return;
+      }
+      if (type === undefined && format === "jwk") return;
+      const onlyFor = (expected: string, family: string) => {
+        if (keyType !== expected) throw incompatible(`The selected key encoding ${String(type)} can only be used for ${family} keys.`);
+      };
+      if (type === "pkcs1") return onlyFor("rsa", "RSA");
+      if (type === "spki" && isPublic) return;
+      if (type === "pkcs8" && !isPublic) return;
+      if (type === "sec1" && !isPublic) return onlyFor("ec", "EC");
+      throw invalid("type", type);
+    }
+    // Bun's parseKeyEncoding for an output private key: a string cipher BoringSSL knows, with a
+    // string or buffer passphrase, and no encryption for raw formats or DER PKCS#1 and SEC1.
+    function checkPairEncryption(encoding: object, format: string, type: unknown, name: string): void {
+      const cipher: unknown = Reflect.get(encoding, "cipher");
+      const passphrase: unknown = Reflect.get(encoding, "passphrase");
+      Reflect.get(encoding, "encoding");
+      if (rawFormats.includes(format) && (cipher != null || passphrase !== undefined))
         throw incompatible("The selected key encoding raw format does not support encryption.");
+      if (cipher == null) {
+        if (passphrase !== undefined) throw args().invalidArgValue(`${name}.cipher`, cipher);
+        return;
+      }
+      if (typeof cipher !== "string") throw args().invalidArgValue(`${name}.cipher`, cipher);
+      if (format === "der" && (type === "pkcs1" || type === "sec1"))
+        throw incompatible(`The selected key encoding ${type} does not support encryption.`);
+      if (typeof passphrase !== "string" && !ArrayBuffer.isView(passphrase) && !(passphrase instanceof ArrayBuffer))
+        throw args().invalidArgValue(`${name}.passphrase`, passphrase);
+      if (internal.native.nodeCrypto.cipherInfo(cipher) === undefined)
+        throw Object.assign(new Error("Unknown cipher"), { code: "ERR_CRYPTO_UNKNOWN_CIPHER" });
+    }
+    // Bun's RsaKeyPairJobCtx::fromJS (CryptoGenRsaKeyPair.cpp): the options object, the
+    // required uint32 modulus length and the optional uint32 exponent, then for "rsa-pss" its
+    // hash options.
+    function rsaKeyPair(type: "rsa" | "rsa-pss", options: unknown): PairJob {
+      args().validateObject(options, "options");
+      const o = options as CryptoKeys.GeneratePairOptions;
+      const modulusLength = args().validateInt32(o.modulusLength, "options.modulusLength", 0, 0xffffffff);
+      const exponentValue: unknown = o.publicExponent;
+      const exponent = exponentValue == null ? 65537 : args().validateInt32(exponentValue, "options.publicExponent", 0, 0xffffffff);
+      if (exponent < 3 || exponent % 2 === 0)
+        throw Object.assign(new RangeError("publicExponent is invalid"), { code: "ERR_OUT_OF_RANGE" });
+      if (type === "rsa-pss") {
+        checkRsaPssOptions(o);
+        // Bun's BoringSSL refuses EVP_PKEY_RSA_PSS key generation, and so does this one.
+        return () => {
+          throw args().opensslError("06000080", "public key routines", "UNSUPPORTED_ALGORITHM", "ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM");
+        };
+      }
+      const bytes = [exponent >>> 24, (exponent >>> 16) & 255, (exponent >>> 8) & 255, exponent & 255];
+      return pairJob({ name: "RSASSA-PKCS1-v1_5", modulusLength, publicExponent: new Uint8Array(bytes), hash: "SHA-256" }, o);
+    }
+    // The "rsa-pss" hash options: every option is read, then checked; each deprecated name
+    // warns (DEP0154) through the runtime's own warning path before its check, so an error
+    // thrown while warning propagates, and the deprecated name then wins. Bun's conflict check
+    // compares the wrong views and never fires. Digests use ncrypto's Digest::FromName.
+    function checkRsaPssOptions(options: CryptoKeys.GeneratePairOptions): void {
+      const { hash: oldHash, mgf1Hash: oldMgf1Hash, hashAlgorithm, mgf1HashAlgorithm, saltLength } = options;
+      if (saltLength !== undefined) args().validateInt32(saltLength, "options.saltLength", 0);
+      if (hashAlgorithm !== undefined) args().validateString(hashAlgorithm, "options.hashAlgorithm");
+      if (mgf1HashAlgorithm !== undefined) args().validateString(mgf1HashAlgorithm, "options.mgf1HashAlgorithm");
+      const deprecated = (name: string, value: unknown, current: unknown): unknown => {
+        if (value === undefined) return current;
+        const warning = `"options.${name}" is deprecated, use "options.${name}Algorithm" instead.`;
+        internal.require("process_warning").emitWarning(internal.require("process"), warning, "DeprecationWarning", "DEP0154");
+        args().validateString(value, `options.${name}`);
+        return value;
+      };
+      const md = deprecated("hash", oldHash, hashAlgorithm);
+      const mgf1Md = deprecated("mgf1Hash", oldMgf1Hash, mgf1HashAlgorithm);
+      const known = (name: unknown) => internal.require("node_digest").hmacName(String(name)) !== undefined;
+      if (md !== undefined && !known(md))
+        throw Object.assign(new TypeError(`Invalid digest: ${String(md)}`), { code: "ERR_CRYPTO_INVALID_DIGEST" });
+      if (mgf1Md !== undefined && !known(mgf1Md))
+        throw Object.assign(new TypeError(`Invalid MGF1 digest: ${String(mgf1Md)}`), { code: "ERR_CRYPTO_INVALID_DIGEST" });
+    }
+    // Bun's EcKeyPairJobCtx::fromJS: the options object and a string curve Bun knows. A curve
+    // Bun builds keys on that BoringSSL here lacks (P-224, secp256k1) fails in the job; Bun
+    // generates such a key and then fails a JWK export of a P-224 key, so that error comes first.
+    function ecKeyPair(options: unknown): PairJob {
+      args().validateObject(options, "options");
+      const o = options as CryptoKeys.GeneratePairOptions;
+      const named: unknown = o.namedCurve;
+      args().validateString(named, "options.namedCurve");
+      const curve = webCurve(named as string);
+      if (curve !== undefined) return pairJob({ name: "ECDSA", namedCurve: curve }, o);
+      if (!knownCurve(named as string)) throw invalidCurve();
+      const jwk = o.publicKeyEncoding?.format === "jwk" || o.privateKeyEncoding?.format === "jwk";
+      const failure = jwk && (named === "P-224" || named === "secp224r1")
+        ? Object.assign(new Error("Unsupported JWK EC curve: secp224r1."), { code: "ERR_CRYPTO_JWK_UNSUPPORTED_CURVE" })
+        : args().opensslError("0f00007b", "elliptic curve routines", "UNKNOWN_GROUP", "ERR_OSSL_EC_UNKNOWN_GROUP");
+      return () => {
+        throw failure;
+      };
+    }
+    // Generation and export, the part Bun runs as a job.
+    function pairJob(a: BunWasm.CryptoParameters, options: CryptoKeys.GeneratePairOptions | undefined): PairJob {
+      return () => {
+        const pair = c.generate(a, true, privateUsages(a).concat(publicUsages(a)));
+        const privateKey = fromCrypto(pair.privateKey), publicKey = fromCrypto(pair.publicKey);
+        return {
+          privateKey: options?.privateKeyEncoding ? privateKey.export(options.privateKeyEncoding) : privateKey,
+          publicKey: options?.publicKeyEncoding ? publicKey.export(options.publicKeyEncoding) : publicKey,
+        };
+      };
+    }
+    // Bun's jsGenerateKeyPair and jsGenerateKeyPairSync (CryptoGenKeyPair.cpp): the type, both
+    // encodings, the options object, then the key type's own options, all before any work.
+    function prepareKeyPair(type: unknown, options: unknown): PairJob {
+      args().validateString(type, "type");
+      const holder = options !== null && (typeof options === "object" || typeof options === "function") ? options : undefined;
+      const publicEncoding: unknown = holder && Reflect.get(holder, "publicKeyEncoding");
+      const privateEncoding: unknown = holder && Reflect.get(holder, "privateKeyEncoding");
+      checkPairEncoding(type as string, publicEncoding, "public");
+      checkPairEncoding(type as string, privateEncoding, "private");
+      if (options !== undefined) args().validateObject(options, "options");
+      if (type === "rsa" || type === "rsa-pss") return rsaKeyPair(type, options);
+      if (type === "ec") return ecKeyPair(options);
+      if (type === "ed25519" || type === "x25519")
+        return pairJob({ name: type === "ed25519" ? "Ed25519" : "X25519" }, options as CryptoKeys.GeneratePairOptions | undefined);
+      throw args().invalidArgValue("type", type, "must be a supported key type");
     }
     function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options?: CryptoKeys.GeneratePairOptions & { privateKeyEncoding?: undefined; publicKeyEncoding?: undefined }): CryptoKeys.KeyPair<KeyObject>;
     function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options?: CryptoKeys.GeneratePairOptions): CryptoKeys.KeyPair;
-    function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options: CryptoKeys.GeneratePairOptions = {}): CryptoKeys.KeyPair {
-      checkRawEncoding(options.publicKeyEncoding, true);
-      checkRawEncoding(options.privateKeyEncoding, false);
-      let a: BunWasm.CryptoParameters;
-      const exponent = options.publicExponent ?? 65537;
-      if (
-        type === "rsa" &&
-        (!Number.isInteger(exponent) ||
-          exponent < 3 ||
-          exponent > 0xffffffff ||
-          exponent % 2 === 0)
-      )
-        throw Object.assign(new RangeError("Invalid publicExponent"), {
-          code: "ERR_OUT_OF_RANGE",
-        });
-      if (type === "rsa")
-        a = {
-          name: "RSASSA-PKCS1-v1_5",
-          modulusLength: options.modulusLength,
-          publicExponent: new Uint8Array([
-            exponent >>> 24,
-            (exponent >>> 16) & 255,
-            (exponent >>> 8) & 255,
-            exponent & 255,
-          ]),
-          hash: options.hashAlgorithm || "SHA-256",
-        };
-      else if (type === "ec") {
-        const named = options.namedCurve;
-        const curve = typeof named === "string" ? webCurve(named) : undefined;
-        if (typeof named === "string" && curve === undefined)
-          throw knownCurve(named)
-            ? args().opensslError("0f00007b", "elliptic curve routines", "UNKNOWN_GROUP", "ERR_OSSL_EC_UNKNOWN_GROUP")
-            : invalidCurve();
-        a = { name: "ECDSA", namedCurve: curve ?? named };
-      }
-      else if (type === "ed25519" || type === "x25519")
-        a = { name: type === "ed25519" ? "Ed25519" : "X25519" };
-      else
-        throw Object.assign(new TypeError(`Unsupported key type ${type}`), {
-          code: "ERR_INVALID_ARG_VALUE",
-        });
-      const pair = c.generate(
-        a,
-        true,
-        privateUsages(a).concat(publicUsages(a)),
-      );
-      const privateKey = fromCrypto(pair.privateKey),
-        publicKey = fromCrypto(pair.publicKey);
-      return {
-        privateKey: options.privateKeyEncoding
-          ? privateKey.export(options.privateKeyEncoding)
-          : privateKey,
-        publicKey: options.publicKeyEncoding
-          ? publicKey.export(options.publicKeyEncoding)
-          : publicKey,
-      };
+    function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options?: CryptoKeys.GeneratePairOptions): CryptoKeys.KeyPair {
+      return prepareKeyPair(type, options)();
     }
     function generateKeyPair(type: CryptoKeys.GeneratePairType, callback: CryptoKeys.GeneratePairCallback): void;
     function generateKeyPair(type: CryptoKeys.GeneratePairType, options: CryptoKeys.GeneratePairOptions | undefined, callback: CryptoKeys.GeneratePairCallback): void;
     function generateKeyPair(type: CryptoKeys.GeneratePairType, options: CryptoKeys.GeneratePairOptions | CryptoKeys.GeneratePairCallback | undefined, callback?: CryptoKeys.GeneratePairCallback): void {
       if (typeof options === "function") {
         callback = options;
-        options = {};
+        options = undefined;
       }
-      if (typeof callback !== "function")
-        throw error("Callback must be a function");
+      if (typeof callback !== "function") throw args().argType("callback", "function", callback);
+      const done = callback;
+      // Argument errors throw here; generation and export errors reach the callback.
+      const job = prepareKeyPair(type, options);
       internal.realTimers.setImmediate(() => {
         let pair: CryptoKeys.KeyPair;
         try {
-          pair = generateKeyPairSync(type, options);
+          pair = job();
         } catch (e) {
-          (callback as (error: Error) => unknown)(e as Error);
+          (done as (error: Error) => unknown)(e as Error);
           return;
         }
-        callback(null, pair.publicKey, pair.privateKey);
+        done(null, pair.publicKey, pair.privateKey);
       });
     }
     function signVerify(verify: false, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature?: undefined): CryptoKeys.Buffer;

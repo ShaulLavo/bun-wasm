@@ -3,8 +3,6 @@ import { createScriptEvaluation } from "./script-evaluation.ts";
 import { createStackPrograms } from "./stack-programs.ts";
 import { observePromise } from "./promise-reactions.ts";
 import { installNativeStreamState } from "./native-stream-state.ts";
-import { oversizedCryptoInput } from "./crypto-inputs.js";
-import { installHostCrypto } from "./crypto-host.js";
 import { memoryViews } from "waffle/core/memory-views";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "./buffer-transfer.ts";
 import { ContentModules } from "./content-modules.ts";
@@ -12,6 +10,7 @@ import { createModuleRecords } from "./module-records.ts";
 import { SLOT_NAMES } from "./net/trampoline.ts";
 import { trackLookup } from "./net/lookup.ts";
 import { bindSharedObjectHost } from "./shared-objects/host.ts";
+import { hostCrypto } from "./host-crypto.ts";
 import { reportWasmCallTrap } from "./wasm-call-trap.ts";
 import { installSharedBufferRealm } from "./shared-objects/realm.ts";
 
@@ -38,14 +37,7 @@ import { installSharedBufferRealm } from "./shared-objects/realm.ts";
 // The host's own versions of what the polyfills replace on globalThis.
 /** Capability flags the host answers for; the wasm owns all the others. */
 const NETWORK_CAPS = new Set(SLOT_NAMES);
-const nativeSubtleCrypto = globalThis.crypto?.subtle;
 const NativeDOMException = globalThis.DOMException;
-const NativeCryptoKey = globalThis.CryptoKey;
-const NativeSubtleCrypto = globalThis.SubtleCrypto;
-const nativeSubtleOperations = nativeSubtleCrypto && Object.fromEntries(
-  ["digest", "generateKey", "importKey", "exportKey", "sign", "verify", "encrypt", "decrypt", "deriveBits", "deriveKey", "wrapKey", "unwrapKey"]
-    .map(name => [name, nativeSubtleCrypto[name]]),
-);
 const NativeTextEncoder = globalThis.TextEncoder;
 const NativeTextDecoder = globalThis.TextDecoder;
 const NativeBlob = globalThis.Blob;
@@ -431,6 +423,7 @@ class EngineHost {
     this.timer = null;
     this.timerAt = Infinity;
     this.immediate = false;
+    this.gcYield = false;
     // Module graph: key (path or builtin) -> URL; URL -> path for stack traces.
     this.urls = new Map();
     // promise -> {state, value}, for console.log and Bun.peek.
@@ -452,6 +445,14 @@ class EngineHost {
     if (NativeMessageChannel) {
       this.channel = new NativeMessageChannel();
       this.channel.port1.onmessage = () => {
+        if (this.gcYield) {
+          this.gcYield = false;
+          nativeSetTimeout(() => {
+            this.immediate = false;
+            this.pump();
+          }, 0);
+          return;
+        }
         this.immediate = false;
         this.pump();
       };
@@ -462,6 +463,8 @@ class EngineHost {
     const d = this.wasm.describe();
     this.entry = d.entry;
     const native = this.buildNative(d);
+    // Bulk crypto on the host's own Web Crypto; the runtime validates every call first.
+    native.hostCrypto = hostCrypto(promise => this.track(promise));
     this.native = native;
     // Before any module is read: the wasm then prepares every module for its record.
     if (!this.o.modules) native.hostUseModuleRecords();
@@ -480,7 +483,6 @@ class EngineHost {
     this.stackPrograms = internal.hasNativeStackTrace
       ? createStackPrograms(bytes => native.hash("sha256", bytes)) : undefined;
     internal.isProgramScriptHash = hash => this.stackPrograms?.has(hash) === true;
-    installHostCrypto(nativeSubtleCrypto,NativeCryptoKey,internal.crypto,native);
     // Module URLs show as their paths; frames of this host itself (and the
     // worker bundle it lives in) are internal, like the polyfills. So are Node's
     // own modules on the Node test host, internal or public: with async context
@@ -548,32 +550,10 @@ class EngineHost {
     // Browser workers expose no engine version, so they add no key.
     const hostV8 = globalThis.process?.versions?.v8;
     if (typeof hostV8 === "string") native.engineVersion = ["v8", hostV8];
-    this.installSubtleCrypto();
-    native.subtleCrypto = nativeSubtleCrypto;
     native.DOMException = NativeDOMException;
-    native.CryptoKey = NativeCryptoKey;
-    native.SubtleCrypto = NativeSubtleCrypto;
     const mapPosition = native.mapPosition;
     Object.assign(native, this.valueNatives((name, line, col) => name.startsWith("bunwasm:hot:") && native.hotMapLookup ? native.hotMapLookup(name, line, col) : mapPosition(name, line, col)));
     return native;
-  }
-
-  installSubtleCrypto() {
-    if (!nativeSubtleCrypto) return;
-    const host = this;
-    for (const [name, operation] of Object.entries(nativeSubtleOperations)) {
-      const wrapper = { [name](...args) {
-        let result;
-        try {
-          if (oversizedCryptoInput(name,args)) throw new NativeDOMException("Crypto input is too large","OperationError");
-          result = Reflect.apply(operation,this,args);
-        } catch (error) { result = NativePromise.reject(error); }
-        // Tracking observes rejection; the returned promise must still report an unhandled rejection.
-        return host.track(result).then(value => value);
-      } }[name];
-      Object.defineProperty(wrapper, "length", { value: operation.length });
-      Object.defineProperty(nativeSubtleCrypto, name, { value: wrapper, writable: true, configurable: true });
-    }
   }
 
   valueNatives(mapPosition) {
@@ -638,7 +618,12 @@ class EngineHost {
         if (host.o.asyncContext) return host.o.asyncContext.set(v);
         host.asyncContext = v;
       },
-      gc: () => nativeGc?.(),
+      gc() {
+        const runGc = typeof host.o.gc === "function" ? host.o.gc : nativeGc;
+        if (!runGc) return;
+        runGc();
+        if (host.o.yieldAfterGc) host.gcYield = true;
+      },
       memoryUsage() {
         const mem = typeof performance === "object" && performance.memory;
         const used = mem ? mem.usedJSHeapSize : 0;
@@ -1170,8 +1155,12 @@ class EngineHost {
     if (ms <= 0) {
       if (this.immediate) return;
       this.immediate = true;
-      if (this.channel) this.channel.port2.postMessage(0);
-      else nativeSetTimeout(() => {
+      if (this.channel && !this.gcYield) {
+        this.channel.port2.postMessage(0);
+        return;
+      }
+      this.gcYield = false;
+      nativeSetTimeout(() => {
         this.immediate = false;
         this.pump();
       }, 0);

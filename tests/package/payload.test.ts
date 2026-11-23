@@ -39,6 +39,7 @@ test("packed package includes a working public worker, no demo or guest binaries
     expect(files).toContain("package/web/src/nested/module-info.ts");
     expect(files).toContain("package/web/src/nested/wire.ts");
     expect(files).toContain("package/dist/package/index.js");
+    expect(files.some(name => name.endsWith(".js.map"))).toBe(false);
     expect(files.some(name => /\.wasm(?:\.gz)?$/.test(name))).toBe(false);
     expect(files).not.toContain("package/web/src/main.ts");
     expect(files).not.toContain("package/web/src/subprocess-broker.ts");

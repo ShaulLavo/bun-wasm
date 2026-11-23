@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { needsRust } from "./ci-changes.ts";
-import { assertNoNameSection, assertShippedGuestHasNoNames, hasNameSection, nameFreeGuests, stripNameSection } from "./wasm-name-sections.ts";
+import { needsJsc, needsRust, needsSharedNative } from "./ci-changes.ts";
+import { assertNamedCopyMatches, assertNoNameSection, assertShippedGuestHasNoNames, hasNameSection, nameFreeGuests, stripNameSection } from "./wasm-name-sections.ts";
 
 const header = [0, 97, 115, 109, 1, 0, 0, 0];
 const text = (value: string) => Array.from(new TextEncoder().encode(value));
@@ -48,12 +48,34 @@ test("malformed modules are rejected, not passed", () => {
   expect(() => hasNameSection(Uint8Array.from(header.concat([0, 0xff, 0xff, 0xff, 0xff, 0x1f])))).toThrow("Invalid Wasm integer");
 });
 
-test("the browser guest must be name free and other guests are not judged", () => {
-  expect(nameFreeGuests).toContain("bun-browser.wasm");
-  expect(() => assertShippedGuestHasNoNames("bun-browser.wasm", named)).toThrow("bun-browser.wasm carries a Wasm name section");
-  expect(() => assertShippedGuestHasNoNames("bun-browser.wasm", plain)).not.toThrow();
-  expect(() => assertShippedGuestHasNoNames("bun.wasm", named)).not.toThrow();
-  expect(() => assertShippedGuestHasNoNames("bun-browser.wasm", named, true)).not.toThrow();
+test("every shipped guest, core and side must be name free and other modules are not judged", () => {
+  for (const guest of ["bun-browser.wasm", "bun.wasm", "quickjs.wasm", "bun-jsc.wasm", "jsc-engine.wasm", "bun-tools.wasm"]) {
+    expect(nameFreeGuests).toContain(guest);
+    expect(() => assertShippedGuestHasNoNames(guest, named)).toThrow(`${guest} carries a Wasm name section`);
+    expect(() => assertShippedGuestHasNoNames(guest, plain)).not.toThrow();
+    expect(() => assertShippedGuestHasNoNames(guest, named, true)).not.toThrow();
+  }
+  expect(() => assertShippedGuestHasNoNames("spidermonkey-engine.wasm", named)).not.toThrow();
+});
+
+test("every producer keeps a named copy and receipts the stripped module", () => {
+  const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+  const recipes = [
+    { path: "./build-bun-core.sh", named: '-o "$named"', strip: 'strip "$named" "$core"', receipt: 'guest-core-receipt.ts" write "$core"' },
+    { path: "./build-engine-quickjs.sh", named: '"$out/engine.named.wasm" "${explicit_profile[@]}"', strip: 'strip "$out/engine.named.wasm" "$out/engine.wasm"', receipt: 'guest-engine-receipt.ts" write "$out/engine.wasm"' },
+    { path: "./build-engine-jsc.sh", named: '"$named" "${explicit_profile[@]}"', strip: 'strip "$named" "$side"', receipt: 'guest-engine-receipt.ts" write "$side"' },
+    { path: "./build-bun-tools.sh", named: '"$root/dist/bun-tools.named.wasm" "$CARGO_TARGET_DIR/tools-optimized"', strip: 'strip "$root/dist/bun-tools.named.wasm" "$root/dist/bun-tools.wasm"', receipt: 'guest-build-receipt.ts" write "$root/dist/bun-tools.wasm"' },
+  ];
+  for (const recipe of recipes) {
+    const text = source(recipe.path);
+    const named = text.indexOf(recipe.named), strip = text.indexOf(recipe.strip), receipt = text.indexOf(recipe.receipt);
+    expect(named, recipe.path).toBeGreaterThan(0);
+    expect(strip, recipe.path).toBeGreaterThan(named);
+    expect(receipt, recipe.path).toBeGreaterThan(strip);
+  }
+  // The JSC interpreter frame check finds the interpreter by name, so it reads the named copy.
+  expect(source("./build-engine-jsc.sh")).toContain('jsc-cloop-frame.ts" check "$named"');
+  expect(source("./stage-program-profiles.ts")).toContain("assertShippedGuestHasNoNames(");
 });
 
 test("the build recipe ships the stripped guest and the shipping paths check it", () => {
@@ -83,7 +105,27 @@ test("the public site never sees the profiling override", () => {
   expect(built).toBeGreaterThan(dropped);
 });
 
+test("a named copy matches only the exact stripped module it came from", () => {
+  expect(() => assertNamedCopyMatches(named, stripNameSection(named), "side.wasm")).not.toThrow();
+  expect(() => assertNamedCopyMatches(named, named, "side.wasm")).toThrow("side.wasm carries a Wasm name section");
+  const other = Uint8Array.from(header.concat(code, custom("producers", [1])));
+  expect(() => assertNamedCopyMatches(named, other, "side.wasm")).toThrow("side.wasm is not its named copy without names");
+});
+
+test("CI export and publication check every shipped module, sides included", () => {
+  const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+  expect(source("./ci-browser-program.ts")).toContain('assertShippedGuestHasNoNames("quickjs.wasm", side)');
+  expect(source("./ci-ordinary-jsc-program.ts")).toContain('assertShippedGuestHasNoNames("bun-jsc.wasm", core)');
+  expect(source("./ci-ordinary-jsc-program.ts")).toContain('assertShippedGuestHasNoNames("jsc-engine.wasm", side)');
+  expect(source("./guest-acceptance.ts")).toContain("assertShippedGuestHasNoNames(name, side)");
+  // Publication input verification (also C1 matrix admission) checks each guest and its sides.
+  expect(source("./guest-acceptance.ts")).toContain("assertShippedGuestHasNoNames(name, candidate)");
+  expect(source("./guest-acceptance.ts")).toContain("assertShippedGuestHasNoNames(companion.name,");
+});
+
 test("a change to the stripper selects the guest build and browser coverage", () => {
   expect(needsRust(["scripts/wasm-name-sections.ts"])).toBe(true);
+  expect(needsJsc(["scripts/wasm-name-sections.ts"])).toBe(true);
+  expect(needsSharedNative(["scripts/wasm-name-sections.ts"])).toBe(true);
   expect(readFileSync(new URL("./browser-guest-selection.ts", import.meta.url), "utf8")).toContain('"scripts/wasm-name-sections.ts"');
 });

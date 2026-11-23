@@ -128,11 +128,15 @@
     return out;
   };
   function buffer(data) {
+    return view(data).slice();
+  }
+  // The caller's bytes, checked but not copied: for a consumer that copies or reads them now.
+  function view(data) {
     if (!(data instanceof ArrayBuffer) && !ArrayBuffer.isView(data))
       throw new TypeError("Expected an ArrayBuffer or ArrayBufferView");
     if (data.byteLength > 0x7fffffff)
       fail("OperationError", "Crypto input is too large");
-    return internal.toUint8(data).slice();
+    return internal.toUint8(data);
   }
   const encode = (data) => native.base64Encode(buffer(data), true);
   const decode = (data) => native.base64Decode(data);
@@ -239,7 +243,7 @@
   const exponentIn = (a) => (typeof a.publicExponent === "string" ? { ...a, publicExponent: decode(a.publicExponent) } : { ...a });
   function serializeKey(value) {
     const r = material.get(value);
-    if (!r || r.nativeKey) return undefined;
+    if (!r) return undefined;
     return JSON.stringify({
       algorithm: exponentOut(r.algorithm),
       displayAlgorithm: exponentOut(r.displayAlgorithm),
@@ -598,23 +602,35 @@
       integer(a.saltLength, 0, 0x7fffffff, "saltLength");
     return out;
   }
-  function signVerify(op, a, key, data, signature) {
+  // A validated operation (CryptoOperationPlan): every argument and key check runs here,
+  // before the guest or the host computes anything.
+  function signVerifyPlan(op, a, key) {
     a = algorithm(a);
     const r = use(key, a, op);
     const out = operationAlgorithm(a, r);
+    // WebCrypto's EcdsaParams has no encoding member: its signatures are always IEEE P1363.
+    // `der` is the node:crypto adapter's own backend switch, which a caller's dictionary must
+    // not reach.
+    delete out.der;
     if (isAkp(a.name)) {
       // FIPS 204 caps the context at 255 bytes; Bun fails both sign and verify past it.
       if (a.context !== undefined && buffer(a.context).length > 255) fail("OperationError");
       out.context = a.context === undefined ? "" : encode(a.context);
     }
-    const result = backend(op, out, {
-      key: r.key,
-      data: encode(data),
-      ...(op === "verify" ? { signature: encode(signature) } : {}),
-    });
-    return op === "verify" ? result.verified : decode(result.data).buffer;
+    return { op, a, r, out, key };
   }
-  function crypt(op, a, key, data, usage = op) {
+  function signVerifyRun(plan, data, signature) {
+    const result = backend(plan.op, plan.out, {
+      key: plan.r.key,
+      data: encode(data),
+      ...(plan.op === "verify" ? { signature: encode(signature) } : {}),
+    });
+    return plan.op === "verify" ? result.verified : decode(result.data).buffer;
+  }
+  function cryptRun(plan, data) {
+    return decode(backend(plan.op, plan.out, { key: plan.r.key, data: encode(data) }).data).buffer;
+  }
+  function cryptPlan(op, a, key, usage = op) {
     a = algorithm(a);
     const r = use(key, a, usage);
     const out = operationAlgorithm(a, r);
@@ -629,6 +645,8 @@
         fail("OperationError", "Invalid tagLength");
     }
     if (a.name === "AES-CTR") {
+      // Bun rejects a counter that is not one block before it starts the operation.
+      if (buffer(a.counter).length !== 16) fail("OperationError");
       out.counter = encode(a.counter);
       out.length = integer(a.length, 1, 128, "counter length");
     }
@@ -643,8 +661,7 @@
       out.iv = encode(a.iv);
       out.additionalData = a.additionalData === undefined ? "" : encode(a.additionalData);
     }
-    return decode(backend(op, out, { key: r.key, data: encode(data) }).data)
-      .buffer;
+    return { op, a, r, out, key };
   }
   // The ML-KEM key for an encapsulation (public) or decapsulation (private) step.
   function kemKey(a, key, usage, role) {
@@ -695,116 +712,219 @@
     if (length % 8) bits[bits.length - 1] &= 0xff << (8 - (length % 8));
     return bits.buffer;
   }
+  // The browser engine computes digests, AES and signatures on the host's own Web Crypto
+  // when it supports them; the checks above always run first, here.
+  const hostCompute = native.hostCrypto
+    ? internal.require("crypto_host_compute")(native.hostCrypto, { buffer, decode })
+    : undefined;
+  // A guest computation done now whose result or failure settles in a later task, after
+  // microtasks already queued: Bun runs digests, encryption, signatures, derivation and
+  // non-AES-KW wrapping as background work (the Web Crypto spec's "queue a task"). Argument
+  // errors are thrown before one is made, so they still reject at once.
+  class Later {
+    constructor(compute) {
+      this.failed = false;
+      try {
+        this.value = compute();
+      } catch (error) {
+        this.failed = true;
+        this.error = error;
+      }
+    }
+  }
+  // Host work, which settles in the host's own task. A key the host refused is computed by the
+  // guest from the call-time copy (`work.input`); any other host failure is the operation's own
+  // failure (a bad tag or padding), reported as the guest and Bun report it, without computing
+  // again.
+  class HostWork {
+    constructor(work, guest) {
+      this.promise = work.promise.then(value => value, error => {
+        if (error === hostCompute.refused) return guest(work.input);
+        return fail("OperationError");
+      });
+    }
+  }
+  function offload(work, data, guest) {
+    return work ? new HostWork(work, guest) : new Later(() => guest(data));
+  }
+  function laterResult(later) {
+    return new Promise((resolve, reject) =>
+      internal.realTimers.setImmediate(() => (later.failed ? reject(later.error) : resolve(later.value))));
+  }
+  // Every SubtleCrypto method: a rejected promise for a bad receiver or argument. Key
+  // management, AES-KW wrapping and the ML-KEM methods resolve at once, as in Bun.
+  function settle(receiver, method, run) {
+    try {
+      if (receiver !== subtleInstance)
+        typeError(`Can only call SubtleCrypto.${method} on instances of SubtleCrypto`, "ERR_INVALID_THIS");
+      const result = run();
+      if (result instanceof HostWork) return result.promise;
+      if (result instanceof Later) return laterResult(result);
+      return Promise.resolve(result);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+  function digest(a, data) {
+    const name = algorithm(a, true).name;
+    const bytes = view(data);
+    return offload(hostCompute?.digest(name, bytes), bytes, input => native.hash(name, input).buffer);
+  }
+  function signVerify(op, a, key, data, signature) {
+    const plan = signVerifyPlan(op, a, key);
+    const bytes = view(data);
+    if (op === "sign") return offload(hostCompute?.sign(plan, bytes), bytes, input => signVerifyRun(plan, input));
+    const sig = buffer(signature);
+    return offload(hostCompute?.verify(plan, sig, bytes), bytes, input => signVerifyRun(plan, input, sig));
+  }
+  function cryptOperation(op, a, key, data) {
+    const plan = cryptPlan(op, a, key);
+    const bytes = view(data);
+    return offload(hostCompute?.crypt(plan, bytes), bytes, input => cryptRun(plan, input));
+  }
+  function publicKey(key, usages) {
+    usages = usageList(usages);
+    const r = record(key);
+    if (r.type !== "private") fail(r.type === "secret" ? "NotSupportedError" : "InvalidAccessError", "key must be a private key");
+    const k = { ...r.key };
+    for (const field of ["d", "p", "q", "dp", "dq", "qi", "priv"]) delete k[field];
+    return makeKey(r.algorithm, "public", true, usages, k);
+  }
   class SubtleCrypto {
     constructor() {
       throw new TypeError("Illegal constructor");
     }
-    async digest(a, data) {
-      return native.hash(algorithm(a, true).name, buffer(data)).buffer;
+    digest(a, data) {
+      return settle(this, "digest", () => digest(a, data));
     }
-    async generateKey(a, extractable, usages) {
-      return generate(a, extractable, usages);
+    generateKey(a, extractable, usages) {
+      return settle(this, "generateKey", () => generate(a, extractable, usages));
     }
-    async importKey(format, data, a, extractable, usages) {
-      return importKey(format, data, a, extractable, usages);
+    importKey(format, data, a, extractable, usages) {
+      return settle(this, "importKey", () => importKey(format, data, a, extractable, usages));
     }
-    async exportKey(format, key) {
-      return exportKey(format, key);
+    exportKey(format, key) {
+      return settle(this, "exportKey", () => exportKey(format, key));
     }
     // The public half of a private key, always extractable, as in Bun.
-    async getPublicKey(key, usages) {
-      usages = usageList(usages);
-      const r = record(key);
-      if (r.type !== "private") fail(r.type === "secret" ? "NotSupportedError" : "InvalidAccessError", "key must be a private key");
-      const k = { ...r.key };
-      for (const field of ["d", "p", "q", "dp", "dq", "qi", "priv"]) delete k[field];
-      return makeKey(r.algorithm, "public", true, usages, k);
+    getPublicKey(key, usages) {
+      return settle(this, "getPublicKey", () => publicKey(key, usages));
     }
-    async sign(a, key, data) {
-      return signVerify("sign", a, key, data);
+    sign(a, key, data) {
+      return settle(this, "sign", () => signVerify("sign", a, key, data));
     }
-    async verify(a, key, signature, data) {
-      return signVerify("verify", a, key, data, signature);
+    verify(a, key, signature, data) {
+      return settle(this, "verify", () => signVerify("verify", a, key, data, signature));
     }
-    async encrypt(a, key, data) {
-      return crypt("encrypt", a, key, data);
+    encrypt(a, key, data) {
+      return settle(this, "encrypt", () => cryptOperation("encrypt", a, key, data));
     }
-    async decrypt(a, key, data) {
-      return crypt("decrypt", a, key, data);
+    decrypt(a, key, data) {
+      return settle(this, "decrypt", () => cryptOperation("decrypt", a, key, data));
     }
     // Node orders encapsulateBits results sharedKey first and encapsulateKey results
     // ciphertext first; Bun does the same.
-    async encapsulateBits(a, key) {
-      const result = encapsulate(a, key, "encapsulateBits");
-      return { sharedKey: result.sharedKey.buffer, ciphertext: result.ciphertext };
+    encapsulateBits(a, key) {
+      return settle(this, "encapsulateBits", () => {
+        const result = encapsulate(a, key, "encapsulateBits");
+        return { sharedKey: result.sharedKey.buffer, ciphertext: result.ciphertext };
+      });
     }
-    async encapsulateKey(a, key, sharedKeyAlgorithm, extractable, usages) {
-      const result = encapsulate(a, key, "encapsulateKey");
-      return {
-        ciphertext: result.ciphertext,
-        sharedKey: importKey("raw-secret", result.sharedKey, sharedKeyAlgorithm, extractable, usages),
-      };
+    encapsulateKey(a, key, sharedKeyAlgorithm, extractable, usages) {
+      return settle(this, "encapsulateKey", () => {
+        const result = encapsulate(a, key, "encapsulateKey");
+        return {
+          ciphertext: result.ciphertext,
+          sharedKey: importKey("raw-secret", result.sharedKey, sharedKeyAlgorithm, extractable, usages),
+        };
+      });
     }
-    async decapsulateBits(a, key, ciphertext) {
-      return decapsulate(a, key, ciphertext, "decapsulateBits").buffer;
+    decapsulateBits(a, key, ciphertext) {
+      return settle(this, "decapsulateBits", () => decapsulate(a, key, ciphertext, "decapsulateBits").buffer);
     }
-    async decapsulateKey(a, key, ciphertext, sharedKeyAlgorithm, extractable, usages) {
-      return importKey("raw-secret", decapsulate(a, key, ciphertext, "decapsulateKey"), sharedKeyAlgorithm, extractable, usages);
+    decapsulateKey(a, key, ciphertext, sharedKeyAlgorithm, extractable, usages) {
+      return settle(this, "decapsulateKey", () =>
+        importKey("raw-secret", decapsulate(a, key, ciphertext, "decapsulateKey"), sharedKeyAlgorithm, extractable, usages));
     }
     // length is optional in WebIDL, so the method's length is 2.
-    async deriveBits(a, key, length = undefined) {
-      return deriveBits(a, key, length);
+    deriveBits(a, key, length = undefined) {
+      return settle(this, "deriveBits", () => {
+        const bits = deriveBits(a, key, length);
+        return new Later(() => bits);
+      });
     }
-    async deriveKey(a, key, derived, extractable, usages) {
-      derived = algorithm(derived);
-      // Only key types with a key length can be derived; Bun's normalization rejects the rest.
-      if (jwkKeyType(derived) !== "oct") fail("NotSupportedError", "Unrecognized algorithm name");
-      if (derived.name === "HMAC") requiredHash(derived);
-      const length =
-        derived.name === "ChaCha20-Poly1305"
-          ? 256
-          : (derived.length ?? (derived.name === "HMAC" ? blockBits[requiredHash(derived).name] : undefined));
-      return importKey(
-        "raw-secret",
-        deriveBits(a, key, length, "deriveKey"),
-        derived,
-        extractable,
-        usages,
-      );
+    deriveKey(a, key, derived, extractable, usages) {
+      return settle(this, "deriveKey", () => {
+        const secret = deriveSecretKey(a, key, derived, extractable, usages);
+        return new Later(() => secret);
+      });
     }
-    async wrapKey(format, key, wrappingKey, a) {
-      format = keyFormat(format, "wrapKey");
-      const data = exportKey(format, key, "wrapKey");
-      let bytes =
-        format === "jwk" ? native.utf8Encode(JSON.stringify(data)) : data;
-      if (format === "jwk" && algorithm(a).name === "AES-KW") {
-        const padded = new Uint8Array(Math.ceil(bytes.length / 8) * 8).fill(32);
-        padded.set(bytes);
-        bytes = padded;
-      }
-      return crypt("encrypt", a, wrappingKey, bytes, "wrapKey");
+    wrapKey(format, key, wrappingKey, a) {
+      return settle(this, "wrapKey", () => wrapKey(format, key, wrappingKey, a));
     }
-    async unwrapKey(format, wrapped, key, a, unwrapped, extractable, usages) {
-      format = keyFormat(format, "unwrapKey");
-      // Bun normalizes the unwrapped key's algorithm before it decrypts.
-      unwrapped = algorithm(unwrapped);
-      const bytes = crypt("decrypt", a, key, wrapped, "unwrapKey");
-      if (format !== "jwk")
-        return importKey(format, bytes, unwrapped, extractable, usages);
-      let jwk;
-      try {
-        jwk = JSON.parse(native.utf8Decode(new Uint8Array(bytes), true));
-      } catch {
-        fail("DataError", "WrappedKey cannot be converted to a JSON object");
-      }
-      return importKey(format, jwk, unwrapped, extractable, usages);
+    unwrapKey(format, wrapped, key, a, unwrapped, extractable, usages) {
+      return settle(this, "unwrapKey", () => unwrapKey(format, wrapped, key, a, unwrapped, extractable, usages));
     }
     get [Symbol.toStringTag]() {
       return "SubtleCrypto";
     }
   }
+  function deriveSecretKey(a, key, derived, extractable, usages) {
+    derived = algorithm(derived);
+    // Only key types with a key length can be derived; Bun's normalization rejects the rest.
+    if (jwkKeyType(derived) !== "oct") fail("NotSupportedError", "Unrecognized algorithm name");
+    if (derived.name === "HMAC") requiredHash(derived);
+    const length =
+      derived.name === "ChaCha20-Poly1305"
+        ? 256
+        : (derived.length ?? (derived.name === "HMAC" ? blockBits[requiredHash(derived).name] : undefined));
+    return importKey(
+      "raw-secret",
+      deriveBits(a, key, length, "deriveKey"),
+      derived,
+      extractable,
+      usages,
+    );
+  }
+  // Bun wraps and unwraps with AES-KW at once and runs the other algorithms as background
+  // work, whose results and failures settle in a later task.
+  function wrapKey(format, key, wrappingKey, a) {
+    format = keyFormat(format, "wrapKey");
+    const data = exportKey(format, key, "wrapKey");
+    let bytes =
+      format === "jwk" ? native.utf8Encode(JSON.stringify(data)) : data;
+    if (format === "jwk" && algorithm(a).name === "AES-KW") {
+      const padded = new Uint8Array(Math.ceil(bytes.length / 8) * 8).fill(32);
+      padded.set(bytes);
+      bytes = padded;
+    }
+    const plan = cryptPlan("encrypt", a, wrappingKey, "wrapKey");
+    const input = buffer(bytes);
+    const run = () => cryptRun(plan, input);
+    return plan.a.name === "AES-KW" ? run() : new Later(run);
+  }
+  function unwrapKey(format, wrapped, key, a, unwrapped, extractable, usages) {
+    format = keyFormat(format, "unwrapKey");
+    // Bun normalizes the unwrapped key's algorithm before it decrypts.
+    unwrapped = algorithm(unwrapped);
+    const plan = cryptPlan("decrypt", a, key, "unwrapKey");
+    const input = buffer(wrapped);
+    const run = () => importUnwrapped(format, cryptRun(plan, input), unwrapped, extractable, usages);
+    return plan.a.name === "AES-KW" ? run() : new Later(run);
+  }
+  function importUnwrapped(format, bytes, unwrapped, extractable, usages) {
+    if (format !== "jwk")
+      return importKey(format, bytes, unwrapped, extractable, usages);
+    let jwk;
+    try {
+      jwk = JSON.parse(native.utf8Decode(new Uint8Array(bytes), true));
+    } catch {
+      fail("DataError", "WrappedKey cannot be converted to a JSON object");
+    }
+    return importKey(format, jwk, unwrapped, extractable, usages);
+  }
   const cryptoObject = globalThis.crypto;
-  const subtleInstance = native.subtleCrypto || Object.create(SubtleCrypto.prototype);
+  const subtleInstance = Object.create(SubtleCrypto.prototype);
   class Crypto {
     constructor() {
       throw new TypeError("Illegal constructor");
@@ -819,45 +939,26 @@
     }
   }
   internal.crypto = {
-    supportsAlgorithm: name => names.some(item => item.toUpperCase() === name.toUpperCase()),
     isKey: (value) => material.has(value),
-    isWasmKey: (value) => material.has(value) && !material.get(value).nativeKey,
-    rememberKey(key, jwk) {
-      const data = { ...jwk };
-      for (const field of ["alg", "ext", "key_ops", "use"]) delete data[field];
-      material.set(key, {
-        algorithm: copy(key.algorithm), displayAlgorithm: key.algorithm,
-        type: key.type, extractable: key.extractable, usages: Array.from(key.usages),
-        key: data, nativeKey: key,
-      });
-    },
     record,
-    // Keys the wasm provider owns; the browser engine's native keys clone natively.
-    cloneKey: (value) => (material.has(value) && !material.get(value).nativeKey ? cloneKey(value) : undefined),
+    cloneKey: (value) => (material.has(value) ? cloneKey(value) : undefined),
     serializeKey,
     deserializeKey,
     makeKey,
     generate,
     importKey,
     exportKey,
-    signVerify,
-    crypt,
     deriveBits,
     backend,
     algorithm,
-    buffer,
     encode,
     decode,
     keyAlgorithm,
   };
-  if (native.subtleCrypto) {
-    Object.setPrototypeOf(CryptoKey.prototype, native.CryptoKey.prototype);
-    internal.require("crypto_host_keys");
-  }
   return (defineGlobal) => {
     defineGlobal("Crypto", Crypto);
     Object.setPrototypeOf(globalThis.crypto, Crypto.prototype);
-    defineGlobal("CryptoKey", native.subtleCrypto ? native.CryptoKey : CryptoKey);
-    defineGlobal("SubtleCrypto", native.subtleCrypto ? native.SubtleCrypto : SubtleCrypto);
+    defineGlobal("CryptoKey", CryptoKey);
+    defineGlobal("SubtleCrypto", SubtleCrypto);
   };
 });

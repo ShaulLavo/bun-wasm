@@ -54,7 +54,7 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 }
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
-  "scripts/ci-shared-check-budget.sh",
+  "scripts/ci-shared-check-budget.sh", "scripts/wasm-name-sections.ts",
   "scripts/ci-shared-consumer-run.ts",
   "scripts/ci-shared-proof-inputs.ts", "scripts/ci-shared-proof-inputs.test.ts", "checks/quality-ci-shared-proof-inputs.json",
   "scripts/ci-build-tools.ts", "scripts/ci-binaryen.ts",
@@ -114,7 +114,7 @@ const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
 const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/getter-dispatch/", "tests/fixtures/proxy-get-forwarding/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/assignment-chain-depth/", "tests/fixtures/statement-record-cap/", "tests/fixtures/statement-records-async-using/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
-  "scripts/ci-ordinary-web-inputs.ts",
+  "scripts/ci-ordinary-web-inputs.ts", "scripts/wasm-name-sections.ts",
   "scripts/runtime-file-checks.ts", "scripts/run-with-timeout.mts", "scripts/process-owner.mts", "scripts/linux-subreaper.mts",
   ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml",
   "scripts/ci-program-delivery.ts",
@@ -158,7 +158,7 @@ const webGuestFiles = new Set([
   "tests/fixtures/runtime-proc-spawn-requests.json", "web/guest-tests/compose.ts", "web/guest-tests/jsc.test.ts",
   "web/tests/subprocess.ts", "web/tests/subprocess.mjs",
   "web/src/fs.ts", "web/src/tool-command.ts", "web/src/engine-host.js", "web/src/engine-host.d.ts",
-  "web/src/crypto-host.js", "web/src/crypto-inputs.js", "web/src/promise-reactions.ts",
+  "web/src/host-crypto.ts", "web/src/promise-reactions.ts",
   "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts", "web/src/native-readable-iterator.ts", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
   "web/src/module-records.ts",
 ]);

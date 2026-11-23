@@ -44,8 +44,8 @@ BROWSER_HOST_SOURCES = (
     "web/scripts/node-host.ts", "web/scripts/async-context.ts", "web/scripts/node-worker.ts", "web/scripts/node-process.ts", "web/scripts/node-signals.ts",
     "web/scripts/node-links.ts", "web/scripts/node-spawn.ts", "web/scripts/node-net.mjs", "web/scripts/node-install-net.ts",
     "web/scripts/node-stdio.ts", "web/src/net/trampoline.ts", "web/src/engine-host.js",
-    "web/src/promise-reactions.ts", "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts", "web/src/crypto-inputs.js",
-    "web/src/crypto-host.js", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
+    "web/src/promise-reactions.ts", "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts",
+    "web/src/host-crypto.ts", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
     "web/src/net/package-fetch.ts",
 )
 
@@ -263,7 +263,7 @@ def command(opts, wasm, work, preloads, path):
         tests += [part for preload in preloads for part in ["--preload", GUEST_TESTS + preload.removeprefix("./")]]
         tests += [GUEST_TESTS + path]
     if opts.engine == "browser":
-        return ["node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm), "--net"] + dirs + flags + ["--"] + tests
+        return ["node", "--expose-gc-as=__bunwasm_v8_gc", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm), "--net"] + dirs + flags + ["--"] + tests
     return [str(opts.launcher), "--wasm", str(wasm)] + dirs + flags + tests
 
 

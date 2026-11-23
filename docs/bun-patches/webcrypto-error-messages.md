@@ -37,7 +37,9 @@ its seed. A private OKP JWK takes its public key from `d`, ignoring `x`, as Bun 
 ECDH and X25519 `deriveBits` keep the leading bits of a length that is not a multiple
 of 8 and zero the rest; `deriveBits.length` is 2.
 
-The `webcrypto-error-messages` fixture compares these paths with native Bun on QuickJS
-and JSC. The Browser engine uses the host's SubtleCrypto and is unchanged.
+The `webcrypto-error-messages` fixture compares these paths with native Bun on all three
+engines. The Browser engine runs the same checks and messages; only the bulk computation of
+a supported operation goes to the browser's own Web Crypto, and a host failure is answered
+by the guest's computation and its error.
 
 [Ledger scope and pinned revisions](scope.md).

@@ -1,6 +1,5 @@
 // SubtleCrypto.getPublicKey for the classic key types: the public half of a private key,
-// always extractable, with Bun's usage and key-type errors. The browser engine delegates
-// to the host's native SubtleCrypto, whose messages are its own, so this fixture skips it.
+// always extractable, with Bun's usage and key-type errors.
 const subtle = crypto.subtle;
 const algorithms = [
   [{ name: "ECDSA", namedCurve: "P-256" }, ["sign", "verify"], ["verify"]],

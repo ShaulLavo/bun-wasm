@@ -535,8 +535,10 @@ Ordinary computed getters use the frame stack and no longer set this floor's sto
 merged the slots would let every reentry path go several times deeper with no source
 change of ours.
 
-`scripts/jsc-cloop-frame.ts check <jsc-engine.wasm>` reads that function from a linked
-side and fails unless it holds at least 4,896 bytes at every call it makes, which is
+`scripts/jsc-cloop-frame.ts check <engine.named.wasm>` reads that function from a linked
+side that keeps its name section (the shipped `jsc-engine.wasm` has none; the JSC side
+producer keeps `engine.named.wasm` beside `engine.wasm` in its build directory,
+`$JSC_ENGINE_BUILD_DIR`) and fails unless it holds at least 4,896 bytes at every call it makes, which is
 where every slow path and every reentry starts. It decodes every instruction and follows
 every path through the function's blocks, loops and branches, tracking how far the
 exported stack pointer is below its value at entry. It knows two writes: an allocation
@@ -1261,7 +1263,8 @@ installed Ajv 8 and is not part of a default sweep:
 python3 scripts/measure-stack.py --engine jsc --budget-kib 192 getter computedgetter ajvnames proxy tostring
 python3 scripts/measure-stack.py --engine jsc --budget-kib 192 \
   --ajv-codegen <project>/node_modules/ajv/dist/compile/codegen ajv
-bun scripts/jsc-cloop-frame.ts check dist/jsc-engine.wasm
+# The named JSC side; scripts/build-bun-jsc.sh writes it to $JSC_BUILD_DIR/engine by default.
+bun scripts/jsc-cloop-frame.ts check "${JSC_ENGINE_BUILD_DIR:-${JSC_BUILD_DIR:-/work/tmp/bun-wasm-jsc}/engine}/engine.named.wasm"
 scripts/test.sh --no-build --engine jsc getter-dispatch
 ```
 

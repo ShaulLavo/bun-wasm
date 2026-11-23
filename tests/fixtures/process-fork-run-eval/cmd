@@ -1,0 +1,7 @@
+run
+-e
+console.log("eval ran")
+-b
+./index.ts
+foo
+-a

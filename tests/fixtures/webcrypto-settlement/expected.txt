@@ -1,0 +1,28 @@
+detached digest: TypeError: Can only call SubtleCrypto.digest on instances of SubtleCrypto (ERR_INVALID_THIS)
+forged digest: TypeError: Can only call SubtleCrypto.digest on instances of SubtleCrypto (ERR_INVALID_THIS)
+forged sign: TypeError: Can only call SubtleCrypto.sign on instances of SubtleCrypto (ERR_INVALID_THIS)
+digest SHA-256: microtask then result
+digest SHA3-256: microtask then result
+encrypt AES-GCM: microtask then result
+sign HMAC: microtask then result
+generateKey HMAC: result then microtask
+round trip: true
+tampered: OperationError: The operation failed for an operation-specific reason
+verify: true false
+bad iv: InvalidAccessError: Key algorithm mismatch (15)
+decrypt bad tag: microtask then OperationError
+encrypt empty GCM iv: microtask then OperationError
+encrypt 12-byte CTR counter: OperationError then microtask
+wrapKey AES-KW: result then microtask
+unwrapKey AES-KW: result then microtask
+wrapKey AES-GCM: microtask then result
+unwrapKey AES-GCM: microtask then result
+wrapKey AES-CBC: microtask then result
+unwrapKey AES-CBC: microtask then result
+wrapKey AES-CTR: microtask then result
+unwrapKey AES-CTR: microtask then result
+bad tag, then repaired: OperationError: The operation failed for an operation-specific reason
+bad tag, then detached: OperationError: The operation failed for an operation-specific reason
+CTR wrap encrypt: f795aaab494b5923f7fd89ff948bc1e066e94bd4ef8a2c3b884cfa59ca342b2e
+CTR wrap decrypt: 0000000000000000000000000000000000000000000000000000000000000000
+ECDSA with der: 64 true
