@@ -64,7 +64,7 @@ if [[ $browser == 1 ]]; then
   browser_test bun tests/browser-editor.ts webkit || failed=1
   browser_test bun tests/browser-filesystem-lifecycle.ts chromium || failed=1
   browser_test bun tests/browser-filesystem-lifecycle.ts webkit || failed=1
-  storage_runner="$(cd "$root/web" && realpath node_modules/waffle/tests/storage-browser-runner.ts)"
+  storage_runner="$(cd "$root/web" && realpath node_modules/waffle/testing/storage-browser-runner.ts)"
   if [[ -f "$storage_runner" ]]; then
     browser_test bun "$storage_runner" chromium webkit || failed=1
   else

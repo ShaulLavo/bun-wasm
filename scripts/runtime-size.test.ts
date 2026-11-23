@@ -73,8 +73,8 @@ test("realm-local terminal turn guards do not admit terminal or process services
 });
 
 test("core gzip budget includes boundary, reports actionable excess", () => {
-  expect(() => checkCoreBudget(12544)).not.toThrow();
-  expect(() => checkCoreBudget(12545)).toThrow("core exceeds 12544 B gzip budget by 1 B");
+  expect(() => checkCoreBudget(14336)).not.toThrow();
+  expect(() => checkCoreBudget(14337)).toThrow("core exceeds 14336 B gzip budget by 1 B");
 });
 
 test("Bun light initial downloads allow the tiny fatal check but never the binary rewriter", () => {
