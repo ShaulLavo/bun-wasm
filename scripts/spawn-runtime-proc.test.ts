@@ -1234,3 +1234,35 @@ test("synchronous native stream pull cannot observe an uninitialized child waite
   expect(await child.exited).toBe(0);
   expect(fake.open()).toBe(0);
 });
+
+test("Node stdout data delivers before exit when a fast child writes and exits in the same step", async () => {
+  const fake = service();
+  const { module, pump } = load(fake);
+  const child = module.nodeChildProcess().spawn("bun", ["child.ts"]);
+  const record = fake.children.get(child.pid)!;
+  const events: string[] = [];
+  let output = "";
+  let seenAtExit = "";
+  child.on("spawn", () => events.push("spawn"));
+  child.stdout.on("data", (chunk: Buffer) => {
+    output += chunk.toString();
+    events.push("data");
+  });
+  child.on("exit", (code: number) => {
+    seenAtExit = output;
+    events.push(`exit:${code}`);
+  });
+  const closed = new Promise<void>((resolve) => child.once("close", () => {
+    events.push("close");
+    resolve();
+  }));
+  // Let Readable.on("data")'s nextTick resume put stdout into flowing mode before the child completes.
+  await new Promise((resolve) => process.nextTick(resolve));
+  fake.childWrite(record, 1, 'child ran ["-b"] ["x"]\n');
+  fake.exit(record, 0);
+  await pump();
+  await closed;
+  expect(events).toEqual(["spawn", "data", "exit:0", "close"]);
+  expect(seenAtExit).toBe('child ran ["-b"] ["x"]\n');
+  expect(fake.open()).toBe(0);
+});

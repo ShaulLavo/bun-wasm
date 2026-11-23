@@ -83,6 +83,7 @@ declare namespace BunWasm {
     getAsyncContext(): unknown;
     setAsyncContext(context: unknown): void;
     runMicrotasks(): void;
+    isExecutionUnwind?(error: unknown): boolean;
     stringIs8Bit?(value: unknown): boolean | undefined;
     exit(code?: number): never;
   }

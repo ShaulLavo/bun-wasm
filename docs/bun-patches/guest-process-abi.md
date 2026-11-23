@@ -68,8 +68,10 @@ of applying a lifetime limit to consumed streams. The capture helper accepts the
 stream and returns the fixed-owned bytes from `concatBytes`; the local `runtime.d.ts` Writable
 final callback declaration includes the optional error passed by the Node stream contract.
 The Node adapter starts one demand-limited pump immediately, so unread empty streams observe
-EOF without an application reader. After exit or startup failure, it resumes unread stdio to
-complete the Node close contract. Destroy cancels the owned Web reader and settles its drain,
+EOF without an application reader. Each async waiter step observes startup first (`spawn`),
+reads ready output pipes before consuming child exit so buffered stdout/stderr resolves pending
+readers ahead of `exited` and Node `exit` listeners, and after exit or startup failure resumes
+unread stdio to complete the Node close contract. Destroy cancels the owned Web reader and settles its drain,
 including an outstanding read. Caller ref/unref intent is kept separately from pipe demand;
 new output demand can reference a dormant waiter without undoing an explicit unref.
 These input/lifetime and demand rules and their fake-host and real-guest regressions are original
