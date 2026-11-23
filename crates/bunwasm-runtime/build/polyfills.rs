@@ -76,7 +76,12 @@ pub fn embed(manifest: &Path, out: &Path) {
         ),
     ];
     for (name, generator, input) in generated {
-        let source = generate(name, &manifest.join("../../scripts").join(generator), &input, out);
+        let source = generate(
+            name,
+            &manifest.join("../../scripts").join(generator),
+            &input,
+            out,
+        );
         let path = if minify {
             let destination = out.join("runtime-js").join(format!("{name}.js"));
             compact.push((source, destination.clone()));
