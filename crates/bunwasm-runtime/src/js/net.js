@@ -201,8 +201,10 @@
   internal.httpStatusText = STATUS_TEXT;
 
   const { validateHeaderName, validateHeaderValue, validateMethod, validatePath, validateStatus, outgoingHeaders } = internal.require("http_common");
-  const encoder = new TextEncoder();
-  const latin1 = (bytes) => native.latin1Decode(bytes);
+  // The runtime's own encoder: net.js loads on first use, after programs may replace globals.
+  const { TextEncoder: Encoder = TextEncoder } = internal.web;
+  const encoder = new Encoder();
+  const latin1 =(bytes) => native.latin1Decode(bytes);
 
   function indexOfCrlfCrlf(bytes, from) {
     for (let i = Math.max(0, from - 3); i + 3 < bytes.length; i++) {

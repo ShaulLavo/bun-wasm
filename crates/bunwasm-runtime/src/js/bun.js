@@ -512,9 +512,7 @@
     return { success: true, outputs: result.outputs.map((o) => new BuildArtifact(o, entrypoints)), logs };
   }
 
-  // A Bun property whose module loads on first use (installed below, after the object exists).
-  const lazyLoad = Symbol("lazy");
-  const lazy = (load) => ({ [lazyLoad]: load });
+  const concatArrayBuffers = internal.require("concat_array_buffers");
 
   async function readableStreamToBytes(stream) {
     const chunks = [];
@@ -525,6 +523,10 @@
   const noProcesses = "WASI has no processes";
   const noNetwork = "WASI has no network access";
 
+  const { TOML, YAML, JSON5, JSONC } = internal.require("formats");
+  const { Glob } = internal.require("glob");
+  const { Cookie, CookieMap } = internal.require("cookie");
+  const { ArrayBufferSink } = internal.require("array_buffer_sink");
   function semverString(value) {
     if (typeof value === "symbol") throw new TypeError("Cannot convert a symbol to a string");
     return `${value}`;
@@ -545,24 +547,19 @@
     ? forceColor !== "0"
     : globalThis.process.env.NO_COLOR === undefined && native.isatty(2);
 
+  const dns = internal.require("dns");
+
   const Bun = {
-    ArrayBufferSink: lazy(() => internal.require("array_buffer_sink").ArrayBufferSink),
-    Archive: lazy(() => internal.require("archive").Archive),
+    ArrayBufferSink,
+    Archive: internal.require("archive").Archive,
 
     jest: () => internal.require("bun_test").exports,
     semver,
-    TOML: lazy(() => internal.require("formats").TOML),
-    YAML: lazy(() => internal.require("formats").YAML),
-    JSON5: lazy(() => internal.require("formats").JSON5),
-    JSONC: lazy(() => internal.require("formats").JSONC),
-    Glob: lazy(() => internal.require("glob").Glob),
-    Cookie: lazy(() => internal.require("cookie").Cookie),
-    CookieMap: lazy(() => internal.require("cookie").CookieMap),
-    JSONL: lazy(() => internal.require("jsonl")),
+    TOML, YAML, JSON5, JSONC, Glob, Cookie, CookieMap, JSONL: internal.require("jsonl"),
     version: info.version,
     revision: info.revision,
     version_with_sha: `v${info.version} (${info.revision.slice(0, 9)})`,
-    Transpiler: lazy(() => internal.require("bun_transpiler").Transpiler),
+    Transpiler: internal.require("bun_transpiler").Transpiler,
     get argv() {
       return globalThis.process.argv;
     },
@@ -603,12 +600,12 @@
       const measured = native.gc();
       return typeof measured === "number" ? measured : native.memoryUsage().heapUsed ?? 0;
     },
-    plugin: lazy(() => internal.require("bun_plugin").plugin),
+    plugin: internal.require("bun_plugin").plugin,
     resolveSync,
     resolve: async (spec, from) => resolveSync(spec, from),
     fileURLToPath: (url) => internal.require("node_url").fileURLToPath(url),
     pathToFileURL: (path) => internal.require("node_url").pathToFileURL(path),
-    concatArrayBuffers: lazy(() => internal.require("concat_array_buffers")),
+    concatArrayBuffers,
     gzipSync: (data, options) => bunZlib(data, options, "gzip"),
     gunzipSync: (data, options) => bunZlib(data, options, "gunzip"),
     deflateSync: (data, options) => bunZlib(data, options, "deflateRaw"),
@@ -652,21 +649,9 @@
     listen: (options) => internal.require("net").bunTcp().listen(options),
     connect: (options) => internal.require("net").bunTcp().connect(options),
     udpSocket: unsupported("Bun.udpSocket", noNetwork),
-    dns: lazy(() => internal.require("dns").bun()),
+    dns: dns.bun(),
     openInEditor: unsupported("Bun.openInEditor", noProcesses),
   };
-  // Lazy properties keep their place and enumerability. The first read or write turns each into
-  // a plain data property, so a class keeps one identity and an assignment replaces it.
-  for (const name of Object.keys(Bun)) {
-    const descriptor = Object.getOwnPropertyDescriptor(Bun, name);
-    const load = descriptor.value?.[lazyLoad];
-    if (!load) continue;
-    const settle = value => {
-      Object.defineProperty(Bun, name, { value, writable: true, enumerable: true, configurable: true });
-      return value;
-    };
-    Object.defineProperty(Bun, name, { enumerable: true, configurable: true, get: () => settle(load()), set: settle });
-  }
   internal.BunFile = BunFile;
   Object.defineProperty(Bun, Symbol.toStringTag, { value: "Bun", configurable: true });
   return Bun;

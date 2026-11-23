@@ -92,7 +92,9 @@ test("whole bootstrap installs native lookup and loads networking on the first l
   expect(state.loaded).toContain("host_lookup");
   expect(state.loaded).not.toContain("net");
   expect(state.loaded).not.toContain("websocket");
-  const pending = state.evaluate("runtime.builtin('node:dns/promises').lookup('localhost', { all: true })");
+  // Networking loads after the program ran, so it must not depend on globals the program replaced.
+  state.evaluate("globalThis.TextEncoder = undefined; globalThis.TextDecoder = undefined");
+  const pending =state.evaluate("runtime.builtin('node:dns/promises').lookup('localhost', { all: true })");
   await Promise.resolve();
   expect(state.loaded).toContain("net");
   expect(state.started).toEqual([["localhost", 0, 0]]);

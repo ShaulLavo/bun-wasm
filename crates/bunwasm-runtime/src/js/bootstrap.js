@@ -1488,7 +1488,7 @@
   internal.require("import_requests");
   internal.require("source_prepare");
   internal.require("function");
-  // fake_timers loads with bun_test.js, the only module that can turn fake timers on.
+  internal.fakeTimers = internal.require("fake_timers");
   // Networking factories require the installed web globals.
   if (native.hostCaps?.lookup_start && native.hostCaps?.lookup_head) {
     internal.require("host_lookup").install();
@@ -1557,17 +1557,6 @@
         return withZoneName(this, Reflect.apply(nativeToTimeString, this, []));
       },
     });
-    // Date() called as a function prints the same string, which QuickJS builds natively. The
-    // proxy traps only calls: `new Date` reaches the engine's constructor without running JS.
-    const NativeDate = Date;
-    const CallableDate = new Proxy(NativeDate, {
-      apply() {
-        const now = new NativeDate();
-        return withZoneName(now, Reflect.apply(nativeToString, now, []));
-      },
-    });
-    defineHidden(NativeDate.prototype, { constructor: CallableDate });
-    defineGlobal("Date", CallableDate);
   }
 
   // Temporal probes Date's native locale methods during initialization. Install

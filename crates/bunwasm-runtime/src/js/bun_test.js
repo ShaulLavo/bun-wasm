@@ -10,9 +10,6 @@
   "use strict";
 
   const native = internal.native;
-  // Fake timers replace globalThis.Date, which slows every Date. Only bun:test and the test
-  // runner can turn them on, so they install when this module loads: before any test file runs.
-  internal.fakeTimers ??= internal.require("fake_timers");
   const INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
 
   function inspectModule() {

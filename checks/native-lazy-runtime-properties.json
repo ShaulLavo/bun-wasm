@@ -1,5 +1,0 @@
-{
-  "owner": "native",
-  "path": "tests/fixtures/lazy-runtime-properties",
-  "engines": ["quickjs", "jsc", "browser"]
-}

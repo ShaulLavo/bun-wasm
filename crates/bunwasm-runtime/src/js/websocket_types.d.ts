@@ -83,5 +83,6 @@ declare namespace BunWasm {
     toUint8: Internal["toUint8"];
     native: Pick<Native, "hostConnect">;
     printError(error: unknown): void;
+    web?: { TextEncoder?: typeof TextEncoder; TextDecoder?: typeof TextDecoder };
   }
 }
