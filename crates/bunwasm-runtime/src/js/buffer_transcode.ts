@@ -8,6 +8,8 @@
     bytesToString(bytes: Uint8Array, encoding: Encoding): string;
     fromString(text: string, encoding: Encoding): Uint8Array;
     allocate(size: number): Uint8Array;
+    maxBufferLength?: number;
+    maxUtf16Units?: number;
   };
 
   return function createTranscode(bindings: Bindings) {
@@ -79,6 +81,25 @@
       return output;
     }
 
+    const MAX_BUFFER_LENGTH = bindings.maxBufferLength ?? 4294967296;
+    const MAX_UTF16_UNITS = bindings.maxUtf16Units ?? 1073741824;
+
+    function checkLimits(length: number, from: Encoding, to: Encoding): void {
+      if ((from === "latin1" || from === "ascii") && to === "utf16le") {
+        if (length * 2 > MAX_BUFFER_LENGTH) throw new RangeError("Out of memory");
+        return;
+      }
+      if (from === "utf8" && to === "utf16le") return;
+      if (from === "utf16le") {
+        const units = Math.floor(length / 2) + (to === "utf16le" ? (length & 1) : 0);
+        if (units >= MAX_UTF16_UNITS) throw new RangeError("Out of memory");
+        return;
+      }
+      if (from === "latin1" || from === "ascii") {
+        if (length >= MAX_UTF16_UNITS) throw new RangeError("Out of memory");
+      }
+    }
+
     return function transcode(source: unknown, fromEncoding?: unknown, toEncoding?: unknown): Uint8Array {
       if (!isSource(source)) throw invalidArgType("source", ["Buffer", "Uint8Array"], source);
       if (readLength.call(source) === 0) return allocate(0);
@@ -87,6 +108,7 @@
       const length = readLength.call(source);
       if (length === 0) return allocate(0);
       const from = encoding(fromValue), to = encoding(toValue);
+      checkLimits(length, from, to);
       const bytes = new Uint8Array(readBuffer.call(source), readOffset.call(source), length);
       const text = decode(bytes, from, to);
       return to === "ascii" || to === "latin1" ? narrow(text, to) : fromString(text, to);
