@@ -23,7 +23,7 @@ type OwnedRequest = { witness: SafariOwnershipWitness | undefined; operation: Sa
 type Request = <T>(path: string, body: unknown, method: string | undefined, decode: (value: unknown) => T, owned?: OwnedRequest) => Promise<T>;
 const accept = (value: unknown): unknown => value;
 type CleanupRequests = { command: Request; session: Request; timeoutMs: number };
-type Preview = { kind: "tab"; handle: string } | { kind: "frame"; token: string };
+type Preview = { kind: "tab"; handle: string } | { kind: "frame"; token: string; loading: string | null };
 
 // Serialized with the existing presenter. Reserve ownership before dispatch so a late
 // creation still belongs to cleanup after its admission expires.
@@ -33,6 +33,41 @@ function presentFrame(input: { url: string; token: string }, present: typeof pre
   const frame = document.getElementById("__goalsIphonePreview");
   if (!(frame instanceof HTMLIFrameElement)) throw new Error("Missing Safari preview frame");
   frame.dataset.goalsPresentation = input.token;
+}
+
+// Preview navigations first show the service worker's loading document, whose CSP refuses the
+// evaluation wrapper's eval (web/src/preview-navigation.ts). It lives at exactly
+// `<app>/__preview/.loading/<UUID>`, beside previews at `<app>/__preview/<port>/...`. Its
+// terminal state replaces the `[role="status"]` text with this message.
+export const previewLoadingFailure = "The preview request failed. Reload to try again.";
+export function previewLoadingPattern(url: string): string | null {
+  const scope = /^(.*?\/__preview\/)\d{1,5}(?:\/|$)/.exec(new URL(url).pathname)?.[1];
+  if (scope === undefined) return null;
+  const escaped = scope.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return `^${escaped}\\.loading/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`;
+}
+
+type FrameState = { state: "pending" | "ready" } | { state: "failed"; message: string };
+// Read in the host document: the frame is ready once it has left its initial about:blank and
+// the loading document. A failed loading document is terminal.
+function previewFrameState(input: { token: string; loading: string | null; failure: string }): FrameState {
+  const frame = document.getElementById("__goalsIphonePreview");
+  if (!(frame instanceof HTMLIFrameElement) || frame.dataset.goalsPresentation !== input.token) throw new Error("Safari preview frame identity changed");
+  try {
+    const current = frame.contentWindow?.location;
+    if (!current || current.href === "about:blank") return { state: "pending" };
+    if (input.loading === null || !new RegExp(input.loading).test(current.pathname)) return { state: "ready" };
+    const loaded = frame.contentDocument;
+    if (!loaded || loaded.readyState !== "complete") return { state: "pending" };
+    // An expired or unbound token commits a plain-text 410 or 400 page with no status element.
+    const status = loaded.querySelector('[role="status"]');
+    if (!status) return { state: "failed", message: (loaded.body?.textContent ?? "").trim() || input.failure };
+    return status.textContent === input.failure ? { state: "failed", message: input.failure } : { state: "pending" };
+  } catch (error) {
+    // Only a cross-origin document hides its location, and it is not the same-origin loading document.
+    if (error instanceof DOMException && error.name === "SecurityError") return { state: "ready" };
+    throw error;
+  }
 }
 
 function ownedFrame(token: string, remove: boolean): HTMLIFrameElement | null {
@@ -132,10 +167,12 @@ async function exchange(url: string, { method, timeoutMs, signal, body, path }: 
   return value;
 }
 
-type EvaluationReply = { ok: true; value: unknown } | { ok: false; message: unknown; stack: unknown };
+type EvaluationReply = { ok: true; value: unknown } | { ok: false; message: unknown; stack: unknown } | { loading: "pending" | "failed"; message: string };
 // The evaluation contract. A guest error is a valid reply; a non-object or a success without JSON is not.
+// A preview still on the loading document reports that instead of evaluating.
 function evaluationReply(value: unknown): EvaluationReply {
   const result = object(value);
+  if (result.loading === "pending" || result.loading === "failed") return { loading: result.loading, message: String(result.message ?? "") };
   if (result.ok !== true) return { ok: false, message: result.message, stack: result.stack };
   if (typeof result.json !== "string") throw new Error("Safari evaluation returned no JSON value");
   return { ok: true, value: JSON.parse(result.json) };
@@ -161,7 +198,15 @@ async function cleanupAfterFailure(error: unknown, cleanup: () => Promise<void>)
 
 const evaluateScript = `
 const done = arguments[arguments.length - 1];
-const expression = arguments[0];
+const expression = arguments[0], loading = arguments[1], failure = arguments[2];
+if (typeof loading === "string" && new RegExp(loading).test(location.pathname)) {
+  const status = document.readyState === "complete" ? document.querySelector('[role="status"]') : undefined;
+  const body = document.body && document.body.textContent ? document.body.textContent.trim() : "";
+  if (status === undefined) done({ loading: "pending", message: "" });
+  else if (status === null) done({ loading: "failed", message: body || failure });
+  else done({ loading: status.textContent === failure ? "failed" : "pending", message: status.textContent || "" });
+  return;
+}
 Promise.resolve().then(() => (0, eval)(expression)).then(value => {
   done({ ok: true, json: JSON.stringify(value === undefined ? null : value) });
 }).catch(error => done({ ok: false, message: String(error), stack: error && error.stack ? String(error.stack) : "" }));
@@ -244,11 +289,14 @@ function transport(request: Request, sessionPath: string, host: string, capabili
   async function openFrame(url: string, admission: Admission): Promise<void> {
     await closePreview(admission);
     await hostContext(admission);
-    const token = crypto.randomUUID();
-    preview = { kind: "frame", token };
+    const token = crypto.randomUUID(), loading = previewLoadingPattern(url);
+    preview = { kind: "frame", token, loading };
     await ownedCommand({ kind: "frame-present", token }, admission, "/execute/sync", {
       script: `(${presentFrame.toString()})(arguments[0], ${presentIphonePreview.toString()}); return null;`, args: [{ url, token }],
     });
+    const input = JSON.stringify({ token, loading, failure: previewLoadingFailure });
+    const frame = await until(() => evaluate<FrameState>(`(${previewFrameState.toString()})(${input})`, admission), value => value.state !== "pending", admit(admission));
+    if (frame.state === "failed") throw new Error(`Safari preview loading failed: ${frame.message}`);
     await previewContext(admission);
   }
 
@@ -260,8 +308,13 @@ function transport(request: Request, sessionPath: string, host: string, capabili
     return created;
   }
 
+  // A frame that reloads (dev startup or a full hot reload) shows the loading document again.
+  // Wait within the admission while it is pending; its failure and any real error surface.
   async function evaluate<T>(expression: string, admission: Admission): Promise<T> {
-    const result = await decodedCommand(admission, "/execute/async", { script: evaluateScript, args: [expression] }, undefined, evaluationReply);
+    const args = [expression, preview?.kind === "frame" ? preview.loading : null, previewLoadingFailure];
+    const send = () => decodedCommand(admission, "/execute/async", { script: evaluateScript, args }, undefined, evaluationReply);
+    const result = await until(send, reply => !("loading" in reply) || reply.loading === "failed", admit(admission));
+    if ("loading" in result) throw new Error(`Safari preview loading failed: ${result.message}`);
     if (!result.ok) throw new Error(`Safari evaluation failed: ${String(result.message)}\n${String(result.stack ?? "")}`);
     return result.value as T;
   }

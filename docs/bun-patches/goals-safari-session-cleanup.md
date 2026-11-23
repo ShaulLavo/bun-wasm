@@ -104,3 +104,51 @@ Playwright import. It serves one local HTML fixture, observes its own host and
 frame, verifies the receipt is readable before teardown, and records frame-removal
 and session-deletion acknowledgements separately. It makes no framework, process
 ownership or physical-window-absence acceptance claim.
+
+## Preview loading document
+
+Desktop page expressions run through an indirect `eval` inside WebDriver's
+asynchronous script. Since `preview-loading-navigation.md`, every mounted preview
+navigation first shows a service-worker loading document whose CSP allows inline
+script but refuses string evaluation. The desktop frame's first render read then
+failed with `EvalError` instead of waiting for the guest page.
+
+The transport matches the loading document by its exact reserved route,
+`<app>/__preview/.loading/<UUID>`. It derives `<app>/__preview/` from the preview URL
+`<app>/__preview/<port>/...`, so an application route that merely contains
+`.loading` is not mistaken for it. A document on that route is pending until its
+`readyState` is `complete`. After that it is failed in either of two cases:
+- It has no `[role="status"]` element. This is the plain-text HTTP 410 (`Preview
+  request is no longer available.`) or 400 (`Cannot bind the preview loading
+  document.`) that a lost or unbound token commits. Its body text becomes the
+  message, or the loading failure text if the body is empty.
+- Its status reads `The preview request failed. Reload to try again.`
+
+Both texts are copied from `web/src/preview-navigation.ts` without changing that
+file, so prepared sites stay valid.
+
+After presenting its frame, the transport polls from the host document, within
+the open-preview phase admission, until the frame's same-origin location has left
+both its initial `about:blank` and the loading document. A failed loading document
+fails the phase at once with its message. A cross-origin document, whose location
+throws `SecurityError`, counts as left. Other read errors still fail the phase.
+
+The frame can return to the loading document after that poll, for example when
+it reloads during development startup or a full hot reload. Each evaluation
+therefore checks first, inside WebDriver's script and before `eval`, whether its
+document is on the loading route. While it is pending, the evaluation is retried
+within the caller's admission. A failed loading document is reported at once.
+Any other result is returned unchanged, so an application's own CSP `EvalError`
+or script error still fails immediately and is never retried.
+
+HTTP fixtures cover each case:
+- the frame passing through `about:blank` and a refusing loading document;
+- an application route containing `.loading`;
+- an immediate terminal failure, both at open and at evaluation;
+- plain-text 410 and 400 responses, still loading and then complete, both at open
+  and at evaluation;
+- a reload back to the loading document that waits and then evaluates;
+- an application CSP refusal that fails without retry.
+
+Chrome and Firefox evaluate through their debugging protocols, and iPhone Safari
+uses its observer bus, so neither changes.

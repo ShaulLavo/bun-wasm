@@ -2,7 +2,7 @@ import { withScoped, withAdmission } from "./scope-fixture";
 import { afterEach, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { createContext, runInContext, type Context } from "node:vm";
-import { createSafariTransport, type SafariTransport, type SafariTransportOptions } from "./safari-transport";
+import { createSafariTransport, previewLoadingFailure, previewLoadingPattern, type SafariTransport, type SafariTransportOptions } from "./safari-transport";
 import { campaignDeadlines, cellDeadlines } from "./deadlines";
 import { Scope } from "./scope";
 import { armNativeClick, observeNativeClick } from "./native-click";
@@ -64,18 +64,39 @@ class FixtureFrame {
   readonly reference = crypto.randomUUID();
   context: Context = createContext();
   constructor(readonly elements: Map<string, FixtureFrame>) {}
+  get contentWindow(): Context { return this.context; }
+  get contentDocument(): unknown { return this.context.document; }
   addEventListener(): void {}
   focus(): void {}
   remove(): void { if (this.elements.get(this.id) === this) this.elements.delete(this.id); }
 }
 
-function document(url = "about:blank"): Context {
+const loadingURL = "http://fixture.test/__preview/.loading/0b6f3c3e-8d1a-4c39-9a51-6d3f2f1e7a10";
+// A document whose CSP allows inline script but refuses string evaluation, like the
+// service worker's loading document. `status` is its `[role="status"]` text.
+function refusingDocument(url: string, status = "Waiting for the development server…"): Context {
+  const context = document(url, status);
+  context.eval = () => { throw new EvalError("Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source"); };
+  return context;
+}
+
+// A plain-text response committed on the loading route: an HTTP 410 or 400 with no status element.
+function plainDocument(url: string, text: string, readyState = "complete"): Context {
+  const context = document(url, undefined, readyState, text);
+  context.eval = () => { throw new EvalError("Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source"); };
+  return context;
+}
+
+function document(url = "about:blank", status?: string, readyState = "complete", text = status ?? ""): Context {
   const elements = new Map<string, FixtureFrame>();
-  return createContext({ setTimeout, clearTimeout, crypto, location: { href: url }, HTMLIFrameElement: FixtureFrame,
+  const pathname = URL.canParse(url) ? new URL(url).pathname : url;
+  return createContext({ setTimeout, clearTimeout, crypto, location: { href: url, pathname }, HTMLIFrameElement: FixtureFrame,
     document: {
+      readyState,
       getElementById: (id: string) => elements.get(id) ?? null,
+      querySelector: (selector: string) => selector === '[role="status"]' && status !== undefined ? { textContent: status } : null,
       createElement: () => new FixtureFrame(elements),
-      body: { appendChild(frame: FixtureFrame) { frame.context = document(frame.src); elements.set(frame.id, frame); } },
+      body: { textContent: text, appendChild(frame: FixtureFrame) { frame.context = document(frame.src); elements.set(frame.id, frame); } },
     },
   });
 }
@@ -242,7 +263,8 @@ test("awaits delayed expressions and parses nested, null, and undefined results"
     expect(value).toEqual({ answer: 42, nested: [null, true, "unicode ☃"] });
     expect(await withScoped(transport, page => page.evaluate("null"))).toBeNull();
     expect(await withScoped(transport, page => page.evaluate("undefined"))).toBeNull();
-    expect(driver.calls.at(-1)?.body.args).toEqual(["undefined"]);
+    // No frame preview: no loading route to watch for.
+    expect(driver.calls.at(-1)?.body.args).toEqual(["undefined", null, previewLoadingFailure]);
     expect(driver.calls.at(-1)?.path).toEndWith("/execute/async");
   } finally { await transport.close(); }
 });
@@ -256,6 +278,159 @@ test("propagates synchronous, rejected-promise, syntax, and JSON serialization e
     await expect(withScoped(transport, page => page.evaluate("1n"))).rejects.toThrow(/BigInt/);
     await expect(withScoped(transport, page => page.evaluate("(() => { const v = {}; v.self = v; return v; })()"))).rejects.toThrow(/circular|cyclic/i);
     expect(await withScoped(transport, page => page.evaluate<number>("6 * 7"))).toBe(42);
+  } finally { await transport.close(); }
+});
+
+// Counts host polls (previewFrameState) and page evaluations of `marker`, letting a test change
+// the preview frame's document between them.
+function previewDriver(change: (frame: () => FixtureFrame, polls: number, evaluations: number) => void) {
+  const counts = { polls: 0, evaluations: 0 };
+  const frame = () => {
+    // Read from the host window: the selected context may be the frame itself.
+    const host = driver.windows.get("host");
+    assert.ok(host);
+    const value: unknown = runInContext('document.getElementById("__goalsIphonePreview")', host);
+    assert.ok(value instanceof FixtureFrame);
+    return value;
+  };
+  const driver = fixture({ intercept: call => {
+    if (!call.path.endsWith("/execute/async")) return;
+    const source = String(call.body.args);
+    if (source.includes("function previewFrameState")) counts.polls++;
+    else if (source.includes("marker")) counts.evaluations++;
+    else return;
+    change(frame, counts.polls, counts.evaluations);
+  } });
+  return { driver, counts, frame };
+}
+const previewURL = "http://fixture.test/__preview/5173/";
+
+test("preview loading documents match only the exact reserved route", () => {
+  const pattern = previewLoadingPattern(previewURL);
+  if (pattern === null) throw new Error("Missing loading pattern");
+  const loading = new RegExp(pattern);
+  expect(loading.test(new URL(loadingURL).pathname)).toBe(true);
+  expect(loading.test("/__preview/5173/docs/.loading/page")).toBe(false);
+  expect(loading.test("/__preview/5173/.loading/0b6f3c3e-8d1a-4c39-9a51-6d3f2f1e7a10")).toBe(false);
+  expect(loading.test(new URL(loadingURL).pathname + "/status")).toBe(false);
+  expect(previewLoadingPattern("http://fixture.test/bun-wasm/__preview/5173/app")).toContain("/bun-wasm/__preview/\\.loading/");
+  expect(previewLoadingPattern("http://fixture.test/editor")).toBeNull();
+});
+
+test("desktop preview waits out the about:blank and loading documents before evaluating in the frame", async () => {
+  const { driver, counts } = previewDriver((frame, polls) => {
+    if (polls === 1) frame().context = document();
+    if (polls === 2) frame().context = refusingDocument(loadingURL);
+    if (polls === 4) frame().context = document(previewURL);
+  });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await withScoped(transport, page => page.openPreview(previewURL));
+    expect(counts.polls).toBe(4);
+    expect(await withScoped(transport, page => page.evaluate("location.href"))).toBe(previewURL);
+  } finally { await transport.close(); }
+});
+
+test("a legitimate route containing .loading is not mistaken for the loading document", async () => {
+  const route = "http://fixture.test/__preview/5173/docs/.loading/page";
+  const { driver, counts } = previewDriver(() => {});
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await withScoped(transport, page => page.openPreview(route));
+    expect(counts.polls).toBe(1);
+    expect(await withScoped(transport, page => page.evaluate("'marker' && location.href"))).toBe(route);
+    expect(counts.evaluations).toBe(1);
+  } finally { await transport.close(); }
+});
+
+test("a failed loading document surfaces its error at once instead of waiting for the deadline", async () => {
+  const { driver, counts } = previewDriver((frame, polls) => { if (polls === 1) frame().context = refusingDocument(loadingURL, previewLoadingFailure); });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    const started = Date.now();
+    await expect(withScoped(transport, page => page.openPreview(previewURL))).rejects.toThrow(`Safari preview loading failed: ${previewLoadingFailure}`);
+    expect(counts.polls).toBe(1);
+    expect(Date.now() - started).toBeLessThan(30_000);
+  } finally { await transport.close(); }
+});
+
+test("a preview that reloads into the loading document waits at evaluation time, then evaluates", async () => {
+  const { driver, counts } = previewDriver((frame, _polls, evaluations) => {
+    if (evaluations === 1) frame().context = refusingDocument(loadingURL);
+    if (evaluations === 3) frame().context = document(previewURL);
+  });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await withScoped(transport, page => page.openPreview(previewURL));
+    expect(await withScoped(transport, page => page.evaluate("'marker' && location.href"))).toBe(previewURL);
+    expect(counts.evaluations).toBe(3);
+  } finally { await transport.close(); }
+});
+
+test("a reloaded preview whose loading document fails surfaces that failure at evaluation time", async () => {
+  const { driver, counts } = previewDriver((frame, _polls, evaluations) => { if (evaluations === 1) frame().context = refusingDocument(loadingURL, previewLoadingFailure); });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await withScoped(transport, page => page.openPreview(previewURL));
+    await expect(withScoped(transport, page => page.evaluate("'marker' && location.href"))).rejects.toThrow(`Safari preview loading failed: ${previewLoadingFailure}`);
+    expect(counts.evaluations).toBe(1);
+  } finally { await transport.close(); }
+});
+
+// web/src/preview-navigation.ts answers a lost token with 410 and an unbound document with 400.
+const lostToken = ["HTTP 410", "Preview request is no longer available."] as const;
+const unbound = ["HTTP 400", "Cannot bind the preview loading document."] as const;
+
+test.each([lostToken, unbound])("a plain-text %s on the loading route fails the open at once", async (_status, text) => {
+  const { driver, counts } = previewDriver((frame, polls) => {
+    if (polls === 1) frame().context = plainDocument(loadingURL, text, "loading");
+    if (polls === 2) frame().context = plainDocument(loadingURL, text);
+  });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await expect(withScoped(transport, page => page.openPreview(previewURL))).rejects.toThrow(`Safari preview loading failed: ${text}`);
+    // The still-loading document was left pending; the completed one failed.
+    expect(counts.polls).toBe(2);
+  } finally { await transport.close(); }
+});
+
+test.each([lostToken, unbound])("a reload that commits a plain-text %s fails the evaluation at once", async (_status, text) => {
+  const { driver, counts } = previewDriver((frame, _polls, evaluations) => {
+    if (evaluations === 1) frame().context = plainDocument(loadingURL, text, "interactive");
+    if (evaluations === 2) frame().context = plainDocument(loadingURL, text);
+  });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await withScoped(transport, page => page.openPreview(previewURL));
+    await expect(withScoped(transport, page => page.evaluate("'marker' && location.href"))).rejects.toThrow(`Safari preview loading failed: ${text}`);
+    expect(counts.evaluations).toBe(2);
+  } finally { await transport.close(); }
+});
+
+test("an empty plain-text loading response still fails with the loading failure message", async () => {
+  const { driver } = previewDriver((frame, polls) => { if (polls === 1) frame().context = plainDocument(loadingURL, "  "); });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await expect(withScoped(transport, page => page.openPreview(previewURL))).rejects.toThrow(`Safari preview loading failed: ${previewLoadingFailure}`);
+  } finally { await transport.close(); }
+});
+
+test("an application CSP that refuses evaluation fails at once and is never retried", async () => {
+  const { driver, counts } = previewDriver((frame, _polls, evaluations) => { if (evaluations === 1) frame().context = refusingDocument(previewURL); });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await withScoped(transport, page => page.openPreview(previewURL));
+    await expect(withScoped(transport, page => page.evaluate("'marker' && location.href"))).rejects.toThrow("unsafe-eval");
+    expect(counts.evaluations).toBe(1);
   } finally { await transport.close(); }
 });
 
