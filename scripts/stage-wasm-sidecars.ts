@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { promisify } from "node:util";
 import { brotliCompress, constants, gzip } from "node:zlib";
@@ -27,10 +27,29 @@ export async function writeWasmWithSidecars(path: string, bytes: Uint8Array, wri
   const suffix = `.${process.pid}-${randomUUID()}.tmp`;
   await mkdir(dirname(path), { recursive: true });
   try {
-    await Promise.all(outputs.map(([target, data]) => write(target + suffix, data)));
+    await writeAll(outputs, suffix, write);
+    await requireFileTargets(outputs.map(([target]) => target));
+    for (const [target] of outputs) await rename(target + suffix, target);
   } catch (error) {
     await Promise.all(outputs.map(([target]) => rm(target + suffix, { force: true })));
     throw error;
   }
-  for (const [target] of outputs) await rename(target + suffix, target);
+}
+
+/** Wait for every write, so none can recreate a temporary file after cleanup, then report the first failure. */
+async function writeAll(outputs: readonly [string, Uint8Array][], suffix: string, write: Writer): Promise<void> {
+  const settled = await Promise.allSettled(outputs.map(([target, data]) => write(target + suffix, data)));
+  const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failure) throw failure.reason;
+}
+
+/** Refuse before any rename, so a directory in one target's place never leaves the others half replaced. */
+async function requireFileTargets(targets: readonly string[]): Promise<void> {
+  for (const target of targets) {
+    const stats = await lstat(target).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (stats?.isDirectory()) throw Object.assign(new Error(`EISDIR: ${target} is a directory`), { code: "EISDIR" });
+  }
 }

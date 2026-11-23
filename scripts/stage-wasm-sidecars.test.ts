@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
@@ -40,6 +40,38 @@ test("a failed twin write keeps the earlier raw and gzip files and leaves no tem
     expect(await Bun.file(path).text()).toBe("earlier raw");
     expect(await Bun.file(`${path}.gz`).text()).toBe("earlier gzip");
     expect((await readdir(directory)).sort()).toEqual(["env.wasm", "env.wasm.gz"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("cleanup waits for slower writes, so none recreates a temporary file after a failure", async () => {
+  const directory = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bw-sidecars-"));
+  try {
+    const path = join(directory, "env.wasm");
+    const failing = async (target: string, bytes: Uint8Array) => {
+      if (target.startsWith(`${path}.br.`)) throw new Error("disk full");
+      await Bun.sleep(50);
+      await writeFile(target, bytes);
+    };
+    await expect(writeWasmWithSidecars(path, new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]), failing)).rejects.toThrow("disk full");
+    // A write still in flight at rejection would land within its 50 ms delay; give it longer than that.
+    await Bun.sleep(150);
+    expect(await readdir(directory)).toEqual([]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a directory in a target's place is refused before any file is replaced", async () => {
+  const directory = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bw-sidecars-"));
+  try {
+    const path = join(directory, "env.wasm");
+    await Bun.write(path, "earlier raw");
+    await mkdir(`${path}.br`);
+    await expect(writeWasmWithSidecars(path, new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]))).rejects.toMatchObject({ code: "EISDIR" });
+    expect(await Bun.file(path).text()).toBe("earlier raw");
+    expect((await readdir(directory)).sort()).toEqual(["env.wasm", "env.wasm.br"]);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
