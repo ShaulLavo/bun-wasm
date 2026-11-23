@@ -52,11 +52,23 @@ async function swapIntoPlace(targets: readonly string[], suffix: string, move: M
   try {
     for (const target of targets) await placeOne(target, suffix, swap, move);
   } catch (error) {
-    await Promise.all(swap.placed.map(target => rm(target, { force: true })));
-    for (const target of swap.kept) await rename(target + swap.previous, target);
-    throw error;
+    const failures = await rollBack(swap, move);
+    if (!failures.length) throw error;
+    throw new AggregateError([error].concat(failures), `${String(error)}; rolling back also failed, so a ${swap.previous} backup may remain`, { cause: error });
   }
   await Promise.all(swap.kept.map(target => rm(target + swap.previous, { force: true })));
+}
+
+/**
+ * Remove each placed file and restore each backup independently, so one failed step never skips
+ * the others. A backup whose restore fails stays beside its target, where it can be recovered.
+ */
+async function rollBack(swap: { previous: string; kept: string[]; placed: string[] }, move: Mover): Promise<unknown[]> {
+  const failures: unknown[] = [];
+  const step = async (action: () => Promise<void>) => { await action().catch((error: unknown) => { failures.push(error); }); };
+  for (const target of swap.placed) await step(() => rm(target, { force: true }));
+  for (const target of swap.kept) await step(() => move(target + swap.previous, target));
+  return failures;
 }
 
 async function placeOne(target: string, suffix: string, swap: { previous: string; kept: string[]; placed: string[] }, move: Mover): Promise<void> {

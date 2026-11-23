@@ -93,8 +93,8 @@ export async function loadWasm(url: string, progress: (text: string) => void, as
     streamed = await streamWasm(url, build, progress);
   } catch (error) {
     // A failure anywhere in the download, headers or body, can still be served from build-checked
-    // bytes a first-visit marker skipped. A missing asset stays missing.
-    const stored = build && !(error instanceof WasmMissing) ? await cachedEngine(key, build, true) : null;
+    // bytes a first-visit marker skipped. A missing asset stays missing and a cancelled load cancelled.
+    const stored = build && !(error instanceof WasmMissing) && !cancelled(error) ? await cachedEngine(key, build, true) : null;
     const fallback = stored && build ? await loadCachedWasm(url, key, stored, build, progress) : null;
     if (fallback) return fallback;
     throw error;
@@ -197,17 +197,26 @@ async function fromArtifact<T>(url: string, build: string | null, label: string,
 async function fallBack<T>(href: string, logical: Miss, label: string, consume: (artifact: Artifact) => Promise<T>): Promise<T> {
   const { held } = logical;
   if (!held) return consume(gzipArtifact(await fetch(href), logical, label));
-  const twin = await fetch(href).catch((error: unknown) => {
-    if (final(error)) throw error;
-    return undefined;
+  const usable = await heldTwin(href, logical, label, consume).catch(async (error: unknown) => {
+    // A cancelled or uncompilable twin is final; the held body is discarded either way.
+    await dispose(held.body);
+    throw error;
   });
-  const usable = await consumeTwin(twin, logical, label, consume);
   if (usable) {
     void dispose(held.body);
     return usable.value;
   }
   // With no usable twin the logical bytes go on to verification, which names what is wrong with them.
   return consume(held);
+}
+
+/** The twin beside a held logical body; a failed fetch counts as no twin unless it was cancelled. */
+async function heldTwin<T>(href: string, logical: Miss, label: string, consume: (artifact: Artifact) => Promise<T>): Promise<{ value: T } | undefined> {
+  const twin = await fetch(href).catch((error: unknown) => {
+    if (final(error)) throw error;
+    return undefined;
+  });
+  return consumeTwin(twin, logical, label, consume);
 }
 
 /** The twin consumed, or undefined when it is missing, empty or does not decode. Cancellation stays final. */
@@ -249,7 +258,10 @@ async function attempt<T>(href: string, consume: (artifact: Artifact) => Promise
 }
 
 function final(error: unknown): boolean {
-  if (error instanceof WebAssembly.CompileError) return true;
+  return error instanceof WebAssembly.CompileError || cancelled(error);
+}
+
+function cancelled(error: unknown): boolean {
   return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
 }
 
@@ -387,8 +399,9 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
     downloaded = await downloadBytes(requested.href, build, url);
   } catch (error) {
     // Headers or body failed: build-checked cached bytes still serve. A missing asset stays missing,
-    // and verification below stays outside, so an integrity mismatch is never masked.
-    const stored = build === null || error instanceof WasmMissing ? null : await cachedEngine(key, build, true);
+    // a cancelled load stays cancelled, and verification below stays outside, so an integrity
+    // mismatch is never masked.
+    const stored = build === null || error instanceof WasmMissing || cancelled(error) ? null : await cachedEngine(key, build, true);
     if (stored && build !== null) return readVerifiedCache(key, name, stored, build, progress);
     throw error;
   }

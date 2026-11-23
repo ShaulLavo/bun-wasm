@@ -87,6 +87,35 @@ test("a failed second rename over an existing pair restores the whole previous p
   }
 });
 
+test("a failed restore still restores the sibling, keeps its backup and reports the placement error", async () => {
+  const directory = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bw-sidecars-"));
+  try {
+    const path = join(directory, "bun.wasm");
+    await Bun.write(`${path}.gz`, "old gzip");
+    await Bun.write(`${path}.br`, "old br");
+    const move = async (from: string, to: string) => {
+      if (to === `${path}.br` && from.endsWith(".tmp")) throw new Error("rename failed");
+      if (to === `${path}.gz` && from.endsWith(".previous")) throw new Error("restore failed");
+      await rename(from, to);
+    };
+    const outputs: [string, Uint8Array][] = [[`${path}.gz`, new TextEncoder().encode("new gzip")], [`${path}.br`, new TextEncoder().encode("new br")]];
+    const error = await replaceFiles(outputs, writeFile, move).then(() => undefined, (failure: unknown) => failure);
+    expect(error).toBeInstanceOf(AggregateError);
+    const { errors, cause } = error as AggregateError;
+    expect(String(errors[0])).toContain("rename failed");
+    expect(String(errors[1])).toContain("restore failed");
+    expect(String(cause)).toContain("rename failed");
+    expect(await Bun.file(`${path}.br`).text()).toBe("old br");
+    const files = await readdir(directory);
+    const backup = files.find(file => file.startsWith("bun.wasm.gz.") && file.endsWith(".previous"));
+    expect(backup).toBeString();
+    expect(await Bun.file(join(directory, backup!)).text()).toBe("old gzip");
+    expect(files.filter(file => file.endsWith(".tmp"))).toEqual([]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a failed shell guest is reported only after the sibling guest finished writing", async () => {
   const directory = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bw-sidecars-"));
   try {

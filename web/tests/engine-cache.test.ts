@@ -234,6 +234,37 @@ for (const { name, asset, load } of lostMarkerCases) test(`${name}: a missing as
   }
 });
 
+const cancelledTwinCases = lostMarkerCases.flatMap(entry => (["held index page", "missing logical URL"] as const).map(logical => ({ ...entry, logical })));
+
+for (const { name, asset, load, logical } of cancelledTwinCases) test(`${name}: a twin cancelled after a ${logical} is not answered from cached bytes`, async () => {
+  const key = `https://engine-cache.test/app/${asset}`;
+  const cache = memoryCaches();
+  cache.entries.set(key, { headers: new Headers({ "x-bunwasm-build": build, "content-type": "application/wasm" }), bytes: wasm });
+  let heldCancelled = false;
+  const restoreGlobals = pageGlobals({
+    location: new URL("https://engine-cache.test/app/"),
+    // No marker, so the loader downloads first and would otherwise recover from the cached bytes.
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    caches: cache.caches,
+    fetch: async (url: string) => {
+      if (url.includes(".gz")) throw new DOMException("The operation was aborted.", "AbortError");
+      if (logical === "missing logical URL") return new Response(null, { status: 404 });
+      return new Response(new ReadableStream({
+        start(controller) { controller.enqueue(new TextEncoder().encode("<!doctype html>")); },
+        cancel() { heldCancelled = true; },
+      }), { headers: { "content-type": "text/html" } });
+    },
+    __bunwasmBuilds: { [asset]: build },
+  });
+  try {
+    await expect(load()).rejects.toMatchObject({ name: "AbortError" });
+    expect(cache.lookups).toEqual([]);
+    expect(heldCancelled).toBe(logical === "held index page");
+  } finally {
+    restoreGlobals();
+  }
+});
+
 /** Loads the Browser engine without a build fingerprint, so nothing is cached between cases. */
 async function loadUncached(fetch: (url: string) => Promise<Response>, url = "bun-browser.wasm", progress: (text: string) => void = () => {}) {
   const restoreGlobals = pageGlobals({

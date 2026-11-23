@@ -26,6 +26,8 @@ async function build(app: string): Promise<void> {
 // Deployed guests ship Brotli quality 11 unless overridden; an invalid override fails before any build starts.
 process.env.BUN_WASM_BROTLI_QUALITY ??= "11";
 brotliQuality();
+// The site copies sandbox/dist and web/dist, so the app builds must write there.
+delete process.env.BUN_WASM_APP_OUT;
 const spiderMonkey = resolveSiteSpiderMonkey(root);
 await verifySiteGuests(root, process.env, spiderMonkey);
 // The public site never ships a guest with debug names. Set the profiling override to "0"

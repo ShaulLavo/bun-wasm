@@ -14,7 +14,8 @@ import { settleAll } from "../scripts/stage-wasm-sidecars";
 
 const here = import.meta.dir;
 const web = resolve(here, "../web");
-const out = join(here, "dist");
+// BUN_WASM_APP_OUT builds somewhere disposable instead of sandbox/dist (tests, side-by-side builds).
+const out = process.env.BUN_WASM_APP_OUT ? resolve(process.env.BUN_WASM_APP_OUT) : join(here, "dist");
 
 // An invalid setting fails before the previous build is removed.
 brotliQuality();
