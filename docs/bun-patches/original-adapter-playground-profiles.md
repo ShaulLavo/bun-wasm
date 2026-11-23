@@ -53,15 +53,19 @@ inputs, so a policy-only edit still exercises matched-pair admission.
 ## iPhone shared-memory bounds
 
 `web/src/host-memory-policy.ts` is an original host adapter. The playground and
-sandbox select a 768 MiB QuickJS group maximum on iPhone. The cumulative member
-allowance is also 768 MiB, as required by Waffle's policy validation. Stacks stay
-8 MiB. Desktop keeps the existing 2 GiB group and 1 GiB member allowance.
+sandbox select a 1,280 MiB QuickJS group maximum on iPhone and keep the original
+1 GiB cumulative member allowance, which Waffle requires to stay at or below the
+maximum. Stacks stay 8 MiB. Desktop keeps the existing 2 GiB group and 1 GiB
+member allowance.
 
-Instrumented Chrome runs of the ordinary Angular and Vite React workflows reach
-425,984,000 and 566,951,936 bytes of shared-memory capacity. Both complete all
-nine phases. The 768 MiB maximum leaves about 42% above the larger measurement.
-These are backing capacities, not resident-memory measurements. Native iPhone
-workflow qualification is separate.
+Instrumented Chrome runs of all three shared-group templates complete nine
+phases on `587c2c69c`. Angular reaches 470,089,728 bytes of shared-memory
+capacity and Vite React 568,131,584. Nuxt reaches 1,068,236,800 bytes during
+its Nitro dev render and 1,091,502,080 during build. The earlier 768 MiB
+maximum was sized from Angular and Vite React only and made Nuxt's iPhone
+render fail with an out-of-memory error. The 1,280 MiB maximum leaves about 23%
+above the Nuxt measurement. These are backing capacities, not resident-memory
+measurements. Native iPhone workflow qualification is separate.
 
 JSC uses a 1,280 MiB iPhone group maximum and retains its 1 GiB cumulative member
 allowance. Its complete instrumented Chrome workflows reach 760,545,280 bytes for

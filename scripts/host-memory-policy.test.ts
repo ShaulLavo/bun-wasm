@@ -5,11 +5,16 @@ import { BUN_MEMORY_GROUP_POLICY } from "../src/engine-kind";
 const iphone = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X) AppleWebKit/605.1.15 Version/26.5 Mobile/15E148 Safari/604.1";
 const desktop = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/26.4 Safari/605.1.15";
 
-test("iPhone QuickJS groups have growth room above both measured framework workloads", () => {
+// Complete nine-phase Chrome workflows on 587c2c69c; Nuxt's Nitro dev render and build set the QuickJS peak.
+const quickjsMeasuredBackingBytes = { angular: 470_089_728, "vite-react": 568_131_584, nuxt: 1_091_502_080 };
+
+test("iPhone QuickJS groups have growth room above every measured shared-group framework workload", () => {
   const policy = memoryGroupPolicy("quickjs", iphone);
-  expect(policy.maximumPages * 65536).toBe(768 << 20);
+  expect(policy.maximumPages * 65536).toBe(1280 << 20);
+  expect(policy.memberPages).toBe(BUN_MEMORY_GROUP_POLICY.memberPages);
   expect(policy.memberPages).toBeLessThanOrEqual(policy.maximumPages);
   expect(policy.stackBytes).toBe(BUN_MEMORY_GROUP_POLICY.stackBytes);
+  for (const bytes of Object.values(quickjsMeasuredBackingBytes)) expect(policy.maximumPages * 65536).toBeGreaterThan(bytes * 1.2);
   expect(memoryGroupPolicy("quickjs", desktop)).toBe(BUN_MEMORY_GROUP_POLICY);
 });
 
