@@ -216,7 +216,7 @@ fn metadata_record(
 }
 
 #[cfg(unix)]
-fn stat_record(meta: &StatMetadata, bigint: bool) -> Val {
+fn stat_record(_state: &State, meta: &StatMetadata, bigint: bool) -> Val {
     use std::os::unix::fs::MetadataExt;
     metadata_record(
         [
@@ -247,14 +247,21 @@ fn stat_record(meta: &StatMetadata, bigint: bool) -> Val {
 }
 
 #[cfg(target_os = "wasi")]
-fn stat_record(stat: &StatMetadata, bigint: bool) -> Val {
+fn stat_record(state: &State, stat: &StatMetadata, bigint: bool) -> Val {
     let timestamp =
         |time: &libc::timespec| i128::from(time.tv_sec) * 1_000_000_000 + i128::from(time.tv_nsec);
+    let mode = state
+        .modes
+        .borrow()
+        .get(&(stat.st_dev, stat.st_ino))
+        .copied()
+        .map(|perms| (stat.st_mode & 0o170000) | (perms & 0o7777))
+        .unwrap_or_else(|| wasi_metadata::mode(stat.st_mode));
     metadata_record(
         [
             ("dev", stat.st_dev),
             ("ino", stat.st_ino),
-            ("mode", u64::from(wasi_metadata::mode(stat.st_mode))),
+            ("mode", u64::from(mode)),
             ("nlink", stat.st_nlink),
             ("uid", u64::from(stat.st_uid)),
             ("gid", u64::from(stat.st_gid)),
@@ -273,6 +280,102 @@ fn stat_record(stat: &StatMetadata, bigint: bool) -> Val {
         ],
         bigint,
     )
+}
+
+#[cfg(any(target_os = "wasi", test))]
+fn mask_creation_mode(mode: u32, umask: u32) -> u32 {
+    (mode & 0o7000) | ((mode & 0o777) & !umask)
+}
+
+// Linux/Bun mkdir(2) honors the sticky bit (0o1000) and ignores setuid/setgid (0o6000).
+#[cfg(any(target_os = "wasi", test))]
+fn mask_dir_creation_mode(mode: u32, umask: u32) -> u32 {
+    (mode & 0o1000) | ((mode & 0o777) & !umask)
+}
+
+#[cfg(any(target_os = "wasi", test))]
+fn should_clear_inode(is_dir: bool, nlink: u64, removed_links: u64) -> bool {
+    is_dir || removed_links >= nlink
+}
+
+#[cfg(target_os = "wasi")]
+fn record_inode_mode(state: &State, stat: &StatMetadata, perms: u32) {
+    state
+        .modes
+        .borrow_mut()
+        .insert((stat.st_dev, stat.st_ino), perms & 0o7777);
+}
+
+#[cfg(target_os = "wasi")]
+fn record_path_mode(state: &State, path: &str, perms: u32, lstat: bool) {
+    if let Ok(stat) = path_metadata(path, lstat) {
+        record_inode_mode(state, &stat, perms);
+    }
+}
+
+#[cfg(target_os = "wasi")]
+fn pending_mode_clear(path: &str) -> Vec<(u64, u64)> {
+    let Ok(stat) = path_metadata(path, true) else {
+        return Vec::new();
+    };
+    let is_dir = (stat.st_mode & 0o170000) == 0o040000;
+    if should_clear_inode(is_dir, stat.st_nlink, 1) {
+        vec![(stat.st_dev, stat.st_ino)]
+    } else {
+        Vec::new()
+    }
+}
+
+#[cfg(target_os = "wasi")]
+fn pending_tree_mode_clears(root: &str) -> Vec<(u64, u64)> {
+    let mut counts: std::collections::HashMap<(u64, u64), (bool, u64, u64)> =
+        std::collections::HashMap::new();
+    let mut stack = vec![std::path::PathBuf::from(root)];
+    while let Some(current) = stack.pop() {
+        let Some(text) = current.to_str() else {
+            continue;
+        };
+        let Ok(stat) = path_metadata(text, true) else {
+            continue;
+        };
+        let is_dir = (stat.st_mode & 0o170000) == 0o040000;
+        let entry = counts
+            .entry((stat.st_dev, stat.st_ino))
+            .or_insert((is_dir, stat.st_nlink, 0));
+        entry.2 += 1;
+        if is_dir && let Ok(entries) = fs::read_dir(&current) {
+            for child in entries.flatten() {
+                stack.push(child.path());
+            }
+        }
+    }
+    counts
+        .into_iter()
+        .filter_map(|(key, (is_dir, nlink, removed))| {
+            should_clear_inode(is_dir, nlink, removed).then_some(key)
+        })
+        .collect()
+}
+
+#[cfg(target_os = "wasi")]
+fn finish_mode_clears(state: &State, keys: Vec<(u64, u64)>) {
+    if keys.is_empty() {
+        return;
+    }
+    let mut modes = state.modes.borrow_mut();
+    for key in keys {
+        modes.remove(&key);
+    }
+}
+
+#[cfg(target_os = "wasi")]
+fn effective_permissions(state: &State, stat: &StatMetadata) -> u32 {
+    state
+        .modes
+        .borrow()
+        .get(&(stat.st_dev, stat.st_ino))
+        .copied()
+        .unwrap_or_else(|| wasi_metadata::mode(stat.st_mode) & 0o7777)
 }
 
 #[cfg(unix)]
@@ -438,8 +541,8 @@ fn descriptor_mode(mode: libc::mode_t, kind: i32) -> io::Result<libc::mode_t> {
     })
 }
 
-fn descriptor_stat(fd: i32, bigint: bool) -> io::Result<Val> {
-    Ok(stat_record(&descriptor_metadata(fd)?, bigint))
+fn descriptor_stat(state: &State, fd: i32, bigint: bool) -> io::Result<Val> {
+    Ok(stat_record(state, &descriptor_metadata(fd)?, bigint))
 }
 
 // Public Node constants use Linux bit values, independent of the libc target.
@@ -485,8 +588,26 @@ fn open_file(path: &str, flags: i32, mode: u32) -> io::Result<File> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn write_file(path: &str, bytes: &[u8], flags: i32, mode: u32) -> NativeResult {
+fn write_file(
+    state: &State,
+    path: &str,
+    bytes: &[u8],
+    flags: i32,
+    mode: u32,
+    umask: u32,
+) -> NativeResult {
+    #[cfg(target_os = "wasi")]
+    let existed = flags & 64 != 0 && fs::symlink_metadata(path).is_ok();
     let mut file = open_file(path, flags, mode).map_err(|e| io_error(e, "open", Some(path)))?;
+    #[cfg(target_os = "wasi")]
+    if flags & 64 != 0
+        && !existed
+        && let Ok(stat) = descriptor_metadata(file.as_raw_fd())
+    {
+        record_inode_mode(state, &stat, mask_creation_mode(mode, umask));
+    }
+    #[cfg(not(target_os = "wasi"))]
+    let _ = (state, umask);
     file.write_all(bytes)
         .map_err(|e| io_error(e, "write", Some(path)))?;
     sync_fd(file.as_raw_fd(), sync_mode(flags)).map_err(|e| io_error(e, "write", Some(path)))?;
@@ -504,7 +625,7 @@ pub fn table(state: &Rc<State>) -> Table {
             crate::host::package_scripts_handoff(a.str(0)?) as f64
         ))
     });
-    install_fs(&mut t);
+    install_fs(&mut t, state);
     install_fds(&mut t, state);
     crate::directory::install(&mut t, state);
     install_modules(&mut t, state);
@@ -700,12 +821,32 @@ mod mkdir_tests;
 #[cfg(test)]
 mod rm_tests;
 
-fn mkdir_recursive(path: &str) -> io::Result<Option<String>> {
+fn create_dir_with_mode(path: &Path, mode: u32) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let cpath = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| io::ErrorKind::InvalidInput)?;
+        if unsafe { libc::mkdir(cpath.as_ptr(), mode as libc::mode_t) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+        fs::create_dir(path)
+    }
+}
+
+fn mkdir_recursive(path: &str, mode: u32) -> io::Result<(Option<String>, Vec<String>)> {
     let mut pending = vec![Path::new(path)];
     let mut first = None;
+    let mut created = Vec::new();
     while let Some(current) = pending.pop() {
-        let Err(error) = fs::create_dir(current) else {
+        let Err(error) = create_dir_with_mode(current, mode) else {
             first = first.or(Some(current));
+            created.push(current.to_string_lossy().into_owned());
             continue;
         };
         if error.kind() == io::ErrorKind::AlreadyExists
@@ -720,10 +861,13 @@ fn mkdir_recursive(path: &str) -> io::Result<Option<String>> {
         pending.push(current);
         pending.push(parent);
     }
-    Ok(first.map(|path| path.to_string_lossy().into_owned()))
+    Ok((
+        first.map(|path| path.to_string_lossy().into_owned()),
+        created,
+    ))
 }
 
-fn install_fs(t: &mut Table) {
+fn install_fs(t: &mut Table, state: &Rc<State>) {
     t.add("readFile", |a| {
         let path = required_path(a.str(0)?, "open")?;
         Ok(Val::Bytes(
@@ -737,41 +881,104 @@ fn install_fs(t: &mut Table) {
             .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
             .into())
     });
-    t.add("writeFile", |a| {
+    let st = state.clone();
+    t.add("writeFile", move |a| {
         write_file(
+            &st,
             a.str(0)?,
             a.bytes(1)?,
             if a.bool(2) { 1089 } else { 577 },
             0o666,
+            0o022,
         )
     });
-    t.add("writeFileFlags", |a| {
+    let st = state.clone();
+    t.add("writeFileFlags", move |a| {
         write_file(
+            &st,
             a.str(0)?,
             a.bytes(1)?,
             a.i32(2)?,
             a.opt_num(3).unwrap_or(438.0) as u32,
+            a.opt_num(4).unwrap_or(18.0) as u32,
         )
     });
     t.add("exists", |a| {
         let path = a.str(0)?;
         Ok((!path.is_empty() && fs::symlink_metadata(path).is_ok()).into())
     });
-    t.add("stat", |a| {
+    let st = state.clone();
+    t.add("stat", move |a| {
         let lstat = a.bool(1);
         let path = required_path(a.str(0)?, if lstat { "lstat" } else { "stat" })?;
         let stat = path_metadata(path, lstat)
             .map_err(|e| io_error(e, if lstat { "lstat" } else { "stat" }, Some(path)))?;
-        Ok(stat_record(&stat, a.bool(2)))
+        Ok(stat_record(&st, &stat, a.bool(2)))
     });
-    t.add("mkdir", |a| {
+    let st = state.clone();
+    t.add("mkdir", move |a| {
         let path = required_path(a.str(0)?, "mkdir")?;
+        let mode = a.opt_num(2).unwrap_or(0o777 as f64) as u32;
+        let umask = a.opt_num(3).unwrap_or(0o022 as f64) as u32;
         if !a.bool(1) {
-            fs::create_dir(path).map_err(|e| io_error(e, "mkdir", Some(path)))?;
+            create_dir_with_mode(Path::new(path), mode)
+                .map_err(|e| io_error(e, "mkdir", Some(path)))?;
+            #[cfg(target_os = "wasi")]
+            record_path_mode(&st, path, mask_dir_creation_mode(mode, umask), true);
+            #[cfg(not(target_os = "wasi"))]
+            let _ = (&st, umask);
             return Ok(Val::Null);
         }
-        let first = mkdir_recursive(path).map_err(|e| io_error(e, "mkdir", Some(path)))?;
+        let (first, created) =
+            mkdir_recursive(path, mode).map_err(|e| io_error(e, "mkdir", Some(path)))?;
+        #[cfg(target_os = "wasi")]
+        {
+            let effective = mask_dir_creation_mode(mode, umask);
+            for dir in &created {
+                record_path_mode(&st, dir, effective, true);
+            }
+        }
+        #[cfg(not(target_os = "wasi"))]
+        let _ = (&st, created, umask);
         Ok(first.map_or(Val::Null, Val::Str))
+    });
+    let st = state.clone();
+    t.add("chmod", move |a| {
+        let path = required_path(a.str(0)?, "chmod")?;
+        let mode = a.num(1)? as u32;
+        #[cfg(unix)]
+        {
+            let _ = &st;
+            let cpath = std::ffi::CString::new(path)
+                .map_err(|_| io_error(io::ErrorKind::InvalidInput.into(), "chmod", Some(path)))?;
+            if unsafe { libc::chmod(cpath.as_ptr(), (mode & 0o7777) as libc::mode_t) } < 0 {
+                return Err(io_error(io::Error::last_os_error(), "chmod", Some(path)));
+            }
+        }
+        #[cfg(target_os = "wasi")]
+        {
+            let stat = path_metadata(path, false).map_err(|e| io_error(e, "chmod", Some(path)))?;
+            record_inode_mode(&st, &stat, mode);
+        }
+        ok()
+    });
+    let st = state.clone();
+    t.add("fchmod", move |a| {
+        let fd = a.i32(0)?;
+        let mode = a.num(1)? as u32;
+        #[cfg(unix)]
+        {
+            let _ = &st;
+            if unsafe { libc::fchmod(fd, (mode & 0o7777) as libc::mode_t) } < 0 {
+                return Err(io_error(io::Error::last_os_error(), "fchmod", None));
+            }
+        }
+        #[cfg(target_os = "wasi")]
+        {
+            let stat = descriptor_metadata(fd).map_err(|e| io_error(e, "fchmod", None))?;
+            record_inode_mode(&st, &stat, mode);
+        }
+        ok()
     });
     t.add("readdir", |a| {
         let path = required_path(a.str(0)?, "scandir")?;
@@ -791,53 +998,112 @@ fn install_fs(t: &mut Table) {
         }
         Ok(Val::Array(list))
     });
-    t.add("rm", |a| {
+    let st = state.clone();
+    t.add("rm", move |a| {
         let path = a.str(0)?;
         if path.is_empty() && a.bool(2) {
             return ok();
         }
         let path = required_path(path, "rm")?;
+        let recursive = a.bool(1);
         let meta = match fs::symlink_metadata(path) {
             Ok(m) => m,
             Err(e) if a.bool(2) && e.kind() == io::ErrorKind::NotFound => return ok(),
             Err(e) => return Err(io_error(e, "rm", Some(path))),
         };
-        let result = match (meta.is_dir(), a.bool(1)) {
+        #[cfg(target_os = "wasi")]
+        let pending = if meta.is_dir() && recursive {
+            pending_tree_mode_clears(path)
+        } else {
+            pending_mode_clear(path)
+        };
+        let result = match (meta.is_dir(), recursive) {
             (true, true) => fs::remove_dir_all(path),
             (true, false) => Err(io::Error::from(io::ErrorKind::IsADirectory)),
             _ => fs::remove_file(path),
         };
         result.map_err(|e| io_error(e, "rm", Some(path)))?;
+        #[cfg(target_os = "wasi")]
+        finish_mode_clears(&st, pending);
+        #[cfg(not(target_os = "wasi"))]
+        let _ = &st;
         ok()
     });
-    t.add("rmdir", |a| {
+    let st = state.clone();
+    t.add("rmdir", move |a| {
         let path = required_path(a.str(0)?, "rmdir")?;
-        let result = if a.bool(1) {
+        let recursive = a.bool(1);
+        #[cfg(target_os = "wasi")]
+        let pending = if recursive {
+            pending_tree_mode_clears(path)
+        } else {
+            pending_mode_clear(path)
+        };
+        let result = if recursive {
             fs::remove_dir_all(path)
         } else {
             fs::remove_dir(path)
         };
         result.map_err(|e| io_error(e, "rmdir", Some(path)))?;
+        #[cfg(target_os = "wasi")]
+        finish_mode_clears(&st, pending);
+        #[cfg(not(target_os = "wasi"))]
+        let _ = &st;
         ok()
     });
-    t.add("unlink", |a| {
+    let st = state.clone();
+    t.add("unlink", move |a| {
         let path = required_path(a.str(0)?, "unlink")?;
+        #[cfg(target_os = "wasi")]
+        let pending = pending_mode_clear(path);
         fs::remove_file(path).map_err(|e| io_error(e, "unlink", Some(path)))?;
+        #[cfg(target_os = "wasi")]
+        finish_mode_clears(&st, pending);
+        #[cfg(not(target_os = "wasi"))]
+        let _ = &st;
         ok()
     });
-    t.add("rename", |a| {
+    let st = state.clone();
+    t.add("rename", move |a| {
         let (from, to) = (a.str(0)?, a.str(1)?);
         required_path(from, "rename")?;
         required_path(to, "rename")?;
+        #[cfg(target_os = "wasi")]
+        let src_key = path_metadata(from, true)
+            .ok()
+            .map(|stat| (stat.st_dev, stat.st_ino));
+        #[cfg(target_os = "wasi")]
+        let pending = pending_mode_clear(to);
         fs::rename(from, to).map_err(|e| io_error(e, "rename", Some(from)))?;
+        #[cfg(target_os = "wasi")]
+        finish_mode_clears(
+            &st,
+            pending
+                .into_iter()
+                .filter(|key| Some(*key) != src_key)
+                .collect(),
+        );
+        #[cfg(not(target_os = "wasi"))]
+        let _ = &st;
         ok()
     });
-    t.add("copyFile", |a| {
+    let st = state.clone();
+    t.add("copyFile", move |a| {
         let (from, to) = (a.str(0)?, a.str(1)?);
         required_path(from, "copyfile")?;
         required_path(to, "copyfile")?;
+        #[cfg(target_os = "wasi")]
+        let src_mode = path_metadata(from, false)
+            .ok()
+            .map(|stat| effective_permissions(&st, &stat));
         copy_file(from, to, a.opt_num(2).unwrap_or(0.0) as i32)
             .map_err(|e| io_error(e, "copyfile", Some(from)))?;
+        #[cfg(target_os = "wasi")]
+        if let Some(perms) = src_mode {
+            record_path_mode(&st, to, perms, false);
+        }
+        #[cfg(not(target_os = "wasi"))]
+        let _ = &st;
         ok()
     });
     t.add("realpath", |a| {
@@ -1128,9 +1394,20 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     t.add("open", move |a| {
         let path = a.str(0)?;
         let flags = a.i32(1)?;
-        let file = open_file(path, flags, a.opt_num(2).unwrap_or(438.0) as u32)
-            .map_err(|e| io_error(e, "open", Some(path)))?;
+        let mode = a.opt_num(2).unwrap_or(438.0) as u32;
+        #[cfg(target_os = "wasi")]
+        let umask = a.opt_num(3).unwrap_or(18.0) as u32;
+        #[cfg(target_os = "wasi")]
+        let existed = flags & 64 != 0 && fs::symlink_metadata(path).is_ok();
+        let file = open_file(path, flags, mode).map_err(|e| io_error(e, "open", Some(path)))?;
         let fd = file.as_raw_fd();
+        #[cfg(target_os = "wasi")]
+        if flags & 64 != 0
+            && !existed
+            && let Ok(stat) = descriptor_metadata(fd)
+        {
+            record_inode_mode(&st, &stat, mask_creation_mode(mode, umask));
+        }
         let mut fds = st.fds.borrow_mut();
         fds.files.insert(fd, file);
         fds.sync_modes.insert(fd, sync_mode(flags));
@@ -1150,8 +1427,9 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     t.add("write", move |a| write_descriptor(&st, a));
     let st = state.clone();
     t.add("writev", move |a| writev(&st, a));
-    t.add("fstat", |a| {
-        descriptor_stat(a.i32(0)?, a.bool(1)).map_err(|e| io_error(e, "fstat", None))
+    let st = state.clone();
+    t.add("fstat", move |a| {
+        descriptor_stat(&st, a.i32(0)?, a.bool(1)).map_err(|e| io_error(e, "fstat", None))
     });
     t.add("ftruncate", |a| {
         let result =
@@ -1885,10 +2163,31 @@ fn platform_info() -> Val {
 mod builtin_tests {
     use super::*;
 
+    fn test_state() -> Rc<State> {
+        Rc::new(State::new(Vec::new(), Box::new(PassthroughTranspiler)))
+    }
+
+    #[test]
+    fn wasi_mode_masks_and_inode_clear_rules_match_linux_and_bun() {
+        assert_eq!(mask_creation_mode(0o666, 0o022), 0o644);
+        assert_eq!(mask_creation_mode(0o4777, 0o022), 0o4755);
+        assert_eq!(mask_dir_creation_mode(0o1777, 0o022), 0o1755);
+        assert_eq!(mask_dir_creation_mode(0o2777, 0o022), 0o755);
+        assert_eq!(mask_dir_creation_mode(0o4777, 0o022), 0o755);
+        assert_eq!(mask_dir_creation_mode(0o7777, 0o022), 0o1755);
+        assert_eq!(mask_dir_creation_mode(0o700, 0), 0o700);
+        // Hard-linked files stay recorded until every remaining link is removed.
+        assert!(!should_clear_inode(false, 2, 1));
+        assert!(should_clear_inode(false, 2, 2));
+        assert!(should_clear_inode(false, 1, 1));
+        // Directories always have nlink >= 2 and clear when removed.
+        assert!(should_clear_inode(true, 2, 1));
+    }
+
     #[test]
     fn filesystem_empty_paths_retain_operation_errors() {
         let mut natives = Table::default();
-        install_fs(&mut natives);
+        install_fs(&mut natives, &test_state());
         for (name, syscall, args) in [
             ("readFile", "open", vec!["".into()]),
             ("readFileUtf8", "open", vec!["".into()]),
@@ -2037,7 +2336,9 @@ mod builtin_tests {
             .write_all(b"!")
             .unwrap();
         assert_eq!(fs::read(existing).unwrap(), b"original!");
-        let Val::Object(fields) = stat_record(&path_metadata(existing, false).unwrap(), true)
+        let state = test_state();
+        let Val::Object(fields) =
+            stat_record(&state, &path_metadata(existing, false).unwrap(), true)
         else {
             panic!("stat record");
         };
@@ -2090,7 +2391,7 @@ mod builtin_tests {
         fs::write(&reference, b"x").unwrap();
         let expected = fs::metadata(&reference).unwrap().permissions().mode() & 0o777;
         let mut natives = Table::default();
-        install_fs(&mut natives);
+        install_fs(&mut natives, &test_state());
         let bun_file = fixture.path("bun-file");
         call(
             &natives,
@@ -2141,12 +2442,14 @@ mod builtin_tests {
         let original = fs::metadata(&path).unwrap();
         let snapshot = path_metadata(&path, false).unwrap();
         fs::rename(&replacement, &path).unwrap();
-        let Val::Object(fields) = stat_record(&snapshot, true) else {
+        let state = test_state();
+        let Val::Object(fields) = stat_record(&state, &snapshot, true) else {
             panic!("stat record");
         };
         assert!(fields.contains(&("ino".into(), Val::BigUint(original.ino()))));
         assert!(fields.contains(&("size".into(), Val::BigUint(3))));
-        let Val::Object(current) = stat_record(&path_metadata(&path, false).unwrap(), true) else {
+        let Val::Object(current) = stat_record(&state, &path_metadata(&path, false).unwrap(), true)
+        else {
             panic!("stat record");
         };
         assert!(current.contains(&("size".into(), Val::BigUint(11))));

@@ -31,7 +31,9 @@ No code is copied. Native comparisons use Bun 1.4.4.
   as 0 and reject anything that is not a number (`The "len" argument must be of type
   number`); `truncate(fd, ...)` truncates the descriptor.
 - `chmod`, `lchmod` and `fchmod` validate the mode with Node's `parseFileMode` (a boxed
-  String is `ERR_INVALID_ARG_TYPE`); WASI has no permission bits to set.
+  String is `ERR_INVALID_ARG_TYPE`). On WASI, `chmod` and `fchmod` record the lower 12
+  permission bits (`0o7777`) into the runtime's per-process `(dev, ino)` mode table (see
+  `docs/bun-patches/filesystem-options.md` for what records, clears, and bypasses it).
 - `mkdir` rejects a `recursive` option that is not a boolean with Bun's message (`The
   "recursive" property must be of type boolean, got string`).
 - `fs.cp` without a callback names the `cb` argument, as Bun does.
