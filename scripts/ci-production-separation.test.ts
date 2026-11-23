@@ -145,9 +145,11 @@ test("ordinary-build shares native-setup, native-seed and native-production with
   }
   const commands = JSON.stringify(steps(job("ordinary-build", true)));
   expect(commands).toContain("bash scripts/sync-bun.sh\\nbash scripts/sync-crypto.sh");
-  expect(commands.indexOf("Prepare pinned Rust standard-library dependencies")).toBeLessThan(commands.indexOf("Build the common engine core once"));
-  const std = named(steps(job("ordinary-build", true)), "Prepare pinned Rust standard-library dependencies");
-  expect(std.run).toContain('"$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1');
+  const prepare = "Prepare locked workspace and Rust standard-library dependencies";
+  expect(commands.indexOf(prepare)).toBeLessThan(commands.indexOf("Build the common engine core once"));
+  const seedDependencies = named(steps(job("ordinary-build", true)), prepare);
+  expect(seedDependencies.run).toContain('"$GUEST_CARGO" fetch --locked\n');
+  expect(seedDependencies.run).toContain('"$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1');
 });
 
 test("empty seed preparation rejects an existing target, registry or git cache rather than overlaying", () => {
