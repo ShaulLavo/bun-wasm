@@ -118,7 +118,6 @@ pub(crate) struct SourceIndexCache {
 struct CachedSource {
     file: String,
     generation: u32,
-    from_original_file: bool,
     text: Rc<str>,
     index: SourceIndex,
 }
@@ -128,26 +127,17 @@ impl SourceIndexCache {
         self.entries.clear();
     }
 
-    pub(crate) fn cached_original_text(&self, file: &str, generation: u32) -> Option<Rc<str>> {
-        self.entries
-            .iter()
-            .find(|e| e.from_original_file && e.generation == generation && e.file == file)
-            .map(|e| e.text.clone())
-    }
-
     pub(crate) fn get_or_insert(
         &mut self,
         file: &str,
         generation: u32,
-        from_original_file: bool,
         text: &Rc<str>,
     ) -> &mut SourceIndex {
-        if let Some(pos) = self.entries.iter().position(|e| {
-            e.generation == generation
-                && e.from_original_file == from_original_file
-                && e.file == file
-                && Rc::ptr_eq(&e.text, text)
-        }) {
+        if let Some(pos) = self
+            .entries
+            .iter()
+            .position(|e| e.generation == generation && e.file == file && Rc::ptr_eq(&e.text, text))
+        {
             if pos != 0 {
                 self.entries[..=pos].rotate_right(1);
             }
@@ -163,7 +153,6 @@ impl SourceIndexCache {
             CachedSource {
                 file: file.to_owned(),
                 generation,
-                from_original_file,
                 text: text.clone(),
                 index: SourceIndex::new(text),
             },
@@ -178,22 +167,18 @@ fn line_ranges(text: &str) -> Vec<(usize, usize)> {
     let mut lines = Vec::new();
     let mut start = 0;
     while start < bytes.len() {
-        match bytes[start..].iter().position(|&b| b == b'\n') {
-            Some(rel) => {
-                let nl = start + rel;
-                let end = if nl > start && bytes[nl - 1] == b'\r' {
-                    nl - 1
-                } else {
-                    nl
-                };
-                lines.push((start, end));
-                start = nl + 1;
-            }
-            None => {
-                lines.push((start, bytes.len()));
-                break;
-            }
-        }
+        let Some(rel) = bytes[start..].iter().position(|&b| b == b'\n') else {
+            lines.push((start, bytes.len()));
+            break;
+        };
+        let nl = start + rel;
+        let end = if nl > start && bytes[nl - 1] == b'\r' {
+            nl - 1
+        } else {
+            nl
+        };
+        lines.push((start, end));
+        start = nl + 1;
     }
     lines
 }
@@ -232,32 +217,31 @@ impl LineUtf16 {
     }
 
     fn byte_offset(&self, line: &str, unit: usize) -> Option<usize> {
-        match self {
-            Self::Ascii => (unit < line.len()).then_some(unit),
-            Self::Checkpoints {
-                total_units,
-                checkpoints,
-            } => {
-                if unit >= *total_units {
-                    return None;
-                }
-                let mut idx = (unit / CHECKPOINT_STRIDE).min(checkpoints.len() - 1);
-                if checkpoints[idx].0 > unit {
-                    idx -= 1;
-                }
-                let (mut units, start_byte) = checkpoints[idx];
-                for (rel, ch) in line[start_byte..].char_indices() {
-                    if units == unit {
-                        return Some(start_byte + rel);
-                    }
-                    units += ch.len_utf16();
-                    if units > unit {
-                        return None;
-                    }
-                }
-                None
+        let Self::Checkpoints {
+            total_units,
+            checkpoints,
+        } = self
+        else {
+            return (unit < line.len()).then_some(unit);
+        };
+        if unit >= *total_units {
+            return None;
+        }
+        let mut idx = (unit / CHECKPOINT_STRIDE).min(checkpoints.len() - 1);
+        if checkpoints[idx].0 > unit {
+            idx -= 1;
+        }
+        let (mut units, start_byte) = checkpoints[idx];
+        for (rel, ch) in line[start_byte..].char_indices() {
+            if units == unit {
+                return Some(start_byte + rel);
+            }
+            units += ch.len_utf16();
+            if units > unit {
+                return None;
             }
         }
+        None
     }
 }
 

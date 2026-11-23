@@ -570,10 +570,10 @@ impl State {
 
     pub fn source_line(&self, file: &str, line: usize) -> Option<String> {
         let index = line.checked_sub(1)?;
-        let (text, from_original_file) = self.source_text(file)?;
+        let text = self.source_text(file)?;
         let generation = self.source_generation.get();
         let mut cache = self.source_columns.borrow_mut();
-        let source = cache.get_or_insert(file, generation, from_original_file, &text);
+        let source = cache.get_or_insert(file, generation, &text);
         source.line(&text, index).map(str::to_owned)
     }
 
@@ -589,27 +589,27 @@ impl State {
         let Some(index) = line.checked_sub(1) else {
             return column;
         };
-        let Some((text, from_original_file)) = self.source_text(file) else {
+        let Some(text) = self.source_text(file) else {
             return column;
         };
         let generation = self.source_generation.get();
         let mut cache = self.source_columns.borrow_mut();
-        let source = cache.get_or_insert(file, generation, from_original_file, &text);
+        let source = cache.get_or_insert(file, generation, &text);
         source
             .apply_column(&text, rule, index, column)
             .unwrap_or(column)
     }
 
-    fn source_text(&self, file: &str) -> Option<(Rc<str>, bool)> {
+    fn source_text(&self, file: &str) -> Option<Rc<str>> {
         let original = self
             .positions
             .borrow()
             .get(file)
             .and_then(|p| p.original.clone());
         match original {
-            Some(Original::File) => Some((self.original_file_text(file)?, true)),
-            Some(Original::Text(text)) => Some((text, false)),
-            None => Some((self.sources.borrow().get(file)?.0.clone(), false)),
+            Some(Original::File) => self.original_file_text(file),
+            Some(Original::Text(text)) => Some(text),
+            None => Some(self.sources.borrow().get(file)?.0.clone()),
         }
     }
 
@@ -621,13 +621,6 @@ impl State {
             && cached == path
         {
             return Some(text.clone());
-        }
-        if let Some(text) = self
-            .source_columns
-            .borrow()
-            .cached_original_text(path, self.source_generation.get())
-        {
-            return Some(text);
         }
         let raw = std::fs::read(path).ok()?;
         if self.source_digests.borrow().get(path) != Some(&self.source_digest(&raw)) {
