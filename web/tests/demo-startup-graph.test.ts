@@ -73,8 +73,9 @@ function assertPromptGraph(
 
 test("playground prompt wiring starts beside startup loads without a second runtime or guessed versions", async () => {
   const source = await Bun.file(new URL("../src/playground/playground.ts", import.meta.url)).text();
-  const loading = source.indexOf('this.params.get("prompt") === "off" ? undefined : import("bash-web/prompt")');
+  const loading = source.indexOf('this.params.get("prompt") === "off" ? Promise.resolve(undefined) : import("bash-web/prompt")');
   expect(loading).toBeGreaterThan(source.indexOf("const wasmReady = this.loadEngine()"));
+  expect(loading).toBeLessThan(source.indexOf('await fs.mkdirp("/tmp")'));
   expect(loading).toBeLessThan(source.indexOf("await this.terminalOpen"));
   expect(source).toContain('PS1: "$ "');
   expect(source).toContain("const HOST_VERSIONS = {}");

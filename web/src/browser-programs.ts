@@ -7,8 +7,10 @@ interface ProgramUrls {
   readonly shell: URL;
 }
 
+const modules = () => Promise.all([import("waffle-base"), import("bash-web")]);
+
 async function install(runtime: Runtime, urls: ProgramUrls) {
-  const [{ installBase }, { installShellCommands }] = await Promise.all([import("waffle-base"), import("bash-web")]);
+  const [{ installBase }, { installShellCommands }] = await modules();
   const base = await installBase(runtime, { launcher: programLauncher(urls.worker) });
   try {
     const shell = await installShellCommands(runtime, { wasmUrl: urls.shell, workerUrl: urls.shellWorker });
@@ -31,13 +33,24 @@ export class BrowserPrograms {
   private closed = false;
   constructor(private readonly runtime: Runtime, private readonly urls: ProgramUrls) {}
 
+  /** Loads the installer code only. It writes nothing, so it may overlap workspace restoration. */
+  preload(): void {
+    void modules().catch(() => {});
+  }
+
+  /** A failed installation has rolled back, so the next call installs again (after quota recovery). */
   ready() {
     if (this.closed) return Promise.reject(new Error("Browser programs are closed"));
-    return this.installation ??= install(this.runtime, this.urls).then(async installed => {
+    if (this.installation) return this.installation;
+    const installation: ReturnType<typeof install> = install(this.runtime, this.urls).then(async installed => {
       if (!this.closed) return installed;
       await installed.dispose();
       throw new Error("Browser programs closed during installation");
+    }, error => {
+      if (this.installation === installation) this.installation = undefined;
+      throw error;
     });
+    return this.installation = installation;
   }
 
   /** The page starts runtime shutdown before awaiting this fence on its guests. */

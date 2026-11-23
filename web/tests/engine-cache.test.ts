@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { loadWasm } from "../src/engine-loader";
+import { WasmMissing, loadEngineProgram, loadWasm } from "../src/engine-loader";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const build = new Bun.CryptoHasher("sha256").update(wasm).digest("hex");
@@ -69,3 +69,147 @@ test("optional cache storage failure preserves the prepared module", () => withC
   expect(loaded.module).toBeInstanceOf(WebAssembly.Module);
   expect(loaded.build).toBe(build);
 }));
+
+/** An in-memory CacheStorage that records lookups; `stored` settles after each completed put. */
+function memoryCaches() {
+  const entries = new Map<string, { headers: Headers; bytes: Uint8Array }>();
+  const lookups: string[] = [];
+  let stored = Promise.withResolvers<void>();
+  const caches = {
+    async match(url: string) {
+      lookups.push(url);
+      const entry = entries.get(url);
+      return entry && new Response(entry.bytes.slice(), { headers: entry.headers });
+    },
+    async open() {
+      return {
+        async put(url: string, response: Response) {
+          entries.set(url, { headers: response.headers, bytes: new Uint8Array(await response.arrayBuffer()) });
+          stored.resolve();
+        },
+        async delete(url: string) { return entries.delete(url); },
+      };
+    },
+  };
+  return {
+    caches, entries, lookups,
+    /** Waits for the next put, then a turn for the loader's marker write after it. */
+    async stored() { await stored.promise; stored = Promise.withResolvers<void>(); await Bun.sleep(1); },
+  };
+}
+
+/** Replaces the page globals a loader reads; the returned function puts the originals back. */
+function pageGlobals(values: Record<string, unknown>): () => void {
+  const previous = Object.keys(values).map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+  for (const [name, value] of Object.entries(values)) Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
+  return () => { for (const [name, descriptor] of previous) restore(name, descriptor); };
+}
+
+for (const storage of ["without", "with"] as const) test(`the Browser engine's second page load compiles from the engine cache ${storage} localStorage`, async () => {
+  const cache = memoryCaches();
+  const fetched: string[] = [];
+  const marks = new Map<string, string>();
+  const restoreGlobals = pageGlobals({
+    location: new URL("https://engine-cache.test/app/"),
+    localStorage: storage === "with" ? {
+      getItem: (key: string) => marks.get(key) ?? null,
+      setItem: (key: string, value: string) => { marks.set(key, value); },
+      removeItem: (key: string) => { marks.delete(key); },
+    } : undefined,
+    caches: cache.caches,
+    fetch: async (url: string) => { fetched.push(String(url)); return new Response(Bun.gzipSync(wasm)); },
+    __bunwasmBuilds: { "bun-browser.wasm": build },
+  });
+  try {
+    const key = "https://engine-cache.test/app/bun-browser.wasm";
+    const first = await loadEngineProgram("browser", "split", () => {});
+    expect(first.build).toBe(build);
+    expect(fetched.map(url => new URL(url, location.href).href)).toEqual([`https://engine-cache.test/app/bun-browser.wasm.gz?v=${build}`]);
+    // A first visit with a usable marker store never waits on CacheStorage before downloading.
+    expect(cache.lookups).toEqual(storage === "with" ? [] : [key]);
+    await cache.stored();
+    expect(cache.entries.get(key)?.headers.get("x-bunwasm-build")).toBe(build);
+    if (storage === "with") expect(marks.get(`bunwasm-engine-cache:${key}`)).toBe(build);
+    const second = await loadEngineProgram("browser", "split", () => {});
+    expect(second.module).toBeInstanceOf(WebAssembly.Module);
+    expect(second.size).toBe(wasm.length);
+    expect(fetched).toHaveLength(1);
+    expect(cache.lookups.at(-1)).toBe(key);
+  } finally {
+    restoreGlobals();
+  }
+});
+
+const lostMarkerCases = [
+  { name: "Browser engine", asset: "bun-browser.wasm", load: () => loadEngineProgram("browser", "split", () => {}) },
+  { name: "verified tools", asset: "bun-tools.wasm", load: () => loadWasm("bun-tools.wasm", () => {}) },
+] as const;
+
+/** How the network fails on the last load: before any headers, or after them, mid-body. */
+const failures = {
+  headers: async (): Promise<Response> => { throw new TypeError("Failed to fetch"); },
+  body: async () => new Response(new ReadableStream({ start(controller) { controller.error(new TypeError("network error")); } })),
+};
+
+const failureCases = lostMarkerCases.flatMap(entry => (["headers", "body"] as const).map(failure => ({ ...entry, failure })));
+
+for (const { name, asset, load, failure } of failureCases) test(`${name}: a marker that cannot be written still leaves the cached bytes when the network fails at the ${failure}`, async () => {
+  const key = `https://engine-cache.test/app/${asset}`;
+  const cache = memoryCaches();
+  const marks = new Map<string, string>([[`bunwasm-engine-cache:${key}`, "0".repeat(64)]]);
+  let online = true;
+  let fetched = 0;
+  const restoreGlobals = pageGlobals({
+    location: new URL("https://engine-cache.test/app/"),
+    // A full localStorage: reads work, writes throw, removal still works.
+    localStorage: {
+      getItem: (item: string) => marks.get(item) ?? null,
+      setItem: () => { throw new DOMException("The quota has been exceeded.", "QuotaExceededError"); },
+      removeItem: (item: string) => { marks.delete(item); },
+    },
+    caches: cache.caches,
+    fetch: async () => {
+      fetched++;
+      if (!online) return failures[failure]();
+      return new Response(Bun.gzipSync(wasm));
+    },
+    __bunwasmBuilds: { [asset]: build },
+  });
+  try {
+    await load();
+    await cache.stored();
+    expect(cache.entries.get(key)?.headers.get("x-bunwasm-build")).toBe(build);
+    // The stale marker is gone rather than naming a build the cache no longer holds.
+    expect(marks.size).toBe(0);
+    await load();
+    expect(cache.lookups).toEqual([]);
+    online = false;
+    const offline = await load();
+    expect(offline.module).toBeInstanceOf(WebAssembly.Module);
+    expect(offline.build).toBe(build);
+    expect(cache.lookups).toEqual([key]);
+    expect(fetched).toBe(3);
+  } finally {
+    restoreGlobals();
+  }
+});
+
+for (const { name, asset, load } of lostMarkerCases) test(`${name}: a missing asset is reported as missing even with cached bytes`, async () => {
+  const key = `https://engine-cache.test/app/${asset}`;
+  const cache = memoryCaches();
+  cache.entries.set(key, { headers: new Headers({ "x-bunwasm-build": build, "content-type": "application/wasm" }), bytes: wasm });
+  const restoreGlobals = pageGlobals({
+    location: new URL("https://engine-cache.test/app/"),
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    caches: cache.caches,
+    fetch: async () => new Response(null, { status: 404 }),
+    __bunwasmBuilds: { [asset]: build },
+  });
+  try {
+    const outcome = await load().then(() => () => {}, (error: unknown) => () => { throw error; });
+    expect(outcome).toThrow(WasmMissing);
+    expect(cache.lookups).toEqual([]);
+  } finally {
+    restoreGlobals();
+  }
+});

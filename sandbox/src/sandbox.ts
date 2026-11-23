@@ -109,10 +109,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       this.listenerRevision++;
       this.previews.register(port, helper);
       const server = this.server = { port, helper };
-      measureStartup("dev-server", this.serverTiming.started);
+      measureStartup("dev-server", this.serverTiming.started, { port });
       void this.showPreview(server, this.serverTiming.visibleStart).catch(this.report);
     },
     stopped: (port, helper) => {
+      performance.mark("bunwasm:listener-stopped", { detail: { port } });
       this.previews.unregister(port, helper);
       if (this.server?.helper !== helper) return;
       this.server = null;
@@ -195,7 +196,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       stored: () => storedWorkspaces("fast"),
       openIdle: (name, signal) => openIdleWorkspace({ mode: "fast", name }, { signal }),
     }, this.template, report => this.storageResult(report));
+    stage("storage-open");
+    // Eviction finishes before this workspace opens. Overlapping the two measured slower in
+    // Chromium: both wait on IndexedDB and Waffle's storage locks.
     await this.storage.prepare();
+    stage("storage-prepared");
     const workspace = this.workspace ??= this.construct();
     this.changed();
     await this.boot(workspace, engine);
@@ -325,6 +330,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   }
 
   private setStatus(text: string, kind: Status["kind"] = ""): void {
+    performance.mark("bunwasm:status", { detail: text });
     this.message = { text, kind };
     this.changed();
   }
@@ -361,6 +367,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     term.loadAddon(this.fit);
     linkLocalUrls(term, this.previews);
     const moduleScope = registerModuleScope();
+    // The first command needs this code, and none of it writes the workspace, so it loads while
+    // storage opens. Installing base programs writes markers, which must wait for restoration.
+    browserPrograms.preload();
+    for (const pending of [runtime.processes(), import("../../web/src/runner")]) pending.catch(() => {});
     const editor = new Editor(fs, {
       app: APP,
       save: (path, text, revision) => this.save(fs, path, text, revision),
@@ -375,19 +385,22 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private async boot({ fs, editor }: Workspace, engine = this.loadEngine()): Promise<void> {
     await this.terminalOpen;
+    stage("terminal-open");
     await this.retryStorage(() => fs.mkdirp("/tmp"));
+    stage("filesystem-open");
     this.setServerState("starting", "loading…");
     if (!globalThis.crossOriginIsolated) {
       this.setStatus("this page is not cross-origin isolated: the dev server can't serve previews", "error");
     }
     const seed = () => loadTemplate(fs, APP, this.project.file).then(() => {});
     const initialize = this.storage ? () => this.storage!.initialize(fs, seed) : seed;
-    await Promise.all([this.retryStorage(initialize), engine]);
+    await Promise.all([this.retryStorage(initialize).then(() => stage("workspace-ready")), engine]);
     this.storageError = "";
     if (this.resetting) return;
     await this.refreshFiles();
     const startFile = this.project.editorFile;
     await editor.open(await fs.lookup(abs(startFile)) ? startFile : ((await fs.listFiles(APP)).map(rel)[0] ?? startFile));
+    stage("editor-open");
     if (!this.failure) this.started = true;
     this.startup = undefined;
     if (!this.wasm) return;
@@ -403,6 +416,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private async downloadEngine(): Promise<void> {
     try {
       this.wasm = await loadEngineProgram(this.engine, this.profile, (text) => this.setStatus(text), this.params.get("wasm") ?? undefined);
+      stage("engine-ready");
     } catch (err) {
       const missing = err instanceof WasmMissing;
       this.setStatus(missing ? `${ENGINES[this.engine].wasm} is not in this build` : `could not load bun.wasm: ${String(err)}`, "error");
@@ -427,11 +441,17 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const visibleStart = this.firstStart ? 0 : performance.now();
     this.firstStart = false;
     this.setStatus("waiting for module service worker…");
-    const scoped = await workspace.moduleScope;
-    if (revision !== this.serverRevision) return;
-    await this.retryStorage(() => fs.flush());
-    if (revision !== this.serverRevision) return;
-    const programs = await browserPrograms.ready();
+    // Base programs install after the restored workspace is checkpointed, as before. A quota
+    // failure there is not remembered, so storage recovery retries it.
+    const programsInstalled = this.retryStorage(() => fs.flush()).then(() => {
+      stage("flushed");
+      return this.retryStorage(() => browserPrograms.ready());
+    }).then(value => { stage("programs-ready"); return value; });
+    const [scoped, programs] = await Promise.all([
+      workspace.moduleScope.then(value => { stage("module-scope-ready"); return value; }),
+      programsInstalled,
+      runtime.processes().then(() => stage("processes-ready")),
+    ]);
     if (revision !== this.serverRevision) return;
     const env: Record<string, string> = {
       HOME,
@@ -448,8 +468,6 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       // Output-only stdin is EOF. Vite must not treat it as a request to close the server.
       CI: "true",
     };
-    await runtime.processes();
-    if (revision !== this.serverRevision) return;
     const options = { engine: this.engine, profile: this.profile, module: wasm.module, env, runtime, moduleScope: scoped, network: this.network };
     const result = await this.retryStorage(() => this.command("install", options, visibleStart, revision));
     if (!result || result.code !== 0 || result.error || revision !== this.serverRevision) return;
@@ -461,6 +479,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private async command(script: "install" | "dev", options: Omit<RunOptions, "args">, visibleStart: number, revision: number): Promise<RunResult | undefined> {
     const { startRun } = await import("../../web/src/runner");
+    stage(`${script}-start`);
     if (revision !== this.serverRevision) return;
     const term = this.workspace!.term;
     const args = script === "install" ? ["install"] : ["run", "dev"];
@@ -481,6 +500,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const current = startRun({ ...options, args }, hooks);
     this.run = current;
     const result = await current.done;
+    stage(`${script}-done`);
     output.flush();
     if (result.error) term.write(`\x1b[31m${result.error}\x1b[0m\r\n`);
     if (this.run !== current) return;
@@ -580,6 +600,8 @@ function stoppingRun(done: Promise<unknown>, ms: number): StoppingRun {
   return { ended: Promise.race([settled, expired]) };
 }
 
+/** Boot waterfall marks on the navigation clock, read by sandbox/tests/page-load-profile.ts. */
+const stage = (name: string) => { performance.mark(`bunwasm:stage:${name}`); };
 const rel = (path: string) => path.slice(APP.length + 1);
 const abs = (relPath: string) => `${APP}/${relPath}`;
 

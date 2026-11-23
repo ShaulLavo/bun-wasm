@@ -160,6 +160,19 @@ test("conflicting caller programs fail instead of pretending base is installed",
 });
 
 
+test("a failed installation is not remembered: the next ready installs again", async () => {
+  await withPrograms(async (runtime, programs) => {
+    await runtime.filesystem.mkdirp("/usr/bin");
+    await runtime.filesystem.writeFile("/usr/bin/cat", "caller owned");
+    const failed = await programs.ready().then(() => () => {}, error => () => { throw error; });
+    expect(failed).toThrow("another entry already exists");
+    await runtime.filesystem.remove("/usr/bin/cat");
+    const installed = await programs.ready();
+    expect(installed.path.split(":")).toContain("/usr/bin");
+    expect(await runtime.filesystem.lookup("/usr/bin/cat")).toBeDefined();
+  });
+});
+
 test("closing during installation removes its markers and refuses a late ready result", async () => {
   await withPrograms(async (runtime, programs) => {
     const pending = programs.ready();

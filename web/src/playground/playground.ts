@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { createRuntime, type Runtime } from "waffle";
 import { memoryGroupPolicy } from "../host-memory-policy";
 import { playgroundProfile, registerPlaygroundBun, templateProfile, type PlaygroundProfile } from "./program-profile";
+import { ENGINE_BIN } from "../../../src/executable-paths";
 import { BrowserPrograms } from "../browser-programs";
 import { ENGINES, type Engine, WasmMissing, createToolsLoader, engineBuildHint, engineUnavailable, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../engine-loader";
 import { installCompileObserver, measurementEnvironment } from "../compile-observer";
@@ -59,6 +60,30 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   private runPending = false;
   private message: Status = { text: "", kind: "" };
   private disposePreviewLinks?: () => void;
+  private startupFailed = false;
+  /** Cleanups for work startup has done so far; they run the moment startup is abandoned. */
+  private readonly abandonHooks = new Set<() => void>();
+
+  /** Startup failed or another tab took the workspace: no late branch may publish or register. */
+  private get abandoned(): boolean {
+    return this.startupFailed || this.fs?.ownershipLost === true;
+  }
+
+  /** Runs `cleanup` when startup is abandoned, or at once if it already was. */
+  private onAbandon(cleanup: () => void): void {
+    if (this.abandoned) cleanup();
+    else this.abandonHooks.add(cleanup);
+  }
+
+  private runAbandonHooks(): void {
+    for (const cleanup of Array.from(this.abandonHooks)) cleanup();
+    this.abandonHooks.clear();
+  }
+
+  private abandonStartup(): void {
+    this.startupFailed = true;
+    this.runAbandonHooks();
+  }
 
   constructor(search: string) {
     super();
@@ -94,6 +119,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     try {
       await this.boot();
     } catch (error) {
+      this.abandonStartup();
       console.error(error);
       this.unreadable = this.fast && !this.fs?.ownershipLost && unreadableWorkspace(error, this.fs?.state);
       this.message = this.unreadable
@@ -145,7 +171,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
 
   async run(): Promise<void> {
     const { editor, shell } = this;
-    if (!editor || !shell || shell.running || this.runPending) return;
+    // The shell starts before Bun is registered; Run waits for the finished startup.
+    if (!this.ready || !editor || !shell || shell.running || this.runPending) return;
     this.runPending = true;
     this.changed();
     try {
@@ -180,6 +207,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   }
 
   private setStatus(text: string, kind: Status["kind"] = ""): void {
+    performance.mark("bunwasm:status", { detail: text });
     this.message = { text, kind };
     this.changed();
   }
@@ -207,24 +235,48 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     fs.onStateChange = state => {
       if (state.status === "waiting") this.setStatus("Waiting for this workspace to close in another tab. It will open here automatically.");
     };
+    // Typing waits for Bun's registration; a tab that loses the workspace drops it for good.
+    const input = new InputGate();
+    // A shell started during an abandoned startup is disposed as soon as it exists, once.
+    let startedShell: BrowserSession | undefined;
+    let retiring: Promise<void> | undefined;
+    const retireShell = () => {
+      if (startedShell) retiring ??= startedShell.dispose().catch(() => {});
+      return retiring;
+    };
     fs.onOwnershipLost = () => {
       this.failure = "ownership";
+      input.close();
+      if (!this.ready) {
+        void retireShell();
+        this.runAbandonHooks();
+      }
       this.changed();
     };
+    // Network work that reads no workspace runs while the workspace storage opens.
+    const wasmReady = this.loadEngine().then(value => { stage("engine-ready"); return value; });
+    const sessionModule = import("bash-web/session");
+    const promptModule = this.params.get("prompt") === "off" ? Promise.resolve(undefined) : import("bash-web/prompt");
+    // Awaited below; a startup that fails first must not also report these as unhandled.
+    for (const pending of [sessionModule, promptModule]) pending.catch(() => {});
     await fs.mkdirp("/tmp");
+    stage("filesystem-open");
+    // These write browser storage too, so they start once it is open (a fresh Firefox profile
+    // opened the workspace slower with them alongside) and overlap seeding and the download.
+    // Browser-engine children need the module scope even when their parent uses QuickJS or JSC.
+    const moduleScope = registerModuleScope().then(value => { stage("module-scope-ready"); return value; });
+    const programsReady = browserPrograms.ready().then(value => { stage("programs-ready"); return value; });
+    programsReady.catch(() => {});
     if (this.template) {
       const { loadTemplate } = await import("../../../sandbox/src/template");
       await loadTemplate(fs, HOME, this.template.file);
     } else await seedExamples(fs);
+    stage("workspace-ready");
     addEventListener("pagehide", (event: PageTransitionEvent) => {
       if (event.persisted) return;
       void Promise.all([runtime.dispose(), browserPrograms.dispose()]).catch(console.error);
     });
 
-    const wasmReady = this.loadEngine();
-    const promptModule = this.params.get("prompt") === "off" ? undefined : import("bash-web/prompt");
-    // Browser-engine children need the module scope even when their parent uses QuickJS or JSC.
-    const moduleScope: Promise<boolean> = registerModuleScope();
     // Networking needs SharedArrayBuffer: without cross-origin isolation bun.wasm gets no fetch slots.
     const previews = this.params.has("root-previews") ? new HostedPreviews(() => runtime) : new Previews();
     const term = this.term = createTerminal();
@@ -250,12 +302,92 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       "",
     ]) term.writeln(line);
 
-    const [programs, scoped, wasm] = await Promise.all([browserPrograms.ready(), moduleScope, wasmReady]);
-    if (wasm instanceof Error) throw wasm;
-    const module = wasm.module;
+    // The shell starts while the engine downloads. Its PATH names Bun's static bin directory,
+    // and typing waits for Bun's registration below, so no command can run before Bun exists.
+    term.onData(data => input.write(data));
+    // A shell that fails or exits before the playground is ready fails startup, even while the
+    // engine is still downloading. It only ever rejects; startup races it against both branches.
+    const shellEnded = Promise.withResolvers<never>();
+    shellEnded.promise.catch(() => {});
+    const shellState = (state: SessionState, detail?: string) => {
+      this.shellChanged(state, detail);
+      if (this.ready || (state !== "failed" && state !== "exited")) return;
+      shellEnded.reject(new Error(detail ?? `The shell ${state} during startup. Reload to start another session.`));
+    };
+    const shellReady = (async () => {
+      const [programs, { BrowserSession }, prompts] = await Promise.all([programsReady, sessionModule, promptModule]);
+      const prompt = prompts?.createPrompt({
+        filesystem: runtime.filesystem,
+        versions: HOST_VERSIONS,
+        file: true,
+        logger: (message: string, error?: unknown) => console.warn(`[prompt] ${message}`, error ?? ""),
+      });
+      const shell = await BrowserSession.create({
+        runtime, cwd: HOME,
+        env: { ...engineEnv, HOME, USER: "user", PATH: `${ENGINE_BIN[this.engine]}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
+        cols: term.cols, rows: term.rows,
+        wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
+        workerUrl: new URL("./shell-worker.js", location.href),
+        lineEditor: { mode: "zsh" },
+        prompt,
+        onOutput: bytes => term.write(bytes),
+        onState: shellState,
+      });
+      stage("shell-created");
+      startedShell = shell;
+      // Ownership may be gone, or the other branch failed, while it started: no engine wait.
+      if (this.abandoned) void retireShell();
+      else this.shell = shell;
+      term.onResize(({ cols, rows }) => shell.resize(cols, rows));
+      return shell;
+    })();
     const engine = this.engine;
+    const registering = this.registerBun(runtime, network, moduleScope, wasmReady);
+    let shell: Awaited<typeof shellReady>;
+    let registration: Awaited<ReturnType<typeof registerPlaygroundBun>>;
+    let size: number;
+    try {
+      // Both branches are observed from here, so whichever fails first ends startup at once.
+      [shell, { registration, size }] = await Promise.race([Promise.all([shellReady, registering]), shellEnded.promise]);
+    } catch (error) {
+      this.abandonStartup();
+      void retireShell();
+      void registering.then(registered => registered.registration.dispose()).catch(() => {});
+      // A takeover is reported as such, not as the startup failure it caused.
+      if (fs.ownershipLost) return;
+      throw error;
+    }
+    if (fs.ownershipLost) {
+      // Another tab took the workspace during startup: nothing here may run against it.
+      this.shell = undefined;
+      registration.dispose();
+      await retireShell();
+      return;
+    }
+    // Replayed and live input share one path: a rejected chunk is reported, never fatal.
+    input.open(data => {
+      try { shell.input(data); } catch (error) { this.report(error); }
+    });
+    addEventListener("pagehide", (event: PageTransitionEvent) => {
+      if (event.persisted) return;
+      void shell.dispose().finally(registration.dispose).catch(console.error);
+    });
+
+    Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews, sharedObjects, engine, profile: registration.profile } });
+    // Startup is complete: its cleanups no longer apply (a later takeover keeps Bun registered).
+    this.abandonHooks.clear();
+    this.ready = !fs.ownershipLost;
+    this.setStatus(`bun.wasm ready · ${ENGINES[engine].name} · ${mb(size)}`, "ok");
+    if (this.ready) whenIdle(warmFirstCommand);
+  }
+
+  /** Registers Bun once its engine and module scope are ready, then checkpoints the workspace. */
+  private async registerBun(runtime: Runtime, network: BunNetworkOptions, moduleScope: Promise<boolean>, wasmReady: ReturnType<Playground["loadEngine"]>) {
+    const [scoped, wasm] = await Promise.all([moduleScope, wasmReady]);
+    if (wasm instanceof Error) throw wasm;
+    if (this.abandoned) throw new Error("Playground startup was abandoned before Bun registration");
     const loadTools = createToolsLoader();
-    const registration = await registerPlaygroundBun({ runtime, engine, module, profile: this.profile,
+    const registration = await registerPlaygroundBun({ runtime, engine: this.engine, module: wasm.module, profile: this.profile,
       loadModule: (provider, profile) => loadEngineProgram(provider, profile, () => {}).then(loaded => loaded.module),
       launcher: provider => async (context, service) => {
         const { bunLauncher } = await import("../bun-launcher");
@@ -266,44 +398,31 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
           loadTools,
         })(context, service);
       },
+      // Abandonment during any registration step rolls back its programs and markers.
+      abandoned: () => this.abandoned,
     });
-    await fs.flush();
-    const { BrowserSession } = await import("bash-web/session");
-    const prompt = (await promptModule)?.createPrompt({
-      filesystem: runtime.filesystem,
-      versions: HOST_VERSIONS,
-      file: true,
-      logger: (message: string, error?: unknown) => console.warn(`[prompt] ${message}`, error ?? ""),
-    });
-    const shell = this.shell = await BrowserSession.create({
-      runtime, cwd: HOME,
-      env: { ...engineEnv, HOME, USER: "user", PATH: `${registration.bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
-      cols: term.cols, rows: term.rows,
-      wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
-      workerUrl: new URL("./shell-worker.js", location.href),
-      lineEditor: { mode: "zsh" },
-      prompt,
-      onOutput: bytes => term.write(bytes),
-      onState: (state, detail) => this.shellChanged(state, detail),
-    });
-    term.onData(data => shell.input(data));
-    term.onResize(({ cols, rows }) => shell.resize(cols, rows));
-    addEventListener("pagehide", (event: PageTransitionEvent) => {
-      if (event.persisted) return;
-      void shell.dispose().finally(registration.dispose).catch(console.error);
-    });
-
-    Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews, sharedObjects, engine, profile: registration.profile } });
-    this.ready = !fs.ownershipLost;
-    this.setStatus(`bun.wasm ready · ${ENGINES[engine].name} · ${mb(wasm.size)}`, "ok");
-    if (this.ready) whenIdle(warmFirstCommand);
+    // From here, abandoning startup removes Bun at once, without waiting for the checkpoint.
+    // Disposing twice is harmless: the registration removes each program only once.
+    this.onAbandon(() => registration.dispose());
+    stage("bun-registered");
+    try {
+      // Mutations are already visible to every worker; the checkpoint only makes them durable.
+      await runtime.filesystem.flush();
+      if (this.abandoned) throw new Error("Playground startup was abandoned during Bun registration");
+    } catch (error) {
+      registration.dispose();
+      throw error;
+    }
+    stage("flushed");
+    return { registration, size: wasm.size };
   }
 
   private async loadEngine(): Promise<Awaited<ReturnType<typeof loadWasm>> | Error> {
     const unavailable = engineUnavailable(this.engine, this.profile);
     if (unavailable) return new Error(unavailable);
     try {
-      return await loadEngineProgram(this.engine, this.profile, (text) => this.setStatus(text), this.params.get("wasm") ?? undefined);
+      // Late download progress must not replace the error of a startup that already failed.
+      return await loadEngineProgram(this.engine, this.profile, (text) => { if (!this.abandoned) this.setStatus(text); }, this.params.get("wasm") ?? undefined);
     } catch (err) {
       return new Error(err instanceof WasmMissing
         ? `${String(err)}. ${engineBuildHint(this.engine)}`
@@ -312,6 +431,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   }
 
   private shellChanged(state: SessionState, detail?: string): void {
+    if (state !== this.shellState) stage(`shell-${state}`);
     this.shellState = state;
     if (state === "ready") void this.editor?.syncFromFs().catch(this.report);
     if (state === "failed" || state === "exited") {
@@ -335,6 +455,37 @@ async function seedExamples(fs: Filesystem): Promise<void> {
   for (const [name, source] of Object.entries(examples)) await fs.writeFile(`${HOME}/${name}`, source);
   await fs.mkdirp(initialized);
   await fs.flush();
+}
+
+/** Holds terminal input until its consumer opens, then delivers it in order. Closing is final. */
+export class InputGate {
+  private readonly queued: string[] = [];
+  private consumer: ((data: string) => void) | undefined;
+  private closed = false;
+
+  write(data: string): void {
+    if (this.closed) return;
+    if (this.consumer) this.consumer(data);
+    else this.queued.push(data);
+  }
+
+  open(consumer: (data: string) => void): void {
+    if (this.closed) return;
+    this.consumer = consumer;
+    for (const data of this.queued.splice(0)) consumer(data);
+  }
+
+  /** Drops queued input and everything typed later. */
+  close(): void {
+    this.closed = true;
+    this.consumer = undefined;
+    this.queued.length = 0;
+  }
+}
+
+/** Boot waterfall marks on the navigation clock, read by sandbox/tests/page-load-profile.ts. */
+function stage(name: string): void {
+  performance.mark(`bunwasm:stage:${name}`);
 }
 
 function createTerminal(): Terminal {

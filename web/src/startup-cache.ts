@@ -15,8 +15,48 @@ export function commandChunks(): string[] {
 }
 
 const CACHE = "bunwasm-engines";
+const MARKER = "bunwasm-engine-cache:";
 
-export async function cachedEngine(url: string, build: string): Promise<Response | null> {
+/**
+ * Which build this origin last stored for `url`, read synchronously. A first visit then skips
+ * CacheStorage, whose first use can take seconds in Firefox, and downloads at once. Undefined
+ * where the page has no usable localStorage (workers, blocked storage): those keep the lookup.
+ */
+function storedBuild(url: string): string | null | undefined {
+  try {
+    const storage: Storage | undefined = globalThis.localStorage;
+    return storage ? storage.getItem(MARKER + url) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Records `build` for `url`, or nothing: a marker that cannot be updated is removed. */
+function mark(url: string, build: string | null): void {
+  try {
+    if (build === null) globalThis.localStorage?.removeItem(MARKER + url);
+    else globalThis.localStorage?.setItem(MARKER + url, build);
+  } catch {
+    unmark(url);
+  }
+}
+
+function unmark(url: string): void {
+  try {
+    globalThis.localStorage?.removeItem(MARKER + url);
+  } catch {
+    // Unusable storage reads as unmarked, which keeps the CacheStorage lookup.
+  }
+}
+
+/**
+ * The cached bytes of `build`. Unless `always`, an absent or different marker answers "none"
+ * without opening CacheStorage. Loaders pass `always` once the network has failed, so bytes a
+ * lost marker hides still serve.
+ */
+export async function cachedEngine(url: string, build: string, always = false): Promise<Response | null> {
+  const stored = always ? undefined : storedBuild(url);
+  if (stored !== undefined && stored !== build) return null;
   try {
     const response = await caches.match(url, { cacheName: CACHE });
     return response?.headers.get("x-bunwasm-build") === build ? response : null;
@@ -30,6 +70,7 @@ export async function cacheEngine(url: string, build: string, response: Response
     const headers = new Headers(response.headers);
     headers.set("x-bunwasm-build", build);
     await (await caches.open(CACHE)).put(url, new Response(response.body, { headers }));
+    mark(url, build);
     return true;
   } catch {
     // Disabled or full storage must not stop a working engine.
@@ -38,6 +79,7 @@ export async function cacheEngine(url: string, build: string, response: Response
 }
 
 export async function evictEngine(url: string): Promise<void> {
+  mark(url, null);
   try {
     await (await caches.open(CACHE)).delete(url);
   } catch {

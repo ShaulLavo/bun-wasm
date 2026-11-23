@@ -127,7 +127,8 @@ class TerminalFixture {
   open() {}
   write() {}
   writeln() {}
-  onData() {}
+  readonly dataListeners: ((data: string) => void)[] = [];
+  onData(listener: (data: string) => void) { this.dataListeners.push(listener); }
   onResize() {}
   registerLinkProvider() { return { dispose() {} }; }
 }
@@ -138,7 +139,7 @@ function fixtureWasm(url = "") {
   return { module: new WebAssembly.Module(url.startsWith("profiles/shared-group/") ? appendCustomSection(bytes, "dylink.0", new Uint8Array()) : bytes), size: 8, build: null };
 }
 
-export async function models(fixture = filesystemFixture(), sources: Record<string, string> = { "index.ts": "example", "deleted.ts": "delete me" }, engine?: () => Promise<ReturnType<typeof fixtureWasm>>) {
+export async function models(fixture = filesystemFixture(), sources: Record<string, string> = { "index.ts": "example", "deleted.ts": "delete me" }, engine?: (progress?: (text: string) => void) => Promise<ReturnType<typeof fixtureWasm>>) {
   const listeners: ((event: { persisted: boolean }) => void)[] = [];
   const loads: string[] = [];
   const runs: { args: string[]; env: Record<string, string>; network: RunOptions["network"]; hooks: RunHooks; done: ReturnType<typeof deferred<RunResult>>; kills: number[] }[] = [];
@@ -161,14 +162,15 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
       readonly recovery = new StorageRecovery(async () => { storageEvents.push("recover"); });
       static async open() { storageEvents.push("open"); await boundary.openStorage(); return new this(); }
       prepare() { storageEvents.push("prepare"); return boundary.prepareStorage(); }
-      async initialize(_fs: unknown, seed: () => Promise<void>) { storageEvents.push("initialize"); await seed(); }
+      async initialize(_fs: unknown, seed: () => Promise<void>) { storageEvents.push("initialize"); await seed(); storageEvents.push("initialized"); }
       reset(replace: () => Promise<void>) { storageEvents.push("reset"); return replace(); }
       close() { storageEvents.push("close"); }
     },
-    BrowserPrograms: class { ready() { return Promise.resolve({ path: "/bin" }); } dispose() { return Promise.resolve(); } },
+    BrowserPrograms: class { preload() {} ready() { return boundary.programsReady(); } dispose() { return Promise.resolve(); } },
+    programsReady: (): Promise<{ path: string }> => Promise.resolve({ path: "/bin" }),
     registerModuleScope: async () => true,
-    loadWasm: async (url: string) => { loads.push(url); return engine ? engine() : fixtureWasm(url); },
-    loadEngineProgram: (engine: engineLoader.Engine, profile: Parameters<typeof engineLoader.loadEngineProgram>[1], _progress: (text: string) => void, override?: string): ReturnType<typeof engineLoader.loadEngineProgram> => boundary.loadWasm(override ?? profileAsset(engineLoader.ENGINES[engine].wasm, profile)),
+    loadWasm: async (url: string, progress?: (text: string) => void) => { loads.push(url); return engine ? engine(progress) : fixtureWasm(url); },
+    loadEngineProgram: (engine: engineLoader.Engine, profile: Parameters<typeof engineLoader.loadEngineProgram>[1], progress: (text: string) => void, override?: string): ReturnType<typeof engineLoader.loadEngineProgram> => boundary.loadWasm(override ?? profileAsset(engineLoader.ENGINES[engine].wasm, profile), progress),
     Previews: class { ready = Promise.resolve("ready"); register() {} unregister() {} url() { return "https://preview.test/"; } },
     HostedPreviews: class {},
     linkLocalUrls() {}, installPreviewLinks() { return () => {}; }, openTerminal() {},
