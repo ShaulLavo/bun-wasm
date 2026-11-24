@@ -57,10 +57,13 @@ const writeMarkerSource = (marker: string) => `(async () => {
   await api.fs.flush(${JSON.stringify(markerPath)});
 })()`;
 
-const readMarkerSource = `(async () => {
+const readAndRemoveMarkerSource = `(async () => {
   const api = globalThis.sandbox;
   if (!api) throw new Error("Missing sandbox API");
-  return new TextDecoder().decode(await api.fs.readFile(${JSON.stringify(markerPath)}));
+  const text = new TextDecoder().decode(await api.fs.readFile(${JSON.stringify(markerPath)}));
+  await api.fs.remove(${JSON.stringify(markerPath)});
+  await api.fs.flush();
+  return text;
 })()`;
 
 const flushAndDisposeSource = `(async () => {
@@ -99,7 +102,7 @@ async function runVisit(
         throw new Error(`Root sandbox did not persist bun-wasm-sandbox-vite-react; saw ${JSON.stringify(databases)}`);
       }
       if (marker.expect !== undefined) {
-        const persisted = await transport.evaluate<string>(readMarkerSource, admission);
+        const persisted = await transport.evaluate<string>(readAndRemoveMarkerSource, admission);
         if (persisted !== marker.expect) {
           throw new Error(`Root sandbox marker did not persist across revisit: expected ${JSON.stringify(marker.expect)}, got ${JSON.stringify(persisted)}`);
         }

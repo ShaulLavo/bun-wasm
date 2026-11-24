@@ -206,8 +206,11 @@ async function runSandboxRoot(options: LiveSmokeOptions): Promise<SandboxRootRes
     await waitForRootSandboxReady(page, options.timeoutMs);
     const reloadMs = Math.round(performance.now() - reloadStart);
     const persisted = await page.evaluate(async (path: string) => {
-      const api = (globalThis as unknown as { sandbox: { fs: { readFile(p: string): Promise<Uint8Array> } } }).sandbox;
-      return new TextDecoder().decode(await api.fs.readFile(path));
+      const api = (globalThis as unknown as { sandbox: { fs: { readFile(p: string): Promise<Uint8Array>; remove(p: string): Promise<void>; flush(): Promise<void> } } }).sandbox;
+      const text = new TextDecoder().decode(await api.fs.readFile(path));
+      await api.fs.remove(path);
+      await api.fs.flush();
+      return text;
     }, markerPath);
     if (persisted !== marker) errors.push(`Persisted marker mismatch after reload: expected ${marker}, got ${persisted}`);
     const smokeGreen = errors.length === 0 && missingUrls.length === 0;

@@ -26,8 +26,11 @@ async function waitForFile(file: string): Promise<void> {
   const want = await Bun.file(join(dist, file)).text();
   const target = `${origin}/${file.replace(/index\.html$/, "")}`;
   for (;;) {
-    const got = await fetch(target, { signal: AbortSignal.timeout(fetchTimeoutMs) })
-      .then(response => response.ok ? response.text() : "", () => "");
+    let got = "";
+    try {
+      const response = await fetch(target, { signal: AbortSignal.timeout(fetchTimeoutMs) });
+      if (response.ok) got = await response.text();
+    } catch { /* Retry transient network/body timeouts until deadline. */ }
     if (got === want) return;
     if (Date.now() > deadline) throw new Error(`${file}: still stale after 2 minutes`);
     await Bun.sleep(2000);

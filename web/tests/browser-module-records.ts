@@ -247,8 +247,13 @@ async function checkBrowser(name: string, site: Site): Promise<string[]> {
   return problems;
 }
 
+function isSwController(controller: string): boolean {
+  try { return new URL(controller).pathname.endsWith("/sw.js"); }
+  catch { return controller.endsWith("/sw.js"); }
+}
+
 function control(controller: string, probeServedBySw: boolean | "no probe response"): string {
-  if (controller.endsWith("/sw.js")) return "controlled (controller)";
+  if (isSwController(controller)) return "controlled (controller)";
   if (controller === "unavailable" && probeServedBySw === true) return "controlled (probe served by the service worker; no worker container)";
   if (probeServedBySw === true) return `served by the service worker but controller ${controller}`;
   return controller === "unavailable" ? "not controlled (no worker container, probe from the network)" : "not controlled (controller null)";
@@ -285,7 +290,7 @@ async function checkVariant(browser: Browser, { name, context: policy, url, orig
   // Logical cleanup: both processes reported their exit, and no module cache exists. Closing the
   // context says nothing about when its workers physically retire, so nothing is inferred from it.
   const moduleCaches: string[] = await page.evaluate(async () => (await caches.keys()).filter((key: string) => key.startsWith("bunwasm-m-")));
-  const scoped = requests.some(request => request.path === "/__bunwasm/worker.js");
+  const scoped = requests.some(request => /^\/__bunwasm\/(?:entry-worker-[0-9a-f]+\.js|worker\.js)$/.test(request.path));
   await context.close();
   console.log(JSON.stringify({ browser: name, context: policy, root, removedRegistrations: removed, registrations: registered, scopedWorkerRequested: scoped, caches: moduleCaches, processes }));
   const problem = expectOld ? oldProblems(processes, policy) : newProblems(processes, policy, name, expected, { registered, caches: moduleCaches });

@@ -19,7 +19,7 @@ import { safariTabJournal } from "./tab-journal";
 import { runSmoke } from "./run";
 import { templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { engineFiles, profileEngineFiles } from "../goals-matrix/engines";
-import { comparedHeaders, decodedSha256, pick, type LiveServed } from "../goals-matrix/iphone-live-proxy";
+import { comparedHeaders, decodedSha256, pick, proxyLiveRequest, type LiveServed } from "../goals-matrix/iphone-live-proxy";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -516,20 +516,24 @@ test("a run whose proxy recorded no playground or root page cannot pass the orig
     });
   });
 });
-test("live origin check rejects 404 responses even when the origin also returns 404 and records status changes separately", async () => {
+test("live origin check rejects 404 responses (including conditional GET and HEAD via proxy) and records status changes separately", async () => {
   await scratch(async root => {
     await preparedRoot(join(root, "deployed"));
     const get = deployedSite(join(root, "deployed"), [source.commit], []);
+    const upstream = (input: string | URL | Request) => get(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     const served: LiveServed[] = [];
     const record = recordServed(served);
     for (const row of await servedFrom(get, servedPaths)) record(row);
-    const missing = (await servedFrom(get, ["/chunks/missing-old.js"]))[0]!;
-    expect(missing.status).toBe(404);
-    record(missing);
+    const conditional = await proxyLiveRequest(new Request("http://127.0.0.1:4100/chunks/missing-cond.js", { headers: { "if-none-match": '"etag-1"' } }), site, upstream as typeof fetch, record);
+    expect(conditional.status).toBe(404);
+    await conditional.arrayBuffer();
+    const head = await proxyLiveRequest(new Request("http://127.0.0.1:4100/chunks/missing-head.js", { method: "HEAD" }), site, upstream as typeof fetch, record);
+    expect(head.status).toBe(404);
     record({ ...served[0]!, status: 404 });
     expect(served.filter(row => row.url === "/")).toHaveLength(2);
     const check = await compareLiveOrigin(site, served, get, { requireRoot: true });
-    expect(check.mismatches).toContain("/chunks/missing-old.js: served HTTP 404");
+    expect(check.mismatches).toContain("/chunks/missing-cond.js: served HTTP 404");
+    expect(check.mismatches).toContain("/chunks/missing-head.js: served HTTP 404");
   });
 });
 test("sandbox-root probe and counter click succeed across distinct host and iframe realms", async () => {

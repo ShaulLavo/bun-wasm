@@ -95,6 +95,7 @@ export async function compareLiveOrigin(
   for (const row of rows) {
     if (row.status >= 400 && !row.url.includes("/__preview/")) {
       mismatches.push(`${row.url}: served HTTP ${row.status}`);
+      continue;
     }
     mismatches.push(...await compareRow(site, row, get));
   }

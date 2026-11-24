@@ -96,9 +96,10 @@ async function rotateAppBuild(buildA: string, buildB: string, templateHtmlPath: 
 
   const entries = await publishVersionedEntries(buildB);
   const workerAssets = Object.fromEntries(VERSIONED_WORKER_FILES.map(name => [name, entries[name]!]));
-  const builds = JSON.parse(readFileSync(join(buildB, "engine-builds.json"), "utf8")) as Record<string, string>;
-  builds["sw.js"] = sha256Hex(readFileSync(join(buildB, "sw.js")));
-  writeFileSync(join(buildB, "engine-builds.json"), JSON.stringify(builds));
+  const pageBuilds: Record<string, string> = {
+    ...buildABuilds,
+    "sw.js": sha256Hex(readFileSync(join(buildB, "sw.js"))),
+  };
 
   const templateHtml = readFileSync(templateHtmlPath, "utf8");
   const commandChunksMatch = /globalThis\.__bunwasmCommandChunks=(\[[^\]]*\])/.exec(readFileSync(join(buildA, "index.html"), "utf8"));
@@ -110,7 +111,7 @@ async function rotateAppBuild(buildA: string, buildB: string, templateHtmlPath: 
       return renamed ? `${item.slice(0, slash + 1)}${renamed}` : item;
     }))
     : undefined;
-  const bootstrap = `globalThis.__bunwasmBuilds=${JSON.stringify(builds)};globalThis.__bunwasmAssets=${JSON.stringify(workerAssets)}`
+  const bootstrap = `globalThis.__bunwasmBuilds=${JSON.stringify(pageBuilds)};globalThis.__bunwasmAssets=${JSON.stringify(workerAssets)}`
     + (rotatedCommandChunks ? `;globalThis.__bunwasmCommandChunks=${rotatedCommandChunks}` : "");
   const index = rewriteEntryHtml(templateHtml, entries).replace("<head>", `<head><script>${bootstrap}</script>`);
   writeFileSync(join(buildB, "index.html"), index);
@@ -120,7 +121,7 @@ async function rotateAppBuild(buildA: string, buildB: string, templateHtmlPath: 
     buildAEntries,
     buildBEntries: { ...workerAssets, "main.js": entries["main.js"]!, "main.css": entries["main.css"]! },
     buildASwVersion,
-    buildBSwVersion: builds["sw.js"].slice(0, 16),
+    buildBSwVersion: pageBuilds["sw.js"]!.slice(0, 16),
   };
 }
 

@@ -77,12 +77,15 @@ for (const template of templates) {
   await Bun.write(join(out, template.file), bytes);
   console.log(`${template.id}: ${Object.keys(files).length} project source files`);
 }
-builds["sw.js"] = new Bun.CryptoHasher("sha256").update(await Bun.file(join(out, "sw.js")).bytes()).digest("hex");
+const pageBuilds: Record<string, string> = {
+  ...builds,
+  "sw.js": new Bun.CryptoHasher("sha256").update(await Bun.file(join(out, "sw.js")).bytes()).digest("hex"),
+};
 
 const entries = await publishVersionedEntries(out);
 const workerAssets = Object.fromEntries(VERSIONED_WORKER_FILES.map(name => [name, entries[name]!]));
 await Bun.write(join(out, "engine-builds.json"), JSON.stringify(builds));
 const index = rewriteEntryHtml(await Bun.file(join(here, "index.html")).text(), entries);
-await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>globalThis.__bunwasmBuilds=${JSON.stringify(builds)};globalThis.__bunwasmAssets=${JSON.stringify(workerAssets)}</script>`));
+await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>globalThis.__bunwasmBuilds=${JSON.stringify(pageBuilds)};globalThis.__bunwasmAssets=${JSON.stringify(workerAssets)}</script>`));
 
 for (const output of page.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);

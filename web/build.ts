@@ -112,18 +112,20 @@ const staging = guests.map(async ({ source, name }) => {
 await settleAll(staging);
 
 const builds = sortedBuilds(engineBuilds);
+const pageBuilds: Record<string, string> = { ...builds };
 for (const template of projectTemplates) {
   const files = await templateFiles(resolve(here, "../sandbox", template.directory));
   const bytes = new TextEncoder().encode(JSON.stringify({ files }));
-  builds[template.file] = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+  pageBuilds[template.file] = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
   await Bun.write(join(out, template.file), bytes);
 }
-builds["sw.js"] = new Bun.CryptoHasher("sha256").update(await Bun.file(join(out, "sw.js")).bytes()).digest("hex");
+pageBuilds["sw.js"] = new Bun.CryptoHasher("sha256").update(await Bun.file(join(out, "sw.js")).bytes()).digest("hex");
 const entries = await publishVersionedEntries(out);
 const workerAssets = Object.fromEntries(VERSIONED_WORKER_FILES.map(name => [name, entries[name]!]));
+// Keep engine-builds.json restricted to WASM fingerprints (validated by producer-closure.ts).
 await Bun.write(join(out, "engine-builds.json"), JSON.stringify(builds));
 const index = rewriteEntryHtml(await Bun.file(join(here, "index.html")).text(), entries);
-const startup = `globalThis.__bunwasmBuilds=${JSON.stringify(builds)};globalThis.__bunwasmAssets=${JSON.stringify(workerAssets)};globalThis.__bunwasmCommandChunks=${JSON.stringify(commandChunks(result.metafile!))}`;
+const startup = `globalThis.__bunwasmBuilds=${JSON.stringify(pageBuilds)};globalThis.__bunwasmAssets=${JSON.stringify(workerAssets)};globalThis.__bunwasmCommandChunks=${JSON.stringify(commandChunks(result.metafile!))}`;
 await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>${startup}</script>`));
 
 for (const output of result.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);
