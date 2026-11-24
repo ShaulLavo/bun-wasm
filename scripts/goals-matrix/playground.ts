@@ -200,6 +200,24 @@ export async function disposePlayground(transport: ScopedTransport): Promise<voi
   await transport.useHost();
   await transport.evaluate(expression(disposeOwnedPlayground, undefined));
 }
+async function clearOwnedWorkspace(template: string): Promise<void> {
+  await disposeOwnedPlayground().catch(() => {});
+  const name = `bun-wasm-workspace-${template}`;
+  await new Promise<void>(resolve => {
+    const timer = setTimeout(resolve, 2000);
+    const done = () => { clearTimeout(timer); resolve(); };
+    try {
+      const request = indexedDB.deleteDatabase(name);
+      request.onsuccess = done;
+      request.onerror = done;
+      request.onblocked = done;
+    } catch { done(); }
+  });
+}
+export async function clearPersistentWorkspace(transport: ScopedTransport, template: string): Promise<void> {
+  await transport.useHost();
+  await transport.evaluate(expression(clearOwnedWorkspace, template));
+}
 function rendered(input: { selector: string; text: string }): { text: string; matched: boolean } {
   const text = document.querySelector(input.selector)?.textContent ?? "";
   return { text, matched: text.trim() === input.text };

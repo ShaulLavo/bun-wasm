@@ -98,3 +98,15 @@ test("the control port lists served responses only to the controller, once per U
   expect((await controlResponse(new Request(path, { headers: { origin: loopback } }), bus, loopback, served)).status).toBe(403);
   expect((await controlResponse(new Request(path), bus, loopback)).status).not.toBe(200);
 });
+
+test("records GET/HEAD asset errors while skipping POST and Cloudflare /cdn-cgi/ beacons", async () => {
+  const seen: Seen[] = [], recorded = recorder();
+  const upstream = upstreamOf(() => new Response("not found", { status: 404, headers: { "cache-control": "no-store" } }), seen);
+  const beacon = await proxyLiveRequest(new Request(loopback + "/cdn-cgi/rum", { method: "POST", body: "{}" }), site, upstream, recorded.record);
+  expect(beacon.status).toBe(404);
+  const cdnGet = await proxyLiveRequest(new Request(loopback + "/cdn-cgi/rum"), site, upstream, recorded.record);
+  expect(cdnGet.status).toBe(404);
+  const missingHead = await proxyLiveRequest(new Request(loopback + "/chunks/missing.js", { method: "HEAD" }), site, upstream, recorded.record);
+  expect(missingHead.status).toBe(404);
+  expect(recorded.rows.map(row => row.url)).toEqual(["/chunks/missing.js"]);
+});

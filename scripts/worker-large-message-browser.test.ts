@@ -80,7 +80,7 @@ async function exercise(name: "chromium" | "webkit", inlineOnly: boolean, site: 
       } });
     }, overflowBudget);
     const page = await context.newPage(), url = await task.serve();
-    await navigateTestPage(page, `${url}?engine=browser&prompt=off&mode=memory`);
+    await navigateTestPage(page, `${url}?engine=browser&prompt=off`);
     assert.match(await ready(page), /ready/);
     const capable = await page.evaluate(maximum => {
       try { return new SharedArrayBuffer(0, { maxByteLength: maximum }).growable === true; } catch { return false; }

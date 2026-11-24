@@ -9,12 +9,12 @@ function request(target: string, referrer = "", method = "GET"): Request {
 function navigation(target = url, referrer = ""): Request {
   return Object.defineProperty(request(target, referrer), "mode", { value: "navigate" });
 }
-function fixture() {
+function fixture(extra: { transientRetryMs?: number; retryDelaysMs?: readonly number[] } = {}) {
   const requests: Request[] = [];
   const response = Promise.withResolvers<Response>();
   const responses = [response];
   const clients = new Map<string, { url: string }>();
-  const router = previewNavigations({ scope, clients: { async get(id) { return clients.get(id); } }, fetch(request) {
+  const router = previewNavigations({ scope, clients: { async get(id) { return clients.get(id); } }, ...extra, fetch(request) {
     if (requests.length) responses.push(Promise.withResolvers<Response>());
     requests.push(request);
     return responses[requests.length - 1]!.promise;
@@ -156,4 +156,75 @@ test("simultaneous consumers cannot both own the saved response body", async () 
   ]);
   expect(results.map(result => result?.status).sort()).toEqual([200, 403]);
   expect(await results.find(result => result?.status === 200)?.text()).toBe("one owner");
+});
+
+function transient502(onCancel?: () => void): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode("No bun.wasm server is listening on port 5173.\n")); },
+    cancel() { onCancel?.(); },
+  });
+  return new Response(body, { status: 502, headers: { "content-type": "text/plain; charset=utf-8", "x-bun-preview-transient": "1" } });
+}
+
+test("transient preview-SW 502 retries across a probe-to-listen gap and cancels discarded bodies", async () => {
+  const { router, requests, responses, begin } = fixture({ transientRetryMs: 500, retryDelaysMs: [5, 5] });
+  const loading = begin();
+  let cancelled = 0;
+  responses[0]!.resolve(transient502(() => { cancelled++; }));
+  await until(() => requests.length === 2);
+  expect(await (await status(router, loading)).json()).toEqual({ ready: false });
+  responses[1]!.resolve(transient502(() => { cancelled++; }));
+  await until(() => requests.length === 3);
+  responses[2]!.resolve(new Response("<h1>Live Vite</h1>", { status: 200, headers: { "content-type": "text/html" } }));
+  await ready(router, loading);
+  expect(cancelled).toBe(2);
+  const delivered = await router.fetch(navigation(url, loading), "loading-client");
+  expect(delivered?.status).toBe(200);
+  expect(await delivered?.text()).toBe("<h1>Live Vite</h1>");
+});
+
+test("non-transient 502 is delivered immediately without retry", async () => {
+  const { router, requests, response, begin } = fixture({ transientRetryMs: 500, retryDelaysMs: [5] });
+  const loading = begin();
+  response.resolve(new Response("guest upstream 502", { status: 502 }));
+  await ready(router, loading);
+  expect(requests).toHaveLength(1);
+  const delivered = await router.fetch(navigation(url, loading), "loading-client");
+  expect(delivered?.status).toBe(502);
+  expect(await delivered?.text()).toBe("guest upstream 502");
+});
+
+test("transient preview-SW 502 stops retrying after the budget expires and delivers the final 502", async () => {
+  const clients = new Map<string, { url: string }>();
+  let calls = 0;
+  const router = previewNavigations({
+    scope,
+    clients: { async get(id) { return clients.get(id); } },
+    transientRetryMs: 30,
+    retryDelaysMs: [10],
+    async fetch() { calls++; return new Response("No bun.wasm server is listening on port 5173.\n", { status: 502, headers: { "x-bun-preview-transient": "1" } }); },
+  });
+  const redirect = router.fetch(navigation(url), "owner");
+  if (!(redirect instanceof Response)) throw new Error("Expected redirect");
+  const loading = redirect.headers.get("location")!;
+  clients.set(loading, { url: loading });
+  router.fetch(navigation(loading), "", loading);
+  router.fetch(request(loading + "/status", loading), loading);
+  await ready(router, loading);
+  expect(calls).toBeGreaterThanOrEqual(2);
+  const delivered = await router.fetch(navigation(url, loading), "loading-client");
+  expect(delivered?.status).toBe(502);
+  expect(await delivered?.text()).toContain("No bun.wasm server is listening");
+});
+
+test("cancelling a loading document during transient 502 backoff aborts further retries", async () => {
+  const { router, requests, responses, begin } = fixture({ transientRetryMs: 500, retryDelaysMs: [200] });
+  const loading = begin();
+  let cancelled = false;
+  responses[0]!.resolve(transient502(() => { cancelled = true; }));
+  await until(() => cancelled);
+  expect((await router.fetch(request(loading + "/cancel/1", loading, "POST"), loading))?.status).toBe(204);
+  await Bun.sleep(20);
+  expect(requests).toHaveLength(1);
+  expect((await status(router, loading)).status).toBe(410);
 });

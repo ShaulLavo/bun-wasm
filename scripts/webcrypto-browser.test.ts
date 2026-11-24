@@ -46,7 +46,7 @@ for (const name of selected) {
       const [, origin] = await task.start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, { ROOT: root, PORT: "0" });
       const browser = await task.launch(type);
       const page = await browser.newPage({ serviceWorkers: "block" });
-      await navigateTestPage(page, `${origin}?engine=browser&prompt=off&mode=memory`);
+      await navigateTestPage(page, `${origin}?engine=browser&prompt=off`);
       expect(await ready(page)).toContain("ready · Browser");
       for (const fixture of fixtures) await runFixture(page, fixture);
     } finally { await task.cleanup(); }

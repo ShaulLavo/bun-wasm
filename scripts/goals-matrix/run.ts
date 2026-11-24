@@ -143,12 +143,13 @@ function selectedCell(cell: Cell, config: Options): boolean {
   if (cell.status === "fail" && !config.retryFailures) return false;
   return true;
 }
-export function playgroundURL(base: string, framework: Framework, engine: Engine, profile?: PlaygroundProfile): string {
+export function playgroundURL(base: string, framework: Framework, engine: Engine, profile?: PlaygroundProfile, mode?: "fast" | "memory"): string {
   templateProfile(engine, framework.template, profile);
   const url = new URL(base);
   url.searchParams.set("template", framework.template); url.searchParams.set("engine", engine);
   if (profile !== undefined) url.searchParams.set("profile", profile);
-  url.searchParams.set("prompt", "off"); url.searchParams.set("mode", "memory");
+  url.searchParams.set("prompt", "off");
+  if (mode !== undefined) url.searchParams.set("mode", mode);
   if (framework.rootPreview) url.searchParams.set("root-previews", "");
   return url.href;
 }
@@ -160,6 +161,7 @@ async function runCell(cell: Cell, config: Options, base: string, signal: AbortS
   const port = framework.rootPreview ? await availablePort() : 5173;
   const limits = cellDeadlines(report.deadlines, cell);
   const execution = (capture?: SafariCausalCapture): Execution => ({ box: cell, framework, port, profile: templateProfile(cell.engine, framework.template, config.profile), url: playgroundURL(base, framework, cell.engine, config.profile), ...limits, signal,
+    clearPersistentWorkspace: cell.browser === "iphone-safari",
     nextBuildObservation: config.nextBuildObservation ? value => appendFileSync(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".next-build.jsonl"), JSON.stringify(value) + "\n") : undefined,
     createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, limits.timeoutMs, Math.min(config.timeoutMs ?? 90_000, 10_000)) : nativeTransport(cell, config, limits.timeoutMs, report, capture, exit),
     observeStartup: capture?.arm,

@@ -568,6 +568,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private async showPreview(target: Server, visibleStart: number): Promise<void> {
     const state = await this.previews.ready;
     if (this.server !== target || this.workspace?.fs.ownershipLost) return;
+    // Vite probes its port with 1-6 ms throwaway listeners before binding the real server.
+    // Waiting a brief tick avoids thrashing the preview iframe with transient 502 navigations.
+    await new Promise<void>(resolve => setTimeout(resolve, 25));
+    if (this.server !== target || this.workspace?.fs.ownershipLost) return;
     const { port } = target;
     if (state !== "ready") {
       this.setServerState("down", `previews need a service worker (${state} here)`);
@@ -580,18 +584,40 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const previewStarted = performance.now();
     const { frame } = this;
     if (!frame) return;
-    const previous = frame.contentDocument;
+    let previous = frame.contentDocument;
     const requested = new URL(url);
     const navigation: PreviewNavigation = this.preview = { server: target, frame, url, loaded: null };
+    let errorRetries = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const isPreviewError = (doc: Document): boolean => {
+      if (!doc.contentType.startsWith("text/plain")) return false;
+      const body = doc.body?.textContent ?? "";
+      return body.startsWith("No bun.wasm server is listening on port ") || body.startsWith("bun.wasm server error:");
+    };
     const loaded = (event: Event) => {
       if (this.preview !== navigation || this.server !== target || this.frame !== frame || this.workspace?.fs.ownershipLost) {
+        clearTimeout(retryTimer);
         frame.removeEventListener("load", loaded);
         return;
       }
-      const document = frame.contentDocument;
+      let document: Document | null;
+      try { document = frame.contentDocument; } catch { document = null; }
       if (!event.isTrusted || !document || document === previous || document.readyState !== "complete" || frame.src !== url) return;
       const final = new URL(document.URL);
       if (final.origin !== requested.origin || !final.pathname.startsWith(requested.pathname)) return;
+      if (isPreviewError(document)) {
+        if (errorRetries < 4) {
+          previous = document;
+          const delay = 250 * ++errorRetries;
+          clearTimeout(retryTimer);
+          retryTimer = setTimeout(() => {
+            if (this.preview !== navigation || this.server !== target || this.frame !== frame || this.workspace?.fs.ownershipLost) return;
+            frame.src = url;
+          }, delay);
+        }
+        return;
+      }
+      clearTimeout(retryTimer);
       frame.removeEventListener("load", loaded);
       navigation.loaded = { document, url: final.href };
       measureStartup("preview", previewStarted);

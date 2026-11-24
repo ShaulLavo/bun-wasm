@@ -548,7 +548,7 @@ test.skipIf(!integratedSite)("actual Waffle filesystem commit updates the same r
     const browser = await task.launch(chromium);
     context = await browser.newContext();
     app = await context.newPage();
-    await app.goto(`${url}?engine=browser&prompt=off&mode=memory`);
+    await app.goto(`${url}?engine=browser&prompt=off`);
     expect(await ready(app)).toContain("ready");
     const html = await Bun.file(new URL("../sandbox/template-hono/src/page.html", import.meta.url)).text();
     const counter = new Bun.Transpiler({ loader: "ts" }).transformSync(await Bun.file(new URL("../sandbox/template-hono/counter.ts", import.meta.url)).text());

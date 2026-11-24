@@ -48,7 +48,9 @@ test("React Router acceptance opens origin-root previews so server and browser r
   expect(url.searchParams.has("root-previews")).toBe(true);
   expect(url.searchParams.get("template")).toBe(framework.template);
   expect(url.searchParams.get("engine")).toBe("browser");
-  expect(url.searchParams.get("mode")).toBe("memory");
+  expect(url.searchParams.get("mode")).toBeNull();
+  const memory = new URL(playgroundURL("http://127.0.0.1:4173/", framework, "browser", undefined, "memory"));
+  expect(memory.searchParams.get("mode")).toBe("memory");
 });
 
 const loopControls: { browser: Browser; cleanupFails: boolean; firstError: string; stop: boolean; visibleIphone?: boolean; timeoutMs?: number }[] = [

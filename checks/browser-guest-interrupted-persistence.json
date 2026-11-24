@@ -1,0 +1,31 @@
+{
+  "owner": "browser-guest",
+  "path": "scripts/interrupted-persistence-browser.test.ts",
+  "inputs": [
+    "scripts/browser-build.ts",
+    "scripts/browser-guest-site.ts",
+    "sandbox/build.ts",
+    "sandbox/index.html",
+    "sandbox/src/sandbox.ts",
+    "sandbox/src/template.ts",
+    "sandbox/src/workspace-restore.ts",
+    "sandbox/src/workspace-storage.ts",
+    "web/serve.ts",
+    "web/src/bun-launcher.ts",
+    "web/src/engine-loader.ts",
+    "web/src/fs-worker.ts",
+    "web/src/playground/playground.ts",
+    "web/src/preview.ts",
+    "web/src/preview-navigation.ts",
+    "web/src/runner.ts",
+    "web/src/shared-fs.ts",
+    "web/src/sw.ts",
+    "web/src/worker.ts",
+    "web/src/worker-main.ts",
+    "web/tests/persistence-browser-main.ts",
+    "web/tests/persistence-browser-worker.ts",
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml"
+  ]
+}

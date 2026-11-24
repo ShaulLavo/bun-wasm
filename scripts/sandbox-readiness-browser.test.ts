@@ -42,6 +42,7 @@ globalThis.sandbox = {
   fs: { state: { status: "ready" }, flush: async () => { flushes++; if (flushHook) await flushHook(); } },
 };
 globalThis.listen = port => control.network.listening(port, sameHelper);
+globalThis.unlisten = port => control.network.stopped(port, sameHelper);
 document.querySelector("#restart").onclick = () => { control.server = null; control.setServerState("starting"); queueMicrotask(() => listen(5174)); };
 listen(5173);
 `);
@@ -309,7 +310,45 @@ async function pendingFlushDeadline(browser: Browser): Promise<void> {
   });
 }
 
-const cases = [normalAndRepeated, redirectsAndQueries, invalidLoads, changesDuringFlush, failures, repeatedInvalidation, readinessDeadline, pendingFlushDeadline];
+async function transientProbeAndPreviewError(browser: Browser): Promise<void> {
+  const context = await browser.newContext();
+  let requests = 0;
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    await page.route("http://readiness.test/**", async route => {
+      const target = route.request().url();
+      if (!target.includes("/__preview/")) { await route.fulfill({ contentType: "text/html", body: html }); return; }
+      requests++;
+      // Return a transient plain-text preview-SW 502 on the first request for port 5174, then the real app.
+      if (target.includes("/5174/") && requests === 2) {
+        await route.fulfill({ status: 502, contentType: "text/plain; charset=utf-8", body: "No bun.wasm server is listening on port 5174.\nStart one in the playground (Bun.serve), then reload this page.\n" });
+        return;
+      }
+      await route.fulfill({ contentType: "text/html", body: '<h1>Edited source persists</h1><button class="counter">count is 0</button>' });
+    });
+    await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
+    expect(requests).toBe(1);
+    // Simulate Vite 8's 3x rapid throwaway port probes before binding the real listener on 5174.
+    await page.evaluate(async () => {
+      const listen = Reflect.get(globalThis, "listen");
+      const unlisten = Reflect.get(globalThis, "unlisten");
+      for (let i = 0; i < 3; i++) {
+        listen(5174);
+        await new Promise(resolve => setTimeout(resolve, 3));
+        unlisten(5174);
+      }
+      listen(5174);
+    });
+    await ready(page, "vanilla");
+    // 1 initial 5173 request + 1 transient 502 on 5174 + 1 automatic recovery on 5174 (zero wasted probe requests).
+    expect(requests).toBe(3);
+    expect(await page.locator("#status").getAttribute("data-kind")).toBe("ok");
+    expect(await page.frameLocator("#preview").locator("button.counter").textContent()).toContain("count is 0");
+  } finally { await context.close(); }
+}
+
+const cases = [normalAndRepeated, redirectsAndQueries, invalidLoads, changesDuringFlush, failures, repeatedInvalidation, readinessDeadline, pendingFlushDeadline, transientProbeAndPreviewError];
 for (const engine of [chromium, webkit]) for (const run of cases) test(`${engine.name()}: ${run.name}`, async () => {
   const browser = await engine.launch({ headless: true });
   try { await run(browser); } finally { await browser.close(); }

@@ -91,7 +91,6 @@ try {
   url.searchParams.set("template", "vite-react");
   url.searchParams.set("engine", "browser");
   url.searchParams.set("prompt", "off");
-  url.searchParams.set("mode", "memory");
   const browser = await task.launch(playwright.chromium);
   const context = await browser.newContext();
   page = await context.newPage();

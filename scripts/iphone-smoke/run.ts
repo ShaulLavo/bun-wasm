@@ -189,7 +189,7 @@ async function runCase(config: SmokeOptions, selection: Selection, source: Smoke
   try { await io.admission(config.thread, ticket, signal); }
   catch (error) { return blocked(pendingCase(box, source), String(error), "mac-admission"); }
   const attempt = await executeAttempt({ box, framework, profile, url: playgroundURL(pageBase(config), framework, box.engine, profile),
-    timeoutMs: phaseTimeoutMs, installTimeoutMs, signal,
+    timeoutMs: phaseTimeoutMs, installTimeoutMs, signal, clearPersistentWorkspace: true,
     createTransport: () => io.transport(config, box, nativeSignal => io.admission(config.thread, ticket, nativeSignal)),
     saveLog: text => Bun.write(join(config.matrix.output, "logs", `${box.framework}-${box.engine}.log`), text).then(() => {}),
   }, "click");
