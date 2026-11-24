@@ -313,6 +313,7 @@ async function pendingFlushDeadline(browser: Browser): Promise<void> {
 async function transientProbeAndPreviewError(browser: Browser): Promise<void> {
   const context = await browser.newContext();
   let requests = 0;
+  let mode: "recover" | "unusable" | "exhaust" = "recover";
   try {
     const page = await context.newPage();
     page.setDefaultTimeout(5000);
@@ -320,31 +321,52 @@ async function transientProbeAndPreviewError(browser: Browser): Promise<void> {
       const target = route.request().url();
       if (!target.includes("/__preview/")) { await route.fulfill({ contentType: "text/html", body: html }); return; }
       requests++;
-      // Return a transient plain-text preview-SW 502 on the first request for port 5174, then the real app.
-      if (target.includes("/5174/") && requests === 2) {
+      if (mode === "recover" && target.includes("/5174/") && requests === 2) {
         await route.fulfill({ status: 502, contentType: "text/plain; charset=utf-8", body: "No bun.wasm server is listening on port 5174.\nStart one in the playground (Bun.serve), then reload this page.\n" });
+        return;
+      }
+      if (mode === "unusable" && target.includes("/5175/")) {
+        await route.fulfill({ status: 502, contentType: "text/plain; charset=utf-8", body: "bun.wasm server sent an unusable response (status 502): malformed headers\n" });
+        return;
+      }
+      if (mode === "exhaust" && target.includes("/5176/")) {
+        await route.fulfill({ status: 502, contentType: "text/plain; charset=utf-8", body: "No bun.wasm server is listening on port 5176.\nStart one in the playground (Bun.serve), then reload this page.\n" });
         return;
       }
       await route.fulfill({ contentType: "text/html", body: '<h1>Edited source persists</h1><button class="counter">count is 0</button>' });
     });
     await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
     expect(requests).toBe(1);
-    // Simulate Vite 8's 3x rapid throwaway port probes before binding the real listener on 5174.
-    await page.evaluate(async () => {
+    // Drive 3 Vite-like probe listeners synchronously before binding the real 5174 listener so CI jitter cannot affect the request count.
+    await page.evaluate(() => {
       const listen = Reflect.get(globalThis, "listen");
       const unlisten = Reflect.get(globalThis, "unlisten");
       for (let i = 0; i < 3; i++) {
         listen(5174);
-        await new Promise(resolve => setTimeout(resolve, 3));
         unlisten(5174);
       }
       listen(5174);
     });
     await ready(page, "vanilla");
-    // 1 initial 5173 request + 1 transient 502 on 5174 + 1 automatic recovery on 5174 (zero wasted probe requests).
     expect(requests).toBe(3);
     expect(await page.locator("#status").getAttribute("data-kind")).toBe("ok");
     expect(await page.frameLocator("#preview").locator("button.counter").textContent()).toContain("count is 0");
+
+    // Non-transient unusable-response 502 must surface an explicit error and never mark ready.
+    mode = "unusable";
+    await page.evaluate(() => Reflect.get(globalThis, "listen")(5175));
+    await page.waitForFunction(() => document.querySelector<HTMLElement>("#status")?.dataset.kind === "error");
+    expect(await page.locator("#status").textContent()).toContain("unusable response");
+    expect(await page.evaluate(() => Reflect.get(globalThis, "control").preview?.loaded)).toBeNull();
+
+    // Exhausted transient 502 retries must transition to an explicit error rather than hanging on "loading preview…".
+    mode = "exhaust";
+    await page.evaluate(() => Reflect.get(globalThis, "listen")(5176));
+    await page.waitForFunction(() => {
+      const st = document.querySelector<HTMLElement>("#status");
+      return st?.dataset.kind === "error" && (st.textContent ?? "").includes("press Restart");
+    }, undefined, { timeout: 6000 });
+    expect(await page.evaluate(() => Reflect.get(globalThis, "control").preview?.loaded)).toBeNull();
   } finally { await context.close(); }
 }
 

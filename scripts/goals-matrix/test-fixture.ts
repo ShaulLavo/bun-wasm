@@ -44,6 +44,13 @@ export async function withPlayground<T>(framework: Framework, installDelayMs: nu
     addEventListener(_type: string, listener: typeof clickListener) { clickListener = listener; },
   };
   const context = createContext({ crypto, performance, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, setInterval, clearInterval, AbortController, AbortSignal, EventTarget, Event, location: { href: "http://fixture/?engine=browser" }, navigator: { userAgent: "goals-deadline-unit-fixture" },
+    indexedDB: {
+      deleteDatabase() {
+        const request: { onsuccess: (() => void) | null; onerror: (() => void) | null; onblocked: (() => void) | null; error: null } = { onsuccess: null, onerror: null, onblocked: null, error: null };
+        queueMicrotask(() => request.onsuccess?.());
+        return request;
+      },
+    },
     __bunRetainedMemorySnapshots: () => [],
     __goalsFixtureNativeClick() { count++; clickListener?.({ isTrusted: true, currentTarget: counter }); clickListener = undefined; },
     document: { querySelector(selector: string) {

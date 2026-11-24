@@ -589,11 +589,13 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const navigation: PreviewNavigation = this.preview = { server: target, frame, url, loaded: null };
     let errorRetries = 0;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
-    const isPreviewError = (doc: Document): boolean => {
+    const isTransientPreviewError = (doc: Document): boolean => {
       if (!doc.contentType.startsWith("text/plain")) return false;
       const body = doc.body?.textContent ?? "";
       return body.startsWith("No bun.wasm server is listening on port ") || body.startsWith("bun.wasm server error:");
     };
+    const isUnusablePreviewError = (doc: Document): boolean =>
+      doc.contentType.startsWith("text/plain") && (doc.body?.textContent ?? "").startsWith("bun.wasm server sent an unusable response (");
     const loaded = (event: Event) => {
       if (this.preview !== navigation || this.server !== target || this.frame !== frame || this.workspace?.fs.ownershipLost) {
         clearTimeout(retryTimer);
@@ -605,7 +607,13 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       if (!event.isTrusted || !document || document === previous || document.readyState !== "complete" || frame.src !== url) return;
       const final = new URL(document.URL);
       if (final.origin !== requested.origin || !final.pathname.startsWith(requested.pathname)) return;
-      if (isPreviewError(document)) {
+      if (isUnusablePreviewError(document)) {
+        clearTimeout(retryTimer);
+        frame.removeEventListener("load", loaded);
+        this.setStatus("preview failed · server sent an unusable response", "error");
+        return;
+      }
+      if (isTransientPreviewError(document)) {
         if (errorRetries < 4) {
           previous = document;
           const delay = 250 * ++errorRetries;
@@ -614,7 +622,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
             if (this.preview !== navigation || this.server !== target || this.frame !== frame || this.workspace?.fs.ownershipLost) return;
             frame.src = url;
           }, delay);
+          return;
         }
+        clearTimeout(retryTimer);
+        frame.removeEventListener("load", loaded);
+        this.setStatus("preview failed to load · press Restart", "error");
         return;
       }
       clearTimeout(retryTimer);

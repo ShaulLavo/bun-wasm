@@ -200,19 +200,30 @@ export async function disposePlayground(transport: ScopedTransport): Promise<voi
   await transport.useHost();
   await transport.evaluate(expression(disposeOwnedPlayground, undefined));
 }
-async function clearOwnedWorkspace(template: string): Promise<void> {
-  await disposeOwnedPlayground().catch(() => {});
+async function clearOwnedWorkspace(template: string): Promise<{ deleted: string }> {
+  if (typeof playground !== "undefined") {
+    const outcomes = await Promise.allSettled([
+      Promise.resolve().then(() => playground.runtime.dispose()),
+      Promise.resolve().then(() => playground.shell.dispose()),
+    ]);
+    const failures = outcomes.filter(outcome => outcome.status === "rejected").map(outcome => outcome.reason);
+    if (failures.length) throw new AggregateError(failures, failures.map(String).join("; "));
+  }
   const name = `bun-wasm-workspace-${template}`;
-  await new Promise<void>(resolve => {
-    const timer = setTimeout(resolve, 2000);
-    const done = () => { clearTimeout(timer); resolve(); };
-    try {
-      const request = indexedDB.deleteDatabase(name);
-      request.onsuccess = done;
-      request.onerror = done;
-      request.onblocked = done;
-    } catch { done(); }
+  await new Promise<void>((resolve, reject) => {
+    let blocked = false;
+    const timer = setTimeout(() => reject(new Error(blocked ? `Deleting workspace ${name} stayed blocked` : `Deleting workspace ${name} timed out`)), 3000);
+    const finish = (error?: unknown) => {
+      clearTimeout(timer);
+      if (error) reject(error instanceof Error ? error : new Error(String(error)));
+      else resolve();
+    };
+    const request = indexedDB.deleteDatabase(name);
+    request.onsuccess = () => finish();
+    request.onerror = () => finish(request.error ?? new Error(`Failed to delete workspace ${name}`));
+    request.onblocked = () => { blocked = true; };
   });
+  return { deleted: name };
 }
 export async function clearPersistentWorkspace(transport: ScopedTransport, template: string): Promise<void> {
   await transport.useHost();

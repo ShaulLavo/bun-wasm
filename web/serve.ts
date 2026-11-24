@@ -107,7 +107,7 @@ const server = Bun.serve({
   port,
   tls,
   hostname: process.env.HOST ?? "127.0.0.1",
-  idleTimeout: 0,
+  idleTimeout: 60,
   websocket: previewOwner.websocket,
   async fetch(req, server) {
     if (!process.env.BUN_WASM_NAVIGATION_LOG) return serve(req, server);

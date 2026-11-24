@@ -53,15 +53,25 @@ function makeTarGz(files: Record<string, string>): Uint8Array {
 interface LocalRegistry {
   base: string;
   dependencies: Record<string, string>;
-  tarballsServed: number;
+  readonly tarballsServed: number;
+  waitForTarball(minCount: number, timeoutMs?: number): Promise<void>;
   close(): Promise<void>;
 }
 
-/** Deterministic offline npm registry with 16 multi-file packages so `bun install` performs sustained VFS writes. */
+/** Deterministic offline npm registry with 16 multi-file packages and an observable tarball signal. */
 function startLocalRegistry(packageCount = 16): LocalRegistry {
   const packages = new Map<string, { meta: string; tgz: Uint8Array }>();
   const dependencies: Record<string, string> = {};
   let tarballsServed = 0;
+  const waiters = new Set<{ minCount: number; resolve(): void }>();
+  const notifyTarball = () => {
+    for (const waiter of Array.from(waiters)) {
+      if (tarballsServed >= waiter.minCount) {
+        waiters.delete(waiter);
+        waiter.resolve();
+      }
+    }
+  };
   const corsHeaders = {
     "access-control-allow-origin": "*",
     "access-control-allow-headers": "*",
@@ -82,6 +92,7 @@ function startLocalRegistry(packageCount = 16): LocalRegistry {
         const entry = packages.get(name);
         if (!entry) return new Response("not found", { status: 404, headers: corsHeaders });
         tarballsServed++;
+        notifyTarball();
         return new Response(new Uint8Array(entry.tgz), {
           headers: { ...corsHeaders, "content-type": "application/gzip" },
         });
@@ -124,6 +135,17 @@ function startLocalRegistry(packageCount = 16): LocalRegistry {
     base,
     dependencies,
     get tarballsServed() { return tarballsServed; },
+    waitForTarball(minCount: number, timeoutMs = 30_000): Promise<void> {
+      if (tarballsServed >= minCount) return Promise.resolve();
+      return new Promise((resolvePromise, reject) => {
+        const entry = { minCount, resolve: () => { clearTimeout(timer); resolvePromise(); } };
+        const timer = setTimeout(() => {
+          waiters.delete(entry);
+          reject(new Error(`Expected at least ${minCount} served tarballs within ${timeoutMs} ms, observed ${tarballsServed}`));
+        }, timeoutMs);
+        waiters.add(entry);
+      });
+    },
     async close() { await server.stop(true); },
   };
 }
@@ -156,59 +178,82 @@ async function waitForSandboxReady(page: Page, timeoutMs: number): Promise<void>
   }, undefined, { timeout: timeoutMs });
 }
 
+async function readSandboxFile(page: Page, path: string): Promise<string | null> {
+  return page.evaluate(async filePath => {
+    const sb = Reflect.get(globalThis, "sandbox");
+    const bytes: Uint8Array | undefined = await sb.fs.readFile(filePath);
+    return bytes ? new TextDecoder().decode(bytes) : null;
+  }, path);
+}
+
 async function stressSandboxMidEdit(context: BrowserContext, sandboxOrigin: string): Promise<void> {
   const errors: string[] = [];
   let page = await context.newPage();
   attachCorruptionGuard(page, errors);
-  await navigateTestPage(page, `${sandboxOrigin}/?template=vanilla`);
-  await waitForSandboxReady(page, STARTUP_MS);
+  const baseline = `BASELINE_EDIT_${crypto.randomUUID()}`;
 
-  // 5 consecutive hard interruptions (alternating reload and tab close+reopen) during rapid un-flushed writes.
-  const delays = [0, 15, 40, 80, 150];
-  for (const [cycle, delayMs] of delays.entries()) {
-    await page.evaluate(cycle => {
-      const sb = Reflect.get(globalThis, "sandbox");
-      if (!sb?.fs) throw new Error("Missing window.sandbox.fs");
-      // Fire rapid overlapping writes + background flushes without awaiting completion before interruption.
-      for (let i = 0; i < 20; i++) {
-        const path = `/home/user/app/stress-${cycle}-${i}.txt`;
-        void sb.fs.writeFile(path, `cycle=${cycle} item=${i} payload=${"a".repeat(2048)}`).catch(() => {});
-        if (i % 4 === 0) void sb.fs.flush(path).catch(() => {});
-      }
-      void sb.fs.flush().catch(() => {});
-    }, cycle);
-    if (delayMs > 0) await page.waitForTimeout(delayMs);
-
-    if (cycle % 2 === 0) {
-      await page.reload({ waitUntil: "domcontentloaded" });
-    } else {
-      await page.close();
-      page = await context.newPage();
-      attachCorruptionGuard(page, errors);
-      await navigateTestPage(page, `${sandboxOrigin}/?template=vanilla`);
-    }
+  try {
+    await navigateTestPage(page, `${sandboxOrigin}/?template=vanilla`);
     await waitForSandboxReady(page, STARTUP_MS);
-    expect(errors).toEqual([]);
-  }
 
-  // Final clean flushed write + reload must persist intact.
-  const marker = `FINAL_EDIT_MARKER_${crypto.randomUUID()}`;
-  await page.evaluate(async marker => {
-    const sb = Reflect.get(globalThis, "sandbox");
-    await sb.fs.writeFile("/home/user/app/.stress-final.txt", marker);
-    await sb.fs.flush("/home/user/app/.stress-final.txt");
-    await sb.fs.flush();
-  }, marker);
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await waitForSandboxReady(page, STARTUP_MS);
-  const readBack = await page.evaluate(async () => {
-    const sb = Reflect.get(globalThis, "sandbox");
-    const bytes: Uint8Array | undefined = await sb.fs.readFile("/home/user/app/.stress-final.txt");
-    return bytes ? new TextDecoder().decode(bytes) : null;
-  });
-  expect(readBack).toBe(marker);
-  expect(errors).toEqual([]);
-  await page.close();
+    // Commit a pre-interruption baseline file that must survive every interrupted write cycle intact.
+    await page.evaluate(async value => {
+      const sb = Reflect.get(globalThis, "sandbox");
+      await sb.fs.writeFile("/home/user/app/.baseline.txt", value);
+      await sb.fs.flush("/home/user/app/.baseline.txt");
+      await sb.fs.flush();
+    }, baseline);
+
+    // 5 consecutive hard interruptions (alternating reload and tab close+reopen) while rapid writes/flushes are in flight.
+    const delays = [0, 15, 40, 80, 150];
+    for (const [cycle, delayMs] of delays.entries()) {
+      const queued = await page.evaluate(async cycle => {
+        const sb = Reflect.get(globalThis, "sandbox");
+        if (!sb?.fs) throw new Error("Missing window.sandbox.fs");
+        // Confirm the worker is actively accepting writes before launching the un-awaited burst + flush.
+        await sb.fs.writeFile(`/home/user/app/inflight-enter-${cycle}.txt`, `enter=${cycle}`);
+        let launched = 0;
+        for (let i = 0; i < 20; i++) {
+          const path = `/home/user/app/stress-${cycle}-${i}.txt`;
+          void sb.fs.writeFile(path, `cycle=${cycle} item=${i} payload=${"a".repeat(2048)}`).catch(() => {});
+          if (i % 4 === 0) void sb.fs.flush(path).catch(() => {});
+          launched++;
+        }
+        void sb.fs.flush().catch(() => {});
+        return launched;
+      }, cycle);
+      expect(queued).toBe(20);
+      if (delayMs > 0) await page.waitForTimeout(delayMs);
+
+      if (cycle % 2 === 0) {
+        await page.reload({ waitUntil: "domcontentloaded" });
+      } else {
+        await page.close();
+        page = await context.newPage();
+        attachCorruptionGuard(page, errors);
+        await navigateTestPage(page, `${sandboxOrigin}/?template=vanilla`);
+      }
+      await waitForSandboxReady(page, STARTUP_MS);
+      expect(await readSandboxFile(page, "/home/user/app/.baseline.txt")).toBe(baseline);
+      expect(errors).toEqual([]);
+    }
+
+    // Final clean flushed write + reload must persist intact alongside the pre-interruption baseline.
+    const marker = `FINAL_EDIT_MARKER_${crypto.randomUUID()}`;
+    await page.evaluate(async marker => {
+      const sb = Reflect.get(globalThis, "sandbox");
+      await sb.fs.writeFile("/home/user/app/.stress-final.txt", marker);
+      await sb.fs.flush("/home/user/app/.stress-final.txt");
+      await sb.fs.flush();
+    }, marker);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await waitForSandboxReady(page, STARTUP_MS);
+    expect(await readSandboxFile(page, "/home/user/app/.baseline.txt")).toBe(baseline);
+    expect(await readSandboxFile(page, "/home/user/app/.stress-final.txt")).toBe(marker);
+    expect(errors).toEqual([]);
+  } finally {
+    await page.close().catch(() => {});
+  }
 }
 
 interface PlaygroundHandle {
@@ -225,33 +270,39 @@ interface PlaygroundHandle {
   };
 }
 
-function assertOpfsSnapshot(snapshot: { path: string; bytes: number[] }[]): void {
-  const seed = snapshot.find(entry => entry.path === "/seed.txt");
-  expect(seed).toBeDefined();
-  expect(new TextDecoder().decode(Uint8Array.from(seed!.bytes))).toBe("seed-v0");
-  for (const entry of snapshot) {
-    if (!entry.path.startsWith("/burst-")) continue;
-    const decoded = new TextDecoder().decode(Uint8Array.from(entry.bytes));
-    expect(decoded).toMatch(/^gen=\d+;idx=\d+;z{1024}$/);
-  }
+async function waitForPlaygroundReady(page: Page, contextLabel: string): Promise<void> {
+  await page.waitForFunction(label => {
+    const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
+    const status = document.querySelector<HTMLElement>("#status");
+    if (status?.dataset.kind === "error") throw new Error(`Playground error (${label}): ${status.textContent}`);
+    return /ready/.test(status?.textContent ?? "") && Boolean(pg?.shell?.state === "ready" && !pg?.shell?.running);
+  }, contextLabel, { timeout: STARTUP_MS });
+}
+
+async function readPlaygroundFile(page: Page, path: string): Promise<string | null> {
+  return page.evaluate(async filePath => {
+    const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
+    const bytes = await pg?.fs?.readFile(filePath);
+    return bytes ? new TextDecoder().decode(bytes) : null;
+  }, path);
 }
 
 async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOrigin: string): Promise<void> {
-  const registry = startLocalRegistry(16);
   const errors: string[] = [];
   let interrupting = false;
-  let page = await context.newPage();
-  attachCorruptionGuard(page, errors, () => interrupting);
+  let registry: LocalRegistry | undefined;
+  let page: Page | undefined;
   const targetUrl = `${playgroundOrigin}/?engine=browser&prompt=off`;
+  const baseline = `BASELINE_INSTALL_${crypto.randomUUID()}`;
 
   const interruptPage = async (cycle: number): Promise<void> => {
     interrupting = true;
     try {
       if (cycle % 2 === 0) {
-        await page.reload({ waitUntil: "domcontentloaded" });
+        await page!.reload({ waitUntil: "domcontentloaded" });
         return;
       }
-      await page.close();
+      await page!.close();
       page = await context.newPage();
       attachCorruptionGuard(page, errors, () => interrupting);
       await navigateTestPage(page, targetUrl);
@@ -261,30 +312,40 @@ async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOri
   };
 
   try {
+    registry = startLocalRegistry(16);
+    page = await context.newPage();
+    attachCorruptionGuard(page, errors, () => interrupting);
     expect(await openPlaygroundPage(page, targetUrl)).toContain("ready");
 
-    // 4 consecutive hard interruptions mid-`bun install` against the local multi-package tarball registry.
-    const delays = [150, 350, 550, 750];
-    for (const [cycle, delayMs] of delays.entries()) {
+    // Commit a pre-interruption baseline file that must survive every interrupted install cycle.
+    await page.evaluate(async ({ base, dependencies, baseline }) => {
+      const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
+      if (!pg?.fs) throw new Error("Missing playground handle");
+      await pg.fs.writeFile("/home/user/.baseline-install.txt", baseline);
+      await pg.fs.writeFile("/home/user/package.json", JSON.stringify({ name: "stress-install", dependencies }));
+      await pg.fs.writeFile("/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(base)}\n`);
+      await pg.fs.flush();
+    }, { base: registry.base, dependencies: registry.dependencies, baseline });
+
+    // 4 consecutive hard interruptions mid-`bun install`, each waiting for an observed tarball download before killing the page.
+    for (let cycle = 0; cycle < 4; cycle++) {
+      const beforeTarballs = registry.tarballsServed;
       await page.evaluate(async ({ base, dependencies }) => {
         const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
         if (!pg?.fs || !pg?.shell) throw new Error("Missing playground handle");
         await pg.fs.writeFile("/home/user/package.json", JSON.stringify({ name: "stress-install", dependencies }));
         await pg.fs.writeFile("/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(base)}\n`);
         await pg.fs.flush();
-        // Start install without awaiting; we intentionally kill/reload the page mid-install.
+        // Start install without awaiting; we interrupt as soon as tarballs are actively being downloaded/extracted.
         void pg.shell.submit("rm -rf node_modules bun.lock && bun install --no-cache").catch(() => {});
       }, { base: registry.base, dependencies: registry.dependencies });
 
-      await page.waitForTimeout(delayMs);
+      await registry.waitForTarball(beforeTarballs + Math.min(1 + cycle * 2, 8), 30_000);
+      expect(registry.tarballsServed).toBeGreaterThan(beforeTarballs);
       await interruptPage(cycle);
 
-      await page.waitForFunction(() => {
-        const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
-        const status = document.querySelector<HTMLElement>("#status");
-        if (status?.dataset.kind === "error") throw new Error(`Playground error after interrupted install: ${status.textContent}`);
-        return /ready/.test(status?.textContent ?? "") && Boolean(pg?.shell?.state === "ready" && !pg?.shell?.running);
-      }, undefined, { timeout: STARTUP_MS });
+      await waitForPlaygroundReady(page, `after interrupted install cycle ${cycle}`);
+      expect(await readPlaygroundFile(page, "/home/user/.baseline-install.txt")).toBe(baseline);
       expect(errors).toEqual([]);
     }
 
@@ -299,26 +360,16 @@ async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOri
       return pg.shell.lastExit;
     }, { base: registry.base, dependencies: registry.dependencies });
     expect(finalExit).toBe(0);
-    expect(registry.tarballsServed).toBeGreaterThan(0);
 
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.waitForFunction(() => {
-      const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
-      const status = document.querySelector<HTMLElement>("#status");
-      if (status?.dataset.kind === "error") throw new Error(`Playground error after reload: ${status.textContent}`);
-      return /ready/.test(status?.textContent ?? "") && Boolean(pg?.shell?.state === "ready" && !pg?.shell?.running);
-    }, undefined, { timeout: STARTUP_MS });
+    await waitForPlaygroundReady(page, "after clean install reload");
 
-    const persisted = await page.evaluate(async () => {
-      const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
-      const bytes = await pg?.fs?.readFile("/home/user/node_modules/stress-pkg-15/index.js");
-      return bytes ? new TextDecoder().decode(bytes) : null;
-    });
-    expect(persisted).toContain('tag = "stress-15"');
+    expect(await readPlaygroundFile(page, "/home/user/.baseline-install.txt")).toBe(baseline);
+    expect(await readPlaygroundFile(page, "/home/user/node_modules/stress-pkg-15/index.js")).toContain('tag = "stress-15"');
     expect(errors).toEqual([]);
   } finally {
-    await page.close().catch(() => {});
-    await registry.close();
+    await page?.close().catch(() => {});
+    await registry?.close();
   }
 }
 
@@ -347,8 +398,8 @@ async function stressOpfsMidWrite(context: BrowserContext, scratchDir: string): 
     },
   });
 
-  const dbName = `bunwasm-opfs-stress-${crypto.randomUUID()}`;
   const errors: string[] = [];
+  const dbsToDelete: string[] = [];
   let page: Page | undefined;
 
   try {
@@ -360,63 +411,76 @@ async function stressOpfsMidWrite(context: BrowserContext, scratchDir: string): 
       return next;
     };
 
-    // Seed initial baseline generation on OPFS.
-    page = await openHarness();
-    await page.evaluate(async dbName => {
-      const h = Reflect.get(globalThis, "persistenceHarness");
-      await h.open(dbName, true, "opfs");
-      await h.write("/seed.txt", Array.from(new TextEncoder().encode("seed-v0")));
-      await h.flush();
-    }, dbName);
-
-    // 5 consecutive hard tab closes during rapid OPFS write + flush bursts.
-    for (let cycle = 0; cycle < 5; cycle++) {
-      await page.evaluate(cycle => {
-        const h = Reflect.get(globalThis, "persistenceHarness");
-        const enc = new TextEncoder();
-        for (let i = 0; i < 25; i++) {
-          void h.write(`/burst-${cycle}-${i}.bin`, Array.from(enc.encode(`gen=${cycle};idx=${i};${"z".repeat(1024)}`))).catch(() => {});
-          if (i % 5 === 0) void h.flush().catch(() => {});
-        }
-        void h.flush().catch(() => {});
-      }, cycle);
-      await page.waitForTimeout(cycle * 25);
-      // Hard-close the page mid-write without graceful dispose.
-      await page.close();
-
+    // 4 deterministic OPFS native partial-write interruptions alternating payload and snapshot boundaries.
+    for (const [cycle, boundary] of (["payload", "snapshot", "payload", "snapshot"] as const).entries()) {
+      const db = `bunwasm-opfs-stress-${cycle}-${crypto.randomUUID()}`;
+      dbsToDelete.push(db);
       page = await openHarness();
-      const snapshot: { path: string; bytes: number[] }[] = await page.evaluate(async dbName => {
+      const old = await page.evaluate(async dbName => {
         const h = Reflect.get(globalThis, "persistenceHarness");
-        await h.open(dbName, true, "opfs");
-        return h.snapshot();
-      }, dbName);
-      assertOpfsSnapshot(snapshot);
+        await h.direct("open", { name: dbName, storage: "opfs" });
+        return h.direct("seedInterrupted");
+      }, db);
+
+      // Start a real multi-megabyte OPFS commit and wait for Waffle's native partial-write boundary signal.
+      await page.evaluate(b => {
+        const h = Reflect.get(globalThis, "persistenceHarness");
+        void h.direct("interruptCommit", b).catch(() => {});
+      }, boundary);
+      await page.waitForFunction(() => {
+        const h = Reflect.get(globalThis, "persistenceHarness");
+        return Boolean(h?.state?.commitStarted && h?.state?.partialWrite === true);
+      }, undefined, { timeout: 30_000 });
+      const observed = await page.evaluate(() => {
+        const state = Reflect.get(globalThis, "persistenceHarness").state;
+        return { boundary: state.boundary, partialWrite: state.partialWrite };
+      });
+      expect(observed).toEqual({ boundary, partialWrite: true });
+
+      // Hard-close the page at the exact partial native write boundary.
+      await page.close();
+      page = await openHarness();
+      const recovered = await page.evaluate(async dbName => {
+        const h = Reflect.get(globalThis, "persistenceHarness");
+        await h.direct("open", { name: dbName, storage: "opfs" });
+        const result = await h.direct("inspectInterrupted");
+        await h.destroy();
+        return result;
+      }, db);
+      expect(["old", "new"]).toContain(recovered.state);
+      if (recovered.state === "old") expect(recovered.metadata).toEqual(old.metadata);
       expect(errors).toEqual([]);
+      await page.close();
+      page = undefined;
     }
 
-    // Final clean write + flush + reload verifies OPFS remains writable and durable after repeated hard closes.
+    // Final clean OPFS write + flush + reload confirms persistent OPFS remains healthy and durable.
+    const cleanDb = `bunwasm-opfs-final-${crypto.randomUUID()}`;
+    dbsToDelete.push(cleanDb);
     const marker = `opfs-final-${crypto.randomUUID()}`;
-    await page.evaluate(async marker => {
+    page = await openHarness();
+    await page.evaluate(async ({ dbName, marker }) => {
       const h = Reflect.get(globalThis, "persistenceHarness");
+      await h.open(dbName, true, "opfs");
       await h.write("/final.txt", Array.from(new TextEncoder().encode(marker)));
       await h.flush();
-    }, marker);
+    }, { dbName: cleanDb, marker });
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => Boolean(Reflect.get(globalThis, "persistenceHarness")));
     const finalSnapshot: { path: string; bytes: number[] }[] = await page.evaluate(async dbName => {
       const h = Reflect.get(globalThis, "persistenceHarness");
       await h.open(dbName, true, "opfs");
-      return h.snapshot();
-    }, dbName);
+      const snap = await h.snapshot();
+      await h.destroy();
+      return snap;
+    }, cleanDb);
     const finalFile = finalSnapshot.find(entry => entry.path === "/final.txt");
     expect(finalFile).toBeDefined();
     expect(new TextDecoder().decode(Uint8Array.from(finalFile!.bytes))).toBe(marker);
     expect(errors).toEqual([]);
-    await page.evaluate(async dbName => {
-      const h = Reflect.get(globalThis, "persistenceHarness");
-      await h.destroy();
-      await h.deleteDatabase(dbName, "opfs");
-    }, dbName).catch(() => {});
+    for (const dbName of dbsToDelete) {
+      await page.evaluate(name => Reflect.get(globalThis, "persistenceHarness").deleteDatabase(name, "opfs"), dbName).catch(() => {});
+    }
   } finally {
     await page?.close().catch(() => {});
     await server.stop(true);
@@ -429,25 +493,29 @@ async function startServeProcess(root: string): Promise<{ origin: string; stop()
     stdout: "pipe",
     stderr: "pipe",
   });
+  const stop = async () => {
+    child.kill("SIGTERM");
+    await child.exited.catch(() => {});
+  };
   const reader = child.stdout.getReader();
   const dec = new TextDecoder();
   let output = "";
   let origin = "";
-  while (!origin) {
-    const { value, done } = await reader.read();
-    if (done) throw new Error(`serve.ts exited early: ${output}`);
-    output += dec.decode(value, { stream: true });
-    const match = /at (http:\/\/\S+) \(cross-origin isolated\)/.exec(output);
-    if (match?.[1]) origin = match[1].replace(/\/$/, "");
+  try {
+    while (!origin) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error(`serve.ts exited early: ${output}`);
+      output += dec.decode(value, { stream: true });
+      const match = /at (http:\/\/\S+) \(cross-origin isolated\)/.exec(output);
+      if (match?.[1]) origin = match[1].replace(/\/$/, "");
+    }
+    reader.releaseLock();
+    return { origin, stop };
+  } catch (error) {
+    reader.releaseLock();
+    await stop();
+    throw error;
   }
-  reader.releaseLock();
-  return {
-    origin,
-    async stop() {
-      child.kill("SIGTERM");
-      await child.exited.catch(() => {});
-    },
-  };
 }
 
 for (const browserName of browsers) {
@@ -459,14 +527,14 @@ for (const browserName of browsers) {
     if (process.env.CI && !provided) throw new Error("CI must supply BUN_WASM_BROWSER_SITE");
     const scratch = mkdtempSync(join(tmpdir(), `bun-wasm-interrupted-persist-${browserName}-`));
     const siteDir = provided ? resolve(provided) : join(scratch, "site-build");
-    const before = provided ? verifySite(siteDir) : buildSite(siteDir);
-    const sandboxRoot = join(siteDir, "site/sandbox");
-    const playgroundRoot = join(siteDir, "site");
     let sandboxServer: { origin: string; stop(): Promise<void> } | undefined;
     let playgroundServer: { origin: string; stop(): Promise<void> } | undefined;
     let context: BrowserContext | undefined;
 
     try {
+      const before = provided ? verifySite(siteDir) : buildSite(siteDir);
+      const sandboxRoot = join(siteDir, "site/sandbox");
+      const playgroundRoot = join(siteDir, "site");
       sandboxServer = await startServeProcess(sandboxRoot);
       playgroundServer = await startServeProcess(playgroundRoot);
       // Persistent profile is required for real on-disk IndexedDB + WebKit OPFS across reloads/closes.

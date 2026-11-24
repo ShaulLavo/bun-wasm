@@ -222,9 +222,76 @@ test("cancelling a loading document during transient 502 backoff aborts further 
   const loading = begin();
   let cancelled = false;
   responses[0]!.resolve(transient502(() => { cancelled = true; }));
-  await until(() => cancelled);
+  await Bun.sleep(15);
   expect((await router.fetch(request(loading + "/cancel/1", loading, "POST"), loading))?.status).toBe(204);
+  await until(() => cancelled);
   await Bun.sleep(20);
   expect(requests).toHaveLength(1);
   expect((await status(router, loading)).status).toBe(410);
+});
+
+test("cancelling during the post-backoff client lookup prevents dispatching another guest fetch", async () => {
+  const clients = new Map<string, { url: string }>();
+  let lookups = 0;
+  let fetches = 0;
+  let cancelled = false;
+  const secondLookup = Promise.withResolvers<void>();
+  const releaseSecondLookup = Promise.withResolvers<void>();
+  const router = previewNavigations({
+    scope,
+    transientRetryMs: 500,
+    retryDelaysMs: [5],
+    clients: {
+      async get(id) {
+        lookups++;
+        if (lookups === 2) {
+          secondLookup.resolve();
+          await releaseSecondLookup.promise;
+        }
+        return clients.get(id);
+      },
+    },
+    async fetch() {
+      fetches++;
+      return transient502(() => { cancelled = true; });
+    },
+  });
+  const redirect = router.fetch(navigation(url), "owner");
+  if (!(redirect instanceof Response)) throw new Error("Expected redirect");
+  const loading = redirect.headers.get("location")!;
+  clients.set(loading, { url: loading });
+  router.fetch(navigation(loading), "", loading);
+  router.fetch(request(loading + "/status", loading), loading);
+  await secondLookup.promise;
+  expect((await router.fetch(request(loading + "/cancel/1", loading, "POST"), loading))?.status).toBe(204);
+  releaseSecondLookup.resolve();
+  await until(() => cancelled);
+  await Bun.sleep(20);
+  expect(fetches).toBe(1);
+});
+
+test("budget expiring during backoff delivers the held 502 without dispatching an expired retry", async () => {
+  const clients = new Map<string, { url: string }>();
+  let fetches = 0;
+  const router = previewNavigations({
+    scope,
+    transientRetryMs: 20,
+    retryDelaysMs: [40],
+    clients: { async get(id) { return clients.get(id); } },
+    async fetch() {
+      fetches++;
+      return new Response(`transient-${fetches}`, { status: 502, headers: { "x-bun-preview-transient": "1" } });
+    },
+  });
+  const redirect = router.fetch(navigation(url), "owner");
+  if (!(redirect instanceof Response)) throw new Error("Expected redirect");
+  const loading = redirect.headers.get("location")!;
+  clients.set(loading, { url: loading });
+  router.fetch(navigation(loading), "", loading);
+  router.fetch(request(loading + "/status", loading), loading);
+  await ready(router, loading);
+  expect(fetches).toBe(1);
+  const delivered = await router.fetch(navigation(url, loading), "loading-client");
+  expect(delivered?.status).toBe(502);
+  expect(await delivered?.text()).toBe("transient-1");
 });

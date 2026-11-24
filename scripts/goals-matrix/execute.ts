@@ -221,10 +221,11 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
   try { await observation.run(guard => saveFinalLog(transport, options, results, failureLog, guard)); }
   catch { /* Optional logging cannot determine the owned cleanup outcome. */ }
   finally { observation.close(); handoff.close(); }
-  if (options.clearPersistentWorkspace) {
+  const started = results.some(result => result.phase === "startup" && result.status === "pass");
+  if (options.clearPersistentWorkspace && started) {
     const reset = Scope.open(4000, admission);
     try { await reset.run(guard => clearPersistentWorkspace(scoped(transport, guard), options.framework.template)); }
-    catch { /* Best-effort workspace reset must not block closing the owned Safari tab. */ }
+    catch (error) { errors.push(error); }
     finally { reset.close(); }
   }
   let evidence: unknown;

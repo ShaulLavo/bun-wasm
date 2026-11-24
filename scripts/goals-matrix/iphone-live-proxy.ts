@@ -54,11 +54,13 @@ export async function proxyLiveRequest(request: Request, site: string, upstream:
   const location = replies.get("location");
   if (location) replies.set("location", loopbackLocation(location, target, origin, incoming.origin));
   let delivered = request.method === "HEAD" ? null : response.body;
-  const full = delivered !== null && fullResponse(request, headers, response);
+  const platformRoute = incoming.pathname.startsWith("/cdn-cgi/");
+  const previewRoute = incoming.pathname.includes("/__preview/");
+  const full = !platformRoute && !(previewRoute && response.status >= 400) && delivered !== null && fullResponse(request, headers, response);
   const recordableError = response.status >= 400
     && (request.method === "GET" || request.method === "HEAD")
-    && !incoming.pathname.includes("/__preview/")
-    && !incoming.pathname.startsWith("/cdn-cgi/");
+    && !previewRoute
+    && !platformRoute;
   if (record && (full || recordableError)) {
     const row = { url: incoming.pathname + incoming.search, request: pick(headers, replayed), status: response.status, headers: pick(response.headers, comparedHeaders) };
     if (full && delivered) {

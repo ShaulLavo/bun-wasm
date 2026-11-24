@@ -95,12 +95,20 @@ export function previewNavigations(options: NavigationOptions) {
         if (!live) { pending.delete(id); cancelBody(response); return; }
         const remaining = deadline - Date.now();
         if (budget > 0 && remaining > 0 && isTransient(response)) {
-          cancelBody(response);
           const delay = Math.min(remaining, delays[Math.min(attempt, delays.length - 1)] ?? 250);
           attempt++;
           await waitDelay(navigation, delay);
-          if (pending.get(id) !== navigation) return;
-          if (!await hasLoadingClient(navigation)) { pending.delete(id); return; }
+          if (pending.get(id) !== navigation) { cancelBody(response); return; }
+          let stillLive: boolean;
+          try { stillLive = await hasLoadingClient(navigation); }
+          catch (error) { cancelBody(response); throw error; }
+          if (pending.get(id) !== navigation) { cancelBody(response); return; }
+          if (!stillLive) { pending.delete(id); cancelBody(response); return; }
+          if (Date.now() >= deadline) {
+            navigation.reply = { kind: "ready", response };
+            return;
+          }
+          cancelBody(response);
           continue;
         }
         navigation.reply = { kind: "ready", response };

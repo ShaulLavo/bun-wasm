@@ -53,6 +53,39 @@ test("React Router acceptance opens origin-root previews so server and browser r
   expect(memory.searchParams.get("mode")).toBe("memory");
 });
 
+test("clearPersistentWorkspace serializes self-contained disposal and requires confirmed IndexedDB deletion", async () => {
+  const { createContext, runInContext } = await import("node:vm");
+  const { clearPersistentWorkspace } = await import("./playground");
+  const events: string[] = [];
+  const makeTransport = (outcome: "success" | "error") => {
+    const ctx = createContext({
+      setTimeout, clearTimeout, Promise, AggregateError, Error,
+      playground: {
+        runtime: { async dispose() { events.push("runtime.dispose"); } },
+        shell: { async dispose() { events.push("shell.dispose"); } },
+      },
+      indexedDB: {
+        deleteDatabase(name: string) {
+          events.push(`delete:${name}`);
+          const req: { onsuccess: (() => void) | null; onerror: (() => void) | null; onblocked: (() => void) | null; error: Error | null } = { onsuccess: null, onerror: null, onblocked: null, error: null };
+          queueMicrotask(() => {
+            if (outcome === "success") req.onsuccess?.();
+            else { req.error = new Error("delete refused"); req.onerror?.(); }
+          });
+          return req;
+        },
+      },
+    });
+    return {
+      async useHost() {},
+      async evaluate<T>(source: string): Promise<T> { return await runInContext(source, ctx) as T; },
+    } as Parameters<typeof clearPersistentWorkspace>[0];
+  };
+  await clearPersistentWorkspace(makeTransport("success"), "vite-react");
+  expect(events).toEqual(["runtime.dispose", "shell.dispose", "delete:bun-wasm-workspace-vite-react"]);
+  await expect(clearPersistentWorkspace(makeTransport("error"), "vite-react")).rejects.toThrow("delete refused");
+});
+
 const loopControls: { browser: Browser; cleanupFails: boolean; firstError: string; stop: boolean; visibleIphone?: boolean; timeoutMs?: number }[] = [
   { browser: "safari", cleanupFails: true, firstError: "Original native phase error", stop: true },
   { browser: "iphone-safari", cleanupFails: true, firstError: "Original native phase error", stop: true },
