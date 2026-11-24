@@ -1,6 +1,7 @@
 // Bun's registration policy; routing and socket transport are guest-independent.
 import { PreviewRouter } from "waffle/browser/preview";
 import { activated } from "waffle/browser/service-worker";
+import { swScriptUrl } from "./entry-assets.js";
 import { PREVIEW_DIR } from "./preview-protocol";
 
 export { activated } from "waffle/browser/service-worker";
@@ -35,7 +36,7 @@ export class Previews extends PreviewRouter {
     container.startMessages();
     try {
       // Keep the playground itself outside this worker's scope (and COOP/COEP untouched).
-      const registration = await container.register("./sw.js", { scope: this.workerScope?.href, updateViaCache: "none" });
+      const registration = await container.register(swScriptUrl(), { scope: this.workerScope?.href, updateViaCache: "none" });
       await activated(registration);
       return "ready";
     } catch (err) {

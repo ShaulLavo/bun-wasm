@@ -71,11 +71,11 @@ async function serveLocal(bus: IphoneBus, endpoint: string): Promise<string> {
 
 /** At most this many distinct live responses are kept for the PC's real-origin comparison. */
 const servedLimit = 1000;
-/** Records each distinct request once: same URL and the same encodings asked for. */
+/** Records each distinct request+status once: same URL, status, and encodings asked for. */
 export function recordServed(served: LiveServed[]): (row: LiveServed) => void {
   const seen = new Set<string>();
   return row => {
-    const key = row.url + "\n" + (row.request["accept-encoding"] ?? "");
+    const key = row.url + "\n" + String(row.status) + "\n" + (row.request["accept-encoding"] ?? "");
     if (seen.has(key) || served.length >= servedLimit) return;
     seen.add(key);
     served.push(row);

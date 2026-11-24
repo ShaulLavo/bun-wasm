@@ -2,6 +2,10 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { chmod, mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
+import { recordServed } from "../goals-matrix/iphone-server";
+import { compareLiveOrigin } from "./live";
+import { clickCounterSource, probeSandboxSource } from "./sandbox-root";
 import { withPlayground, completeAttempt } from "../goals-matrix/test-fixture";
 import { frameworks, boxId, type Box, type Framework } from "../goals-matrix/catalog";
 import { execute, executeAttempt } from "../goals-matrix/execute";
@@ -409,10 +413,11 @@ function deployedSite(root: string, commits: string[], requests: string[], pageH
     const path = new URL(url).pathname;
     if (!url.startsWith(site)) throw new Error(`Live smoke fetched another origin: ${url}`);
     if (path === "/deployment.json") return Response.json({ sourceCommit: commits.length > 1 ? commits.shift() : commits[0], waffleVersion: "0.0.0-test" });
-    const name = path === "/playground/" ? "index.html" : path.replace(/^\/playground\//, "");
+    const isHtml = path === "/" || path === "/playground/";
+    const name = isHtml ? "index.html" : path.replace(/^\/playground\//, "").replace(/^\//, "");
     const file = Bun.file(join(root, name));
     if (!await file.exists()) return new Response(null, { status: 404 });
-    return new Response(file, { headers: path === "/playground/" ? { "content-type": "text/html", "cache-control": "no-store", ...pageHeaders } : { "content-type": "application/octet-stream" } });
+    return new Response(file, { headers: isHtml ? { "content-type": "text/html", "cache-control": "no-store", ...pageHeaders } : { "content-type": "application/octet-stream" } });
   };
 }
 /** What the Mac proxy would have recorded for these paths, read from the same deployed site. */
@@ -422,7 +427,7 @@ async function servedFrom(get: (url: string) => Promise<Response>, paths: readon
     return { url, request: { "accept-encoding": "gzip, deflate, br" }, status: response.status, headers: pick(response.headers, comparedHeaders), sha256: decodedSha256(await response.bytes(), null) };
   }));
 }
-const servedPaths = ["/playground/", "/playground/engine-builds.json"];
+const servedPaths = ["/", "/playground/", "/playground/engine-builds.json"];
 const passingSandboxRoot = async () => ({ url: "http://127.0.0.1/", status: "pass" as const, initialMs: 1200, reloadMs: 600, databases: ["bun-wasm-sandbox-vite-react"] });
 test("live mode skips local setup and runs the same cases against the deployed playground", async () => {
   await scratch(async root => {
@@ -433,7 +438,7 @@ test("live mode skips local setup and runs the same cases against the deployed p
     const served = await servedFrom(deployedSite(join(root, "deployed"), [source.commit], []), servedPaths);
     const result = await withFixtures(config, [], { preflight: true, onNavigate: url => urls.push(url),
       overrides: { fetch: get, served: async () => served, sandboxRoot: passingSandboxRoot } });
-    expect(result.liveOrigin).toEqual({ checked: 2, mismatches: [] });
+    expect(result.liveOrigin).toEqual({ checked: 3, mismatches: [] });
     expect(result.sandboxRoot?.status).toBe("pass");
     expect(result.status, JSON.stringify(result.failures)).toBe("green");
     expect(result.revision).toBe(source.commit);
@@ -489,23 +494,74 @@ test("any difference between the run and the real origin makes the live smoke re
     await preparedRoot(join(root, "deployed"));
     const get = deployedSite(join(root, "deployed"), [source.commit], []);
     const served = await servedFrom(get, servedPaths);
-    served[0]!.headers["cache-control"] = "public, max-age=600";
-    served[1]!.sha256 = "0".repeat(64);
+    served[1]!.headers["cache-control"] = "public, max-age=600";
+    served[2]!.sha256 = "0".repeat(64);
     const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => served, sandboxRoot: passingSandboxRoot } });
     expect(result.cases.every(value => value.status === "pass")).toBe(true);
-    expect(result).toMatchObject({ status: "red", failedPhase: "live-origin", liveOrigin: { checked: 2 } });
+    expect(result).toMatchObject({ status: "red", failedPhase: "live-origin", liveOrigin: { checked: 3 } });
     expect(result.liveOrigin?.mismatches).toEqual([
       "/playground/: cache-control \"public, max-age=600\" in the run, \"no-store\" from the real origin",
       "/playground/engine-builds.json: decoded bytes differ from the real origin"]);
   });
 });
-test("a run whose proxy recorded no playground page cannot pass the origin check", async () => {
+test("a run whose proxy recorded no playground or root page cannot pass the origin check", async () => {
   await scratch(async root => {
     await preparedRoot(join(root, "deployed"));
     const get = deployedSite(join(root, "deployed"), [source.commit], []);
     const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => [], sandboxRoot: passingSandboxRoot } });
-    expect(result).toMatchObject({ status: "red", failedPhase: "live-origin", liveOrigin: { checked: 0, mismatches: ["the run served no /playground/ page"] } });
+    expect(result).toMatchObject({
+      status: "red",
+      failedPhase: "live-origin",
+      liveOrigin: { checked: 0, mismatches: ["the run served no /playground/ page", "the run served no / sandbox page"] },
+    });
   });
+});
+test("live origin check rejects 404 responses even when the origin also returns 404 and records status changes separately", async () => {
+  await scratch(async root => {
+    await preparedRoot(join(root, "deployed"));
+    const get = deployedSite(join(root, "deployed"), [source.commit], []);
+    const served: LiveServed[] = [];
+    const record = recordServed(served);
+    for (const row of await servedFrom(get, servedPaths)) record(row);
+    const missing = (await servedFrom(get, ["/chunks/missing-old.js"]))[0]!;
+    expect(missing.status).toBe(404);
+    record(missing);
+    record({ ...served[0]!, status: 404 });
+    expect(served.filter(row => row.url === "/")).toHaveLength(2);
+    const check = await compareLiveOrigin(site, served, get, { requireRoot: true });
+    expect(check.mismatches).toContain("/chunks/missing-old.js: served HTTP 404");
+  });
+});
+test("sandbox-root probe and counter click succeed across distinct host and iframe realms", async () => {
+  class HostHTMLElement {}
+  class IframeHTMLElement {}
+  const button = Object.assign(new IframeHTMLElement(), {
+    textContent: "count is 0",
+    click() { this.textContent = "count is 1"; },
+  });
+  expect(button instanceof HostHTMLElement).toBe(false);
+  const iframe = {
+    contentDocument: {
+      querySelector: (selector: string) => selector === "button.counter:not([disabled])" ? button : null,
+    },
+  };
+  const elements: Record<string, unknown> = {
+    "#status": { getAttribute: (name: string) => name === "data-kind" ? "ok" : null, textContent: "dev server ready in 1.2 s" },
+    "#server-dot": { getAttribute: (name: string) => name === "data-state" ? "up" : null },
+    "#preview": iframe,
+  };
+  const context = {
+    HTMLElement: HostHTMLElement,
+    HTMLIFrameElement: class HostIFrame {},
+    document: { querySelector: (selector: string) => elements[selector] ?? null },
+    indexedDB: { databases: async () => [{ name: "bun-wasm-sandbox-vite-react" }] },
+    performance: { now: () => Date.now() },
+    setTimeout,
+  };
+  const probed = await runInNewContext(probeSandboxSource, context) as { ready: boolean; buttonText: string; databases: string[] };
+  expect(probed).toMatchObject({ ready: true, buttonText: "count is 0", databases: ["bun-wasm-sandbox-vite-react"] });
+  const clicked = await runInNewContext(clickCounterSource, context) as { clicked: boolean; text: string };
+  expect(clicked).toEqual({ clicked: true, text: "count is 1" });
 });
 test("live mode reports red when the root persistent sandbox fails", async () => {
   await scratch(async root => {

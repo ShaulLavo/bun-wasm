@@ -161,17 +161,19 @@ async function waitForRootSandboxReady(page: Page, timeoutMs: number): Promise<v
  */
 async function runSandboxRoot(options: LiveSmokeOptions): Promise<SandboxRootResult> {
   const url = options.base.href;
-  const profileDir = await mkdtemp(join(tmpdir(), "bun-wasm-chrome-live-root-"));
   const errors: string[] = [];
   const missingUrls: string[] = [];
   const executablePath = process.env.GOALS_CHROME_EXECUTABLE;
-  const context = await chromium.launchPersistentContext(profileDir, {
-    ...(executablePath ? { executablePath } : { channel: "chrome" }),
-    headless: true,
-    timeout: options.timeoutMs,
-    serviceWorkers: "allow",
-  });
+  let profileDir: string | undefined;
+  let context: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | undefined;
   try {
+    profileDir = await mkdtemp(join(tmpdir(), "bun-wasm-chrome-live-root-"));
+    context = await chromium.launchPersistentContext(profileDir, {
+      ...(executablePath ? { executablePath } : { channel: "chrome" }),
+      headless: true,
+      timeout: options.timeoutMs,
+      serviceWorkers: "allow",
+    });
     const page = context.pages()[0] ?? await context.newPage();
     page.on("pageerror", error => errors.push(`pageerror: ${error.message}`));
     page.on("console", message => {
@@ -185,18 +187,29 @@ async function runSandboxRoot(options: LiveSmokeOptions): Promise<SandboxRootRes
       else if (response.status() >= 500 && !isPreview) errors.push(`http ${response.status()}: ${responseUrl}`);
     });
     const budget = Math.max(options.timeoutMs, options.installTimeoutMs);
+    const markerPath = "/home/user/app/.chrome-smoke-marker";
+    const marker = `chrome-root-${crypto.randomUUID()}`;
     const initialStart = performance.now();
     await page.goto(url, { timeout: options.timeoutMs });
     await waitForRootSandboxReady(page, budget);
     const initialMs = Math.round(performance.now() - initialStart);
     const databases = await page.evaluate(async () => (await indexedDB.databases()).map(db => db.name).filter((name): name is string => typeof name === "string"));
     if (!databases.includes("bun-wasm-sandbox-vite-react")) errors.push(`Missing persistent sandbox database; saw ${JSON.stringify(databases)}`);
-    await page.evaluate(async () => { await (globalThis as unknown as { sandbox: { fs: { flush(): Promise<void> } } }).sandbox.fs.flush(); });
+    await page.evaluate(async ({ path, text }) => {
+      const api = (globalThis as unknown as { sandbox: { fs: { writeFile(p: string, data: string): Promise<void>; flush(p?: string): Promise<void> } } }).sandbox;
+      await api.fs.writeFile(path, text);
+      await api.fs.flush(path);
+    }, { path: markerPath, text: marker });
 
     const reloadStart = performance.now();
     await page.reload({ timeout: options.timeoutMs });
     await waitForRootSandboxReady(page, options.timeoutMs);
     const reloadMs = Math.round(performance.now() - reloadStart);
+    const persisted = await page.evaluate(async (path: string) => {
+      const api = (globalThis as unknown as { sandbox: { fs: { readFile(p: string): Promise<Uint8Array> } } }).sandbox;
+      return new TextDecoder().decode(await api.fs.readFile(path));
+    }, markerPath);
+    if (persisted !== marker) errors.push(`Persisted marker mismatch after reload: expected ${marker}, got ${persisted}`);
     const smokeGreen = errors.length === 0 && missingUrls.length === 0;
     const result: SandboxRootResult = { url, smokeGreen, initialMs, reloadMs, databases, errors, missingUrls };
     console.log("sandbox-root", smokeGreen ? "smoke-pass" : "smoke-fail", `initial:${initialMs}ms reload:${reloadMs}ms errors:${errors.length} missing:${missingUrls.length}`);
@@ -209,8 +222,8 @@ async function runSandboxRoot(options: LiveSmokeOptions): Promise<SandboxRootRes
     await writeFile(join(options.output, "logs", "sandbox-root.log"), JSON.stringify(result, null, 2) + "\n");
     return result;
   } finally {
-    await context.close().catch(() => {});
-    await rm(profileDir, { recursive: true, force: true }).catch(() => {});
+    await context?.close().catch(() => {});
+    if (profileDir) await rm(profileDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

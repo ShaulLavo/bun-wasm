@@ -165,7 +165,7 @@ function requireLiveCases(selections: readonly Selection[]): void {
 }
 /** Repeats the run's live requests against the real origin; any difference makes the smoke red. */
 async function checkLiveOrigin(config: SmokeOptions, site: string, report: SmokeReport, io: SmokeIO): Promise<void> {
-  const check = report.liveOrigin = await compareLiveOrigin(site, await io.served(config), io.fetch);
+  const check = report.liveOrigin = await compareLiveOrigin(site, await io.served(config), io.fetch, { requireRoot: report.sandboxRoot !== undefined });
   if (check.mismatches.length) throw new StepFailure("live-origin", `Live origin check: ${check.mismatches.length} difference(s) from the real origin: ${check.mismatches.slice(0, 5).join("; ")}`);
 }
 async function cases(config: SmokeOptions, report: SmokeReport, io: SmokeIO, ticket: string, selections: readonly Selection[], signal?: AbortSignal): Promise<void> {

@@ -329,6 +329,12 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       this.failure = "storage";
       this.storageError = `Browser storage could not be saved. Keep this page open and copy any unsaved text. No active project was removed. ${errorText(error)}`;
     }
+    if (!this.server) {
+      this.serverState = {
+        state: "down",
+        text: this.failure === "storage" ? "storage unavailable · press Retry" : "startup failed · press Restart",
+      };
+    }
     this.setStatus(errorText(error), "error");
     this.term?.write(`\x1b[31m${String(error)}\x1b[0m\r\n`);
   };
@@ -345,6 +351,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private fail(failure: Failure, error: unknown): void {
     this.failure = failure;
+    if (this.workspace?.fs.ownershipLost) this.stopDevServer();
     if (!this.started || this.workspace?.fs.ownershipLost || !this.server) {
       this.serverState = {
         state: "down",
@@ -557,7 +564,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private async showPreview(target: Server, visibleStart: number): Promise<void> {
     const state = await this.previews.ready;
-    if (this.server !== target) return;
+    if (this.server !== target || this.workspace?.fs.ownershipLost) return;
     const { port } = target;
     if (state !== "ready") {
       this.setServerState("down", `previews need a service worker (${state} here)`);
@@ -574,7 +581,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const requested = new URL(url);
     const navigation: PreviewNavigation = this.preview = { server: target, frame, url, loaded: null };
     const loaded = (event: Event) => {
-      if (this.preview !== navigation || this.server !== target || this.frame !== frame) {
+      if (this.preview !== navigation || this.server !== target || this.frame !== frame || this.workspace?.fs.ownershipLost) {
         frame.removeEventListener("load", loaded);
         return;
       }

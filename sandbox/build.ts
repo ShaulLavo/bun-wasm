@@ -77,6 +77,7 @@ for (const template of templates) {
   await Bun.write(join(out, template.file), bytes);
   console.log(`${template.id}: ${Object.keys(files).length} project source files`);
 }
+builds["sw.js"] = new Bun.CryptoHasher("sha256").update(await Bun.file(join(out, "sw.js")).bytes()).digest("hex");
 
 const entries = await publishVersionedEntries(out);
 const workerAssets = Object.fromEntries(VERSIONED_WORKER_FILES.map(name => [name, entries[name]!]));

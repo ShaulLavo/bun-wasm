@@ -35,10 +35,6 @@ await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 // Cloudflare Static Assets headers: cross-origin isolation (SharedArrayBuffer for
 // Atomics.wait sleeps and the networking bridge). serve.ts sends the same locally.
 await Bun.write(join(out, "_headers"), Bun.file(join(here, "_headers")));
-for (const template of projectTemplates) {
-  const files = await templateFiles(resolve(here, "../sandbox", template.directory));
-  await Bun.write(join(out, template.file), JSON.stringify({ files }));
-}
 
 type Metafile = NonNullable<typeof result.metafile>;
 
@@ -116,6 +112,13 @@ const staging = guests.map(async ({ source, name }) => {
 await settleAll(staging);
 
 const builds = sortedBuilds(engineBuilds);
+for (const template of projectTemplates) {
+  const files = await templateFiles(resolve(here, "../sandbox", template.directory));
+  const bytes = new TextEncoder().encode(JSON.stringify({ files }));
+  builds[template.file] = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+  await Bun.write(join(out, template.file), bytes);
+}
+builds["sw.js"] = new Bun.CryptoHasher("sha256").update(await Bun.file(join(out, "sw.js")).bytes()).digest("hex");
 const entries = await publishVersionedEntries(out);
 const workerAssets = Object.fromEntries(VERSIONED_WORKER_FILES.map(name => [name, entries[name]!]));
 await Bun.write(join(out, "engine-builds.json"), JSON.stringify(builds));

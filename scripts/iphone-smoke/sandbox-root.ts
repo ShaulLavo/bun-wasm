@@ -6,6 +6,7 @@ import type { SandboxRootOutcome } from "./model";
 import { installTimeoutMs, phaseTimeoutMs } from "./options";
 
 const sandboxRootUrl = "http://127.0.0.1/";
+const markerPath = "/home/user/app/.iphone-smoke-marker";
 
 interface SandboxProbe {
   ready: boolean;
@@ -16,28 +17,28 @@ interface SandboxProbe {
   databases?: string[];
 }
 
-const probeSandboxSource = `(async () => {
+/** Evaluated inside the host window; avoids cross-realm `instanceof` checks on iframe elements. */
+export const probeSandboxSource = `(async () => {
   const status = document.querySelector("#status");
   const kind = status?.getAttribute("data-kind") ?? "";
   const text = status?.textContent ?? "";
   if (kind === "error") return { ready: false, error: text || "sandbox error", status: text };
   const dot = document.querySelector("#server-dot")?.getAttribute("data-state") ?? null;
   const frame = document.querySelector("#preview");
-  const button = frame && frame instanceof HTMLIFrameElement
-    ? frame.contentDocument?.querySelector("button.counter:not([disabled])")
-    : null;
+  const doc = frame && "contentDocument" in frame ? frame.contentDocument : null;
+  const button = doc?.querySelector("button.counter:not([disabled])") ?? null;
   const ready = kind === "ok" && /dev server ready/.test(text) && dot === "up" && Boolean(button);
   if (!ready) return { ready: false, status: text, serverState: dot };
   const databases = (await indexedDB.databases()).map(db => db.name).filter(name => typeof name === "string");
   return { ready: true, status: text, serverState: dot, buttonText: button?.textContent ?? null, databases };
 })()`;
 
-const clickCounterSource = `(async () => {
+/** Clicks the preview iframe's counter button without relying on host-realm `HTMLElement`. */
+export const clickCounterSource = `(async () => {
   const frame = document.querySelector("#preview");
-  const button = frame && frame instanceof HTMLIFrameElement
-    ? frame.contentDocument?.querySelector("button.counter:not([disabled])")
-    : null;
-  if (!button || !(button instanceof HTMLElement)) return { clicked: false, text: null };
+  const doc = frame && "contentDocument" in frame ? frame.contentDocument : null;
+  const button = doc?.querySelector("button.counter:not([disabled])") ?? null;
+  if (!button || typeof button.click !== "function") return { clicked: false, text: null };
   const before = button.textContent ?? "";
   button.click();
   const deadline = performance.now() + 5000;
@@ -47,6 +48,19 @@ const clickCounterSource = `(async () => {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   return { clicked: false, text: button.textContent ?? null };
+})()`;
+
+const writeMarkerSource = (marker: string) => `(async () => {
+  const api = globalThis.sandbox;
+  if (!api) throw new Error("Missing sandbox API");
+  await api.fs.writeFile(${JSON.stringify(markerPath)}, ${JSON.stringify(marker)});
+  await api.fs.flush(${JSON.stringify(markerPath)});
+})()`;
+
+const readMarkerSource = `(async () => {
+  const api = globalThis.sandbox;
+  if (!api) throw new Error("Missing sandbox API");
+  return new TextDecoder().decode(await api.fs.readFile(${JSON.stringify(markerPath)}));
 })()`;
 
 const flushAndDisposeSource = `(async () => {
@@ -67,6 +81,7 @@ async function waitSandboxReady(transport: Transport, timeoutMs: number, admissi
 async function runVisit(
   createTransport: () => Promise<Transport>,
   timeoutMs: number,
+  marker: { write?: string; expect?: string },
   signal?: AbortSignal,
 ): Promise<{ durationMs: number; databases: string[]; buttonText: string | null }> {
   const transport = await createTransport();
@@ -83,10 +98,17 @@ async function runVisit(
       if (!databases.includes("bun-wasm-sandbox-vite-react")) {
         throw new Error(`Root sandbox did not persist bun-wasm-sandbox-vite-react; saw ${JSON.stringify(databases)}`);
       }
+      if (marker.expect !== undefined) {
+        const persisted = await transport.evaluate<string>(readMarkerSource, admission);
+        if (persisted !== marker.expect) {
+          throw new Error(`Root sandbox marker did not persist across revisit: expected ${JSON.stringify(marker.expect)}, got ${JSON.stringify(persisted)}`);
+        }
+      }
       const clicked = await transport.evaluate<{ clicked: boolean; text: string | null }>(clickCounterSource, admission);
       if (!clicked.clicked) {
         throw new Error(`Root sandbox counter did not increment after click; saw ${JSON.stringify(clicked.text)}`);
       }
+      if (marker.write !== undefined) await transport.evaluate(writeMarkerSource(marker.write), admission);
       await transport.evaluate(flushAndDisposeSource, admission);
       return { durationMs: Math.round(performance.now() - started), databases, buttonText: clicked.text };
     });
@@ -113,15 +135,16 @@ async function runVisit(
 
 /**
  * Verifies the live `/` root sandbox on default persistent IndexedDB storage (not `mode=memory`),
- * then reopens `/` on the same Safari profile to confirm clean persistent-FS reload.
+ * writes a flushed workspace marker, then reopens `/` on the same Safari profile and reads it back.
  */
 export async function runIphoneSandboxRoot(
   createTransport: () => Promise<Transport>,
   signal?: AbortSignal,
 ): Promise<SandboxRootOutcome> {
+  const token = `iphone-root-${crypto.randomUUID()}`;
   try {
-    const initial = await runVisit(createTransport, installTimeoutMs, signal);
-    const reload = await runVisit(createTransport, phaseTimeoutMs, signal);
+    const initial = await runVisit(createTransport, installTimeoutMs, { write: token }, signal);
+    const reload = await runVisit(createTransport, phaseTimeoutMs, { expect: token }, signal);
     return {
       url: sandboxRootUrl,
       status: "pass",

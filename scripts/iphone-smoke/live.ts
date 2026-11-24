@@ -77,12 +77,27 @@ function strings(value: unknown): Record<string, string> {
  * Repeats every request the proxy made, with the same request headers, against the real origin
  * from the PC, and compares status, the compared headers and the decoded bytes.
  */
-export async function compareLiveOrigin(site: string, served: unknown, get: LiveFetch): Promise<LiveOriginCheck> {
+export async function compareLiveOrigin(
+  site: string,
+  served: unknown,
+  get: LiveFetch,
+  options: { requireRoot?: boolean } = {},
+): Promise<LiveOriginCheck> {
   const rows = servedRows(served);
   const page = "/" + livePlaygroundPath;
   const mismatches: string[] = [];
-  if (!rows.some(row => row.url === page || row.url.startsWith(page + "?"))) mismatches.push(`the run served no ${page} page`);
-  for (const row of rows) mismatches.push(...await compareRow(site, row, get));
+  if (!rows.some(row => row.status === 200 && (row.url === page || row.url.startsWith(page + "?")))) {
+    mismatches.push(`the run served no ${page} page`);
+  }
+  if (options.requireRoot && !rows.some(row => row.status === 200 && (row.url === "/" || row.url.startsWith("/?")))) {
+    mismatches.push("the run served no / sandbox page");
+  }
+  for (const row of rows) {
+    if (row.status >= 400 && !row.url.includes("/__preview/")) {
+      mismatches.push(`${row.url}: served HTTP ${row.status}`);
+    }
+    mismatches.push(...await compareRow(site, row, get));
+  }
   return { checked: rows.length, mismatches };
 }
 async function compareRow(site: string, row: LiveServed, get: LiveFetch): Promise<string[]> {

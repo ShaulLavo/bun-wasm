@@ -75,6 +75,10 @@ beforeAll(async () => {
   await Bun.write(join(assets, "index.html"), "<h1>home</h1>");
   await Bun.write(join(assets, "404.html"), "<h1>missing</h1>");
   await Bun.write(join(assets, "playground/index.html"), "<h1>playground</h1>");
+  await Bun.write(join(assets, "playground/sw.js"), "self.addEventListener('fetch', () => {});");
+  await Bun.write(join(assets, "playground/chunks/chunk-a1.js"), "export const x = 1;");
+  await Bun.write(join(assets, "playground/entry-worker-a1b2c3d4e5f6a7b8.js"), "export const w = 1;");
+  await Bun.write(join(assets, "playground/__bunwasm/entry-worker-a1b2c3d4e5f6a7b8.js"), "export const w = 1;");
   await Bun.write(join(assets, "chunks/chunk-a1.js"), "export const x = 1;");
   await Bun.write(join(assets, "entry-worker-a1b2c3d4e5f6a7b8.js"), "export const w = 1;");
   await Bun.write(join(assets, "__bunwasm/entry-worker-a1b2c3d4e5f6a7b8.js"), "export const w = 1;");
@@ -107,7 +111,10 @@ beforeAll(async () => {
     await Bun.write(join(assets, path), wasm);
     await Bun.write(join(assets, path + ".br"), "not the network module");
   }
+  const immutable = "  Cache-Control: public, max-age=31536000, immutable\n";
   await Bun.write(join(assets, "_headers"), await Bun.file(join(import.meta.dir, "../_headers")).text()
+    + "\n/playground/\n  Cache-Control: no-store\n/playground/index.html\n  Cache-Control: no-store\n/playground/sw.js\n  Cache-Control: no-store\n"
+    + `/playground/entry-*\n${immutable}/playground/__bunwasm/entry-*\n${immutable}/playground/chunks/*.js\n${immutable}/playground/__bunwasm/chunks/*.js\n${immutable}`
     + `\n${program}\n  Cache-Control: public, max-age=60\n  Vary: Origin\n  X-Logical-Asset: preserved\n${program}.br\n  Cache-Control: no-store\n  X-Sidecar-Only: not-logical\n`);
   const original = await Bun.file(join(import.meta.dir, "../../site/wrangler.jsonc")).text();
   const config = join(root, "wrangler.jsonc");
@@ -374,10 +381,31 @@ test.each(["/", "/index.html", "/sw.js", "/playground/", "/playground/index.html
 });
 
 test.each([
+  ["/", "no-store"],
+  ["/sw.js", "no-store"],
+  ["/playground/", "no-store"],
+  ["/playground/sw.js", "no-store"],
+  ["/chunks/chunk-a1.js", "public, max-age=31536000, immutable"],
+  ["/entry-worker-a1b2c3d4e5f6a7b8.js", "public, max-age=31536000, immutable"],
+  ["/__bunwasm/entry-worker-a1b2c3d4e5f6a7b8.js", "public, max-age=31536000, immutable"],
+  ["/playground/chunks/chunk-a1.js", "public, max-age=31536000, immutable"],
+  ["/playground/entry-worker-a1b2c3d4e5f6a7b8.js", "public, max-age=31536000, immutable"],
+  ["/playground/__bunwasm/entry-worker-a1b2c3d4e5f6a7b8.js", "public, max-age=31536000, immutable"],
+])("public router sends exact cache-control %s -> %s", async (path, expectedCacheControl) => {
+  const response = await get(path, "identity", { origin: publicOrigin });
+  expect(response.status).toBe(200);
+  expect(response.headers["cache-control"]).toBe(expectedCacheControl);
+});
+
+test.each([
   "/chunks/missing-oldhash.js",
   "/__bunwasm/chunks/missing-oldhash.js",
   "/entry-worker-0000000000000000.js",
   "/__bunwasm/entry-worker-0000000000000000.js",
+  "/playground/chunks/missing-oldhash.js",
+  "/playground/__bunwasm/chunks/missing-oldhash.js",
+  "/playground/entry-worker-0000000000000000.js",
+  "/playground/__bunwasm/entry-worker-0000000000000000.js",
   "/missing",
   program.replace("ls.wasm", "missing.wasm"),
 ])("404 responses at %s are never cached as immutable", async path => {

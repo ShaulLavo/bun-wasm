@@ -2,14 +2,24 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { entryAssetName, entryAssetUrl } from "../src/entry-assets";
+import { entryAssetName, entryAssetUrl, swScriptUrl } from "../src/entry-assets";
 import { siblingWorkerUrl } from "../src/bun-launcher";
 import { publishVersionedEntries, rewriteEntryHtml, VERSIONED_ENTRY_FILES, VERSIONED_WORKER_FILES } from "../../scripts/browser-build";
 
 const originalAssets = Object.getOwnPropertyDescriptor(globalThis, "__bunwasmAssets");
+const originalBuilds = Object.getOwnPropertyDescriptor(globalThis, "__bunwasmBuilds");
 afterEach(() => {
   if (originalAssets) Object.defineProperty(globalThis, "__bunwasmAssets", originalAssets);
   else Reflect.deleteProperty(globalThis, "__bunwasmAssets");
+  if (originalBuilds) Object.defineProperty(globalThis, "__bunwasmBuilds", originalBuilds);
+  else Reflect.deleteProperty(globalThis, "__bunwasmBuilds");
+});
+
+test("swScriptUrl appends a content hash query when __bunwasmBuilds names sw.js", () => {
+  Reflect.deleteProperty(globalThis, "__bunwasmBuilds");
+  expect(swScriptUrl()).toBe("./sw.js");
+  Reflect.set(globalThis, "__bunwasmBuilds", { "sw.js": "0123456789abcdef9999999999999999" });
+  expect(swScriptUrl()).toBe("./sw.js?v=0123456789abcdef");
 });
 
 test("entryAssetName and entryAssetUrl resolve hashed filenames from __bunwasmAssets and fall back cleanly", () => {

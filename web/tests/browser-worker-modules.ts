@@ -75,10 +75,17 @@ export function assertWorkerModuleReport(value: unknown, browser: string): void 
 function uncontrolledChildren() {
   const NativeWorker = globalThis.Worker;
   let root: Worker | null = null;
+  let redirects = 0;
+  Reflect.set(globalThis, "__bunwasmUncontrolledRedirects", 0);
   globalThis.Worker = new Proxy(NativeWorker, {
     construct(target, args, newTarget) {
-      const scoped = new URL(String(args[0]), location.href).pathname.endsWith("/__bunwasm/worker.js");
-      if (scoped && root) args[0] = new URL("./worker.js", location.href).href;
+      const pathname = new URL(String(args[0]), location.href).pathname;
+      const match = /\/__bunwasm\/(entry-worker-[0-9a-f]+\.js|worker\.js)$/.exec(pathname);
+      const scoped = match !== null;
+      if (scoped && root) {
+        args[0] = new URL(`./${match[1]}`, location.href).href;
+        Reflect.set(globalThis, "__bunwasmUncontrolledRedirects", ++redirects);
+      }
       const worker: Worker = Reflect.construct(target, args, newTarget);
       if (!scoped || root) return worker;
       root = worker;
@@ -139,9 +146,13 @@ async function checkWorkerBrowser(report: WorkerModuleReport, task: ReturnType<P
     let iteration = 0;
     return { async run() {
       const checked = await helpers.run(page, "bun run worker-atomic.ts", 120000);
-      const passed = checked.code === atomic.exit && atomic.output.every(line => checked.output.includes(line));
-      console.log(JSON.stringify({ browser: report.browser, variant, iteration: ++iteration, passed, ...checked }));
-      return { passed, detail: JSON.stringify(checked) };
+      const redirects = variant === "uncontrolled"
+        ? await page.evaluate(() => Number(Reflect.get(globalThis, "__bunwasmUncontrolledRedirects") ?? 0))
+        : 0;
+      const redirected = variant !== "uncontrolled" || redirects > 0;
+      const passed = checked.code === atomic.exit && atomic.output.every(line => checked.output.includes(line)) && redirected;
+      console.log(JSON.stringify({ browser: report.browser, variant, iteration: ++iteration, passed, redirects, ...checked }));
+      return { passed, detail: JSON.stringify({ ...checked, redirects }) };
     } };
   }
   try {

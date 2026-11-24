@@ -859,3 +859,32 @@ test("sandbox moves the preview bar to down when persistent storage startup fail
   expect(transientMarkup).toContain('data-state="down"');
   expect(transientMarkup).not.toContain("starting dev server");
 });
+
+test("sandbox moves the preview bar to down when post-install flush fails on Restart and stops pending preview on takeover", async () => {
+  const { page, sandbox } = await runningSandbox();
+  sandbox.restart();
+  await turn();
+  page.runs[1]!.done.resolve({ code: 137 });
+  await turn();
+  expect(page.runs[2]!.args).toEqual(["install"]);
+  expect(sandbox.serverState).toEqual({ state: "starting", text: "installing dependencies…", url: undefined });
+  page.fixture.fs.flush = async () => { throw new DOMException("Quota exceeded", "QuotaExceededError"); };
+  page.runs[2]!.done.resolve({ code: 0 });
+  await turn();
+  await turn();
+  expect(sandbox.failure).toBe("storage");
+  expect(sandbox.serverState).toEqual({ state: "down", text: "storage unavailable · press Retry" });
+
+  // Takeover while a preview readiness wait is pending must keep the bar down and never flip back up.
+  const takeover = await runningSandbox();
+  const previewsReady = deferred<"ready">();
+  Reflect.set(takeover.sandbox, "previews", { ready: previewsReady.promise, register() {}, unregister() {}, url: (port: number) => `https://example.test/__preview/${port}/` });
+  const network = Reflect.get(takeover.sandbox, "network") as { listening(port: number, helper: object): void };
+  network.listening(5173, {});
+  Reflect.set(takeover.page.fixture.fs, "ownershipLost", true);
+  takeover.page.fixture.fs.onOwnershipLost?.();
+  expect(takeover.sandbox.serverState).toEqual({ state: "down", text: "workspace open in another tab · press Reload" });
+  previewsReady.resolve("ready");
+  await turn();
+  expect(takeover.sandbox.serverState).toEqual({ state: "down", text: "workspace open in another tab · press Reload" });
+});
