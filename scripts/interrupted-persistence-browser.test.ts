@@ -61,6 +61,13 @@ interface LocalRegistry {
   close(): Promise<void>;
 }
 
+function closeHeldStream(controller: ReadableStreamDefaultController<Uint8Array>, tail: Uint8Array): void {
+  try {
+    controller.enqueue(tail);
+    controller.close();
+  } catch { /* Stream already closed when the interrupted browser tab dropped the connection. */ }
+}
+
 /**
  * Deterministic offline npm registry with 16 multi-file packages and a mid-stream hold gate.
  * When `holdAfter(N)` is active, the first `N` tarballs complete normally (so real files are
@@ -94,12 +101,10 @@ function startLocalRegistry(packageCount = 16): LocalRegistry {
     return new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array(bytes.subarray(0, split)));
+        const tail = new Uint8Array(bytes.subarray(split));
         const release = () => {
           heldReleases.delete(release);
-          try {
-            controller.enqueue(new Uint8Array(bytes.subarray(split)));
-            controller.close();
-          } catch { /* Stream already closed when the interrupted browser tab dropped the connection. */ }
+          closeHeldStream(controller, tail);
         };
         releaseFn = release;
         heldReleases.add(release);
@@ -248,21 +253,23 @@ async function stressSandboxMidEdit(context: BrowserContext, sandboxOrigin: stri
       await sb.fs.flush();
     }, baseline);
 
-    // 5 consecutive hard interruptions while a large write + flush batch is proved still in-flight.
+    // 5 consecutive hard interruptions while a large write + flush batch is proved still pending after a worker round-trip.
     for (let cycle = 0; cycle < 5; cycle++) {
       const state = await page.evaluate(async cycle => {
         const sb = Reflect.get(globalThis, "sandbox");
         if (!sb?.fs) throw new Error("Missing window.sandbox.fs");
-        // Confirm the worker is accepting writes, then enqueue a 480 KiB write+flush batch and verify the flush is still pending.
-        await sb.fs.writeFile(`/home/user/app/inflight-enter-${cycle}.txt`, `enter=${cycle}`);
         let flushSettled = false;
-        const payload = `cycle=${cycle} payload=${"a".repeat(8192)}`;
-        for (let i = 0; i < 60; i++) {
+        const payload = `cycle=${cycle} payload=${"a".repeat(16384)}`;
+        const firstWrite = sb.fs.writeFile(`/home/user/app/inflight-enter-${cycle}.txt`, `enter=${cycle}`);
+        for (let i = 0; i < 120; i++) {
           const path = `/home/user/app/stress-${cycle}-${i}.txt`;
           void sb.fs.writeFile(path, `${i}:${payload}`).catch(() => {});
-          if (i % 10 === 0) void sb.fs.flush(path).catch(() => {});
+          if (i % 20 === 0) void sb.fs.flush(path).catch(() => {});
         }
         void sb.fs.flush().then(() => { flushSettled = true; }, () => { flushSettled = true; });
+        // Await the first worker write AND a real timer turn so any already-settled flush promise would have flipped flushSettled.
+        await firstWrite;
+        await new Promise(resolve => setTimeout(resolve, 5));
         return { flushInFlight: !flushSettled };
       }, cycle);
       expect(state.flushInFlight).toBe(true);
@@ -303,6 +310,7 @@ interface PlaygroundHandle {
   fs?: {
     writeFile(path: string, data: string): Promise<void>;
     readFile(path: string): Promise<Uint8Array | undefined>;
+    listFiles(path?: string): Promise<string[]>;
     flush(path?: string): Promise<void>;
   };
   shell?: {
@@ -370,8 +378,8 @@ async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOri
       await pg.fs.flush();
     }, { base: registry.base, dependencies: registry.dependencies, baseline });
 
-    // 4 consecutive hard interruptions mid-`bun install`: real tarballs are completed and extracted while
-    // the next tarball stream is held open mid-body so `bun install` is guaranteed still in-flight at kill time.
+    // 4 consecutive hard interruptions mid-`bun install`: real tarballs are completed and extracted into the
+    // persistent VFS while the next tarball stream stays held open mid-body so `bun install` cannot finish.
     for (let cycle = 0; cycle < 4; cycle++) {
       const beforeCompleted = registry.tarballsCompleted;
       registry.holdAfter(beforeCompleted + 1 + cycle);
@@ -381,10 +389,18 @@ async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOri
         await pg.fs.writeFile("/home/user/package.json", JSON.stringify({ name: "stress-install", dependencies }));
         await pg.fs.writeFile("/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(base)}\n`);
         await pg.fs.flush();
-        void pg.shell.submit("rm -rf node_modules bun.lock && bun install --no-cache").catch(() => {});
+        // Clear both node_modules and the Bun package cache before starting so any observed extracted file is from this cycle.
+        await pg.shell.submit("rm -rf node_modules bun.lock ~/.bun/install/cache");
+        void pg.shell.submit("bun install --no-cache").catch(() => {});
       }, { base: registry.base, dependencies: registry.dependencies });
 
       await registry.waitForHeld(30_000);
+      // Confirm the guest actually received and extracted at least one package file into persistent VFS while the held tarball remains open.
+      await page.waitForFunction(async () => {
+        const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
+        const files = await pg?.fs?.listFiles?.("/home/user");
+        return Boolean(files?.some(file => /stress-pkg-\d+(?:@[^/]+)?\/(?:index\.js|package\.json)$/.test(file)));
+      }, undefined, { timeout: 30_000 });
       expect(registry.tarballsCompleted).toBeGreaterThan(beforeCompleted);
       expect(registry.heldCount).toBeGreaterThan(0);
       await interruptPage(cycle);
