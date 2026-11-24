@@ -16,7 +16,7 @@ test("SolidStart acceptance keeps the browser router at the server's root path",
   expect(url.searchParams.has("root-previews")).toBe(true);
   expect(url.searchParams.get("template")).toBe("solidstart");
   expect(url.searchParams.get("engine")).toBe("browser");
-  expect(url.searchParams.get("mode")).toBe("memory");
+  expect(url.searchParams.get("mode")).toBeNull();
   expect(framework.rootPreview?.dev.replaceAll("{port}", "41821")).toBe("bun run dev --port 41821");
   expect(framework.rootPreview?.start.replaceAll("{port}", "41821")).toBe("bun run start --port 41821");
 });

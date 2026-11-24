@@ -568,10 +568,6 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private async showPreview(target: Server, visibleStart: number): Promise<void> {
     const state = await this.previews.ready;
     if (this.server !== target || this.workspace?.fs.ownershipLost) return;
-    // Vite probes its port with 1-6 ms throwaway listeners before binding the real server.
-    // Waiting a brief tick avoids thrashing the preview iframe with transient 502 navigations.
-    await new Promise<void>(resolve => setTimeout(resolve, 25));
-    if (this.server !== target || this.workspace?.fs.ownershipLost) return;
     const { port } = target;
     if (state !== "ready") {
       this.setServerState("down", `previews need a service worker (${state} here)`);
@@ -581,6 +577,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     // The label shows the server's own address; tapping it opens the preview, which works anywhere.
     this.setServerState("up", `localhost:${port}/`, url);
     this.setStatus("loading preview…");
+    // Vite probes its port with 1-6 ms throwaway listeners before binding the real server.
+    // Waiting a brief tick before navigating the iframe avoids thrashing it with transient 502s.
+    await new Promise<void>(resolve => setTimeout(resolve, 25));
+    if (this.server !== target || this.workspace?.fs.ownershipLost) return;
     const previewStarted = performance.now();
     const { frame } = this;
     if (!frame) return;
