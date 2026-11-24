@@ -338,6 +338,20 @@ async function readPlaygroundFile(page: Page, path: string): Promise<string | nu
   }, path);
 }
 
+async function waitForExtractedPackage(page: Page, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const found = await page.evaluate(async () => {
+      const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
+      const files = await pg?.fs?.listFiles?.("/home/user");
+      return Boolean(files?.some(file => /stress-pkg-\d+(?:@[^/]+)?\/(?:index\.js|package\.json)$/.test(file)));
+    });
+    if (found) return;
+    await page.waitForTimeout(25);
+  }
+  throw new Error(`No extracted stress-pkg file appeared in persistent VFS within ${timeoutMs} ms`);
+}
+
 async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOrigin: string): Promise<void> {
   const errors: string[] = [];
   let interrupting = false;
@@ -383,7 +397,7 @@ async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOri
     for (let cycle = 0; cycle < 4; cycle++) {
       const beforeCompleted = registry.tarballsCompleted;
       registry.holdAfter(beforeCompleted + 1 + cycle);
-      await page.evaluate(async ({ base, dependencies }) => {
+      const rmExit = await page.evaluate(async ({ base, dependencies }) => {
         const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
         if (!pg?.fs || !pg?.shell) throw new Error("Missing playground handle");
         await pg.fs.writeFile("/home/user/package.json", JSON.stringify({ name: "stress-install", dependencies }));
@@ -391,16 +405,17 @@ async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOri
         await pg.fs.flush();
         // Clear both node_modules and the Bun package cache before starting so any observed extracted file is from this cycle.
         await pg.shell.submit("rm -rf node_modules bun.lock ~/.bun/install/cache");
+        const exitCode = pg.shell.lastExit;
+        if (exitCode !== 0) return exitCode;
         void pg.shell.submit("bun install --no-cache").catch(() => {});
+        return 0;
       }, { base: registry.base, dependencies: registry.dependencies });
+      expect(rmExit).toBe(0);
 
       await registry.waitForHeld(30_000);
-      // Confirm the guest actually received and extracted at least one package file into persistent VFS while the held tarball remains open.
-      await page.waitForFunction(async () => {
-        const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
-        const files = await pg?.fs?.listFiles?.("/home/user");
-        return Boolean(files?.some(file => /stress-pkg-\d+(?:@[^/]+)?\/(?:index\.js|package\.json)$/.test(file)));
-      }, undefined, { timeout: 30_000 });
+      // Poll page.evaluate directly (Playwright's waitForFunction treats async Promise returns as truthy)
+      // to confirm the guest actually extracted at least one package file into persistent VFS while heldCount > 0.
+      await waitForExtractedPackage(page, 30_000);
       expect(registry.tarballsCompleted).toBeGreaterThan(beforeCompleted);
       expect(registry.heldCount).toBeGreaterThan(0);
       await interruptPage(cycle);
