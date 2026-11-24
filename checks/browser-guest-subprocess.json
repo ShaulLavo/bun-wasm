@@ -57,6 +57,7 @@
     "web/src/buffer-transfer.ts",
     "web/src/bun-executor.ts",
     "web/src/bun-launcher.ts",
+    "web/src/entry-assets.ts",
     "web/src/compile-observer.ts",
     "web/src/content-modules.ts",
     "web/src/default-signal.ts",

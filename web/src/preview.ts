@@ -35,7 +35,7 @@ export class Previews extends PreviewRouter {
     container.startMessages();
     try {
       // Keep the playground itself outside this worker's scope (and COOP/COEP untouched).
-      const registration = await container.register("./sw.js", { scope: this.workerScope?.href });
+      const registration = await container.register("./sw.js", { scope: this.workerScope?.href, updateViaCache: "none" });
       await activated(registration);
       return "ready";
     } catch (err) {

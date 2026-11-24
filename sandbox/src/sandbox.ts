@@ -14,6 +14,7 @@ import type { Run, RunHooks, RunOptions, RunResult } from "../../web/src/runner"
 import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "../../web/src/shared-fs";
 import { START_FRESH_BUSY, startFresh, unreadableWorkspace } from "../../web/src/start-fresh";
 import { errorText, measureStartup } from "../../web/src/startup";
+import { entryAssetUrl } from "../../web/src/entry-assets";
 import { openTerminal } from "../../web/src/terminal-mount";
 import { linkLocalUrls } from "../../web/src/terminal-links";
 import { Editor } from "./editor";
@@ -182,6 +183,12 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         this.storageError = this.unreadable
           ? `This browser's saved copy of the workspace cannot be opened. Start fresh deletes it and opens the template again. ${errorText(error)}`
           : `Browser storage could not be opened or saved. Your workspace was kept. ${action} ${errorText(error)}`;
+        if (!this.started || !this.server) {
+          this.serverState = {
+            state: "down",
+            text: this.unreadable ? "saved workspace unreadable · press Start fresh" : "storage unavailable · press Retry",
+          };
+        }
         this.changed();
       }
       this.term?.write(`\x1b[31m${String(error)}\x1b[0m\r\n`);
@@ -257,6 +264,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         return;
       }
       this.failure = undefined;
+      if (!this.started) this.serverState = { state: "starting", text: "starting…" };
       if (!this.started && getVfsDescriptor(this.params.get("mode") ?? "fast").mode === "fast") this.launchPersistent();
       else if (!this.started) this.startWorkspace();
       else void this.startDevServer().catch(this.report);
@@ -337,6 +345,14 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private fail(failure: Failure, error: unknown): void {
     this.failure = failure;
+    if (!this.started || this.workspace?.fs.ownershipLost || !this.server) {
+      this.serverState = {
+        state: "down",
+        text: this.workspace?.fs.ownershipLost
+          ? "workspace open in another tab · press Reload"
+          : "startup failed · press Reload",
+      };
+    }
     this.setStatus(errorText(error), "error");
   }
 
@@ -348,14 +364,17 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private construct(): Workspace {
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
-    const runtime = createRuntime({ filesystem: { mode, name: workspaceName(this.template) }, memoryGroups: memoryGroupPolicy(this.engine, navigator.userAgent) });
+    const runtime = createRuntime({
+      filesystem: { mode, name: workspaceName(this.template), workerURL: entryAssetUrl("./fs-worker.js", location.href) },
+      memoryGroups: memoryGroupPolicy(this.engine, navigator.userAgent),
+    });
     const sharedObjects = installBunSharedObjects(runtime);
     addEventListener("pagehide", (event: PageTransitionEvent) => { if (!event.persisted) sharedObjects.close(); });
     const fs = runtime.filesystem;
     const browserPrograms = new BrowserPrograms(runtime, {
-      worker: new URL("./preview1-worker.js", location.href),
+      worker: entryAssetUrl("./preview1-worker.js", location.href),
       shell: new URL("./programs/shell-engine.wasm", location.href),
-      shellWorker: new URL("./shell-worker.js", location.href),
+      shellWorker: entryAssetUrl("./shell-worker.js", location.href),
     });
     addEventListener("pagehide", (event: PageTransitionEvent) => {
       if (event.persisted) return;

@@ -423,6 +423,7 @@ async function servedFrom(get: (url: string) => Promise<Response>, paths: readon
   }));
 }
 const servedPaths = ["/playground/", "/playground/engine-builds.json"];
+const passingSandboxRoot = async () => ({ url: "http://127.0.0.1/", status: "pass" as const, initialMs: 1200, reloadMs: 600, databases: ["bun-wasm-sandbox-vite-react"] });
 test("live mode skips local setup and runs the same cases against the deployed playground", async () => {
   await scratch(async root => {
     const config = smokeOptions(liveArguments(root));
@@ -431,8 +432,9 @@ test("live mode skips local setup and runs the same cases against the deployed p
     const get = deployedSite(join(root, "deployed"), [source.commit], requests);
     const served = await servedFrom(deployedSite(join(root, "deployed"), [source.commit], []), servedPaths);
     const result = await withFixtures(config, [], { preflight: true, onNavigate: url => urls.push(url),
-      overrides: { fetch: get, served: async () => served } });
+      overrides: { fetch: get, served: async () => served, sandboxRoot: passingSandboxRoot } });
     expect(result.liveOrigin).toEqual({ checked: 2, mismatches: [] });
+    expect(result.sandboxRoot?.status).toBe("pass");
     expect(result.status, JSON.stringify(result.failures)).toBe("green");
     expect(result.revision).toBe(source.commit);
     expect(result.source).toEqual({ commit: source.commit, dirty: null, assets: { source: site, deployment: { sourceCommit: source.commit, waffleVersion: "0.0.0-test" } } });
@@ -464,7 +466,7 @@ test("live mode reports red when the site redeploys during the smoke", async () 
     const config = smokeOptions(liveArguments(root));
     await preparedRoot(join(root, "deployed"));
     const result = await withFixtures(config, [], { preflight: true,
-      overrides: { fetch: deployedSite(join(root, "deployed"), [source.commit, "b".repeat(40)], []), served: async () => [] } });
+      overrides: { fetch: deployedSite(join(root, "deployed"), [source.commit, "b".repeat(40)], []), served: async () => [], sandboxRoot: passingSandboxRoot } });
     expect(result.cases.every(value => value.status === "pass")).toBe(true);
     expect(result.status).toBe("red");
     expect(result.failures[0]?.error).toContain(`Live site changed deployment during smoke: ${source.commit} became ${"b".repeat(40)}`);
@@ -489,7 +491,7 @@ test("any difference between the run and the real origin makes the live smoke re
     const served = await servedFrom(get, servedPaths);
     served[0]!.headers["cache-control"] = "public, max-age=600";
     served[1]!.sha256 = "0".repeat(64);
-    const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => served } });
+    const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => served, sandboxRoot: passingSandboxRoot } });
     expect(result.cases.every(value => value.status === "pass")).toBe(true);
     expect(result).toMatchObject({ status: "red", failedPhase: "live-origin", liveOrigin: { checked: 2 } });
     expect(result.liveOrigin?.mismatches).toEqual([
@@ -501,8 +503,25 @@ test("a run whose proxy recorded no playground page cannot pass the origin check
   await scratch(async root => {
     await preparedRoot(join(root, "deployed"));
     const get = deployedSite(join(root, "deployed"), [source.commit], []);
-    const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => [] } });
+    const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => [], sandboxRoot: passingSandboxRoot } });
     expect(result).toMatchObject({ status: "red", failedPhase: "live-origin", liveOrigin: { checked: 0, mismatches: ["the run served no /playground/ page"] } });
+  });
+});
+test("live mode reports red when the root persistent sandbox fails", async () => {
+  await scratch(async root => {
+    await preparedRoot(join(root, "deployed"));
+    const get = deployedSite(join(root, "deployed"), [source.commit], []);
+    const served = await servedFrom(get, servedPaths);
+    const result = await withFixtures(smokeOptions(liveArguments(root)), [], {
+      preflight: true,
+      overrides: {
+        fetch: get,
+        served: async () => served,
+        sandboxRoot: async () => ({ url: "http://127.0.0.1/", status: "fail", error: "INVALID_VFS_FORMAT" }),
+      },
+    });
+    expect(result.cases.every(value => value.status === "pass")).toBe(true);
+    expect(result).toMatchObject({ status: "red", failedPhase: "sandbox-root", sandboxRoot: { status: "fail", error: "INVALID_VFS_FORMAT" } });
   });
 });
 test("live mode needs the site's recorded source commit", async () => {

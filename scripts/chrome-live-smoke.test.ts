@@ -80,9 +80,11 @@ test("the verdict judges the smoke phases and cleanup, never later phases", () =
   expect(smokeGreen([])).toBe(false);
 });
 
-test("the run is green only when every cell is", () => {
+test("the run is green only when every cell and the root persistent sandbox pass", () => {
   expect(overallStatus([{ smokeGreen: true }, { smokeGreen: true }])).toBe("green");
-  expect(overallStatus([{ smokeGreen: true }, { smokeGreen: false }])).toBe("red");
+  expect(overallStatus([{ smokeGreen: true }, { smokeGreen: true }], { smokeGreen: true })).toBe("green");
+  expect(overallStatus([{ smokeGreen: true }, { smokeGreen: true }], { smokeGreen: false })).toBe("red");
+  expect(overallStatus([{ smokeGreen: true }, { smokeGreen: false }], { smokeGreen: true })).toBe("red");
   expect(overallStatus([])).toBe("red");
 });
 

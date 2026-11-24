@@ -76,6 +76,9 @@ beforeAll(async () => {
   await Bun.write(join(assets, "404.html"), "<h1>missing</h1>");
   await Bun.write(join(assets, "playground/index.html"), "<h1>playground</h1>");
   await Bun.write(join(assets, "chunks/chunk-a1.js"), "export const x = 1;");
+  await Bun.write(join(assets, "entry-worker-a1b2c3d4e5f6a7b8.js"), "export const w = 1;");
+  await Bun.write(join(assets, "__bunwasm/entry-worker-a1b2c3d4e5f6a7b8.js"), "export const w = 1;");
+  await Bun.write(join(assets, "sw.js"), "self.addEventListener('fetch', () => {});");
   await Bun.write(join(assets, "unrelated.wasm"), wasm);
   await Bun.write(join(assets, program.replace("ls.wasm", "raw-only.wasm")), rawOnly);
   await Bun.write(join(assets, "programs/base/readme.txt"), "unencoded static file");
@@ -360,7 +363,7 @@ test("Worker validators identify the selected representation, not the raw file",
   expect(response.headers["etag"]).toBe(encoded.headers["etag"]);
 });
 
-test.each(["/", "/index.html", "/playground/", "/playground/index.html", "/chunks/chunk-a1.js", "/unrelated.wasm", "/programs/base/readme.txt", "/missing", program.replace("ls.wasm", "missing.wasm")])("keeps native static behavior for %s", async path => {
+test.each(["/", "/index.html", "/sw.js", "/playground/", "/playground/index.html", "/chunks/chunk-a1.js", "/entry-worker-a1b2c3d4e5f6a7b8.js", "/__bunwasm/entry-worker-a1b2c3d4e5f6a7b8.js", "/unrelated.wasm", "/programs/base/readme.txt"])("keeps native static behavior for %s", async path => {
   const [worker, native] = await Promise.all([get(path, "identity"), get(path, "identity", { origin: nativeOrigin })]);
   expect(worker.status).toBe(native.status);
   expect(worker.body).toEqual(native.body);
@@ -368,6 +371,23 @@ test.each(["/", "/index.html", "/playground/", "/playground/index.html", "/chunk
   const workerLocation = worker.headers["location"];
   const nativeLocation = native.headers["location"];
   expect(workerLocation ? new URL(workerLocation, origin).pathname : undefined).toBe(nativeLocation ? new URL(nativeLocation, nativeOrigin).pathname : undefined);
+});
+
+test.each([
+  "/chunks/missing-oldhash.js",
+  "/__bunwasm/chunks/missing-oldhash.js",
+  "/entry-worker-0000000000000000.js",
+  "/__bunwasm/entry-worker-0000000000000000.js",
+  "/missing",
+  program.replace("ls.wasm", "missing.wasm"),
+])("404 responses at %s are never cached as immutable", async path => {
+  for (const target of [origin, publicOrigin]) {
+    const response = await get(path, "identity", { origin: target });
+    expect(response.status).toBe(404);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["cross-origin-opener-policy"]).toBe("same-origin");
+    expect(response.headers["cross-origin-embedder-policy"]).toBe("require-corp");
+  }
 });
 
 test("Worker streams the supplied larger representation instead of double-compressing it", async () => {

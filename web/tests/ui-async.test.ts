@@ -709,6 +709,7 @@ test("sandbox takeover locks workspace controls and Restart reloads the saved wo
   page.fixture.fs.onOwnershipLost?.();
   expect(sandbox.failure).toBe("startup");
   expect(sandbox.status.text).toContain("Unsaved changes");
+  expect(sandbox.serverState).toEqual({ state: "down", text: "workspace open in another tab · press Reload" });
   const markup = await page.renderSandbox(sandbox);
   expect(markup).toContain('title="Open the latest saved workspace"');
   expect(markup.match(/<select[^>]*id="engine"[^>]*>/)?.[0]).toContain("disabled");
@@ -825,4 +826,36 @@ test("playground prompt-off arm skips the provider while keeping the session pro
   expect(page.promptCreates).toEqual([]);
   expect(page.sessionCreates[0]?.prompt).toBeUndefined();
   expect(page.sessionCreates[0]?.env?.PS1).toBe("$ ");
+});
+
+test("sandbox moves the preview bar to down when persistent storage startup fails with INVALID_VFS_FORMAT or a transient error", async () => {
+  const formatPage = await pageFixture();
+  const invalid = Object.assign(new Error("Existing filesystem storage is corrupt; no valid snapshot can be recovered"), { name: "VfsError", code: "INVALID_VFS_FORMAT" });
+  formatPage.fixture.fs.mkdirp = async () => { throw invalid; };
+  Reflect.set(formatPage.fixture.fs, "state", { status: "failed", error: invalid });
+  const unreadable = new formatPage.Sandbox("?mode=fast");
+  unreadable.start();
+  method<() => void>(unreadable, "terminalOpened")();
+  await turn();
+  await turn();
+  expect(unreadable.failure).toBe("storage");
+  expect(unreadable.unreadable).toBe(true);
+  expect(unreadable.serverState).toEqual({ state: "down", text: "saved workspace unreadable · press Start fresh" });
+  const unreadableMarkup = await formatPage.renderSandbox(unreadable);
+  expect(unreadableMarkup).toContain('id="start-fresh"');
+  expect(unreadableMarkup).toContain('data-state="down"');
+  expect(unreadableMarkup).not.toContain("starting dev server");
+
+  const transientPage = await pageFixture();
+  transientPage.boundary.openStorage = async () => { throw new Error("IndexedDB temporarily unavailable"); };
+  const transient = new transientPage.Sandbox("?mode=fast");
+  transient.start();
+  await turn();
+  await turn();
+  expect(transient.failure).toBe("storage");
+  expect(transient.unreadable).toBe(false);
+  expect(transient.serverState).toEqual({ state: "down", text: "storage unavailable · press Retry" });
+  const transientMarkup = await transientPage.renderSandbox(transient);
+  expect(transientMarkup).toContain('data-state="down"');
+  expect(transientMarkup).not.toContain("starting dev server");
 });

@@ -3,7 +3,7 @@ import { evictIdle, type EvictionDependencies, type EvictionReport } from "./wor
 import { WorkspaceIndex } from "./workspace-index";
 import { IDLE_INSTALLS_KEPT, isStorageFull, regenerableOutputs, StorageRecovery } from "./workspace-policy";
 import { restoreSource } from "./workspace-restore";
-import { templateFiles } from "./template";
+import { templateFiles, templateUrl } from "./template";
 import { templates } from "./template-catalog";
 import { measureStartup } from "../../web/src/startup";
 
@@ -70,7 +70,7 @@ async function openIndex(): Promise<WorkspaceIndex> {
 async function preservationPolicy(templateId: string): Promise<{ outputs: readonly string[]; templatePaths: ReadonlySet<string> }> {
   const template = templates.find(template => template.id === templateId);
   if (!template) throw new Error("Unknown sandbox template");
-  const response = await fetch(`./${template.file}`);
+  const response = await fetch(templateUrl(template.file));
   if (!response.ok) throw new Error(`${template.file}: HTTP ${response.status}`);
   const files = templateFiles(await response.text());
   if (!files) throw new Error(`${template.file}: invalid project files`);

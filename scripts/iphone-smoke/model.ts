@@ -15,6 +15,14 @@ export interface SmokeCase {
   failures: Failure[];
   attempt: Attempt | null;
 }
+export interface SandboxRootOutcome {
+  url: string;
+  status: "pass" | "fail";
+  initialMs?: number;
+  reloadMs?: number;
+  databases?: string[];
+  error?: string;
+}
 export interface SmokeReport {
   schema: 1;
   kind: "manual-iphone-smoke";
@@ -26,6 +34,8 @@ export interface SmokeReport {
   createdAt: string;
   finishedAt: string | null;
   cases: SmokeCase[];
+  /** Live mode: `/` root sandbox on default persistent IndexedDB storage plus full reopen/reload. */
+  sandboxRoot?: SandboxRootOutcome;
   failures: Failure[];
   resources: { owned: string[]; external: string[] };
   /** Live mode: the run's live requests repeated against the real origin. */

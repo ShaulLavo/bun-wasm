@@ -7,8 +7,10 @@ import { projectTemplates } from "../web/src/playground/project-templates";
 
 const origin = "https://bun.sprockt.dev";
 const dist = join(import.meta.dir, "dist");
+const hashedEntries = Array.from(new Bun.Glob("{,__bunwasm/,playground/,playground/__bunwasm/}entry-*").scanSync(dist)).sort();
 const files = ["index.html", "main.js", "worker.js", "sw.js", "playground/index.html", "playground/main.js",
   "deployment.json", "engine-builds.json", "playground/engine-builds.json"].concat(
+  hashedEntries,
   templates.map(template => template.file), projectTemplates.map(template => `playground/${template.file}`));
 const deadline = Date.now() + 120_000;
 for (const file of files) {

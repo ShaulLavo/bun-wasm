@@ -14,10 +14,11 @@ import { templateProfile, type PlaygroundProfile } from "../../web/src/playgroun
 import { verifyMacAdmission } from "./admission";
 import { safariTabJournal } from "./tab-journal";
 import { deviceUDID, phaseTimeoutMs, installTimeoutMs, type SmokeOptions } from "./options";
-import { StepFailure, completedCase, pendingCase, unsafeToContinue, type SmokeCase, type SmokeReport } from "./model";
+import { StepFailure, completedCase, pendingCase, unsafeToContinue, type SandboxRootOutcome, type SmokeCase, type SmokeReport } from "./model";
 import { smokeCases } from "./cases";
 import { compareLiveOrigin, liveFetch, liveSource, withLiveRoot, type LiveFetch } from "./live";
 import { livePlaygroundPath } from "../goals-matrix/iphone-live-proxy";
+import { runIphoneSandboxRoot } from "./sandbox-root";
 
 type Selection = { box: Box; framework: Framework; profile: PlaygroundProfile };
 type Source = NonNullable<SmokeReport["source"]>;
@@ -30,6 +31,8 @@ interface SmokeIO {
   verify(config: SmokeOptions, programs: readonly Selection[], source: Source, get: LiveFetch): Promise<void>;
   /** Live mode: what the Mac proxy received from the live origin during the run. */
   served(config: SmokeOptions): Promise<unknown>;
+  /** Live mode: root `/` sandbox persistent-FS + reload verification. */
+  sandboxRoot(config: SmokeOptions, beforeNative: (signal: AbortSignal) => Promise<unknown>, signal?: AbortSignal): Promise<SandboxRootOutcome>;
 }
 function select(box: Box): Selection {
   const framework = frameworks.find(item => item.id === box.framework);
@@ -94,10 +97,22 @@ const defaultIO: SmokeIO = {
   transport: async (config, box, beforeNative) => createIphoneTransport({ control: config.control, agent: config.agent, deviceUDID,
     timeoutMs: phaseTimeoutMs, cleanupTimeoutMs, beforeNative, tabJournal: safariTabJournal(),
     saveNative: orderedAppender(join(config.matrix.output, "logs", `${box.framework}-${box.engine}.native.jsonl`)) }),
+  sandboxRoot: (config, beforeNative, signal) => runIphoneSandboxRoot(
+    () => createIphoneTransport({
+      control: config.control, agent: config.agent, deviceUDID,
+      timeoutMs: phaseTimeoutMs, cleanupTimeoutMs, beforeNative, tabJournal: safariTabJournal(),
+      saveNative: orderedAppender(join(config.matrix.output, "logs", "sandbox-root.native.jsonl")),
+    }),
+    signal,
+  ),
 };
 async function save(report: SmokeReport): Promise<void> {
-  report.status = report.failures.length === 0 && report.cases.every(result => result.status === "pass") ? "green" : "red";
-  report.failedPhase = report.cases.flatMap(result => result.failures)[0]?.phase ?? report.failures[0]?.phase ?? null;
+  const sandboxOk = report.sandboxRoot === undefined || report.sandboxRoot.status === "pass";
+  report.status = report.failures.length === 0 && sandboxOk && report.cases.every(result => result.status === "pass") ? "green" : "red";
+  report.failedPhase = report.cases.flatMap(result => result.failures)[0]?.phase
+    ?? (report.sandboxRoot?.status === "fail" ? "sandbox-root" : null)
+    ?? report.failures[0]?.phase
+    ?? null;
   const temporary = report.reportPath + ".tmp";
   await Bun.write(temporary, JSON.stringify(report, null, 2) + "\n");
   await rename(temporary, report.reportPath);
@@ -123,6 +138,12 @@ export async function runSmoke(config: SmokeOptions, overrides: Partial<SmokeIO>
       throw new StepFailure("mac-admission", error instanceof Error ? error.message : String(error));
     });
     await cases(config, report, io, ticket, selections, signal);
+    signal?.throwIfAborted();
+    if (config.target.mode === "live" && report.cases.every(result => result.status === "pass")) {
+      await io.admission(config.thread, ticket, signal);
+      report.sandboxRoot = await io.sandboxRoot(config, nativeSignal => io.admission(config.thread, ticket, nativeSignal), signal);
+      await save(report);
+    }
     signal?.throwIfAborted();
     await io.verify(config, programs, source, io.fetch);
     signal?.throwIfAborted();

@@ -473,7 +473,7 @@ export async function registerModuleScope(): Promise<boolean> {
   const container = navigator.serviceWorker;
   if (!container) return false;
   try {
-    const registration = await container.register("./sw.js", { scope: MODULE_SCOPE });
+    const registration = await container.register("./sw.js", { scope: MODULE_SCOPE, updateViaCache: "none" });
     await activated(registration);
     return registration.active !== null;
   } catch (err) {

@@ -13,6 +13,7 @@ import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, typ
 import { createRing } from "./net/ring";
 import { SubprocessBroker, type ExecutableRegistration } from "./subprocess-broker";
 import { siblingWorkerUrl, type Preview1LauncherOptions } from "./bun-launcher.js";
+import { entryAssetUrl } from "./entry-assets.js";
 import { createNotificationBridge, type NotificationBridge } from "waffle/browser/notification-relay";
 import { createPreview1Network } from "waffle/browser/preview1-network";
 import { isToolCommand } from "./tool-command";
@@ -184,7 +185,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("waffle/fs").FilesystemIdentity } | undefined)?.filesystem;
   const pid = options.runtime.identities.pid(), job = options.runtime.identities.job();
   const memoryTelemetryId = crypto.randomUUID();
-  const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
+  const workerUrl = entryAssetUrl(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
   let notifications: NotificationBridge | undefined;
   let request: Omit<RunRequest, "controlGrant">;
   try {

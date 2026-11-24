@@ -1,5 +1,6 @@
 import type { Runtime } from "waffle";
 import { measureStartup } from "../../web/src/startup";
+import { assetBuild } from "../../web/src/startup-cache";
 
 type Filesystem = Runtime["filesystem"];
 type TemplateSources = Record<string, string>;
@@ -19,10 +20,15 @@ export function templateFiles(text: string): TemplateSources | null {
   } catch { return null; }
 }
 
+export function templateUrl(templateFile: string): string {
+  const build = assetBuild(templateFile);
+  return build ? `./${templateFile}?v=${encodeURIComponent(build)}` : `./${templateFile}`;
+}
+
 /** Fetches the template and seeds `app` with it on first use or reset. */
 export async function loadTemplate(fs: Filesystem, app: string, templateFile: string, reset = false): Promise<TemplateSources> {
   const started = performance.now();
-  const response = await fetch(`./${templateFile}`);
+  const response = await fetch(templateUrl(templateFile));
   if (!response.ok) throw new Error(`${templateFile}: HTTP ${response.status}`);
   const files = templateFiles(await response.text());
   if (!files) throw new Error(`${templateFile}: invalid project files`);
