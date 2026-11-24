@@ -534,6 +534,17 @@ test("live origin check rejects 404 responses (including conditional GET and HEA
     const check = await compareLiveOrigin(site, served, get, { requireRoot: true });
     expect(check.mismatches).toContain("/chunks/missing-cond.js: served HTTP 404");
     expect(check.mismatches).toContain("/chunks/missing-head.js: served HTTP 404");
+
+    // Conditional GET and HEAD 404s under /__preview/ stay unrecorded and do not break live-origin checks.
+    const previewServed: LiveServed[] = [];
+    const recordPreview = recordServed(previewServed);
+    for (const row of await servedFrom(get, servedPaths)) recordPreview(row);
+    const previewCond = await proxyLiveRequest(new Request("http://127.0.0.1:4100/__preview/5173/missing.js", { headers: { "if-none-match": '"etag-1"' } }), site, upstream as typeof fetch, recordPreview);
+    expect(previewCond.status).toBe(404);
+    await previewCond.arrayBuffer();
+    const previewHead = await proxyLiveRequest(new Request("http://127.0.0.1:4100/__preview/5173/missing.js", { method: "HEAD" }), site, upstream as typeof fetch, recordPreview);
+    expect(previewHead.status).toBe(404);
+    expect(await compareLiveOrigin(site, previewServed, get, { requireRoot: true })).toEqual({ checked: 3, mismatches: [] });
   });
 });
 test("sandbox-root probe and counter click succeed across distinct host and iframe realms", async () => {
