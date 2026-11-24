@@ -53,23 +53,32 @@ function makeTarGz(files: Record<string, string>): Uint8Array {
 interface LocalRegistry {
   base: string;
   dependencies: Record<string, string>;
-  readonly tarballsServed: number;
-  waitForTarball(minCount: number, timeoutMs?: number): Promise<void>;
+  readonly tarballsCompleted: number;
+  readonly heldCount: number;
+  holdAfter(completedCount: number | null): void;
+  waitForHeld(timeoutMs?: number): Promise<void>;
+  releaseHeld(): void;
   close(): Promise<void>;
 }
 
-/** Deterministic offline npm registry with 16 multi-file packages and an observable tarball signal. */
+/**
+ * Deterministic offline npm registry with 16 multi-file packages and a mid-stream hold gate.
+ * When `holdAfter(N)` is active, the first `N` tarballs complete normally (so real files are
+ * extracted into IndexedDB) while subsequent tarball responses stream half their bytes and stay
+ * open until `releaseHeld()`, guaranteeing `bun install` cannot finish before interruption.
+ */
 function startLocalRegistry(packageCount = 16): LocalRegistry {
   const packages = new Map<string, { meta: string; tgz: Uint8Array }>();
   const dependencies: Record<string, string> = {};
-  let tarballsServed = 0;
-  const waiters = new Set<{ minCount: number; resolve(): void }>();
-  const notifyTarball = () => {
-    for (const waiter of Array.from(waiters)) {
-      if (tarballsServed >= waiter.minCount) {
-        waiters.delete(waiter);
-        waiter.resolve();
-      }
+  let tarballsCompleted = 0;
+  let holdThreshold: number | null = null;
+  const heldReleases = new Set<() => void>();
+  const heldWaiters = new Set<() => void>();
+  const notifyHeld = () => {
+    if (heldReleases.size === 0) return;
+    for (const resolve of Array.from(heldWaiters)) {
+      heldWaiters.delete(resolve);
+      resolve();
     }
   };
   const corsHeaders = {
@@ -78,6 +87,28 @@ function startLocalRegistry(packageCount = 16): LocalRegistry {
     "access-control-allow-methods": "GET, HEAD, OPTIONS",
     "cross-origin-resource-policy": "cross-origin",
     "cache-control": "no-store",
+  };
+  const heldTarballStream = (bytes: Uint8Array) => {
+    const split = Math.max(1, Math.floor(bytes.byteLength / 2));
+    let releaseFn: (() => void) | undefined;
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(bytes.subarray(0, split)));
+        const release = () => {
+          heldReleases.delete(release);
+          try {
+            controller.enqueue(new Uint8Array(bytes.subarray(split)));
+            controller.close();
+          } catch { /* Stream already closed when the interrupted browser tab dropped the connection. */ }
+        };
+        releaseFn = release;
+        heldReleases.add(release);
+        notifyHeld();
+      },
+      cancel() {
+        if (releaseFn) heldReleases.delete(releaseFn);
+      },
+    });
   };
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -91,8 +122,12 @@ function startLocalRegistry(packageCount = 16): LocalRegistry {
         const name = path.slice(0, -4);
         const entry = packages.get(name);
         if (!entry) return new Response("not found", { status: 404, headers: corsHeaders });
-        tarballsServed++;
-        notifyTarball();
+        if (holdThreshold !== null && tarballsCompleted >= holdThreshold) {
+          return new Response(heldTarballStream(entry.tgz), {
+            headers: { ...corsHeaders, "content-type": "application/gzip" },
+          });
+        }
+        tarballsCompleted++;
         return new Response(new Uint8Array(entry.tgz), {
           headers: { ...corsHeaders, "content-type": "application/gzip" },
         });
@@ -131,22 +166,31 @@ function startLocalRegistry(packageCount = 16): LocalRegistry {
     });
     packages.set(name, { meta, tgz });
   }
+  const releaseHeld = () => {
+    for (const release of Array.from(heldReleases)) release();
+  };
   return {
     base,
     dependencies,
-    get tarballsServed() { return tarballsServed; },
-    waitForTarball(minCount: number, timeoutMs = 30_000): Promise<void> {
-      if (tarballsServed >= minCount) return Promise.resolve();
+    get tarballsCompleted() { return tarballsCompleted; },
+    get heldCount() { return heldReleases.size; },
+    holdAfter(completedCount: number | null) { holdThreshold = completedCount; },
+    waitForHeld(timeoutMs = 30_000): Promise<void> {
+      if (heldReleases.size > 0) return Promise.resolve();
       return new Promise((resolvePromise, reject) => {
-        const entry = { minCount, resolve: () => { clearTimeout(timer); resolvePromise(); } };
+        const done = () => { clearTimeout(timer); resolvePromise(); };
         const timer = setTimeout(() => {
-          waiters.delete(entry);
-          reject(new Error(`Expected at least ${minCount} served tarballs within ${timeoutMs} ms, observed ${tarballsServed}`));
+          heldWaiters.delete(done);
+          reject(new Error(`Expected an in-flight held tarball within ${timeoutMs} ms (completed=${tarballsCompleted})`));
         }, timeoutMs);
-        waiters.add(entry);
+        heldWaiters.add(done);
       });
     },
-    async close() { await server.stop(true); },
+    releaseHeld,
+    async close() {
+      releaseHeld();
+      await server.stop(true);
+    },
   };
 }
 
@@ -204,27 +248,26 @@ async function stressSandboxMidEdit(context: BrowserContext, sandboxOrigin: stri
       await sb.fs.flush();
     }, baseline);
 
-    // 5 consecutive hard interruptions (alternating reload and tab close+reopen) while rapid writes/flushes are in flight.
-    const delays = [0, 15, 40, 80, 150];
-    for (const [cycle, delayMs] of delays.entries()) {
-      const queued = await page.evaluate(async cycle => {
+    // 5 consecutive hard interruptions while a large write + flush batch is proved still in-flight.
+    for (let cycle = 0; cycle < 5; cycle++) {
+      const state = await page.evaluate(async cycle => {
         const sb = Reflect.get(globalThis, "sandbox");
         if (!sb?.fs) throw new Error("Missing window.sandbox.fs");
-        // Confirm the worker is actively accepting writes before launching the un-awaited burst + flush.
+        // Confirm the worker is accepting writes, then enqueue a 480 KiB write+flush batch and verify the flush is still pending.
         await sb.fs.writeFile(`/home/user/app/inflight-enter-${cycle}.txt`, `enter=${cycle}`);
-        let launched = 0;
-        for (let i = 0; i < 20; i++) {
+        let flushSettled = false;
+        const payload = `cycle=${cycle} payload=${"a".repeat(8192)}`;
+        for (let i = 0; i < 60; i++) {
           const path = `/home/user/app/stress-${cycle}-${i}.txt`;
-          void sb.fs.writeFile(path, `cycle=${cycle} item=${i} payload=${"a".repeat(2048)}`).catch(() => {});
-          if (i % 4 === 0) void sb.fs.flush(path).catch(() => {});
-          launched++;
+          void sb.fs.writeFile(path, `${i}:${payload}`).catch(() => {});
+          if (i % 10 === 0) void sb.fs.flush(path).catch(() => {});
         }
-        void sb.fs.flush().catch(() => {});
-        return launched;
+        void sb.fs.flush().then(() => { flushSettled = true; }, () => { flushSettled = true; });
+        return { flushInFlight: !flushSettled };
       }, cycle);
-      expect(queued).toBe(20);
-      if (delayMs > 0) await page.waitForTimeout(delayMs);
+      expect(state.flushInFlight).toBe(true);
 
+      // Interrupt immediately with no post-burst sleep while the flush is still open in the FS worker.
       if (cycle % 2 === 0) {
         await page.reload({ waitUntil: "domcontentloaded" });
       } else {
@@ -327,29 +370,33 @@ async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOri
       await pg.fs.flush();
     }, { base: registry.base, dependencies: registry.dependencies, baseline });
 
-    // 4 consecutive hard interruptions mid-`bun install`, each waiting for an observed tarball download before killing the page.
+    // 4 consecutive hard interruptions mid-`bun install`: real tarballs are completed and extracted while
+    // the next tarball stream is held open mid-body so `bun install` is guaranteed still in-flight at kill time.
     for (let cycle = 0; cycle < 4; cycle++) {
-      const beforeTarballs = registry.tarballsServed;
+      const beforeCompleted = registry.tarballsCompleted;
+      registry.holdAfter(beforeCompleted + 1 + cycle);
       await page.evaluate(async ({ base, dependencies }) => {
         const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
         if (!pg?.fs || !pg?.shell) throw new Error("Missing playground handle");
         await pg.fs.writeFile("/home/user/package.json", JSON.stringify({ name: "stress-install", dependencies }));
         await pg.fs.writeFile("/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(base)}\n`);
         await pg.fs.flush();
-        // Start install without awaiting; we interrupt as soon as tarballs are actively being downloaded/extracted.
         void pg.shell.submit("rm -rf node_modules bun.lock && bun install --no-cache").catch(() => {});
       }, { base: registry.base, dependencies: registry.dependencies });
 
-      await registry.waitForTarball(beforeTarballs + Math.min(1 + cycle * 2, 8), 30_000);
-      expect(registry.tarballsServed).toBeGreaterThan(beforeTarballs);
+      await registry.waitForHeld(30_000);
+      expect(registry.tarballsCompleted).toBeGreaterThan(beforeCompleted);
+      expect(registry.heldCount).toBeGreaterThan(0);
       await interruptPage(cycle);
+      registry.releaseHeld();
 
       await waitForPlaygroundReady(page, `after interrupted install cycle ${cycle}`);
       expect(await readPlaygroundFile(page, "/home/user/.baseline-install.txt")).toBe(baseline);
       expect(errors).toEqual([]);
     }
 
-    // Final clean install must exit 0, flush, and survive reload on the same persistent workspace.
+    // Release hold gate; final clean install must exit 0, flush, and survive reload on the same workspace.
+    registry.holdAfter(null);
     const finalExit = await page.evaluate(async ({ base, dependencies }) => {
       const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
       if (!pg?.fs || !pg?.shell) throw new Error("Missing playground handle");
@@ -373,8 +420,8 @@ async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOri
   }
 }
 
-async function stressOpfsMidWrite(context: BrowserContext, scratchDir: string): Promise<void> {
-  const out = join(scratchDir, "opfs-dist");
+async function stressNativeCommitBoundaries(context: BrowserContext, scratchDir: string): Promise<void> {
+  const out = join(scratchDir, "persistence-dist");
   const built = await Bun.build(browserBuildConfig([
     resolve(import.meta.dir, "../web/tests/persistence-browser-main.ts"),
     resolve(import.meta.dir, "../web/src/fs-worker.ts"),
@@ -399,7 +446,7 @@ async function stressOpfsMidWrite(context: BrowserContext, scratchDir: string): 
   });
 
   const errors: string[] = [];
-  const dbsToDelete: string[] = [];
+  const dbsToDelete: { name: string; storage: "indexeddb" | "opfs" }[] = [];
   let page: Page | undefined;
 
   try {
@@ -411,42 +458,53 @@ async function stressOpfsMidWrite(context: BrowserContext, scratchDir: string): 
       return next;
     };
 
-    // 4 deterministic OPFS native partial-write interruptions alternating payload and snapshot boundaries.
-    for (const [cycle, boundary] of (["payload", "snapshot", "payload", "snapshot"] as const).entries()) {
-      const db = `bunwasm-opfs-stress-${cycle}-${crypto.randomUUID()}`;
-      dbsToDelete.push(db);
-      page = await openHarness();
-      const old = await page.evaluate(async dbName => {
-        const h = Reflect.get(globalThis, "persistenceHarness");
-        await h.direct("open", { name: dbName, storage: "opfs" });
-        return h.direct("seedInterrupted");
-      }, db);
+    // Deterministic native mid-commit hard closes for BOTH IndexedDB (transaction boundary) and OPFS (partial payload/snapshot writes).
+    const cases: { storage: "indexeddb" | "opfs"; boundary: "transaction" | "payload" | "snapshot" }[] = [
+      { storage: "indexeddb", boundary: "transaction" },
+      { storage: "indexeddb", boundary: "transaction" },
+      { storage: "indexeddb", boundary: "transaction" },
+      { storage: "opfs", boundary: "payload" },
+      { storage: "opfs", boundary: "snapshot" },
+      { storage: "opfs", boundary: "payload" },
+      { storage: "opfs", boundary: "snapshot" },
+    ];
 
-      // Start a real multi-megabyte OPFS commit and wait for Waffle's native partial-write boundary signal.
+    for (const [cycle, { storage, boundary }] of cases.entries()) {
+      const db = `bunwasm-commit-stress-${storage}-${cycle}-${crypto.randomUUID()}`;
+      dbsToDelete.push({ name: db, storage });
+      page = await openHarness();
+      const old = await page.evaluate(async ({ dbName, storage }) => {
+        const h = Reflect.get(globalThis, "persistenceHarness");
+        await h.direct("open", { name: dbName, storage });
+        return h.direct("seedInterrupted");
+      }, { dbName: db, storage });
+
       await page.evaluate(b => {
         const h = Reflect.get(globalThis, "persistenceHarness");
         void h.direct("interruptCommit", b).catch(() => {});
       }, boundary);
-      await page.waitForFunction(() => {
+      await page.waitForFunction(requirePartial => {
         const h = Reflect.get(globalThis, "persistenceHarness");
-        return Boolean(h?.state?.commitStarted && h?.state?.partialWrite === true);
-      }, undefined, { timeout: 30_000 });
-      const observed = await page.evaluate(() => {
-        const state = Reflect.get(globalThis, "persistenceHarness").state;
-        return { boundary: state.boundary, partialWrite: state.partialWrite };
-      });
-      expect(observed).toEqual({ boundary, partialWrite: true });
+        return Boolean(h?.state?.commitStarted && (!requirePartial || h?.state?.partialWrite === true));
+      }, storage === "opfs", { timeout: 30_000 });
+      if (storage === "opfs") {
+        const observed = await page.evaluate(() => {
+          const state = Reflect.get(globalThis, "persistenceHarness").state;
+          return { boundary: state.boundary, partialWrite: state.partialWrite };
+        });
+        expect(observed).toEqual({ boundary, partialWrite: true });
+      }
 
-      // Hard-close the page at the exact partial native write boundary.
+      // Hard-close the page at the live native commit boundary.
       await page.close();
       page = await openHarness();
-      const recovered = await page.evaluate(async dbName => {
+      const recovered = await page.evaluate(async ({ dbName, storage }) => {
         const h = Reflect.get(globalThis, "persistenceHarness");
-        await h.direct("open", { name: dbName, storage: "opfs" });
+        await h.direct("open", { name: dbName, storage });
         const result = await h.direct("inspectInterrupted");
         await h.destroy();
         return result;
-      }, db);
+      }, { dbName: db, storage });
       expect(["old", "new"]).toContain(recovered.state);
       if (recovered.state === "old") expect(recovered.metadata).toEqual(old.metadata);
       expect(errors).toEqual([]);
@@ -456,7 +514,7 @@ async function stressOpfsMidWrite(context: BrowserContext, scratchDir: string): 
 
     // Final clean OPFS write + flush + reload confirms persistent OPFS remains healthy and durable.
     const cleanDb = `bunwasm-opfs-final-${crypto.randomUUID()}`;
-    dbsToDelete.push(cleanDb);
+    dbsToDelete.push({ name: cleanDb, storage: "opfs" });
     const marker = `opfs-final-${crypto.randomUUID()}`;
     page = await openHarness();
     await page.evaluate(async ({ dbName, marker }) => {
@@ -478,8 +536,8 @@ async function stressOpfsMidWrite(context: BrowserContext, scratchDir: string): 
     expect(finalFile).toBeDefined();
     expect(new TextDecoder().decode(Uint8Array.from(finalFile!.bytes))).toBe(marker);
     expect(errors).toEqual([]);
-    for (const dbName of dbsToDelete) {
-      await page.evaluate(name => Reflect.get(globalThis, "persistenceHarness").deleteDatabase(name, "opfs"), dbName).catch(() => {});
+    for (const item of dbsToDelete) {
+      await page.evaluate(({ name, storage }) => Reflect.get(globalThis, "persistenceHarness").deleteDatabase(name, storage), item).catch(() => {});
     }
   } finally {
     await page?.close().catch(() => {});
@@ -542,7 +600,7 @@ for (const browserName of browsers) {
 
       await stressSandboxMidEdit(context, sandboxServer.origin);
       await stressPlaygroundMidInstall(context, playgroundServer.origin);
-      await stressOpfsMidWrite(context, scratch);
+      await stressNativeCommitBoundaries(context, scratch);
 
       expect(verifySite(siteDir)).toEqual(before);
     } finally {

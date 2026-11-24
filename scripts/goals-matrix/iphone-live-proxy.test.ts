@@ -114,10 +114,10 @@ test("records GET/HEAD asset errors while skipping POST, preview errors, and Clo
   const missingGet = await proxyLiveRequest(new Request(loopback + "/chunks/missing-get.js"), site, upstream, recorded.record);
   expect(missingGet.status).toBe(404);
   await missingGet.text();
+  expect(await recorded.next).toMatchObject({ url: "/chunks/missing-get.js", status: 404, sha256: decodedSha256(new TextEncoder().encode("not found"), null) });
   const missingHead = await proxyLiveRequest(new Request(loopback + "/chunks/missing-head.js", { method: "HEAD" }), site, upstream, recorded.record);
   expect(missingHead.status).toBe(404);
-  await Bun.sleep(10);
+  expect((await missingHead.bytes()).byteLength).toBe(0);
   expect(recorded.rows.map(row => row.url)).toEqual(["/chunks/missing-get.js", "/chunks/missing-head.js"]);
-  expect(recorded.rows[0]?.sha256).toBe(decodedSha256(new TextEncoder().encode("not found"), null));
   expect(recorded.rows[1]?.sha256).toBeNull();
 });

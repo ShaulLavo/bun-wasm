@@ -200,7 +200,7 @@ export async function disposePlayground(transport: ScopedTransport): Promise<voi
   await transport.useHost();
   await transport.evaluate(expression(disposeOwnedPlayground, undefined));
 }
-async function clearOwnedWorkspace(template: string): Promise<{ deleted: string }> {
+async function clearOwnedWorkspace(input: { template: string; timeoutMs: number }): Promise<{ deleted: string }> {
   if (typeof playground !== "undefined") {
     const outcomes = await Promise.allSettled([
       Promise.resolve().then(() => playground.runtime.dispose()),
@@ -209,10 +209,10 @@ async function clearOwnedWorkspace(template: string): Promise<{ deleted: string 
     const failures = outcomes.filter(outcome => outcome.status === "rejected").map(outcome => outcome.reason);
     if (failures.length) throw new AggregateError(failures, failures.map(String).join("; "));
   }
-  const name = `bun-wasm-workspace-${template}`;
+  const name = `bun-wasm-workspace-${input.template}`;
   await new Promise<void>((resolve, reject) => {
     let blocked = false;
-    const timer = setTimeout(() => reject(new Error(blocked ? `Deleting workspace ${name} stayed blocked` : `Deleting workspace ${name} timed out`)), 3000);
+    const timer = setTimeout(() => reject(new Error(blocked ? `Deleting workspace ${name} stayed blocked` : `Deleting workspace ${name} timed out`)), input.timeoutMs);
     const finish = (error?: unknown) => {
       clearTimeout(timer);
       if (error) reject(error instanceof Error ? error : new Error(String(error)));
@@ -225,9 +225,9 @@ async function clearOwnedWorkspace(template: string): Promise<{ deleted: string 
   });
   return { deleted: name };
 }
-export async function clearPersistentWorkspace(transport: ScopedTransport, template: string): Promise<void> {
+export async function clearPersistentWorkspace(transport: ScopedTransport, template: string, timeoutMs = 3000): Promise<void> {
   await transport.useHost();
-  await transport.evaluate(expression(clearOwnedWorkspace, template));
+  await transport.evaluate(expression(clearOwnedWorkspace, { template, timeoutMs }));
 }
 function rendered(input: { selector: string; text: string }): { text: string; matched: boolean } {
   const text = document.querySelector(input.selector)?.textContent ?? "";
