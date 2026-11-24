@@ -14,7 +14,7 @@ import type { Run, RunHooks, RunOptions, RunResult } from "../../web/src/runner"
 import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "../../web/src/shared-fs";
 import { START_FRESH_BUSY, startFresh, unreadableWorkspace } from "../../web/src/start-fresh";
 import { errorText, measureStartup } from "../../web/src/startup";
-import { entryAssetUrl } from "../../web/src/entry-assets";
+import { entryAssetName, entryAssetUrl } from "../../web/src/entry-assets";
 import { openTerminal } from "../../web/src/terminal-mount";
 import { linkLocalUrls } from "../../web/src/terminal-links";
 import { Editor } from "./editor";
@@ -371,17 +371,20 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private construct(): Workspace {
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
+    const fsWorker = entryAssetName("fs-worker.js");
     const runtime = createRuntime({
-      filesystem: { mode, name: workspaceName(this.template), workerURL: entryAssetUrl("./fs-worker.js", location.href) },
+      filesystem: fsWorker !== "fs-worker.js"
+        ? { mode, name: workspaceName(this.template), workerURL: entryAssetUrl("./fs-worker.js") }
+        : { mode, name: workspaceName(this.template) },
       memoryGroups: memoryGroupPolicy(this.engine, navigator.userAgent),
     });
     const sharedObjects = installBunSharedObjects(runtime);
     addEventListener("pagehide", (event: PageTransitionEvent) => { if (!event.persisted) sharedObjects.close(); });
     const fs = runtime.filesystem;
     const browserPrograms = new BrowserPrograms(runtime, {
-      worker: entryAssetUrl("./preview1-worker.js", location.href),
+      worker: entryAssetUrl("./preview1-worker.js"),
       shell: new URL("./programs/shell-engine.wasm", location.href),
-      shellWorker: entryAssetUrl("./shell-worker.js", location.href),
+      shellWorker: entryAssetUrl("./shell-worker.js"),
     });
     addEventListener("pagehide", (event: PageTransitionEvent) => {
       if (event.persisted) return;

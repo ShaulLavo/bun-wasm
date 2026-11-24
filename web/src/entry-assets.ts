@@ -12,7 +12,7 @@ export function entryAssetName(name: string): string {
   return typeof value === "string" && ENTRY_ASSET_PATTERN.test(value) ? value : name;
 }
 
-export function entryAssetUrl(path: string, base: string = location.href): URL {
+export function entryAssetUrl(path: string, base: string = globalThis.location?.href ?? import.meta.url): URL {
   const slash = path.lastIndexOf("/");
   const dir = slash >= 0 ? path.slice(0, slash + 1) : "./";
   const file = slash >= 0 ? path.slice(slash + 1) : path;

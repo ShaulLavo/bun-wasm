@@ -185,7 +185,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("waffle/fs").FilesystemIdentity } | undefined)?.filesystem;
   const pid = options.runtime.identities.pid(), job = options.runtime.identities.job();
   const memoryTelemetryId = crypto.randomUUID();
-  const workerUrl = entryAssetUrl(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
+  const workerUrl = entryAssetUrl(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js").href;
   let notifications: NotificationBridge | undefined;
   let request: Omit<RunRequest, "controlGrant">;
   try {
