@@ -32,11 +32,16 @@ const previews = createPreviewServiceWorker({
     headers.set("cross-origin-opener-policy", "same-origin");
     return new Response(injectSocket(response.body, port), { status: response.status, statusText: response.statusText, headers });
   },
-  unavailableResponse: port => text(502, `No bun.wasm server is listening on port ${port}.\nStart one in the playground (Bun.serve), then reload this page.\n`),
-  serverErrorResponse: message => text(502, `bun.wasm server error: ${message}\n`),
+  unavailableResponse: port => text(502, `No bun.wasm server is listening on port ${port}.\nStart one in the playground (Bun.serve), then reload this page.\n`, true),
+  serverErrorResponse: message => text(502, `bun.wasm server error: ${message}\n`, true),
   unusableResponse: (status, error) => text(502, `bun.wasm server sent an unusable response (status ${status}): ${String(error)}\n`),
 });
-const navigations = previewNavigations({ scope: sw.registration.scope, clients: sw.clients, fetch: (request, clientId) => previews.fetch(request, clientId) ?? fetch(request) });
+const navigations = previewNavigations({
+  scope: sw.registration.scope,
+  clients: sw.clients,
+  fetch: (request, clientId) => previews.fetch(request, clientId) ?? fetch(request),
+  transientRetryMs: 2000,
+});
 
 sw.addEventListener("install", () => void sw.skipWaiting());
 sw.addEventListener("activate", event => event.waitUntil(sw.clients.claim()));
@@ -74,8 +79,15 @@ async function moduleScope(request: Request, rest: string): Promise<Response> {
   return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers });
 }
 
-function text(status: number, body: string): Response {
-  return new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+function text(status: number, body: string, transient = false): Response {
+  const headers: Record<string, string> = {
+    "content-type": "text/plain; charset=utf-8",
+    "cache-control": "no-store",
+    "cross-origin-embedder-policy": "require-corp",
+    "cross-origin-resource-policy": "same-origin",
+  };
+  if (transient) headers["x-bun-preview-transient"] = "1";
+  return new Response(body, { status, headers });
 }
 
 function injectSocket(stream: ReadableStream<Uint8Array>, port: number): ReadableStream<Uint8Array> {

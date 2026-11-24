@@ -6,7 +6,7 @@ import { finish, type Attempt, type Cell, type Phase, type PhaseResult } from ".
 import { scoped, type ScopedTransport, type Transport } from "./transport";
 import { admit, awaitWithin, Scope, type Admission } from "./scope";
 import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
-import { checkClick, command, disposePlayground, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
+import { checkClick, clearPersistentWorkspace, command, disposePlayground, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
 import { bounded } from "./bounded";
 import { NextBuildObserver, closeNextBuildObserver, retainNextBuildObservation, type NextBuildObservation } from "./next-build-observer";
 export { bounded } from "./bounded";
@@ -25,6 +25,8 @@ export interface Execution {
   nextBuildObservation?: (value: NextBuildObservation) => void;
   /** Runs after the playground is ready, inside the startup phase and its admission. A rejection fails startup, so install never runs. */
   observeStartup?: (page: ScopedTransport, admission: Admission) => Promise<void>;
+  /** Dispose and delete the template's IndexedDB workspace before closing a shared browser profile (e.g. iPhone Safari). */
+  clearPersistentWorkspace?: boolean;
 }
 type TerminalCapture = { status: "observed"; text: string } | { status: "unavailable"; reason: string };
 type LogObservation = { terminal: TerminalCapture; diagnostic: string };
@@ -219,6 +221,13 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
   try { await observation.run(guard => saveFinalLog(transport, options, results, failureLog, guard)); }
   catch { /* Optional logging cannot determine the owned cleanup outcome. */ }
   finally { observation.close(); handoff.close(); }
+  const started = results.some(result => result.phase === "startup" && result.status === "pass");
+  if (options.clearPersistentWorkspace && started) {
+    const reset = Scope.open(4000, admission);
+    try { await reset.run(guard => clearPersistentWorkspace(scoped(transport, guard), options.framework.template)); }
+    catch (error) { errors.push(error); }
+    finally { reset.close(); }
+  }
   let evidence: unknown;
   try { evidence = await awaitWithin(close(admit(admission)), admission); }
   catch (error) { errors.push(error); }

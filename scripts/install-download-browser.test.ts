@@ -43,7 +43,7 @@ async function scenario(browser: Awaited<ReturnType<typeof chromium.launch>>, ur
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
-    assert.match(await openPlaygroundPage(page, `${url}?engine=browser&prompt=off&mode=memory`), /ready/);
+    assert.match(await openPlaygroundPage(page, `${url}?engine=browser&prompt=off`), /ready/);
     await writeFile(page, "/home/user/package.json", JSON.stringify({ name: "fixture", dependencies: registry.dependencies }));
     await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);
     const result = await run(page, stage === "metadata" ? "bun install --lockfile-only" : "bun install", 30000);

@@ -200,6 +200,35 @@ export async function disposePlayground(transport: ScopedTransport): Promise<voi
   await transport.useHost();
   await transport.evaluate(expression(disposeOwnedPlayground, undefined));
 }
+async function clearOwnedWorkspace(input: { template: string; timeoutMs: number }): Promise<{ deleted: string }> {
+  if (typeof playground !== "undefined") {
+    const outcomes = await Promise.allSettled([
+      Promise.resolve().then(() => playground.runtime.dispose()),
+      Promise.resolve().then(() => playground.shell.dispose()),
+    ]);
+    const failures = outcomes.filter(outcome => outcome.status === "rejected").map(outcome => outcome.reason);
+    if (failures.length) throw new AggregateError(failures, failures.map(String).join("; "));
+  }
+  const name = `bun-wasm-workspace-${input.template}`;
+  await new Promise<void>((resolve, reject) => {
+    let blocked = false;
+    const timer = setTimeout(() => reject(new Error(blocked ? `Deleting workspace ${name} stayed blocked` : `Deleting workspace ${name} timed out`)), input.timeoutMs);
+    const finish = (error?: unknown) => {
+      clearTimeout(timer);
+      if (error) reject(error instanceof Error ? error : new Error(String(error)));
+      else resolve();
+    };
+    const request = indexedDB.deleteDatabase(name);
+    request.onsuccess = () => finish();
+    request.onerror = () => finish(request.error ?? new Error(`Failed to delete workspace ${name}`));
+    request.onblocked = () => { blocked = true; };
+  });
+  return { deleted: name };
+}
+export async function clearPersistentWorkspace(transport: ScopedTransport, template: string, timeoutMs = 3000): Promise<void> {
+  await transport.useHost();
+  await transport.evaluate(expression(clearOwnedWorkspace, { template, timeoutMs }));
+}
 function rendered(input: { selector: string; text: string }): { text: string; matched: boolean } {
   const text = document.querySelector(input.selector)?.textContent ?? "";
   return { text, matched: text.trim() === input.text };

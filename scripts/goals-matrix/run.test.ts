@@ -48,7 +48,100 @@ test("React Router acceptance opens origin-root previews so server and browser r
   expect(url.searchParams.has("root-previews")).toBe(true);
   expect(url.searchParams.get("template")).toBe(framework.template);
   expect(url.searchParams.get("engine")).toBe("browser");
-  expect(url.searchParams.get("mode")).toBe("memory");
+  expect(url.searchParams.get("mode")).toBeNull();
+  const memory = new URL(playgroundURL("http://127.0.0.1:4173/", framework, "browser", undefined, "memory"));
+  expect(memory.searchParams.get("mode")).toBe("memory");
+});
+
+test("clearPersistentWorkspace serializes self-contained disposal and requires confirmed IndexedDB deletion", async () => {
+  const { createContext, runInContext } = await import("node:vm");
+  const { clearPersistentWorkspace } = await import("./playground");
+  const { executeAttempt } = await import("./execute");
+  const { withPlayground } = await import("./test-fixture");
+  const events: string[] = [];
+  const makeTransport = (outcome: "success" | "error" | "blocked") => {
+    const ctx = createContext({
+      setTimeout, clearTimeout, Promise, AggregateError, Error,
+      playground: {
+        runtime: { async dispose() { events.push("runtime.dispose"); } },
+        shell: { async dispose() { events.push("shell.dispose"); } },
+      },
+      indexedDB: {
+        deleteDatabase(name: string) {
+          events.push(`delete:${name}`);
+          const req: { onsuccess: (() => void) | null; onerror: (() => void) | null; onblocked: (() => void) | null; error: Error | null } = { onsuccess: null, onerror: null, onblocked: null, error: null };
+          queueMicrotask(() => {
+            if (outcome === "success") req.onsuccess?.();
+            else if (outcome === "blocked") req.onblocked?.();
+            else { req.error = new Error("delete refused"); req.onerror?.(); }
+          });
+          return req;
+        },
+      },
+    });
+    return {
+      async useHost() {},
+      async evaluate<T>(source: string): Promise<T> { return await runInContext(source, ctx) as T; },
+    } as Parameters<typeof clearPersistentWorkspace>[0];
+  };
+  await clearPersistentWorkspace(makeTransport("success"), "vite-react", 50);
+  expect(events).toEqual(["runtime.dispose", "shell.dispose", "delete:bun-wasm-workspace-vite-react"]);
+  await expect(clearPersistentWorkspace(makeTransport("error"), "vite-react", 50)).rejects.toThrow("delete refused");
+  await expect(clearPersistentWorkspace(makeTransport("blocked"), "vite-react", 25)).rejects.toThrow("stayed blocked");
+
+  // Owned cleanup still closes the tab after a workspace reset failure, and skips reset when startup failed.
+  const framework = frameworks.find(item => item.id === "vite-react")!;
+  await withPlayground(framework, 0, async base => {
+    let closed = false;
+    let resetAttempted = false;
+    const attempt = await executeAttempt({
+      box: { framework: "vite-react", browser: "iphone-safari", engine: "browser" },
+      framework,
+      url: "http://fixture/?engine=browser",
+      timeoutMs: 1000,
+      clearPersistentWorkspace: true,
+      createTransport: async () => ({
+        ...base,
+        async evaluate(source, admission, options) {
+          if (source.includes("deleteDatabase")) {
+            resetAttempted = true;
+            throw new Error("delete failed in Safari");
+          }
+          return base.evaluate(source, admission, options);
+        },
+        async cleanup() { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; },
+      }),
+      saveLog: async () => {},
+    }, "click");
+    expect(resetAttempted).toBe(true);
+    expect(closed).toBe(true);
+    expect(attempt.phases.find(p => p.phase === "cleanup")).toMatchObject({ status: "fail", error: expect.stringContaining("delete failed in Safari") });
+  });
+
+  await withPlayground(framework, 0, async base => {
+    let closed = false;
+    let resetAttempted = false;
+    const attempt = await executeAttempt({
+      box: { framework: "vite-react", browser: "iphone-safari", engine: "browser" },
+      framework,
+      url: "http://fixture/?engine=browser",
+      timeoutMs: 1000,
+      clearPersistentWorkspace: true,
+      createTransport: async () => ({
+        ...base,
+        async navigate() { throw new Error("device failed before page load"); },
+        async evaluate(source, admission, options) {
+          if (source.includes("deleteDatabase")) resetAttempted = true;
+          return base.evaluate(source, admission, options);
+        },
+        async cleanup() { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; },
+      }),
+      saveLog: async () => {},
+    }, "click");
+    expect(resetAttempted).toBe(false);
+    expect(closed).toBe(true);
+    expect(attempt.phases.find(p => p.phase === "cleanup")?.status).toBe("pass");
+  });
 });
 
 const loopControls: { browser: Browser; cleanupFails: boolean; firstError: string; stop: boolean; visibleIphone?: boolean; timeoutMs?: number }[] = [

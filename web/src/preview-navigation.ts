@@ -2,10 +2,14 @@ interface NavigationOptions {
   scope: string;
   clients: { get(id: string): Promise<{ readonly url: string } | undefined> };
   fetch(request: Request, clientId: string): Promise<Response>;
+  /** Retry transient 502 preview-SW responses up to this many ms while the loading client stays open. */
+  transientRetryMs?: number;
+  /** Backoff steps (ms) between transient retries. */
+  retryDelaysMs?: readonly number[];
 }
 
 type Reply = { kind: "waiting"; request: Request; clientId: string } | { kind: "pending" } | { kind: "ready"; response: Response } | { kind: "failed"; error: unknown };
-interface Navigation { url: string; loadingURL: string; clientId: string; document: number; reply: Reply }
+interface Navigation { url: string; loadingURL: string; clientId: string; document: number; reply: Reply; abortWait?: () => void }
 
 /** A loading document keeps a slow guest request outside WebKit's fetch-head watchdog. */
 export function previewNavigations(options: NavigationOptions) {
@@ -30,6 +34,8 @@ export function previewNavigations(options: NavigationOptions) {
 
   function cancel(id: string, navigation: Navigation): void {
     pending.delete(id);
+    navigation.abortWait?.();
+    navigation.abortWait = undefined;
     if (navigation.reply.kind === "ready") cancelBody(navigation.reply.response);
   }
 
@@ -55,18 +61,62 @@ export function previewNavigations(options: NavigationOptions) {
     });
   }
 
+  function isTransient(response: Response): boolean {
+    return response.status === 502 && response.headers.get("x-bun-preview-transient") === "1";
+  }
+
+  function waitDelay(navigation: Navigation, ms: number): Promise<void> {
+    return new Promise(resolve => {
+      const done = () => {
+        clearTimeout(timer);
+        if (navigation.abortWait === done) navigation.abortWait = undefined;
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      navigation.abortWait = done;
+    });
+  }
+
   function start(id: string, navigation: Navigation): void {
     if (navigation.reply.kind !== "waiting") return;
     const { request, clientId } = navigation.reply;
     navigation.reply = { kind: "pending" };
-    void options.fetch(request, clientId).then(async response => {
-      let live: boolean;
-      try { live = await hasLoadingClient(navigation); }
-      catch (error) { cancelBody(response); throw error; }
-      if (pending.get(id) !== navigation) { cancelBody(response); return; }
-      if (!live) { pending.delete(id); cancelBody(response); return; }
-      navigation.reply = { kind: "ready", response };
-    }).catch(error => { navigation.reply = { kind: "failed", error }; });
+    const budget = options.transientRetryMs ?? 0;
+    const delays = options.retryDelaysMs ?? [50, 100, 150, 200, 250];
+    const deadline = budget > 0 ? Date.now() + budget : 0;
+    void (async () => {
+      let attempt = 0;
+      while (true) {
+        const response = await options.fetch(request, clientId);
+        let live: boolean;
+        try { live = await hasLoadingClient(navigation); }
+        catch (error) { cancelBody(response); throw error; }
+        if (pending.get(id) !== navigation) { cancelBody(response); return; }
+        if (!live) { pending.delete(id); cancelBody(response); return; }
+        const remaining = deadline - Date.now();
+        if (budget > 0 && remaining > 0 && isTransient(response)) {
+          const delay = Math.min(remaining, delays[Math.min(attempt, delays.length - 1)] ?? 250);
+          attempt++;
+          await waitDelay(navigation, delay);
+          if (pending.get(id) !== navigation) { cancelBody(response); return; }
+          let stillLive: boolean;
+          try { stillLive = await hasLoadingClient(navigation); }
+          catch (error) { cancelBody(response); throw error; }
+          if (pending.get(id) !== navigation) { cancelBody(response); return; }
+          if (!stillLive) { pending.delete(id); cancelBody(response); return; }
+          if (Date.now() >= deadline) {
+            navigation.reply = { kind: "ready", response };
+            return;
+          }
+          cancelBody(response);
+          continue;
+        }
+        navigation.reply = { kind: "ready", response };
+        return;
+      }
+    })().catch(error => {
+      if (pending.get(id) === navigation) navigation.reply = { kind: "failed", error };
+    });
   }
 
   function cancelBody(response: Response): void { void response.body?.cancel().catch(() => {}); }

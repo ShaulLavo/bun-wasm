@@ -42,6 +42,7 @@ globalThis.sandbox = {
   fs: { state: { status: "ready" }, flush: async () => { flushes++; if (flushHook) await flushHook(); } },
 };
 globalThis.listen = port => control.network.listening(port, sameHelper);
+globalThis.unlisten = port => control.network.stopped(port, sameHelper);
 document.querySelector("#restart").onclick = () => { control.server = null; control.setServerState("starting"); queueMicrotask(() => listen(5174)); };
 listen(5173);
 `);
@@ -309,7 +310,67 @@ async function pendingFlushDeadline(browser: Browser): Promise<void> {
   });
 }
 
-const cases = [normalAndRepeated, redirectsAndQueries, invalidLoads, changesDuringFlush, failures, repeatedInvalidation, readinessDeadline, pendingFlushDeadline];
+async function transientProbeAndPreviewError(browser: Browser): Promise<void> {
+  const context = await browser.newContext();
+  let requests = 0;
+  let mode: "recover" | "unusable" | "exhaust" = "recover";
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    await page.route("http://readiness.test/**", async route => {
+      const target = route.request().url();
+      if (!target.includes("/__preview/")) { await route.fulfill({ contentType: "text/html", body: html }); return; }
+      requests++;
+      if (mode === "recover" && target.includes("/5174/") && requests === 2) {
+        await route.fulfill({ status: 502, contentType: "text/plain; charset=utf-8", body: "No bun.wasm server is listening on port 5174.\nStart one in the playground (Bun.serve), then reload this page.\n" });
+        return;
+      }
+      if (mode === "unusable" && target.includes("/5175/")) {
+        await route.fulfill({ status: 502, contentType: "text/plain; charset=utf-8", body: "bun.wasm server sent an unusable response (status 502): malformed headers\n" });
+        return;
+      }
+      if (mode === "exhaust" && target.includes("/5176/")) {
+        await route.fulfill({ status: 502, contentType: "text/plain; charset=utf-8", body: "No bun.wasm server is listening on port 5176.\nStart one in the playground (Bun.serve), then reload this page.\n" });
+        return;
+      }
+      await route.fulfill({ contentType: "text/html", body: '<h1>Edited source persists</h1><button class="counter">count is 0</button>' });
+    });
+    await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
+    expect(requests).toBe(1);
+    // Drive 3 Vite-like probe listeners synchronously before binding the real 5174 listener so CI jitter cannot affect the request count.
+    await page.evaluate(() => {
+      const listen = Reflect.get(globalThis, "listen");
+      const unlisten = Reflect.get(globalThis, "unlisten");
+      for (let i = 0; i < 3; i++) {
+        listen(5174);
+        unlisten(5174);
+      }
+      listen(5174);
+    });
+    await ready(page, "vanilla");
+    expect(requests).toBe(3);
+    expect(await page.locator("#status").getAttribute("data-kind")).toBe("ok");
+    expect(await page.frameLocator("#preview").locator("button.counter").textContent()).toContain("count is 0");
+
+    // Non-transient unusable-response 502 must surface an explicit error and never mark ready.
+    mode = "unusable";
+    await page.evaluate(() => Reflect.get(globalThis, "listen")(5175));
+    await page.waitForFunction(() => document.querySelector<HTMLElement>("#status")?.dataset.kind === "error");
+    expect(await page.locator("#status").textContent()).toContain("unusable response");
+    expect(await page.evaluate(() => Reflect.get(globalThis, "control").preview?.loaded)).toBeNull();
+
+    // Exhausted transient 502 retries must transition to an explicit error rather than hanging on "loading preview…".
+    mode = "exhaust";
+    await page.evaluate(() => Reflect.get(globalThis, "listen")(5176));
+    await page.waitForFunction(() => {
+      const st = document.querySelector<HTMLElement>("#status");
+      return st?.dataset.kind === "error" && (st.textContent ?? "").includes("press Restart");
+    }, undefined, { timeout: 6000 });
+    expect(await page.evaluate(() => Reflect.get(globalThis, "control").preview?.loaded)).toBeNull();
+  } finally { await context.close(); }
+}
+
+const cases = [normalAndRepeated, redirectsAndQueries, invalidLoads, changesDuringFlush, failures, repeatedInvalidation, readinessDeadline, pendingFlushDeadline, transientProbeAndPreviewError];
 for (const engine of [chromium, webkit]) for (const run of cases) test(`${engine.name()}: ${run.name}`, async () => {
   const browser = await engine.launch({ headless: true });
   try { await run(browser); } finally { await browser.close(); }

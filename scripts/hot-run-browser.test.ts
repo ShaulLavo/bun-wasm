@@ -69,7 +69,7 @@ async function scenario(browser: Browser, url: string): Promise<void> {
   const context = await browser.newContext();
   try {
         const page = await context.newPage();
-        await navigateTestPage(page, `${url}?engine=browser&prompt=off&mode=memory`);
+        await navigateTestPage(page, `${url}?engine=browser&prompt=off`);
         expect(await ready(page)).toContain("ready");
         for (const file of readdirSync(fixture)) {
           if (!/\.(ts|cjs|html|json)$/.test(file)) continue;

@@ -577,21 +577,59 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     // The label shows the server's own address; tapping it opens the preview, which works anywhere.
     this.setServerState("up", `localhost:${port}/`, url);
     this.setStatus("loading preview…");
+    // Vite probes its port with 1-6 ms throwaway listeners before binding the real server.
+    // Waiting a brief tick before navigating the iframe avoids thrashing it with transient 502s.
+    await new Promise<void>(resolve => setTimeout(resolve, 25));
+    if (this.server !== target || this.workspace?.fs.ownershipLost) return;
     const previewStarted = performance.now();
     const { frame } = this;
     if (!frame) return;
-    const previous = frame.contentDocument;
+    let previous = frame.contentDocument;
     const requested = new URL(url);
     const navigation: PreviewNavigation = this.preview = { server: target, frame, url, loaded: null };
+    let errorRetries = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const isTransientPreviewError = (doc: Document): boolean => {
+      if (!doc.contentType.startsWith("text/plain")) return false;
+      const body = doc.body?.textContent ?? "";
+      return body.startsWith("No bun.wasm server is listening on port ") || body.startsWith("bun.wasm server error:");
+    };
+    const isUnusablePreviewError = (doc: Document): boolean =>
+      doc.contentType.startsWith("text/plain") && (doc.body?.textContent ?? "").startsWith("bun.wasm server sent an unusable response (");
     const loaded = (event: Event) => {
       if (this.preview !== navigation || this.server !== target || this.frame !== frame || this.workspace?.fs.ownershipLost) {
+        clearTimeout(retryTimer);
         frame.removeEventListener("load", loaded);
         return;
       }
-      const document = frame.contentDocument;
+      let document: Document | null;
+      try { document = frame.contentDocument; } catch { document = null; }
       if (!event.isTrusted || !document || document === previous || document.readyState !== "complete" || frame.src !== url) return;
       const final = new URL(document.URL);
       if (final.origin !== requested.origin || !final.pathname.startsWith(requested.pathname)) return;
+      if (isUnusablePreviewError(document)) {
+        clearTimeout(retryTimer);
+        frame.removeEventListener("load", loaded);
+        this.setStatus("preview failed · server sent an unusable response", "error");
+        return;
+      }
+      if (isTransientPreviewError(document)) {
+        if (errorRetries < 4) {
+          previous = document;
+          const delay = 250 * ++errorRetries;
+          clearTimeout(retryTimer);
+          retryTimer = setTimeout(() => {
+            if (this.preview !== navigation || this.server !== target || this.frame !== frame || this.workspace?.fs.ownershipLost) return;
+            frame.src = url;
+          }, delay);
+          return;
+        }
+        clearTimeout(retryTimer);
+        frame.removeEventListener("load", loaded);
+        this.setStatus("preview failed to load · press Restart", "error");
+        return;
+      }
+      clearTimeout(retryTimer);
       frame.removeEventListener("load", loaded);
       navigation.loaded = { document, url: final.href };
       measureStartup("preview", previewStarted);

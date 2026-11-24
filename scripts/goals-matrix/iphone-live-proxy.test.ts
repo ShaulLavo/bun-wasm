@@ -98,3 +98,26 @@ test("the control port lists served responses only to the controller, once per U
   expect((await controlResponse(new Request(path, { headers: { origin: loopback } }), bus, loopback, served)).status).toBe(403);
   expect((await controlResponse(new Request(path), bus, loopback)).status).not.toBe(200);
 });
+
+test("records GET/HEAD asset errors while skipping POST, preview errors, and Cloudflare /cdn-cgi/ beacons", async () => {
+  const seen: Seen[] = [], recorded = recorder();
+  const upstream = upstreamOf(() => new Response("not found", { status: 404, headers: { "cache-control": "no-store" } }), seen);
+  const beacon = await proxyLiveRequest(new Request(loopback + "/cdn-cgi/rum", { method: "POST", body: "{}" }), site, upstream, recorded.record);
+  expect(beacon.status).toBe(404);
+  await beacon.text();
+  const cdnGet = await proxyLiveRequest(new Request(loopback + "/cdn-cgi/rum"), site, upstream, recorded.record);
+  expect(cdnGet.status).toBe(404);
+  await cdnGet.text();
+  const previewGet = await proxyLiveRequest(new Request(loopback + "/__preview/5173/missing"), site, upstream, recorded.record);
+  expect(previewGet.status).toBe(404);
+  await previewGet.text();
+  const missingGet = await proxyLiveRequest(new Request(loopback + "/chunks/missing-get.js"), site, upstream, recorded.record);
+  expect(missingGet.status).toBe(404);
+  await missingGet.text();
+  expect(await recorded.next).toMatchObject({ url: "/chunks/missing-get.js", status: 404, sha256: decodedSha256(new TextEncoder().encode("not found"), null) });
+  const missingHead = await proxyLiveRequest(new Request(loopback + "/chunks/missing-head.js", { method: "HEAD" }), site, upstream, recorded.record);
+  expect(missingHead.status).toBe(404);
+  expect((await missingHead.bytes()).byteLength).toBe(0);
+  expect(recorded.rows.map(row => row.url)).toEqual(["/chunks/missing-get.js", "/chunks/missing-head.js"]);
+  expect(recorded.rows[1]?.sha256).toBeNull();
+});
