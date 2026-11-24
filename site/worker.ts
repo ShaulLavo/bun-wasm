@@ -27,7 +27,20 @@ function represented(response: Response, metadata: Headers, encoding: Encoding):
 function negotiationError(status: number, metadata: Headers): Response {
   const headers = negotiationHeaders(metadata);
   for (const field of ["content-length", "content-encoding", "etag", "last-modified", "content-range", "accept-ranges"]) headers.delete(field);
+  headers.set("cache-control", "no-store");
   return new Response(null, { status, headers });
+}
+
+/**
+ * Serves a static asset response while preventing Cloudflare `_headers` rules (such as immutable
+ * `/chunks/*.js` and `/entry-*`) from caching 404 or other error responses.
+ */
+async function assetResponse(request: Request, env: SiteEnv): Promise<Response> {
+  const response = await env.ASSETS.fetch(request);
+  if (response.status < 400) return response;
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "no-store");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 /**
@@ -51,11 +64,11 @@ export default {
   async fetch(request: Request, env: SiteEnv): Promise<Response> {
     const url = new URL(request.url);
     // Every program and Bun guest WASM may ship `.br` and `.gz` twins (wrangler.jsonc routes them here).
-    if (!url.pathname.endsWith(".wasm") || !["GET", "HEAD"].includes(request.method)) return env.ASSETS.fetch(request);
+    if (!url.pathname.endsWith(".wasm") || !["GET", "HEAD"].includes(request.method)) return assetResponse(request, env);
     const headers = new Headers(request.headers);
     headers.set("accept-encoding", "identity");
     const metadata = await logicalMetadata(env, url, headers);
-    if (!metadata) return env.ASSETS.fetch(request);
+    if (!metadata) return assetResponse(request, env);
     const originalEncoding = request.cf?.clientAcceptEncoding;
     const preference = acceptedEncodings(typeof originalEncoding === "string" ? originalEncoding : request.headers.get("accept-encoding"));
     if (!preference) return negotiationError(400, metadata.headers);

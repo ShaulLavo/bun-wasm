@@ -65,6 +65,7 @@ const commonInputs = [
   "web/src/engine-host.js",
   "web/src/engine-loader.ts",
   "web/src/engine-stack-budget.ts",
+  "web/src/entry-assets.ts",
   "web/src/fs-worker.ts",
   "web/src/fs.ts",
   "web/src/host-crypto.ts",

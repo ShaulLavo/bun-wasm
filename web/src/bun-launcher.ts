@@ -17,6 +17,7 @@ import { readOutcome } from "waffle/proc/outcome";
 import { isToolCommand } from "./tool-command.js";
 import { installLookupServer } from "./net/lookup.js";
 import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objects/runtime.js";
+import { entryAssetName } from "./entry-assets.js";
 
 export interface Preview1LauncherOptions {
   readonly sockets?: readonly Preview1SocketBinding[];
@@ -44,7 +45,7 @@ function base(): string {
 
 /** A worker bundled beside the Bun worker in the same output directory. */
 export function siblingWorkerUrl(workerUrl: string, name: string): string {
-  return new URL(`./${name}`, new URL(workerUrl, base())).href;
+  return new URL(`./${entryAssetName(name)}`, new URL(workerUrl, base())).href;
 }
 
 function sharedGroupLaunch(module: WebAssembly.Module, worker: unknown): "new" | "inherit" | undefined {

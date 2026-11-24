@@ -70,6 +70,7 @@ async function moduleScope(request: Request, rest: string): Promise<Response> {
   }
   headers.set("cross-origin-embedder-policy", "require-corp");
   headers.set("cross-origin-resource-policy", "same-origin");
+  if (!upstream.ok) headers.set("cache-control", "no-store");
   return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers });
 }
 

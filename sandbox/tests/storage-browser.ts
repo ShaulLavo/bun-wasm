@@ -373,6 +373,8 @@ export async function startFreshScenario(browser: Browser, base: string, observe
     await step("start-fresh.sandbox.offered", () => page.locator("#start-fresh").waitFor({ timeout: STARTUP_MS }));
     observer?.event("assert", { phase: "start-fresh.sandbox.offered" });
     assert.match(await page.locator("#status").textContent() ?? "", /cannot be opened/);
+    assert.equal(await page.locator("#server-dot").getAttribute("data-state"), "down", "preview dot stayed active after unreadable storage failure");
+    assert.match(await page.locator("#preview-url").textContent() ?? "", /unreadable|start fresh/i, "preview bar stayed stuck on starting dev server after unreadable storage failure");
     assert.equal(await page.locator("#reset").count(), 0, "Reset template is replaced while the workspace cannot be opened");
     // Another tab that has the workspace open holds Waffle's writer lock for it, so Start fresh
     // deletes nothing and says so.

@@ -19,6 +19,7 @@ import type { BrowserSession, SessionState } from "bash-web/session";
 import { START_FRESH_BUSY, startFresh, unreadableWorkspace } from "../start-fresh";
 import { errorText } from "../startup";
 import { commandChunks } from "../startup-cache";
+import { entryAssetName, entryAssetUrl } from "../entry-assets";
 import { openTerminal } from "../terminal-mount";
 import { installPreviewLinks } from "./preview-links";
 import { Editor } from "./editor";
@@ -219,14 +220,17 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       ...measurementEnvironment(this.params),
     };
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
+    const fsWorker = entryAssetName("fs-worker.js");
     const runtime = createRuntime({
-      filesystem: { mode, name: this.workspaceName },
+      filesystem: fsWorker !== "fs-worker.js"
+        ? { mode, name: this.workspaceName, workerURL: entryAssetUrl("./fs-worker.js") }
+        : { mode, name: this.workspaceName },
       memoryGroups: memoryGroupPolicy(this.engine, navigator.userAgent),
     });
     const browserPrograms = new BrowserPrograms(runtime, {
-      worker: new URL("./preview1-worker.js", location.href),
-      shell: new URL("./programs/shell-engine.wasm", location.href),
-      shellWorker: new URL("./shell-worker.js", location.href),
+      worker: entryAssetUrl("./preview1-worker.js"),
+      shell: new URL("./programs/shell-engine.wasm", globalThis.location?.href ?? import.meta.url),
+      shellWorker: entryAssetUrl("./shell-worker.js"),
     });
     this.disposeRuntime = () => Promise.all([runtime.dispose(), browserPrograms.dispose()]);
     const sharedObjects = installRuntimeSharedObjects(runtime);
@@ -327,7 +331,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
         env: { ...engineEnv, HOME, USER: "user", PATH: `${ENGINE_BIN[this.engine]}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
         cols: term.cols, rows: term.rows,
         wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
-        workerUrl: new URL("./shell-worker.js", location.href),
+        workerUrl: entryAssetUrl("./shell-worker.js"),
         lineEditor: { mode: "zsh" },
         prompt,
         onOutput: bytes => term.write(bytes),
@@ -392,9 +396,9 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       launcher: provider => async (context, service) => {
         const { bunLauncher } = await import("../bun-launcher");
         return bunLauncher(provider, {
-          runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
+          runtime, network, workerUrl: entryAssetUrl(scoped ? "./__bunwasm/worker.js" : "./worker.js").href,
           // web/build.ts emits the notification helper at the page root in both modes.
-          notificationWorkerUrl: new URL("./notification-worker.js", location.href).href,
+          notificationWorkerUrl: entryAssetUrl("./notification-worker.js").href,
           loadTools,
         })(context, service);
       },

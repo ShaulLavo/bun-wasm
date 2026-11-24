@@ -54,11 +54,17 @@ export async function proxyLiveRequest(request: Request, site: string, upstream:
   const location = replies.get("location");
   if (location) replies.set("location", loopbackLocation(location, target, origin, incoming.origin));
   let delivered = request.method === "HEAD" ? null : response.body;
-  if (record && delivered && fullResponse(request, headers, response)) {
-    const [safari, copy] = delivered.tee();
-    delivered = safari;
+  const full = delivered !== null && fullResponse(request, headers, response);
+  const recordableError = response.status >= 400 && !incoming.pathname.includes("/__preview/");
+  if (record && (full || recordableError)) {
     const row = { url: incoming.pathname + incoming.search, request: pick(headers, replayed), status: response.status, headers: pick(response.headers, comparedHeaders) };
-    void new Response(copy).bytes().then(bytes => record({ ...row, sha256: decodedSha256(bytes, response.headers.get("content-encoding")) }), () => record({ ...row, sha256: null }));
+    if (full && delivered) {
+      const [safari, copy] = delivered.tee();
+      delivered = safari;
+      void new Response(copy).bytes().then(bytes => record({ ...row, sha256: decodedSha256(bytes, response.headers.get("content-encoding")) }), () => record({ ...row, sha256: null }));
+    } else {
+      record({ ...row, sha256: null });
+    }
   }
   return new Response(delivered, { status: response.status, statusText: response.statusText, headers: replies });
 }

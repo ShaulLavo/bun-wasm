@@ -35,6 +35,7 @@
     "src/shared-objects.ts",
     "web/src/browser-programs.ts",
     "web/src/bun-launcher.ts",
+    "web/src/entry-assets.ts",
     "web/src/bun-executor.ts",
     "web/src/worker.ts",
     "web/src/worker-main.ts",

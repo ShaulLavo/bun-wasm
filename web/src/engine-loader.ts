@@ -3,6 +3,7 @@ import { pairedEngineKinds, programKind, programProfile, type Engine, type Paire
 import { prepareProgram } from "../../src/assets.ts";
 // Engine metadata and downloads are usable before the execution/process graph loads.
 import { activated } from "./preview";
+import { swScriptUrl } from "./entry-assets.js";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
 import { measureStartup } from "./startup";
 import { observeCompile, withoutCompileSpans } from "./compile-observer";
@@ -473,7 +474,7 @@ export async function registerModuleScope(): Promise<boolean> {
   const container = navigator.serviceWorker;
   if (!container) return false;
   try {
-    const registration = await container.register("./sw.js", { scope: MODULE_SCOPE });
+    const registration = await container.register(swScriptUrl(), { scope: MODULE_SCOPE, updateViaCache: "none" });
     await activated(registration);
     return registration.active !== null;
   } catch (err) {

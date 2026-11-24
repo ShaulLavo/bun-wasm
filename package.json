@@ -85,6 +85,7 @@
     "web/src/net",
     "src/executable-paths.ts",
     "web/src/bun-launcher.ts",
+    "web/src/entry-assets.ts",
     "web/src/tool-command.ts",
     "web/src/bun-executor.ts",
     "web/src/engine-stack-budget.ts",

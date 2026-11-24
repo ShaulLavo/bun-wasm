@@ -56,10 +56,10 @@ rmSync(out, { recursive: true, force: true });
 cpSync(join(root, "sandbox/dist"), out, { recursive: true });
 cpSync(join(root, "web/dist"), join(out, "playground"), { recursive: true });
 rmSync(join(out, "playground/_headers"));
-// Cloudflare allows one splat per rule, so the playground's hashed-chunk rules are spelled out.
+// Cloudflare allows one splat per rule, so the playground's hashed entry and chunk rules are spelled out.
 const immutable = "  Cache-Control: public, max-age=31536000, immutable\n";
-appendFileSync(join(out, "_headers"), "\n/playground/\n  Cache-Control: no-store\n/playground/index.html\n  Cache-Control: no-store\n"
-  + `/playground/chunks/*.js\n${immutable}/playground/__bunwasm/chunks/*.js\n${immutable}`);
+appendFileSync(join(out, "_headers"), "\n/playground/\n  Cache-Control: no-store\n/playground/index.html\n  Cache-Control: no-store\n/playground/sw.js\n  Cache-Control: no-store\n"
+  + `/playground/entry-*\n${immutable}/playground/__bunwasm/entry-*\n${immutable}/playground/chunks/*.js\n${immutable}/playground/__bunwasm/chunks/*.js\n${immutable}`);
 // Source maps stay local; the public site doesn't need them.
 for (const map of new Bun.Glob("**/*.map").scanSync(out)) rmSync(join(out, map));
 const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: root });

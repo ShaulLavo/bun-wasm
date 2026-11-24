@@ -1,0 +1,31 @@
+{
+  "owner": "browser-guest",
+  "path": "scripts/deploy-upgrade-browser.test.ts",
+  "inputs": [
+    "scripts/browser-build.ts",
+    "scripts/browser-guest-site.ts",
+    "sandbox/build.ts",
+    "sandbox/index.html",
+    "sandbox/src/sandbox.ts",
+    "sandbox/src/template.ts",
+    "sandbox/src/workspace-storage.ts",
+    "web/_headers",
+    "web/serve.ts",
+    "web/src/bun-launcher.ts",
+    "web/src/engine-loader.ts",
+    "web/src/entry-assets.ts",
+    "web/src/playground/playground.ts",
+    "web/src/preview.ts",
+    "web/src/runner.ts",
+    "web/src/startup-cache.ts",
+    "web/src/subprocess-broker.ts",
+    "web/src/sw.ts",
+    "web/src/worker.ts",
+    "web/src/worker-main.ts",
+    "site/build.ts",
+    "site/worker.ts",
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml"
+  ]
+}

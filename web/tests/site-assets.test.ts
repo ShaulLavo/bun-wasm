@@ -75,7 +75,14 @@ beforeAll(async () => {
   await Bun.write(join(assets, "index.html"), "<h1>home</h1>");
   await Bun.write(join(assets, "404.html"), "<h1>missing</h1>");
   await Bun.write(join(assets, "playground/index.html"), "<h1>playground</h1>");
+  await Bun.write(join(assets, "playground/sw.js"), "self.addEventListener('fetch', () => {});");
+  await Bun.write(join(assets, "playground/chunks/chunk-a1.js"), "export const x = 1;");
+  await Bun.write(join(assets, "playground/entry-worker-a1b2c3d4e5f6a7b8.js"), "export const w = 1;");
+  await Bun.write(join(assets, "playground/__bunwasm/entry-worker-a1b2c3d4e5f6a7b8.js"), "export const w = 1;");
   await Bun.write(join(assets, "chunks/chunk-a1.js"), "export const x = 1;");
+  await Bun.write(join(assets, "entry-worker-a1b2c3d4e5f6a7b8.js"), "export const w = 1;");
+  await Bun.write(join(assets, "__bunwasm/entry-worker-a1b2c3d4e5f6a7b8.js"), "export const w = 1;");
+  await Bun.write(join(assets, "sw.js"), "self.addEventListener('fetch', () => {});");
   await Bun.write(join(assets, "unrelated.wasm"), wasm);
   await Bun.write(join(assets, program.replace("ls.wasm", "raw-only.wasm")), rawOnly);
   await Bun.write(join(assets, "programs/base/readme.txt"), "unencoded static file");
@@ -104,7 +111,10 @@ beforeAll(async () => {
     await Bun.write(join(assets, path), wasm);
     await Bun.write(join(assets, path + ".br"), "not the network module");
   }
+  const immutable = "  Cache-Control: public, max-age=31536000, immutable\n";
   await Bun.write(join(assets, "_headers"), await Bun.file(join(import.meta.dir, "../_headers")).text()
+    + "\n/playground/\n  Cache-Control: no-store\n/playground/index.html\n  Cache-Control: no-store\n/playground/sw.js\n  Cache-Control: no-store\n"
+    + `/playground/entry-*\n${immutable}/playground/__bunwasm/entry-*\n${immutable}/playground/chunks/*.js\n${immutable}/playground/__bunwasm/chunks/*.js\n${immutable}`
     + `\n${program}\n  Cache-Control: public, max-age=60\n  Vary: Origin\n  X-Logical-Asset: preserved\n${program}.br\n  Cache-Control: no-store\n  X-Sidecar-Only: not-logical\n`);
   const original = await Bun.file(join(import.meta.dir, "../../site/wrangler.jsonc")).text();
   const config = join(root, "wrangler.jsonc");
@@ -360,7 +370,7 @@ test("Worker validators identify the selected representation, not the raw file",
   expect(response.headers["etag"]).toBe(encoded.headers["etag"]);
 });
 
-test.each(["/", "/index.html", "/playground/", "/playground/index.html", "/chunks/chunk-a1.js", "/unrelated.wasm", "/programs/base/readme.txt", "/missing", program.replace("ls.wasm", "missing.wasm")])("keeps native static behavior for %s", async path => {
+test.each(["/", "/index.html", "/sw.js", "/playground/", "/playground/index.html", "/chunks/chunk-a1.js", "/entry-worker-a1b2c3d4e5f6a7b8.js", "/__bunwasm/entry-worker-a1b2c3d4e5f6a7b8.js", "/unrelated.wasm", "/programs/base/readme.txt"])("keeps native static behavior for %s", async path => {
   const [worker, native] = await Promise.all([get(path, "identity"), get(path, "identity", { origin: nativeOrigin })]);
   expect(worker.status).toBe(native.status);
   expect(worker.body).toEqual(native.body);
@@ -368,6 +378,44 @@ test.each(["/", "/index.html", "/playground/", "/playground/index.html", "/chunk
   const workerLocation = worker.headers["location"];
   const nativeLocation = native.headers["location"];
   expect(workerLocation ? new URL(workerLocation, origin).pathname : undefined).toBe(nativeLocation ? new URL(nativeLocation, nativeOrigin).pathname : undefined);
+});
+
+test.each([
+  ["/", "no-store"],
+  ["/sw.js", "no-store"],
+  ["/playground/", "no-store"],
+  ["/playground/sw.js", "no-store"],
+  ["/chunks/chunk-a1.js", "public, max-age=31536000, immutable"],
+  ["/entry-worker-a1b2c3d4e5f6a7b8.js", "public, max-age=31536000, immutable"],
+  ["/__bunwasm/entry-worker-a1b2c3d4e5f6a7b8.js", "public, max-age=31536000, immutable"],
+  ["/playground/chunks/chunk-a1.js", "public, max-age=31536000, immutable"],
+  ["/playground/entry-worker-a1b2c3d4e5f6a7b8.js", "public, max-age=31536000, immutable"],
+  ["/playground/__bunwasm/entry-worker-a1b2c3d4e5f6a7b8.js", "public, max-age=31536000, immutable"],
+])("public router sends exact cache-control %s -> %s", async (path, expectedCacheControl) => {
+  const response = await get(path, "identity", { origin: publicOrigin });
+  expect(response.status).toBe(200);
+  expect(response.headers["cache-control"]).toBe(expectedCacheControl);
+});
+
+test.each([
+  "/chunks/missing-oldhash.js",
+  "/__bunwasm/chunks/missing-oldhash.js",
+  "/entry-worker-0000000000000000.js",
+  "/__bunwasm/entry-worker-0000000000000000.js",
+  "/playground/chunks/missing-oldhash.js",
+  "/playground/__bunwasm/chunks/missing-oldhash.js",
+  "/playground/entry-worker-0000000000000000.js",
+  "/playground/__bunwasm/entry-worker-0000000000000000.js",
+  "/missing",
+  program.replace("ls.wasm", "missing.wasm"),
+])("404 responses at %s are never cached as immutable", async path => {
+  for (const target of [origin, publicOrigin]) {
+    const response = await get(path, "identity", { origin: target });
+    expect(response.status).toBe(404);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["cross-origin-opener-policy"]).toBe("same-origin");
+    expect(response.headers["cross-origin-embedder-policy"]).toBe("require-corp");
+  }
 });
 
 test("Worker streams the supplied larger representation instead of double-compressing it", async () => {

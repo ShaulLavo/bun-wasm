@@ -206,6 +206,48 @@ export async function buildBrowserEntries(entrypoints: string[], outdir: string,
 // Workers a scoped Bun worker reaches as siblings of its own URL (siblingWorkerUrl).
 const scopedSiblings = new Set(["worker.js", "fs-worker.js", "preview1-worker.js", "notification-worker.js"]);
 
+export const VERSIONED_ENTRY_FILES = ["main.js", "main.css", "worker.js", "fs-worker.js", "preview1-worker.js", "notification-worker.js", "shell-worker.js"] as const;
+export const VERSIONED_WORKER_FILES = ["worker.js", "fs-worker.js", "preview1-worker.js", "notification-worker.js", "shell-worker.js"] as const;
+
+/**
+ * Emits content-hashed `entry-<stem>-<hash>.<ext>` copies beside the plain entry files and mirrors
+ * scoped worker entries under `__bunwasm/`. Plain entries remain for tools and tests that read them
+ * by fixed name; pages load the hashed copies so deploys never reuse stale worker or page scripts.
+ */
+export async function publishVersionedEntries(
+  outdir: string,
+  names: readonly string[] = VERSIONED_ENTRY_FILES,
+  scoped: ReadonlySet<string> = scopedSiblings,
+): Promise<Record<string, string>> {
+  const entries: Record<string, string> = {};
+  for (const name of names) {
+    const file = Bun.file(join(outdir, name));
+    if (!await file.exists()) throw new Error(`Missing built entry asset: ${name}`);
+    const bytes = await file.bytes();
+    const dot = name.lastIndexOf(".");
+    if (dot <= 0) throw new Error(`Entry asset lacks an extension: ${name}`);
+    const digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex").slice(0, 16);
+    const hashed = `entry-${name.slice(0, dot)}-${digest}${name.slice(dot)}`;
+    await Bun.write(join(outdir, hashed), bytes);
+    if (scoped.has(name)) await Bun.write(join(outdir, "__bunwasm", hashed), bytes);
+    entries[name] = hashed;
+  }
+  return entries;
+}
+
+/** Rewrites index.html's static main.css and main.js references to their content-hashed entry filenames. */
+export function rewriteEntryHtml(html: string, entries: Readonly<Record<string, string>>): string {
+  const css = entries["main.css"], js = entries["main.js"];
+  if (!css || !js) throw new Error("Versioned entry map must include main.css and main.js");
+  const next = html
+    .replace('href="./main.css"', `href="./${css}"`)
+    .replace('src="./main.js"', `src="./${js}"`);
+  if (!next.includes(`href="./${css}"`) || !next.includes(`src="./${js}"`)) {
+    throw new Error("index.html did not contain expected ./main.css and ./main.js entry tags");
+  }
+  return next;
+}
+
 /** Keep service workers standalone classic scripts for Safari. Never split this build. */
 export function buildClassicWorker(entrypoint: string, outdir: string, define?: Record<string, string>, consumerEntry = entrypoint) {
   const { plugins } = browserBuildConfig([consumerEntry], outdir);

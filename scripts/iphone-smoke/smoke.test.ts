@@ -2,6 +2,10 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { chmod, mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
+import { recordServed } from "../goals-matrix/iphone-server";
+import { compareLiveOrigin } from "./live";
+import { clickCounterSource, probeSandboxSource } from "./sandbox-root";
 import { withPlayground, completeAttempt } from "../goals-matrix/test-fixture";
 import { frameworks, boxId, type Box, type Framework } from "../goals-matrix/catalog";
 import { execute, executeAttempt } from "../goals-matrix/execute";
@@ -15,7 +19,7 @@ import { safariTabJournal } from "./tab-journal";
 import { runSmoke } from "./run";
 import { templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { engineFiles, profileEngineFiles } from "../goals-matrix/engines";
-import { comparedHeaders, decodedSha256, pick, type LiveServed } from "../goals-matrix/iphone-live-proxy";
+import { comparedHeaders, decodedSha256, pick, proxyLiveRequest, type LiveServed } from "../goals-matrix/iphone-live-proxy";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -409,10 +413,11 @@ function deployedSite(root: string, commits: string[], requests: string[], pageH
     const path = new URL(url).pathname;
     if (!url.startsWith(site)) throw new Error(`Live smoke fetched another origin: ${url}`);
     if (path === "/deployment.json") return Response.json({ sourceCommit: commits.length > 1 ? commits.shift() : commits[0], waffleVersion: "0.0.0-test" });
-    const name = path === "/playground/" ? "index.html" : path.replace(/^\/playground\//, "");
+    const isHtml = path === "/" || path === "/playground/";
+    const name = isHtml ? "index.html" : path.replace(/^\/playground\//, "").replace(/^\//, "");
     const file = Bun.file(join(root, name));
     if (!await file.exists()) return new Response(null, { status: 404 });
-    return new Response(file, { headers: path === "/playground/" ? { "content-type": "text/html", "cache-control": "no-store", ...pageHeaders } : { "content-type": "application/octet-stream" } });
+    return new Response(file, { headers: isHtml ? { "content-type": "text/html", "cache-control": "no-store", ...pageHeaders } : { "content-type": "application/octet-stream" } });
   };
 }
 /** What the Mac proxy would have recorded for these paths, read from the same deployed site. */
@@ -422,7 +427,8 @@ async function servedFrom(get: (url: string) => Promise<Response>, paths: readon
     return { url, request: { "accept-encoding": "gzip, deflate, br" }, status: response.status, headers: pick(response.headers, comparedHeaders), sha256: decodedSha256(await response.bytes(), null) };
   }));
 }
-const servedPaths = ["/playground/", "/playground/engine-builds.json"];
+const servedPaths = ["/", "/playground/", "/playground/engine-builds.json"];
+const passingSandboxRoot = async () => ({ url: "http://127.0.0.1/", status: "pass" as const, initialMs: 1200, reloadMs: 600, databases: ["bun-wasm-sandbox-vite-react"] });
 test("live mode skips local setup and runs the same cases against the deployed playground", async () => {
   await scratch(async root => {
     const config = smokeOptions(liveArguments(root));
@@ -431,8 +437,9 @@ test("live mode skips local setup and runs the same cases against the deployed p
     const get = deployedSite(join(root, "deployed"), [source.commit], requests);
     const served = await servedFrom(deployedSite(join(root, "deployed"), [source.commit], []), servedPaths);
     const result = await withFixtures(config, [], { preflight: true, onNavigate: url => urls.push(url),
-      overrides: { fetch: get, served: async () => served } });
-    expect(result.liveOrigin).toEqual({ checked: 2, mismatches: [] });
+      overrides: { fetch: get, served: async () => served, sandboxRoot: passingSandboxRoot } });
+    expect(result.liveOrigin).toEqual({ checked: 3, mismatches: [] });
+    expect(result.sandboxRoot?.status).toBe("pass");
     expect(result.status, JSON.stringify(result.failures)).toBe("green");
     expect(result.revision).toBe(source.commit);
     expect(result.source).toEqual({ commit: source.commit, dirty: null, assets: { source: site, deployment: { sourceCommit: source.commit, waffleVersion: "0.0.0-test" } } });
@@ -464,7 +471,7 @@ test("live mode reports red when the site redeploys during the smoke", async () 
     const config = smokeOptions(liveArguments(root));
     await preparedRoot(join(root, "deployed"));
     const result = await withFixtures(config, [], { preflight: true,
-      overrides: { fetch: deployedSite(join(root, "deployed"), [source.commit, "b".repeat(40)], []), served: async () => [] } });
+      overrides: { fetch: deployedSite(join(root, "deployed"), [source.commit, "b".repeat(40)], []), served: async () => [], sandboxRoot: passingSandboxRoot } });
     expect(result.cases.every(value => value.status === "pass")).toBe(true);
     expect(result.status).toBe("red");
     expect(result.failures[0]?.error).toContain(`Live site changed deployment during smoke: ${source.commit} became ${"b".repeat(40)}`);
@@ -487,22 +494,105 @@ test("any difference between the run and the real origin makes the live smoke re
     await preparedRoot(join(root, "deployed"));
     const get = deployedSite(join(root, "deployed"), [source.commit], []);
     const served = await servedFrom(get, servedPaths);
-    served[0]!.headers["cache-control"] = "public, max-age=600";
-    served[1]!.sha256 = "0".repeat(64);
-    const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => served } });
+    served[1]!.headers["cache-control"] = "public, max-age=600";
+    served[2]!.sha256 = "0".repeat(64);
+    const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => served, sandboxRoot: passingSandboxRoot } });
     expect(result.cases.every(value => value.status === "pass")).toBe(true);
-    expect(result).toMatchObject({ status: "red", failedPhase: "live-origin", liveOrigin: { checked: 2 } });
+    expect(result).toMatchObject({ status: "red", failedPhase: "live-origin", liveOrigin: { checked: 3 } });
     expect(result.liveOrigin?.mismatches).toEqual([
       "/playground/: cache-control \"public, max-age=600\" in the run, \"no-store\" from the real origin",
       "/playground/engine-builds.json: decoded bytes differ from the real origin"]);
   });
 });
-test("a run whose proxy recorded no playground page cannot pass the origin check", async () => {
+test("a run whose proxy recorded no playground or root page cannot pass the origin check", async () => {
   await scratch(async root => {
     await preparedRoot(join(root, "deployed"));
     const get = deployedSite(join(root, "deployed"), [source.commit], []);
-    const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => [] } });
-    expect(result).toMatchObject({ status: "red", failedPhase: "live-origin", liveOrigin: { checked: 0, mismatches: ["the run served no /playground/ page"] } });
+    const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => [], sandboxRoot: passingSandboxRoot } });
+    expect(result).toMatchObject({
+      status: "red",
+      failedPhase: "live-origin",
+      liveOrigin: { checked: 0, mismatches: ["the run served no /playground/ page", "the run served no / sandbox page"] },
+    });
+  });
+});
+test("live origin check rejects 404 responses (including conditional GET and HEAD via proxy) and records status changes separately", async () => {
+  await scratch(async root => {
+    await preparedRoot(join(root, "deployed"));
+    const get = deployedSite(join(root, "deployed"), [source.commit], []);
+    const upstream = (input: string | URL | Request) => get(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    const served: LiveServed[] = [];
+    const record = recordServed(served);
+    for (const row of await servedFrom(get, servedPaths)) record(row);
+    const conditional = await proxyLiveRequest(new Request("http://127.0.0.1:4100/chunks/missing-cond.js", { headers: { "if-none-match": '"etag-1"' } }), site, upstream as typeof fetch, record);
+    expect(conditional.status).toBe(404);
+    await conditional.arrayBuffer();
+    const head = await proxyLiveRequest(new Request("http://127.0.0.1:4100/chunks/missing-head.js", { method: "HEAD" }), site, upstream as typeof fetch, record);
+    expect(head.status).toBe(404);
+    record({ ...served[0]!, status: 404 });
+    expect(served.filter(row => row.url === "/")).toHaveLength(2);
+    const check = await compareLiveOrigin(site, served, get, { requireRoot: true });
+    expect(check.mismatches).toContain("/chunks/missing-cond.js: served HTTP 404");
+    expect(check.mismatches).toContain("/chunks/missing-head.js: served HTTP 404");
+
+    // Conditional GET and HEAD 404s under /__preview/ stay unrecorded and do not break live-origin checks.
+    const previewServed: LiveServed[] = [];
+    const recordPreview = recordServed(previewServed);
+    for (const row of await servedFrom(get, servedPaths)) recordPreview(row);
+    const previewCond = await proxyLiveRequest(new Request("http://127.0.0.1:4100/__preview/5173/missing.js", { headers: { "if-none-match": '"etag-1"' } }), site, upstream as typeof fetch, recordPreview);
+    expect(previewCond.status).toBe(404);
+    await previewCond.arrayBuffer();
+    const previewHead = await proxyLiveRequest(new Request("http://127.0.0.1:4100/__preview/5173/missing.js", { method: "HEAD" }), site, upstream as typeof fetch, recordPreview);
+    expect(previewHead.status).toBe(404);
+    expect(await compareLiveOrigin(site, previewServed, get, { requireRoot: true })).toEqual({ checked: 3, mismatches: [] });
+  });
+});
+test("sandbox-root probe and counter click succeed across distinct host and iframe realms", async () => {
+  class HostHTMLElement {}
+  class IframeHTMLElement {}
+  const button = Object.assign(new IframeHTMLElement(), {
+    textContent: "count is 0",
+    click() { this.textContent = "count is 1"; },
+  });
+  expect(button instanceof HostHTMLElement).toBe(false);
+  const iframe = {
+    contentDocument: {
+      querySelector: (selector: string) => selector === "button.counter:not([disabled])" ? button : null,
+    },
+  };
+  const elements: Record<string, unknown> = {
+    "#status": { getAttribute: (name: string) => name === "data-kind" ? "ok" : null, textContent: "dev server ready in 1.2 s" },
+    "#server-dot": { getAttribute: (name: string) => name === "data-state" ? "up" : null },
+    "#preview": iframe,
+  };
+  const context = {
+    HTMLElement: HostHTMLElement,
+    HTMLIFrameElement: class HostIFrame {},
+    document: { querySelector: (selector: string) => elements[selector] ?? null },
+    indexedDB: { databases: async () => [{ name: "bun-wasm-sandbox-vite-react" }] },
+    performance: { now: () => Date.now() },
+    setTimeout,
+  };
+  const probed = await runInNewContext(probeSandboxSource, context) as { ready: boolean; buttonText: string; databases: string[] };
+  expect(probed).toMatchObject({ ready: true, buttonText: "count is 0", databases: ["bun-wasm-sandbox-vite-react"] });
+  const clicked = await runInNewContext(clickCounterSource, context) as { clicked: boolean; text: string };
+  expect(clicked).toEqual({ clicked: true, text: "count is 1" });
+});
+test("live mode reports red when the root persistent sandbox fails", async () => {
+  await scratch(async root => {
+    await preparedRoot(join(root, "deployed"));
+    const get = deployedSite(join(root, "deployed"), [source.commit], []);
+    const served = await servedFrom(get, servedPaths);
+    const result = await withFixtures(smokeOptions(liveArguments(root)), [], {
+      preflight: true,
+      overrides: {
+        fetch: get,
+        served: async () => served,
+        sandboxRoot: async () => ({ url: "http://127.0.0.1/", status: "fail", error: "INVALID_VFS_FORMAT" }),
+      },
+    });
+    expect(result.cases.every(value => value.status === "pass")).toBe(true);
+    expect(result).toMatchObject({ status: "red", failedPhase: "sandbox-root", sandboxRoot: { status: "fail", error: "INVALID_VFS_FORMAT" } });
   });
 });
 test("live mode needs the site's recorded source commit", async () => {

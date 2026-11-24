@@ -59,7 +59,7 @@ async function wasmResponse(path: string, acceptEncoding: string | null, headers
     if (await file.exists()) available.set(encoding, { encoding, file });
   }
   const identity = available.get("identity") ?? available.get("gzip") ?? available.get("br");
-  if (!identity) return new Response("not found", { status: 404, headers });
+  if (!identity) return new Response("not found", { status: 404, headers: { ...headers, "cache-control": "no-store" } });
   available.set("identity", identity);
   headers["content-type"] = "application/wasm";
   for (const encoding of preference) {
@@ -135,7 +135,7 @@ async function serve(req: Request, server: Parameters<PreviewOwnerHost["fetch"]>
   }
   if (path.endsWith(".wasm")) return wasmResponse(join(root, path), req.headers.get("accept-encoding"), headers);
   const file = Bun.file(join(root, path));
-  if (!(await file.exists())) return new Response("not found", { status: 404 });
+  if (!(await file.exists())) return new Response("not found", { status: 404, headers: { "cache-control": "no-store" } });
   return new Response(file, { headers });
 }
 navigationServerListening(server.url);
