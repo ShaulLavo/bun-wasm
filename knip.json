@@ -8,6 +8,7 @@
         "scripts/app-matrix/engine-memory-hook.ts",
         "scripts/engine-producer.ts",
         "scripts/sandbox-storage-measure.ts",
+        "scripts/bun-api-probe.ts",
         "scripts/c1-controller.ts",
         "scripts/goals-matrix/run.ts",
         "scripts/iphone-smoke.ts",

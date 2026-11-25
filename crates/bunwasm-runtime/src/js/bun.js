@@ -345,8 +345,20 @@
   hash.wyhash = hash;
   hash.crc32 = (data) => native.crc32(hashInput(data));
   hash.adler32 = (data) => native.adler32(hashInput(data));
+  // HashObject.rs reads a number or bigint seed as u64; anything else is 0.
+  function hashSeed(seed) {
+    if (typeof seed === "bigint") return BigInt.asUintN(64, seed);
+    if (typeof seed === "number" && Number.isFinite(seed)) return BigInt.asUintN(64, BigInt(Math.trunc(seed)));
+    return 0n;
+  }
   for (const name of ["cityHash32", "cityHash64", "xxHash32", "xxHash64", "xxHash3", "murmur32v2", "murmur32v3", "murmur64v2", "rapidhash"]) {
-    hash[name] = unsupported(`Bun.hash.${name}`, "only wyhash, crc32 and adler32 are implemented");
+    hash[name] = {
+      [name](data) {
+        const value = hashSeed(arguments[1]);
+        const input = hashInput(data);
+        return native.bunHash(name, typeof input === "string" ? native.utf8Encode(input) : input, Number(value >> 32n), Number(value & 0xffffffffn));
+      },
+    }[name];
   }
 
   const digests = internal.require("node_digest");
@@ -475,6 +487,10 @@
     const { resolve } = internal.require("path");
     const entrypoints = Array.from(config.entrypoints || [], (e) => resolve(toPath(e)));
     if (entrypoints.length === 0) throw new TypeError("Bun.build: expected a non-empty array of entrypoints");
+    // The native bundler has no JavaScript plugin hooks yet; ignoring a plugin would build the wrong output.
+    if (Array.isArray(config.plugins) && config.plugins.length) {
+      unsupported("Bun.build({ plugins })", "the bundler has no JavaScript plugin hooks yet")();
+    }
     const request = { entrypoints };
     for (const key of BUILD_STRINGS) if (config[key] !== undefined) request[key] = String(config[key]);
     for (const key of BUILD_FLAGS) if (config[key]) request[key] = true;
@@ -584,6 +600,9 @@
     which: (command, options) => internal.require("spawn").which(command, options),
     hash,
     CryptoHasher,
+    get password() { return internal.require("bun_password").password; },
+    // Bun.sha is SHA-512/256, as in Bun.
+    sha: function sha(input) { return internal.require("bun_hash_classes").SHA512_256.hash(input, arguments[1]); },
     // Loaded on first use; the module is cached, so each class keeps one identity.
     get MD4() { return internal.require("bun_hash_classes").MD4; },
     get MD5() { return internal.require("bun_hash_classes").MD5; },

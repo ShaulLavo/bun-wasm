@@ -41,3 +41,7 @@ pending next resolves, acquisition errors, chunk offsets, clone/lock behavior
 and falsy errors. The pending producer is released in finally and all test waits
 are bounded. Native Bun's eager clone read-ahead is not asserted; the existing
 bounded tee behavior and buffer-reuse semantics remain unchanged.
+
+## Async generator function bodies
+
+`new Response(async function* () { ... })` streams what the generator yields, as in Bun: `extractBody` in `web.js` calls a body whose `Symbol.toStringTag` is `AsyncGeneratorFunction` and hands the iterator to the same byte stream. Other functions, including sync generator functions, stay their source text, which is what native Bun 1.4.4 sends. The `async generator response` check of `tests/fixtures/bun-probe-serve` compares it with native Bun on every engine.

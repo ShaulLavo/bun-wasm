@@ -49,6 +49,11 @@ bun_brotli_sys = { path = "../../vendor/bun/src/brotli_sys" }
 libsqlite3-sys = { version = "0.38", features = ["bundled"] }
 libc = "0.2"
 lol_html = { path = "../../vendor/bun/vendor/lolhtml" }
+# Bun.password: Bun's own argon2 and bcrypt choices (docs/bun-patches/bun-password.md).
+argon2 = { package = "rust-argon2", path = "../../vendor/bun/vendor/rust-argon2", default-features = false }
+bcrypt = "=0.19.0"
+base64 = "0.22"
+xxhash-rust = { version = "0.8", features = ["xxh32", "xxh64", "xxh3"] }
 
 tar = { version = "0.4", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

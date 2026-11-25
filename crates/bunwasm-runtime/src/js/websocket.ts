@@ -187,8 +187,9 @@
       if (this.state !== 1) return 0;
       return this.sendFrame(opcode, payload(data));
     }
-    close(code = 1000, reason = "") {
-      const bytes = closePayload(code, reason);
+    // `null` sends a close frame without a status code, which the other side reports as 1005.
+    close(code: number | null = 1000, reason = "") {
+      const bytes = code === null ? new Uint8Array(0) : closePayload(code, reason);
       if (this.state !== 1) return;
       this.state = 2;
       this.closeTimer = setTimeout(() => this.conn.destroy(), 10000);
@@ -443,14 +444,15 @@
         if (this._conn) { this._conn.onClose = null; this._conn.destroy(); }
         setTimeout(() => this._fail(new Error("WebSocket closed before connecting")), 0);
       }
-      close(code = 1000, reason = "") {
-        if (!validCode(code)) throw new DOMException(`Invalid WebSocket close code. Received ${code}`, "InvalidAccessError");
+      close(code?: number, reason = "") {
+        if (code !== undefined && !validCode(code)) throw new DOMException(`Invalid WebSocket close code. Received ${code}`, "InvalidAccessError");
         const size = encoder.encode(String(reason)).length;
         if (size > 123) throw new SyntaxError(`WebSocket close reason exceeds 123 UTF-8 bytes. Received ${size} bytes`);
         if (!this._peer) { this._abort(); return; }
         if (this._state >= 2) return;
         this._state = 2;
-        this._peer.close(code, reason);
+        // close() with no code sends no status, as browsers and Bun do; a reason alone needs 1000.
+        this._peer.close(code ?? (size ? 1000 : null), reason);
       }
       terminate() { this._abort(); }
     };

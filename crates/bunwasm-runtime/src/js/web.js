@@ -1223,6 +1223,9 @@
       return { stream: bodyStreams.adoptable(body), bytes, type: (bytes && bodyStreams.type(body)) || null, lifted: true };
     }
     if (typeof body[Symbol.asyncIterator] === "function") return { stream: bodyStreams.fromAsyncIterable(body), type: null };
+    // Bun calls an async generator function body and streams what it yields; other functions
+    // stay their source text, as in Bun.
+    if (typeof body === "function" && body[Symbol.toStringTag] === "AsyncGeneratorFunction") return { stream: bodyStreams.fromAsyncIterable(body()), type: null };
     return { bytes: native.utf8Encode(String(body)), type: null, served: "text/plain;charset=utf-8" };
   }
 
