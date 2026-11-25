@@ -1205,7 +1205,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       signal.throwIfAborted();
     }
 
-    this.setServerState("starting", "loading…");
+    if (!this.server) this.setServerState("starting", "loading…");
     if (!globalThis.crossOriginIsolated) {
       this.setStatus("this page is not cross-origin isolated: the dev server can't serve previews", "error");
     }
@@ -1360,7 +1360,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
     if (!this.wasm || this.disposed) return;
     coordinator.start();
-    this.setStatus(`starting the dev server on ${ENGINES[this.engine].name}…`);
+    if (!this.server) this.setStatus(`starting the dev server on ${ENGINES[this.engine].name}…`);
     await coordinator.attemptElection();
   }
 
@@ -2039,7 +2039,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     if (this.disposed || this.coordinator?.role === "owner") return;
     if (state.state === "up" && state.port !== undefined) {
       const tupleKey = `${state.ownerId}:${state.attemptId}:${state.generation}:${state.port}:${state.url ?? ""}`;
-      if (this.server?.remoteKey === tupleKey) return;
+      if (this.server?.remoteKey === tupleKey && this.serverState.state === "up") return;
       const remoteServer: Server = { port: state.port, remoteKey: tupleKey };
       this.server = remoteServer;
       let url = state.url;

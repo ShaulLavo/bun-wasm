@@ -58,18 +58,33 @@ async function withSite(
 }
 
 async function waitForSandboxReady(page: Page, timeout = 120_000): Promise<void> {
-  await page.waitForFunction(
-    () => {
+  try {
+    await page.waitForFunction(
+      () => {
+        const api = Reflect.get(globalThis, "sandbox");
+        const status = document.querySelector("#status");
+        if (status?.getAttribute("data-kind") === "error") {
+          throw new Error(`Sandbox error: ${status.textContent}`);
+        }
+        return Boolean(api?.editor?.path) && document.querySelector("#server-dot")?.getAttribute("data-state") === "up";
+      },
+      null,
+      { timeout },
+    );
+  } catch (error) {
+    const diag = await page.evaluate(() => {
       const api = Reflect.get(globalThis, "sandbox");
-      const status = document.querySelector("#status");
-      if (status?.getAttribute("data-kind") === "error") {
-        throw new Error(`Sandbox error: ${status.textContent}`);
-      }
-      return Boolean(api?.editor?.path) && document.querySelector("#server-dot")?.getAttribute("data-state") === "up";
-    },
-    null,
-    { timeout },
-  );
+      return {
+        role: api?.role?.() ?? null,
+        editorPath: api?.editor?.path ?? null,
+        serverDot: document.querySelector("#server-dot")?.getAttribute("data-state") ?? null,
+        previewUrl: document.querySelector("#preview-url")?.textContent ?? null,
+        status: document.querySelector("#status")?.textContent ?? null,
+        fsStatus: api?.fs?.state?.status ?? null,
+      };
+    }).catch(() => null);
+    throw new Error(`${String(error)} | sandboxDiag=${JSON.stringify(diag)}`);
+  }
 }
 
 async function waitForPreviewText(page: Page, expected: string, timeout = 60_000): Promise<void> {

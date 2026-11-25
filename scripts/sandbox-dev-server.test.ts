@@ -250,3 +250,40 @@ test("a second concurrent navigate cannot unlock the editor during teardown", as
     await f.cleanup();
   }
 });
+
+test("follower recovers serverState up on matching owner heartbeat even if serverState was transiently reset", async () => {
+  const f = await fixture();
+  try {
+    const frame = {
+      src: "",
+      contentDocument: null,
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    f.sandbox.attachPreview(frame as unknown as HTMLIFrameElement);
+    const ownerState = {
+      ownerId: "owner-tab",
+      attemptId: "attempt-1",
+      generation: 1,
+      engine: "browser",
+      state: "up" as const,
+      text: "localhost:5173/",
+      port: 5173,
+      url: "https://preview.example.test/",
+    };
+    const handleObserved = method<(s: typeof ownerState) => void>(f.sandbox, "handleObservedOwnerState");
+    handleObserved(ownerState);
+    expect(f.sandbox.serverState.state).toBe("up");
+
+    // Simulate a transient reset of serverState (e.g. boot() racing an early owner heartbeat).
+    method<(state: "starting" | "up" | "down", text: string) => void>(f.sandbox, "setServerState")("starting", "loading…");
+    expect(f.sandbox.serverState.state).toBe("starting");
+
+    // A matching heartbeat with the same tupleKey must restore serverState to "up".
+    handleObserved(ownerState);
+    expect(f.sandbox.serverState.state).toBe("up");
+    expect(f.sandbox.serverState.url).toBe("https://preview.example.test/");
+  } finally {
+    await f.cleanup();
+  }
+});
