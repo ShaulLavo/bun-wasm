@@ -1,4 +1,8 @@
 // Seed programs for the playground's home directory.
+// Returning visitors keep the files they were seeded with; their files are never rewritten. When a
+// demo's code changes in a way an old copy would get wrong, give the file a new name, so the
+// demo's exclusive-create restore adds the new file beside the visitor's old one (db.ts became
+// sqlite.ts and files.ts became bun-file.ts this way).
 
 export const HOME = "/home/user";
 
@@ -23,7 +27,7 @@ console.log("argv:", process.argv.slice(2));
 console.log("cwd:", process.cwd());
 `,
 
-  "files.ts": `// Bun.write and Bun.file on the browser filesystem.
+  "bun-file.ts": `// Bun.write and Bun.file on the browser filesystem.
 // Written files appear in the editor and in \`ls\`.
 const path = \`\${import.meta.dir}/notes/hello.txt\`;
 
@@ -263,7 +267,7 @@ const math = result.outputs.find((output) => output.path.endsWith("math.js"));
 if (math) console.log("\\nminified math.js:\\n" + (await math.text()).split("\\n")[0]);
 `,
 
-  "db.ts": `// In-memory SQLite in WebAssembly, so open tabs never share a database file.
+  "sqlite.ts": `// In-memory SQLite in WebAssembly, so open tabs never share a database file.
 import { Database } from "bun:sqlite";
 
 const db = new Database(":memory:");

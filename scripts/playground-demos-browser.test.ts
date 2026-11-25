@@ -36,6 +36,7 @@ for (const browserName of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webki
   test(`${browserName}: a returning visitor's unedited old examples are upgraded and edited ones kept`, () => withBrowser(browserName, returningVisitor));
   test(`${browserName}: Run cannot slip into a preparing demo, and Stop cancels it`, () => withBrowser(browserName, runStopRace));
   test(`${browserName}: Restart belongs to the launch's own process, and a failed preview stops spinning`, () => withBrowser(browserName, attributionAndFailure));
+  test(`${browserName}: a second Stop kills a server that ignores Ctrl-C, and Stop at any moment leaves Run usable`, () => withBrowser(browserName, forcedStop));
 }
 
 type Shell = { shell: { submit(command: string): Promise<void> }; editor: { open(path: string): Promise<void> } };
@@ -49,15 +50,16 @@ async function writeHome(page: Page, files: Record<string, string>): Promise<voi
   }, files);
 }
 
-/** Workspaces seeded before this change keep main's examples (bun-wasm 7b25271e). */
+/** A workspace seeded before the demos keeps main's db.ts and files.ts (bun-wasm 7b25271e). */
+const OLD_DB = 'import { Database } from "bun:sqlite";\nconst db = new Database("todos.sqlite");\ndb.run("CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY, title TEXT, done INTEGER)");\n';
+const OLD_FILES = 'const path = "notes/hello.txt";\nawait Bun.write(path, "old");\n';
+
 async function returningVisitor(browser: Browser, url: string): Promise<void> {
-  const legacy = await Bun.file(join(import.meta.dir, "../web/tests/fixtures/legacy-examples.json")).json() as Record<string, string[]>;
-  const editedMath = `${legacy["math.ts"]![0]}// edited by the visitor\n`;
+  const editedMath = `${examples["math.ts"]!}// edited by the visitor\n`;
   const context = await browser.newContext();
   try {
-    // The earlier visit left a workspace holding main's examples, one of them edited.
     const page = await open(context, url);
-    await writeHome(page, { "db.ts": legacy["db.ts"]![0]!, "files.ts": legacy["files.ts"]![0]!, "math.ts": editedMath });
+    await writeHome(page, { "db.ts": OLD_DB, "files.ts": OLD_FILES, "math.ts": editedMath });
     // The visitor comes back: the same tab loads the page again over that workspace.
     await page.reload();
     expect(await ready(page)).toContain("ready");
@@ -65,14 +67,16 @@ async function returningVisitor(browser: Browser, url: string): Promise<void> {
       const { fs } = Reflect.get(globalThis, "playground") as unknown as PageApi;
       return new TextDecoder().decode(await fs.readFile("/home/user/math.ts")) === edited;
     }, editedMath, { timeout: HANG_MS });
-    // The demos run the current examples: the old stock db.ts and files.ts are upgraded.
+    // The demos add their own new files; nothing of the visitor's is touched.
     expect(await runDemo(page, "sqlite", OUTPUT.sqlite!)).toContain("1 open todo(s)");
-    expect(await readText(page, "/home/user/db.ts")).toBe(examples["db.ts"]!);
+    expect(await readText(page, "/home/user/sqlite.ts")).toBe(examples["sqlite.ts"]!);
     expect(await runDemo(page, "test", OUTPUT.test!)).toContain("5 pass");
-    expect(await readText(page, "/home/user/math.ts")).toBe(editedMath);
     expect((await run(page, "cd /tmp", 30_000)).code).toBe(0);
     expect(await runDemo(page, "file", OUTPUT.file!)).toContain("exists: true");
-    expect(await readText(page, "/home/user/files.ts")).toBe(examples["files.ts"]!);
+    expect(await readText(page, "/home/user/bun-file.ts")).toBe(examples["bun-file.ts"]!);
+    expect(await readText(page, "/home/user/db.ts")).toBe(OLD_DB);
+    expect(await readText(page, "/home/user/files.ts")).toBe(OLD_FILES);
+    expect(await readText(page, "/home/user/math.ts")).toBe(editedMath);
     const files = await page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as { fs: { listFiles(path: string): Promise<string[]> } }).fs.listFiles("/home/user"));
     expect(files.filter(path => path.endsWith(".sqlite"))).toEqual([]);
     expect(files).toContain("/home/user/notes/hello.txt");
@@ -117,6 +121,58 @@ async function runStopRace(browser: Browser, url: string): Promise<void> {
   }
 }
 
+async function terminalIncludes(page: Page, text: string): Promise<void> {
+  await page.waitForFunction(text => {
+    const buffer = (Reflect.get(globalThis, "playground") as unknown as PageApi).term.buffer.active;
+    for (let row = 0; row < buffer.length; row++) if (buffer.getLine(row)?.translateToString(true).includes(text)) return true;
+    return false;
+  }, text, { timeout: HANG_MS });
+}
+
+async function idleRun(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const run = document.querySelector<HTMLButtonElement>("#run");
+    return run?.getAttribute("data-state") === "run" && !run.disabled;
+  }, undefined, { timeout: HANG_MS });
+}
+
+async function forcedStop(browser: Browser, url: string): Promise<void> {
+  const context = await browser.newContext();
+  try {
+    const page = await open(context, url);
+    await writeHome(page, {
+      "stubborn.ts": "process.on('SIGINT', () => console.log('IGNORED' + '_SIGINT'));\nBun.serve({ port: 3004, fetch: () => new Response('<h1>stubborn</h1>', { headers: { 'content-type': 'text/html' } }) });\nconsole.log('STUBBORN' + '_UP');\n",
+    });
+    await page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as Shell).editor.open("/home/user/stubborn.ts"));
+    await page.locator("#run").click();
+    await page.locator(".preview-dock iframe").waitFor({ timeout: HANG_MS });
+    await terminalIncludes(page, "STUBBORN_UP");
+
+    // The first Stop sends Ctrl-C, which the server handles and survives.
+    await page.locator("#run").click();
+    await terminalIncludes(page, "IGNORED_SIGINT");
+    expect(await page.locator("#run").getAttribute("data-state")).toBe("stop");
+    expect(await page.locator(".preview-dock").count()).toBe(1);
+
+    // The second Stop kills its job: Run comes back and the preview closes with the server.
+    await page.locator("#run").click();
+    await idleRun(page);
+    await page.locator(".preview-dock").waitFor({ state: "detached", timeout: HANG_MS });
+
+    // Stop pressed at any point of a demo's start (preparing, `cd ~`, launched) leaves the
+    // playground idle with Run enabled, never stuck disabled.
+    for (const delay of [0, 5, 10, 20, 40, 80, 160]) {
+      await page.locator('.demo[data-demo="test"]').click();
+      await page.waitForTimeout(delay);
+      if (await page.locator("#run").getAttribute("data-state") === "stop") await page.locator("#run").click();
+      await idleRun(page);
+    }
+    expect(await runDemo(page, "test", OUTPUT.test!)).toContain("5 pass");
+  } finally {
+    await context.close();
+  }
+}
+
 async function attributionAndFailure(browser: Browser, url: string): Promise<void> {
   const context = await browser.newContext();
   try {
@@ -143,7 +199,7 @@ async function attributionAndFailure(browser: Browser, url: string): Promise<voi
     void page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as Shell).shell.submit("bun run slow.ts"));
     const frameElement = await page.locator(".preview-dock iframe").elementHandle({ timeout: HANG_MS });
     const frame = await frameElement!.contentFrame();
-    await frame!.waitForFunction(() => document.title === "Loading preview", undefined, { timeout: HANG_MS });
+    await frame!.waitForFunction(() => document.querySelector("[data-preview-loading]") !== null, undefined, { timeout: HANG_MS });
     // The loading page polls its status with the global fetch; make the next poll fail.
     await frame!.evaluate(() => { Reflect.set(globalThis, "fetch", () => Promise.reject(new Error("offline"))); });
     await page.locator(".preview-dock .preview-failed").waitFor({ timeout: HANG_MS });
@@ -282,7 +338,7 @@ async function oneTab(browser: Browser, url: string): Promise<void> {
     await setEditorText(page, "console.log('VISITOR' + '_EDIT');\n");
     const edited = await runDemo(page, "sqlite", ["VISITOR_EDIT"]);
     expect(edited).toContain("VISITOR_EDIT");
-    expect(await readText(page, "/home/user/db.ts")).toBe("console.log('VISITOR' + '_EDIT');\n");
+    expect(await readText(page, "/home/user/sqlite.ts")).toBe("console.log('VISITOR' + '_EDIT');\n");
 
     // A deleted helper file is restored; the demo runs from any working directory.
     expect((await run(page, "rm math.ts && cd /tmp", 30_000)).code).toBe(0);

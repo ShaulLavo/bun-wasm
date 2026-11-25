@@ -13,11 +13,11 @@ export type Demo = {
 
 const files: Record<DemoId, readonly string[]> = {
   serve: ["serve.ts"],
-  sqlite: ["db.ts"],
+  sqlite: ["sqlite.ts"],
   test: ["math.test.ts", "math.ts"],
   build: ["build.ts", "jsx.tsx", "math.ts"],
   shell: ["shell.ts"],
-  file: ["files.ts"],
+  file: ["bun-file.ts"],
 };
 
 export const demos: readonly Demo[] = Object.entries(files).map(([id, needed]) => ({

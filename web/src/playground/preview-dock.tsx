@@ -6,19 +6,21 @@ type Props = { playground: Playground };
 type FrameState = "waiting" | "loaded" | "failed";
 
 /**
- * The preview service worker first serves a same-origin "Loading preview" page while the
- * server answers. Its status element is the only thing that page rewrites, and only when the
- * preview request fails, so a change there is the failure signal. A frame whose document
- * cannot be read counts as loaded.
+ * The preview service worker first serves a same-origin loading page while the server
+ * answers. Its status element carries `data-preview-loading` with its waiting text, and the
+ * page rewrites that text only when the preview request fails. A frame without the marker
+ * (the real page, or one that cannot be read) counts as loaded.
  */
-function loadingStatus(frame: HTMLIFrameElement): Element | null | undefined {
+function loadingStatus(frame: HTMLIFrameElement): HTMLElement | undefined {
   try {
-    const document = frame.contentDocument;
-    if (document?.title !== "Loading preview") return undefined;
-    return document.querySelector('[role="status"]');
+    return frame.contentDocument?.querySelector<HTMLElement>("[data-preview-loading]") ?? undefined;
   } catch {
     return undefined;
   }
+}
+
+function loadingFailed(status: HTMLElement): boolean {
+  return status.textContent !== status.dataset.previewLoading;
 }
 
 /**
@@ -44,10 +46,11 @@ export function PreviewDock(handle: Handle<Props>) {
   const close = on<HTMLButtonElement>("click", () => handle.props.playground.closePreview());
   const load = on<HTMLIFrameElement>("load", (event) => {
     const status = loadingStatus(event.currentTarget);
-    if (status === undefined) return settle("loaded");
+    if (!status) return settle("loaded");
     watch?.disconnect();
-    if (!status) return;
-    watch = new MutationObserver(() => settle("failed"));
+    // The request may already have failed before this load event ran.
+    if (loadingFailed(status)) return settle("failed");
+    watch = new MutationObserver(() => { if (loadingFailed(status)) settle("failed"); });
     watch.observe(status, { childList: true, characterData: true, subtree: true });
   });
   return () => {

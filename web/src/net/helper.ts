@@ -40,7 +40,10 @@ export interface BunNetworkOptions {
 /** What a Bun process was started with, so a host can tell which command a server belongs to. */
 export interface BunProcessStart {
   readonly argv: readonly string[];
-  readonly cwd: string;
+  readonly env: Readonly<Record<string, string>>;
+  readonly pid: number;
+  /** The job the process runs in, which a host can signal as a whole. */
+  readonly job: number;
 }
 
 export function createBunNetworkHelper(

@@ -3,7 +3,6 @@ import { examples } from "../src/examples";
 import { demo, demos } from "../src/playground/demos";
 import { copy } from "../src/playground/showcase-copy";
 import { orderFiles } from "../src/playground/editor-pane";
-import { legacyExamples, textHash } from "../src/legacy-examples";
 import { visibleLength, wrapWords } from "../src/playground/playground";
 
 test("every demo runs a seeded example and restores only seeded files", () => {
@@ -25,26 +24,24 @@ test("the Bun.serve demo listens on a fixed port so its preview and Restart find
   expect(examples["serve.ts"]).toContain("port: 3000");
 });
 
-test("every older stock example hash matches its recorded text, and the current example differs", async () => {
-  const texts = await Bun.file(new URL("./fixtures/legacy-examples.json", import.meta.url)).json() as Record<string, string[]>;
-  expect(Object.keys(legacyExamples).sort()).toEqual(Object.keys(texts).sort());
-  for (const [name, hashes] of Object.entries(legacyExamples)) {
-    expect(await Promise.all(texts[name]!.map(textHash))).toEqual(hashes.slice());
-    expect(hashes).not.toContain(await textHash(examples[name]!));
-  }
-  // The old db.ts is the reason for the upgrade: it opened a file database every tab shared.
-  expect(texts["db.ts"]![0]).toContain('new Database("todos.sqlite")');
+test("demos whose code changed have new names, so an old workspace's copies are never reused", () => {
+  // Main's db.ts opened a shared todos.sqlite and its files.ts wrote relative to the shell's
+  // directory. Their replacements must not reuse those names, or exclusive create would keep
+  // the old copies and run them.
+  expect(demo("sqlite")?.file).toBe("sqlite.ts");
+  expect(demo("file")?.file).toBe("bun-file.ts");
+  for (const entry of demos) for (const file of entry.files) expect(["db.ts", "files.ts"]).not.toContain(file);
 });
 
 test("demo databases are in memory, so two tabs never write one SQLite file", () => {
-  for (const name of ["serve.ts", "db.ts"]) {
+  for (const name of ["serve.ts", "sqlite.ts"]) {
     expect(examples[name]).toContain('new Database(":memory:")');
     expect(examples[name]).not.toMatch(/new Database\("[^:]/);
   }
 });
 
 test("demos that touch files resolve them from their own directory, not the shell's", () => {
-  for (const name of ["build.ts", "files.ts", "shell.ts"]) expect(examples[name]).toContain("import.meta.dir");
+  for (const name of ["build.ts", "bun-file.ts", "shell.ts"]) expect(examples[name]).toContain("import.meta.dir");
 });
 
 test("tabs put the demo first, generated output last and leave binary files out", () => {
