@@ -942,6 +942,9 @@ impl Processes {
             };
             target = parent;
         }
+        if signal == 0 {
+            return 0;
+        }
         child.cancel.kill(signal);
         self.notify.bump();
         0
@@ -957,6 +960,9 @@ impl Processes {
         };
         if record.owner != self.pid {
             return PERM;
+        }
+        if signal == 0 {
+            return 0;
         }
         for child in state.processes.values().filter(|child| child.job == job) {
             child.cancel.kill(signal);

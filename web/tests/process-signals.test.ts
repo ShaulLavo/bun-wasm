@@ -33,10 +33,11 @@ test("shared public identity keeps zero, ignored, handled and fatal self signals
   expect(sibling.selected()).toBeUndefined();
 });
 
-function fixture() {
+function fixture(procKill: (pid: number, signal: number) => number = () => -71) {
   const dispositions = new Map<number, number>();
   const pending = new Set<number>();
   const changes: number[][] = [];
+  const killCalls: number[][] = [];
   const ticks: (() => void)[] = [];
   const writes: unknown[][] = [];
   let writeError: Error | undefined;
@@ -52,6 +53,10 @@ function fixture() {
       writeStdout(...args: unknown[]) { writes.push(args); if (writeError) throw writeError; }, writeStderr() {},
       tlsDispose() {}, closeAllDirs() {},
       exit(code: number): never { throw new GuestExit(code); },
+      procKill(pid: number, signal: number) {
+        killCalls.push([pid, signal]);
+        return procKill(pid, signal);
+      },
       hostSignal(signal: number, mode: number) {
         // Mode 4 reads only the fatal outcome, as Waffle's runtime_proc.signal does.
         if (signal === 0 && mode === 4) {
@@ -102,7 +107,7 @@ function fixture() {
   const process = runInContext(processSource, context)(internal);
   context.process = process;
   return {
-    process, events, internal, changes, dispositions, pending, context, writes,
+    process, events, internal, changes, killCalls, dispositions, pending, context, writes,
     cancelIoWaitersCalls: () => cancelIoWaitersCalls,
     writeFails(error: Error) { writeError = error; },
     ticks() { while (ticks.length) ticks.shift()!(); },
@@ -527,4 +532,39 @@ test("stdio error listeners do not turn Node's ignored SIGPIPE into a fatal sign
   expect(f.selected()).toBeUndefined();
   expect(f.process.kill(f.process.pid, "SIGPIPE")).toBe(true);
   expect(f.selected()).toBeUndefined();
+});
+
+test("process.kill(pid, 0) maps runtime_proc.kill probe results to Node return and errno errors", () => {
+  const f = fixture((pid, signal) => {
+    expect(signal).toBe(0);
+    if (pid === 51) return 0;
+    if (pid === 7) return -63;
+    return -71;
+  });
+  expect(f.process.kill(f.process.pid, 0)).toBe(true);
+  expect(f.process.kill(51, 0)).toBe(true);
+  expect(f.process.kill("51", 0)).toBe(true);
+  expect(f.killCalls).toEqual([[51, 0], [51, 0]]);
+  expect(f.changes).toEqual([]);
+
+  let permError: (Error & { code?: string; errno?: number; syscall?: string }) | undefined;
+  try { f.process.kill(7, 0); } catch (error) { permError = error as typeof permError; }
+  expect(permError?.code).toBe("EPERM");
+  expect(permError?.errno).toBe(-1);
+  expect(permError?.syscall).toBe("kill");
+
+  let srchError: (Error & { code?: string; errno?: number; syscall?: string }) | undefined;
+  try { f.process.kill(99999, 0); } catch (error) { srchError = error as typeof srchError; }
+  expect(srchError?.code).toBe("ESRCH");
+  expect(srchError?.errno).toBe(-3);
+  expect(srchError?.syscall).toBe("kill");
+
+  let overflowError: (Error & { code?: string; errno?: number; syscall?: string }) | undefined;
+  try { f.process.kill(0x100000000, 0); } catch (error) { overflowError = error as typeof overflowError; }
+  expect(overflowError?.code).toBe("ESRCH");
+  expect(overflowError?.errno).toBe(-3);
+
+  let nonZeroError: (Error & { code?: string }) | undefined;
+  try { f.process.kill(51, "SIGTERM"); } catch (error) { nonZeroError = error as typeof nonZeroError; }
+  expect(nonZeroError?.code).toBe("ENOSYS");
 });

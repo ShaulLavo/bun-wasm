@@ -1038,6 +1038,66 @@ fn orphan_completion_keeps_job_outcome_and_live_descendant_signal_authority() {
 }
 
 #[test]
+fn signal_zero_probes_without_waking_and_distinguishes_live_zombie_collected_and_unpermitted() {
+    let root = processes();
+    fake_child(&root, 10, root.pid, ROOT_JOB, None);
+    fake_child(&root, 11, 10, 77, None);
+    root.runtime.state.lock().unwrap().jobs.insert(
+        77,
+        Job {
+            owner: 10,
+            leader: 11,
+            result: None,
+        },
+    );
+    let child_admission = root
+        .runtime
+        .admit_fixture(10, ProcessKind::Process, Arc::default())
+        .unwrap();
+    let child = Processes::new(
+        child_admission,
+        Stdio {
+            fds: Descriptors::new(),
+            memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
+        },
+        root.notify.clone(),
+    );
+
+    let before = root.notify.generation();
+    assert_eq!(root.kill(10, 0), 0);
+    assert_eq!(root.kill(11, 0), 0);
+    assert_eq!(child.kill(10, 0), PERM);
+    assert_eq!(child.kill(11, 0), PERM);
+    assert_eq!(root.kill(99999, 0), SRCH);
+    assert_eq!(root.kill_job(77, 0), PERM);
+    assert_eq!(root.notify.generation(), before);
+
+    // Zombie (exited, not yet reaped): still exists until wait() collects it.
+    root.runtime
+        .state
+        .lock()
+        .unwrap()
+        .complete(11, FinalOutcome::Exit(0));
+    assert_eq!(root.kill(11, 0), 0);
+    assert_eq!(child.kill(11, 0), PERM);
+    assert_eq!(root.notify.generation(), before);
+
+    // Collected: ESRCH for every caller.
+    assert!(
+        root.runtime
+            .state
+            .lock()
+            .unwrap()
+            .processes
+            .remove(&11)
+            .is_some()
+    );
+    assert_eq!(root.kill(11, 0), SRCH);
+    assert_eq!(child.kill(11, 0), SRCH);
+    assert_eq!(root.notify.generation(), before);
+}
+
+#[test]
 fn executable_symlinks_resolve_in_guest_namespace_without_erasing_components() {
     use std::os::unix::fs::symlink;
     let mut p = processes();
