@@ -40,12 +40,38 @@ export const copy = {
   projectLabel: "Project",
   projectTitle: "Open a project template in its own workspace",
   examplesOption: "Bun API examples",
-  // The sandbox's link to these demos is DEMOS_LINK in sandbox/src/app.tsx.
-  sandboxLink: "Sandbox",
-  sandboxTitle: "Open the browser app sandbox with live preview",
+  /** The two-page switch after the wordmark, on both the sandbox and the playground. */
+  siteNav: {
+    aria: "Pages",
+    sandbox: "Sandbox",
+    sandboxTitle: "Open the browser app sandbox with live preview",
+    playground: "Bun APIs",
+    playgroundTitle: "Run Bun.serve, bun:sqlite, bun test, Bun.build, Bun.$, and Bun.file in the playground",
+  },
+  /** The header's main button: Run when idle, Stop while a command runs. */
+  run: {
+    run: "▶ Run",
+    runTitle: "Save and run (Ctrl/Cmd-Enter)",
+    stop: "■ Stop",
+    stopTitle: "Stop the running command (press again to force it)",
+  },
+  /** The phone-only switch between the three panes of the examples workspace. */
+  panes: {
+    aria: "Pane",
+    code: "Code",
+    preview: "Preview",
+    terminal: "Terminal",
+    previewLive: "Server running",
+  },
+  /** The line the terminal prints when a server's preview is ready. */
+  terminal: {
+    previewLabel: "preview",
+    previewHint: "Ctrl-C stops the server",
+  },
   preview: {
     aria: "Server preview",
     frameTitle: "Server preview",
+    waiting: "Waiting for the server",
     restart: "Restart",
     restartTitle: "Save the file and restart the server",
     open: "Open",

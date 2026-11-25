@@ -26,6 +26,7 @@ import { installPreviewLinks } from "./preview-links";
 import { Editor } from "./editor";
 import { projectTemplate, type ProjectTemplate } from "./project-templates";
 import { demo as findDemo, type Demo } from "./demos";
+import { copy } from "./showcase-copy";
 import {
   acquireLockHandle,
   acquireWriterClaim,
@@ -55,6 +56,16 @@ import { startWorkspaceWatch, type WorkspaceWatchHandle } from "../workspace-wat
 
 type Filesystem = Runtime["filesystem"];
 export type Status = { text: string; kind: "" | "ok" | "error" };
+/** A command the playground started: Run's file or a demo's. */
+export type Launch = { readonly path: string; readonly demo?: Demo };
+export type Pane = "code" | "preview" | "terminal";
+const encoder = new TextEncoder();
+/** WASI EEXIST, as the filesystem worker reports an exclusive create of an existing path. */
+const ERRNO_EXIST = 20;
+
+function isExistsError(error: unknown): boolean {
+  return !!error && typeof error === "object" && "errno" in error && error.errno === ERRNO_EXIST;
+}
 /** Why Run became Reload. Startup and ownership failures also lock the workspace controls. */
 export type Failure = "startup" | "ownership" | "shell";
 
@@ -64,6 +75,8 @@ const STOP_WAIT_MS = 30_000;
 /** A demo click stops the running command first; a second interrupt after this long sends SIGKILL. */
 const DEMO_INTERRUPT_MS = 3_000;
 const DEMO_IDLE_MS = 15_000;
+/** The welcome banner wraps at words, at most this wide (narrower on phones). */
+const BANNER_COLUMNS = 60;
 
 /** The playground page: one Waffle runtime, the ~ workspace, bun.wasm, and an interactive bash-web shell. */
 export class Playground extends TypedEventTarget<{ change: Event }> {
@@ -75,7 +88,11 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   /** The demo the visitor last started; `?demo=<id>` starts one when the page is ready. */
   activeDemo: Demo | undefined;
   /** A server started in the examples workspace, shown docked next to the terminal. */
-  dockedPreview: { url: string; port: number; key: number } | undefined;
+  dockedPreview: { url: string; port: number; key: number; launch: Launch | undefined } | undefined;
+  /** The pane a phone shows in the examples workspace. */
+  pane: Pane = "code";
+  /** The file the playground itself started (Run or a demo), while that command runs. */
+  private launch: Launch | undefined;
   term?: Terminal;
   editor?: Editor;
   failure?: Failure;
@@ -305,18 +322,45 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     location.assign(next);
   }
 
+  /** A foreground command is running or about to: the Run button offers Stop. */
+  get busy(): boolean {
+    return this.ready && (this.runPending || this.shell?.running === true);
+  }
+
+  /** Saves the open file and runs it. Resolves when the command ends. */
   async run(): Promise<void> {
     const { editor, shell } = this;
     if (!this.ready || !editor || !shell || shell.running || this.runPending) return;
     this.runPending = true;
     this.changed();
+    const path = editor.path;
     try {
-      const path = editor.path;
       await editor.save();
-      const quoted = `'${path.replace(/'/g, "'\\''")}'`;
-      const command = /\.(test|spec)\.[cm]?[jt]sx?$/.test(path) ? "test" : "run";
+    } catch (error) {
+      this.runPending = false;
+      this.changed();
+      throw error;
+    }
+    await this.submitLaunch({ path });
+  }
+
+  /** Stop: Ctrl-C for the foreground command; a second Stop kills it. */
+  stop(): void {
+    this.shell?.interrupt();
+  }
+
+  /** Runs `launch.path` by absolute path. The caller has set runPending; this clears it when the command ends. */
+  private async submitLaunch(launch: Launch): Promise<void> {
+    const { shell } = this;
+    this.launch = launch;
+    this.changed();
+    try {
+      if (!shell) return;
+      const quoted = `'${launch.path.replace(/'/g, "'\\''")}'`;
+      const command = /\.(test|spec)\.[cm]?[jt]sx?$/.test(launch.path) ? "test" : "run";
       await shell.submit(`bun ${command} ${quoted}`);
     } finally {
+      if (this.launch === launch) this.launch = undefined;
       this.runPending = false;
       this.changed();
     }
@@ -328,31 +372,83 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     return this.ready && shellUp && !this.demoPending && this.failure === undefined;
   }
 
-  /** Restores the demo's files if they were deleted, opens its file and runs it. Edits are kept. */
+  /**
+   * Stops the foreground command, restores the demo's missing files (never replacing one that
+   * exists), opens its file and runs that file. Holding runPending from the stop to the launch
+   * keeps Run and other demos out until the demo's own command is submitted.
+   */
   async runDemo(demo: Demo): Promise<void> {
-    const { editor, shell, fs } = this;
-    if (!this.canStartDemo || !editor || !shell || !fs) return;
+    const { editor, shell } = this;
+    if (!this.canStartDemo || !editor || !shell) return;
     this.demoPending = true;
     this.activeDemo = demo;
     this.syncDemoParam(demo);
     this.changed();
+    const path = `${HOME}/${demo.file}`;
+    let launched = false;
     try {
       await this.stopForeground(shell);
-      for (const name of demo.files) {
-        const path = `${HOME}/${name}`;
-        if (await fs.lookup(path)) continue;
-        await this.withPlaygroundPageWrite(async (liveFs) => {
-          await liveFs.writeFile(path, examples[name]!);
-          await liveFs.flush(path);
-        });
-      }
-      await editor.open(`${HOME}/${demo.file}`);
-      // run() resolves when the command ends, which for a server is when it is stopped.
-      void this.run().catch(this.report);
+      this.runPending = true;
+      this.changed();
+      for (const name of demo.files) await this.createIfMissing(`${HOME}/${name}`, encoder.encode(examples[name]!));
+      await editor.open(path);
+      if (editor.path === path && editor.dirty(path)) await editor.save();
+      this.term?.clear();
+      this.pane = "terminal";
+      launched = true;
+      // The launch resolves when the command ends, which for a server is when it is stopped.
+      void this.submitLaunch({ path, demo }).catch(this.report);
     } finally {
+      if (!launched) this.runPending = false;
       this.demoPending = false;
       this.changed();
     }
+  }
+
+  /** Restart in the preview bar: reruns the launch that started the previewed server. */
+  async restartPreview(): Promise<void> {
+    const launch = this.dockedPreview?.launch;
+    const { editor, shell } = this;
+    if (!launch || !editor || !shell || this.demoPending) return;
+    if (launch.demo) return this.runDemo(launch.demo);
+    this.demoPending = true;
+    this.changed();
+    let launched = false;
+    try {
+      await this.stopForeground(shell);
+      this.runPending = true;
+      this.changed();
+      if (editor.path === launch.path && editor.dirty(launch.path)) await editor.save();
+      launched = true;
+      void this.submitLaunch({ path: launch.path }).catch(this.report);
+    } finally {
+      if (!launched) this.runPending = false;
+      this.demoPending = false;
+      this.changed();
+    }
+  }
+
+  /** Phones show one pane at a time in the examples workspace. */
+  setPane(pane: Pane): void {
+    this.pane = pane;
+    this.changed();
+  }
+
+  /** Creates `path` holding `bytes` unless it already exists. The check and create are one filesystem call. */
+  private async createIfMissing(path: string, bytes: Uint8Array): Promise<boolean> {
+    return this.withPlaygroundPageWrite(async (fs) => {
+      const client = new FilesystemClient(fs.fork());
+      try {
+        await client.asyncCall("writeFile", [path, false, true], bytes);
+        await fs.flush(path);
+        return true;
+      } catch (error) {
+        if (isExistsError(error)) return false;
+        throw error;
+      } finally {
+        client.dispose();
+      }
+    });
   }
 
   /** Interrupts the foreground command, then kills it if it ignores the interrupt. */
@@ -372,14 +468,20 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     history.replaceState(history.state, "", next);
   }
 
-  /** Each announcement gets a fresh frame, so a restarted server is loaded again. */
+  /**
+   * Each announcement gets a fresh frame, so a restarted server is loaded again. The preview
+   * remembers the playground launch that was running when the server started (Run or a demo);
+   * a server started from the terminal has none, so its preview offers no Restart.
+   */
   private dockPreview(url: string, port: number): void {
-    this.dockedPreview = { url, port, key: ++this.previewKey };
+    this.dockedPreview = { url, port, key: ++this.previewKey, launch: this.launch };
+    if (this.launch?.demo) this.pane = "preview";
     this.changed();
   }
 
   closePreview(): void {
     this.dockedPreview = undefined;
+    if (this.pane === "preview") this.pane = "terminal";
     this.changed();
   }
 
@@ -387,19 +489,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const { editor } = this;
     if (!editor || !this.fs) return;
     const path = normalize(name, HOME);
-    await this.withPlaygroundPageWrite(async (fs) => {
-      const client = new FilesystemClient(fs.fork());
-      try {
-        await client.asyncCall("writeFile", [path, false, true], new Uint8Array());
-        await fs.flush(path);
-      } catch (error) {
-        if (!error || typeof error !== "object" || !("errno" in error) || error.errno !== 20) {
-          throw error;
-        }
-      } finally {
-        client.dispose();
-      }
-    });
+    await this.createIfMissing(path, new Uint8Array());
     await editor.open(path);
     editor.focus();
   }
@@ -946,8 +1036,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
         ? `${this.template.label}: run bun install, then bun run dev. Open its preview link, edit ${this.template.editorFile}, and save with Ctrl/Cmd-S.`
         : "Try \x1b[32mbun repl\x1b[0m, \x1b[32mbun run index.ts\x1b[0m, or press Run.",
       `filesystem: ${storage}, preopened at /, cwd ${HOME}; editor saves ${durability} reload`,
-      "",
-    ]) term.writeln(line);
+    ]) for (const wrapped of wrapWords(line, Math.min(BANNER_COLUMNS, term.cols - 1))) term.writeln(wrapped);
+    term.writeln("");
   }
 
   private async startShellSession(params: {
@@ -1121,10 +1211,30 @@ function createTerminal(): Terminal {
   });
 }
 
+/** The short `localhost:<port>` text links to the real preview URL. */
 function previewLine(previews: Previews, port: number, state: string): string {
   if (state !== "ready") return `\x1b[2m[preview] port ${port}: preview transport is ${state}\x1b[0m\r\n`;
   const url = previews.url(port);
-  return `\x1b[2m[preview]\x1b[0m \x1b]8;;${url}\x07\x1b[4;36m${url}\x1b[0m\x1b]8;;\x07 \x1b[2m(Ctrl-C stops the server)\x1b[0m\r\n`;
+  return `\x1b[2m[${copy.terminal.previewLabel}]\x1b[0m \x1b]8;;${url}\x07\x1b[4;36mlocalhost:${port}\x1b[0m\x1b]8;;\x07 \x1b[2m${copy.terminal.previewHint}\x1b[0m\r\n`;
+}
+
+/** Hard-wraps at spaces so banner lines never break mid-word; ANSI colour codes take no width. */
+export function wrapWords(text: string, width: number): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(" ")) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (line && visibleLength(candidate) > width) {
+      lines.push(line);
+      line = word;
+    } else line = candidate;
+  }
+  return lines.concat([line]);
+}
+
+/** Text width without SGR colour sequences (ESC [ ... m). */
+export function visibleLength(text: string): number {
+  return text.split("\x1b[").reduce((length, part, index) => length + (index === 0 ? part : part.replace(/^[0-9;]*m/, "")).length, 0);
 }
 
 function warmFirstCommand(): void {

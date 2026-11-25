@@ -5,11 +5,29 @@ import { PreviewPane } from "./preview-pane";
 import type { Sandbox } from "./sandbox";
 import { TerminalPane } from "./terminal-pane";
 import { templates } from "./template-catalog";
-
-/** The link to the playground's one-click Bun API demos (copy lives here so the sandbox page imports no playground module). */
-const DEMOS_LINK = { text: "Bun API demos", title: "Run Bun.serve, bun:sqlite, bun test, Bun.build, Bun.$, and Bun.file in the playground" };
+import { SiteBrand, SiteNav } from "../../web/src/site-header";
 
 type Props = { sandbox: Sandbox };
+
+/** A clockwise arrow: restart the dev server. */
+function RestartIcon() {
+  return () => (
+    <svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path d="M13 8a5 5 0 1 1-1.46-3.54" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+      <path d="M13 2.5V5h-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  );
+}
+
+/** A counter-clockwise arrow: put the template back. */
+function ResetIcon() {
+  return () => (
+    <svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path d="M3 8a5 5 0 1 0 1.46-3.54" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+      <path d="M3 2.5V5h2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  );
+}
 
 const ENGINE_OPTIONS = [["browser", "Browser (native)"], ["quickjs", "QuickJS"], ["jsc", "JSC"]] as const;
 const RELOAD_TITLES = { construction: "Retry sandbox startup", startup: "Open the latest saved workspace", storage: "Retry saving and starting without leaving this page" };
@@ -50,9 +68,9 @@ function Header(handle: Handle<Props>) {
     const locked = resetting || navigating || failure !== undefined;
     return (
       <header>
-        <h1><span class="logo" aria-hidden="true">🥟</span> bun<span class="dim">.wasm</span> <span class="product">sandbox</span></h1>
+        <SiteBrand />
+        <SiteNav current="sandbox" sandboxHref="./" playgroundHref="./playground/?demo=serve" />
         <span id="status" role="status" aria-live="polite" data-kind={status.kind}>{status.text}</span>
-        <a class="nav showcase-link" href="./playground/?demo=serve" title={DEMOS_LINK.title}>{DEMOS_LINK.text}</a>
         <label class="engine template-choice">
           <span class="label">Template</span>
           <select id="template" aria-label="App template" title="App template" disabled={locked} mix={choose("template")}>
@@ -67,10 +85,10 @@ function Header(handle: Handle<Props>) {
         </label>
         {sandbox.unreadable
           ? <button id="start-fresh" type="button" title="Delete the workspace that cannot be opened and start from the template" disabled={resetting || navigating} mix={startFresh}>Start fresh</button>
-          : <button id="reset" type="button" title="Discard this workspace and restore its template" disabled={locked || !sandbox.workspaceInitialized} mix={reset}>Reset template</button>}
+          : <button id="reset" type="button" aria-label="Reset template" title="Discard this workspace and restore its template" disabled={locked || !sandbox.workspaceInitialized} mix={reset}><ResetIcon /><span class="label">Reset template</span></button>}
         {failure
           ? <button id="restart" type="button" title={RELOAD_TITLES[failure]} mix={restart}>{failure === "storage" ? "Retry" : "Reload"}</button>
-          : <button id="restart" type="button" title="Restart the dev server" disabled={resetting || navigating} mix={restart}>↻ Restart</button>}
+          : <button id="restart" type="button" aria-label="Restart" title="Restart the dev server" disabled={resetting || navigating} mix={restart}><RestartIcon /><span class="label">Restart</span></button>}
       </header>
     );
   };

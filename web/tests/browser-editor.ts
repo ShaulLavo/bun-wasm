@@ -52,7 +52,8 @@ async function filesystemInfoCheck(base: string, mode: "memory" | "fast" | null)
     const output = await terminalText(page);
     const storage = mode === "memory" ? "memory-only browser storage" : "persistent browser storage";
     const durability = mode === "memory" ? "do not survive" : "survive";
-    assert.ok(output.includes(`filesystem: ${storage}, preopened at /, cwd /home/user; editor saves ${durability} reload`), output);
+    // The banner wraps at words, so compare with line breaks folded into spaces.
+    assert.ok(output.replace(/\s+/g, " ").includes(`filesystem: ${storage}, preopened at /, cwd /home/user; editor saves ${durability} reload`), output);
     if (mode === "memory") assert.doesNotMatch(output, /persistent browser storage|editor saves survive reload/);
     if (process.env.FILESYSTEM_INFO_SCREENSHOT) await page.screenshot({ path: `${process.env.FILESYSTEM_INFO_SCREENSHOT}-${mode ?? "default"}.png`, fullPage: true });
     const initial = await page.locator("#editor .cm-content").innerText();

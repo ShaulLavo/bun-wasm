@@ -25,7 +25,7 @@ console.log("cwd:", process.cwd());
 
   "files.ts": `// Bun.write and Bun.file on the browser filesystem.
 // Written files appear in the editor and in \`ls\`.
-const path = "notes/hello.txt";
+const path = \`\${import.meta.dir}/notes/hello.txt\`;
 
 await Bun.write(path, "Written by Bun.write at " + new Date().toISOString() + "\\n");
 const file = Bun.file(path);
@@ -33,8 +33,9 @@ console.log("exists:", await file.exists());
 console.log("size:", file.size, "bytes");
 console.log("text:", (await file.text()).trim());
 
-await Bun.write("notes/data.json", JSON.stringify({ language: "TypeScript", runtime: "bun.wasm" }, null, 2));
-const data = await Bun.file("notes/data.json").json();
+const json = \`\${import.meta.dir}/notes/data.json\`;
+await Bun.write(json, JSON.stringify({ language: "TypeScript", runtime: "bun.wasm" }, null, 2));
+const data = await Bun.file(json).json();
 console.log("json:", data);
 `,
 
@@ -171,7 +172,8 @@ test("mocks and async", async () => {
 // Edit the HTML or a route, then press Restart above the preview.
 import { Database } from "bun:sqlite";
 
-const db = new Database("visits.sqlite");
+// One in-memory database per server, so two tabs never write the same SQLite file.
+const db = new Database(":memory:");
 db.run("CREATE TABLE IF NOT EXISTS visits (at TEXT NOT NULL)");
 
 const server = Bun.serve({
@@ -196,12 +198,13 @@ function page(visits: number): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bun.serve in WebAssembly</title>
 <style>
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #14151a; color: #e6e6e6; font: 16px/1.5 system-ui, sans-serif; }
-  main { max-width: 32rem; padding: 2rem; text-align: center; }
-  h1 { color: #fbf0df; margin: 0 0 .5rem; }
+  html { color-scheme: dark; background: #14151a; }
+  body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; color: #e6e6e6; font: 15px/1.5 system-ui, sans-serif; }
+  main { margin: auto; max-width: 32rem; padding: 1.25rem; text-align: center; }
+  h1 { color: #fbf0df; margin: 0 0 .5rem; font-size: clamp(1.35rem, 5vw, 2rem); line-height: 1.15; }
   b { color: #f472b6; }
-  button { font: inherit; border: 0; border-radius: 999px; padding: .6rem 1.2rem; background: #fbf0df; color: #14151a; cursor: pointer; }
-  pre { text-align: left; background: #1b1d24; border: 1px solid #2a2d38; border-radius: 8px; padding: 1rem; white-space: pre-wrap; }
+  button { font: inherit; border: 0; border-radius: 6px; padding: .5rem 1rem; background: #fbf0df; color: #14151a; cursor: pointer; }
+  pre { text-align: left; background: #1b1d24; border: 1px solid #2a2d38; border-radius: 6px; padding: .6rem .75rem; margin: .75rem 0 0; font-size: 13px; white-space: pre-wrap; }
 </style>
 <main>
   <h1>Hello from Bun.serve</h1>
@@ -222,7 +225,7 @@ function page(visits: number): string {
   "shell.ts": `// Bun's shell runs globs, pipes, and builtins on this workspace's filesystem.
 import { $ } from "bun";
 
-console.log("glob:", (await $\`echo *.ts\`.text()).trim());
+console.log("glob:", (await $\`echo *.ts\`.cwd(import.meta.dir).text()).trim());
 
 // Bun.$ escapes interpolated values, so this stays one argument.
 const risky = "hello; rm -rf /";
@@ -239,9 +242,10 @@ console.log("exit code of a failed ls:", exitCode);
 `,
 
   "build.ts": `// Bundle and minify jsx.tsx and math.ts into dist/ with linked sourcemaps.
+const here = import.meta.dir;
 const result = await Bun.build({
-  entrypoints: ["./jsx.tsx", "./math.ts"],
-  outdir: "./dist",
+  entrypoints: [\`\${here}/jsx.tsx\`, \`\${here}/math.ts\`],
+  outdir: \`\${here}/dist\`,
   minify: true,
   sourcemap: "linked",
 });
@@ -252,17 +256,17 @@ if (!result.success) {
 }
 
 for (const output of result.outputs) {
-  console.log(\`\${output.kind.padEnd(10)} \${output.path.slice(process.cwd().length + 1).padEnd(18)} \${output.size} bytes\`);
+  console.log(\`\${output.kind.padEnd(10)} \${output.path.slice(here.length + 1).padEnd(18)} \${output.size} bytes\`);
 }
 
 const math = result.outputs.find((output) => output.path.endsWith("math.js"));
 if (math) console.log("\\nminified math.js:\\n" + (await math.text()).split("\\n")[0]);
 `,
 
-  "db.ts": `// SQLite in WebAssembly. Writes persist in todos.sqlite across runs.
+  "db.ts": `// SQLite in WebAssembly, in memory, so tabs never share a database file.
 import { Database } from "bun:sqlite";
 
-const db = new Database("todos.sqlite");
+const db = new Database(":memory:");
 db.run("CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY, title TEXT, done INTEGER)");
 
 const insert = db.prepare("INSERT INTO todos (title, done) VALUES ($title, $done)");
@@ -277,6 +281,6 @@ addMany([
 
 console.table(db.query("SELECT id, title, done FROM todos ORDER BY id").all());
 const { open } = db.query("SELECT count(*) AS open FROM todos WHERE done = 0").get() as { open: number };
-console.log(open, "open todo(s); run again and the database file keeps growing");
+console.log(open, "open todo(s)");
 `,
 };

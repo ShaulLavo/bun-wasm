@@ -56,13 +56,13 @@ async function projectPicker(page: Page): Promise<void> {
   const options = await picker.locator("option").evaluateAll(options => options.map(option => [option.getAttribute("value"), option.textContent]));
   assert.deepEqual(options.slice(1).map(([value]) => value), projectTemplates.map(project => project.id));
   assert.equal(options[0]?.[0], "");
-  assert.deepEqual(await page.getByRole("navigation", { name: "Projects" }).getByRole("link").evaluateAll(links => links.map(link => link.getAttribute("href"))), ["../"]);
+  assert.deepEqual(await page.getByRole("navigation", { name: "Pages" }).getByRole("link").evaluateAll(links => links.map(link => link.getAttribute("href"))), ["../", "./"]);
   assert.equal(await page.locator(".demo-bar").count(), 0, "Template workspaces have no demo bar");
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 844 });
     if (reports) await page.screenshot({ path: join(reports, `next-playground-header-${width}.png`) });
     const controls = await headerControlBoxes(page);
-    assert.equal(controls.length, 5);
+    assert.equal(controls.length, 6);
     assert.ok(controls.every(control => control.left >= 0 && control.right <= width), JSON.stringify({ width, controls }));
     assert.ok(controls.every(control => control.width > 0 && control.contentWidth <= control.width), JSON.stringify({ width, controls }));
     assertSeparate(controls);

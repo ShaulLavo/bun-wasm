@@ -8,6 +8,11 @@
   --pink: #f472b6;
   --ok: #86efac;
   --bad: #fca5a5;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --radius: 4px;
+  --header-h: 48px;
+  --bar-h: 36px;
+  --control-h: 32px;
   --app-height: 100dvh;
   color-scheme: dark;
 }
@@ -38,21 +43,31 @@ body {
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
+/* Header: same shape as the playground's (wordmark, page switch, status, pickers, actions). */
 header {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-height: var(--header-h);
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
   flex: none;
 }
 
-h1 {
+h1.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
   font-size: 16px;
   font-weight: 650;
   white-space: nowrap;
+}
+
+.brand .mark {
+  flex: none;
+  display: block;
 }
 
 .dim {
@@ -60,9 +75,84 @@ h1 {
   font-weight: 400;
 }
 
-.product {
-  color: var(--pink);
-  font-weight: 600;
+.site-nav {
+  display: flex;
+  flex: none;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.site-nav a.nav {
+  display: flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 3px;
+  color: var(--dim);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.site-nav a.nav[aria-current="page"] {
+  background: var(--panel);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* One interaction base for every control, as on the playground. */
+#reset,
+#start-fresh,
+#restart,
+.copy-terminal,
+.site-nav a.nav,
+#engine,
+#template,
+#file-select {
+  transition: transform 140ms var(--ease-out), background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+:is(#reset, #start-fresh, #restart, .copy-terminal, .site-nav a.nav):active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+:is(#reset, #start-fresh, #restart, .copy-terminal, .site-nav a.nav, #engine, #template, #file-select, #tree button):focus-visible {
+  outline: 2px solid var(--pink);
+  outline-offset: 2px;
+}
+
+:is(#reset, #start-fresh, #restart, .copy-terminal):disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :is(#reset, #start-fresh, #restart, .copy-terminal, #engine, #template, #file-select):hover:not(:disabled) {
+    border-color: var(--dim);
+  }
+
+  .site-nav a.nav:not([aria-current="page"]):hover {
+    color: var(--text);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #reset,
+  #start-fresh,
+  #restart,
+  .copy-terminal,
+  .site-nav a.nav,
+  #engine,
+  #template,
+  #file-select {
+    transition: none;
+  }
+
+  :is(#reset, #start-fresh, #restart, .copy-terminal, .site-nav a.nav):active:not(:disabled) {
+    transform: none;
+  }
 }
 
 #status {
@@ -119,7 +209,7 @@ select {
 #file-select {
   background-color: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 13px;
   appearance: none;
   -webkit-appearance: none;
@@ -130,27 +220,32 @@ select {
   padding: 4px 30px 4px 10px;
 }
 
+/* Pickers size to their text, within limits, and end with an ellipsis when cut. */
 #engine,
 #template {
+  field-sizing: content;
+  min-width: 150px;
+  max-width: 220px;
+  min-height: var(--control-h);
   line-height: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 #reset,
 #start-fresh,
 #restart {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--control-h);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px 10px;
+  border-radius: var(--radius);
+  padding: 0 10px;
   font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
-}
-
-#reset:hover,
-#start-fresh:hover,
-#restart:hover {
-  border-color: var(--dim);
 }
 
 main {
@@ -200,7 +295,7 @@ main {
   align-items: center;
   gap: 8px;
   flex: none;
-  height: 34px;
+  height: var(--bar-h);
   padding: 0 10px;
   font-size: 12px;
   color: var(--dim);
@@ -298,6 +393,12 @@ main {
   height: 100%;
 }
 
+/* The editor sits on the shell's panel colour; the syntax colours stay. */
+#editor .cm-editor,
+#editor .cm-gutters {
+  background: var(--panel);
+}
+
 #editor .cm-scroller {
   font-family: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace;
   font-size: 13px;
@@ -364,31 +465,55 @@ main {
 }
 
 @media (max-width: 800px) {
+  /* Row one: mark, page switch, Restart and Reset as icons. Row two: both pickers, side by side. */
   header {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-    gap: 6px 10px;
+    flex-wrap: wrap;
+    gap: 8px;
     padding: 6px 10px;
   }
 
-  header h1 {
-    grid-column: 1 / 3;
-    grid-row: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  header h1.brand {
+    min-width: 0;
   }
 
-  header a.nav {
-    grid-column: 3;
-    grid-row: 1;
-    justify-self: end;
+  .site-nav a.nav {
+    min-height: 34px;
+  }
+
+  header #restart {
+    order: 1;
+  }
+
+  header #reset,
+  header #start-fresh {
+    order: 1;
+    margin-left: auto;
+  }
+
+  header #restart,
+  header #reset {
+    justify-content: center;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0 8px;
+    font-size: 16px;
+  }
+
+  header #restart .label,
+  header #reset .label {
+    display: none;
+  }
+
+  header .engine {
+    order: 2;
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
   }
 
   header #status {
     display: block;
-    grid-column: 1 / 3;
-    grid-row: 3;
-    width: 100%;
+    order: 3;
+    flex: 1 1 100%;
   }
 
   header #status:empty,
@@ -396,36 +521,13 @@ main {
     display: none;
   }
 
-  header .engine {
-    grid-column: 1;
-    grid-row: 2;
-    min-width: 0;
-    max-width: 100%;
-    justify-self: start;
-  }
-
-  header .engine:not(.template-choice) {
-    grid-column: 2;
-  }
-
-  header #restart {
-    grid-column: 3;
-    grid-row: 2;
-    min-height: 34px;
-  }
-
-  header #reset,
-  header #start-fresh {
-    grid-column: 3;
-    grid-row: 3;
-    min-height: 30px;
-  }
-
   #engine,
   #template {
+    flex: 1;
+    width: 100%;
     min-width: 0;
     max-width: 100%;
-    min-height: 34px;
+    min-height: 40px;
   }
 
   #file-select {
@@ -438,7 +540,6 @@ main {
     text-overflow: ellipsis;
   }
 
-  h1 .dim,
   .engine .label {
     display: none;
   }
@@ -477,67 +578,24 @@ main {
   }
 }
 
-a.nav {
-  flex: none;
-  color: var(--dim);
-  font-size: 13px;
-  text-decoration: none;
-}
-
-a.nav:hover {
-  color: inherit;
-  text-decoration: underline;
-}
-
-/* The way from the React sandbox to the playground's one-click Bun API demos. */
-a.nav.showcase-link {
-  padding: 5px 10px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  color: var(--accent);
-  font-weight: 600;
-  transition: transform 140ms cubic-bezier(0.23, 1, 0.32, 1), background-color 140ms ease;
-}
-
-a.nav.showcase-link:hover {
-  text-decoration: none;
-}
-
-a.nav.showcase-link:active {
-  transform: scale(0.97);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  a.nav.showcase-link:hover {
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
+/* The narrowest phones keep the mark and drop the wordmark so the header stays one row. */
+@media (max-width: 379px) {
+  .brand .wordmark {
+    display: none;
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  a.nav.showcase-link {
-    transition: none;
-  }
-
-  a.nav.showcase-link:active {
-    transform: none;
-  }
-}
-
-#copy-terminal {
+.copy-terminal {
   flex: none;
   margin-left: auto;
-  min-height: 30px;
-  padding: 2px 8px;
+  min-height: 28px;
+  padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius);
   background: var(--bg);
   color: var(--text);
   font-size: 12px;
   cursor: pointer;
-}
-
-#copy-terminal:hover {
-  border-color: var(--dim);
 }
 
 @media (forced-colors: active) {

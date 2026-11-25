@@ -7,7 +7,8 @@ export async function fits(page, label) {
   const size = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
   assert.ok(size.scroll <= size.width, `${label}: page width ${size.scroll} exceeds viewport ${size.width}`);
   // A clipped header also passes scrollWidth, so check the controls themselves.
-  const selectors = ["header h1", "header a.nav", "#engine", "#run, #restart", "#copy-terminal"];
+  // The playground's examples workspace puts Copy in its phone pane switch.
+  const selectors = ["header h1", "header a.nav", "#engine", "#run, #restart", "#copy-terminal, #copy-terminal-phone"];
   const groups = await page.evaluate(selectors => selectors.map(selector =>
     Array.from(document.querySelectorAll(selector))
       .filter(control => control.checkVisibility({ visibilityProperty: true }))

@@ -21,12 +21,20 @@ loads a different module at runtime; `?trace` logs every WASI call to the worker
 
 The examples workspace shows a demo bar: Bun.serve, bun:sqlite, bun test, Bun.build, Bun.$ and
 Bun.file. A click stops any running command, restores the demo's files if they were deleted (edits
-are kept), opens the file and runs it. A server started there opens in a preview above the
-terminal; its Restart button saves and reruns the demo. `?demo=<id>` (for example
-`/playground/?demo=serve`) starts a demo once the page is ready, and the address follows the last
-demo clicked. The sandbox at `/` links to `?demo=serve`. Visible strings live in
+are kept), opens the file and runs it by absolute path. Restoring is one exclusive-create call, so
+it never replaces a file another tab wrote meanwhile. Demos resolve their files from
+`import.meta.dir`, so they work from any shell directory, and the SQLite demos use in-memory
+databases: every tab runs its own processes, and SQLite here allows one writer per file.
+
+While a command runs, Run becomes Stop (Ctrl-C; a second Stop forces it). A server started there
+opens in a preview above the terminal. Restart reruns the Run or demo launch that started it; a
+server typed into the terminal gets no Restart. At 800 px and narrower the examples workspace shows
+one pane at a time (Code, Preview, Terminal). `?demo=<id>` (for example `/playground/?demo=serve`)
+starts a demo once the page is ready, and the address follows the last demo clicked. The page
+switch in both headers links the sandbox at `/` and `?demo=serve`. Visible strings live in
 `web/src/playground/showcase-copy.ts`; the demo programs are in `web/src/examples.ts`.
-`scripts/playground-demos-browser.test.ts` checks every demo, Restart, file restore and reload.
+`scripts/playground-demos-browser.test.ts` checks every demo, Restart, Close, Stop, edits, file
+restore, reload, and two tabs (separate databases and the restore race).
 
 ## Run Vite with React
 
