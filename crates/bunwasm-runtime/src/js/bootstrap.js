@@ -1161,10 +1161,19 @@
 
   // --- uncaught errors --------------------------------------------------------
 
+  // Whether uncaught errors print in colour (Bun's enable_ansi_colors_stderr).
+  function stderrColors() {
+    try {
+      return internal.require("pretty_output").stderr === true;
+    } catch {
+      return false;
+    }
+  }
+
   function printError(err, versionLine = true) {
     let text;
     try {
-      text = internal.require("inspect").formatError(err);
+      text = internal.require("inspect").formatError(err, { colors: stderrColors() });
     } catch (_formatErr) {
       text = fallbackErrorText(err);
     }
@@ -1172,8 +1181,10 @@
     if (versionLine) printVersionLine();
   }
 
+  // run_command.rs: `<r>\n<d>Bun v...<r>\n`.
   function printVersionLine() {
-    native.writeStderr(`\nBun v${native.platformInfo.version} (WASI ${native.platformInfo.arch})\n`);
+    const version = `Bun v${native.platformInfo.version} (WASI ${native.platformInfo.arch})`;
+    native.writeStderr(stderrColors() ? `\u001b[0m\n\u001b[2m${version}\u001b[0m\n` : `\n${version}\n`);
   }
   internal.printError = printError;
 

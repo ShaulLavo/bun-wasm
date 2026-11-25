@@ -17,8 +17,11 @@ function factory(name: string) {
 }
 
 test("mock and spy contracts through the runtime factory", async () => {
+  const output = factory("pretty_output.ts")({ native: { isatty: () => false } });
   const modules = {
     inspect: { bunInspect: Bun.inspect },
+    // Plain reports, whatever FORCE_COLOR the harness runs under.
+    pretty_output: { prettyFmt: output.prettyFmt, markup: output.markup, stdout: false, stderr: false },
     util: factory("util.ts")({ isPromise: types.isPromise, promiseThen: (value: Promise<unknown>, fulfilled: (value: unknown) => unknown, rejected?: (error: unknown) => unknown) => Promise.prototype.then.call(value, fulfilled, rejected) }),
     test_matchers: factory("test_matchers.ts")({
       realTimers: { setTimeout },
