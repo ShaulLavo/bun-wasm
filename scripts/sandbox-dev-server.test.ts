@@ -212,3 +212,41 @@ test("follower tab navigates to the owner's broadcast cross-origin hosted previe
     await page.cleanup();
   }
 });
+
+test("a second concurrent navigate cannot unlock the editor during teardown", async () => {
+  const f = await fixture();
+  try {
+    const devRun = await f.dev();
+    await f.sandbox.editor?.open("src/App.tsx");
+    const assigned: string[] = [];
+    f.page.boundary.location.assign = (next: URL | string) => { assigned.push(String(next)); };
+    const teardownGate = Promise.withResolvers<void>();
+    const origTeardown = f.sandbox.teardown.bind(f.sandbox);
+    f.sandbox.teardown = async () => {
+      await teardownGate.promise;
+      devRun.done.resolve({ code: 0 });
+      await origTeardown();
+    };
+    const first = f.sandbox.navigate("engine", "quickjs");
+    await turn();
+    expect(f.sandbox.navigating).toBe(true);
+    expect(f.sandbox.editor?.view.state.readOnly).toBe(true);
+    const html = await f.page.renderSandbox(f.sandbox);
+    expect(html).toContain('id="engine"');
+    expect(html).toContain("disabled");
+
+    // A second navigation while the first is in teardown must be a no-op and never unlock the editor.
+    await f.sandbox.navigate("template", "vanilla");
+    expect(f.sandbox.navigating).toBe(true);
+    expect(f.sandbox.editor?.view.state.readOnly).toBe(true);
+    f.sandbox.editor?.setText("dropped edit");
+    expect(f.sandbox.editor?.view.state.doc.toString()).toBe("app");
+
+    teardownGate.resolve();
+    await first;
+    expect(assigned).toHaveLength(1);
+    expect(assigned[0]).toContain("engine=quickjs");
+  } finally {
+    await f.cleanup();
+  }
+});

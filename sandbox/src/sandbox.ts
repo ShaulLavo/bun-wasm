@@ -122,6 +122,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   failure?: Failure;
   unreadable = false;
   resetting = false;
+  navigating = false;
   workspaceInitialized = false;
   storageNotice = "";
   files: string[] = [];
@@ -959,7 +960,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   /** Flushes debounced edits before leaving; a failed save keeps this page open. */
   async navigate(param: "engine" | "template", value: string): Promise<void> {
+    if (this.navigating || this.teardownRequested || this.disposed) return;
+    this.navigating = true;
     this.editorInstance?.setNavigationLock(true);
+    this.changed();
     try {
       await this.editorInstance?.flushAll();
       if (this.editorInstance?.hasUnsavedChanges()) {
@@ -973,7 +977,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       if (param === "engine") next.searchParams.delete("wasm");
       location.assign(next);
     } catch (error) {
-      this.editorInstance?.setNavigationLock(false);
+      if (!this.teardownRequested && !this.disposed) {
+        this.navigating = false;
+        this.editorInstance?.setNavigationLock(false);
+        this.changed();
+      }
       throw error;
     }
   }
