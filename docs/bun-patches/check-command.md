@@ -16,10 +16,15 @@ that take a value (the `<VALUE>` entries of `AUTO_PARAMS` in
 `bun --title check ./entry.ts` runs `entry.ts`; `-e` and `-p` evaluate, except
 that `-p…` directly before `check` is its `--project`; and an executable named
 `node` or `nodejs` has no subcommands. What follows `--` is the command or the file
-to run, so `bun -- --entry.ts check` runs `--entry.ts`. Of the flags before `check`,
-the checker gets only its project (`-p…` directly before it, `--tsconfig-override`
-in either form), as upstream parses those anywhere on the command line; Bun's other
-flags there, such as `--title=check` or `--no-warnings`, stay Bun's. `bun lint` and
+to run, so `bun -- --entry.ts check` runs `--entry.ts`. A bare `-` runs standard input, so `bun - check` passes it
+`check`; the CLI now does this for `bun -` as it did for `bun run -`. Of the flags
+before `check`, the checker gets the options that upstream's check command parses
+anywhere on the command line, when they fit in one argument: `-p…` directly before
+it (`-bpapp` is Bun's `-b` and the checker's `--project=app`), `--project=…`,
+`--tsconfig-override` in either form, `--threads=…`, `--no-pretty`, `--all`,
+`--timing`, `--no-script`, `--no-emit`, `-h` and `--help`. Bun's other flags there,
+such as `--title=check` or `--no-warnings`, stay Bun's, and `-b`/`--build` there are
+`--bun`, as upstream. `bun lint` and
 `bun fmt` still get the flags before them that Bun doesn't know. The rule does not ask the lint and format
 drivers which short flags they accept before the command, as upstream's
 `has_flag` does. The package's `installBunAdapters` takes an optional `loadTools`
@@ -34,7 +39,8 @@ and passes it to the launchers, as the playground does.
 - Arguments are parsed by hand instead of with `bun_clap`'s compile-time tables,
   in two steps like upstream: first `bun check`'s own options (`-p`/`--project`
   and its alias `--tsconfig-override`, with the last one winning, attached forms
-  such as `-papp`, an empty value (`-p=`, `--project=`) meaning the default project, `-b`/`--build`, `--no-pretty`, `--all`, `--timing`, `--cwd`,
+  such as `-papp`, an empty value (`-p=`, `--project=`) meaning the working directory's project and,
+  like any project given on the command line, replacing one from a response file, `-b`/`--build`, `--no-pretty`, `--all`, `--timing`, `--cwd`,
   `--threads`, `--no-emit`, `--no-script`, `-h`/`--help` and `--`), then
   `--cwd`, then `bun_sema_driver::parse_command_line` for the compiler options
   and response files, in the new working directory.
