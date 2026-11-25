@@ -3,6 +3,8 @@
 // port, not this page, is the capability.
 import { RELAY_MESSAGE, SW_ATTACH, SW_NEED_PORT, SW_PATH, relayMessage, type RelayEvent } from "./protocol";
 
+const REGISTER_ATTEMPTS = 3;
+
 /** The static host writes the allowed IDE origins into the page (host.ts). */
 function ideOrigins(): string[] {
   const value: unknown = Reflect.get(globalThis, "__bunwasmPreviewIdeOrigins");
@@ -17,18 +19,29 @@ function tell(event: RelayEvent): void {
   for (const origin of allowed) parent.postMessage({ type: RELAY_MESSAGE, event }, origin);
 }
 
-function activated(registration: ServiceWorkerRegistration): Promise<void> {
-  const worker = registration.active ?? registration.waiting ?? registration.installing;
-  if (!worker || worker.state === "activated") return Promise.resolve();
+/** Resolves with the registration's activated worker, or null when its newest worker was discarded. */
+function activeWorker(registration: ServiceWorkerRegistration): Promise<ServiceWorker | null> {
+  const worker = registration.installing ?? registration.waiting ?? registration.active;
+  if (!worker) return Promise.resolve(null);
   return new Promise(resolve => {
-    worker.addEventListener("statechange", () => { if (worker.state === "activated" || worker.state === "redundant") resolve(); });
+    const check = () => {
+      if (worker.state !== "activated" && worker.state !== "redundant") return;
+      worker.removeEventListener("statechange", check);
+      resolve(worker.state === "activated" ? worker : registration.active);
+    };
+    worker.addEventListener("statechange", check);
+    check();
   });
 }
 
-async function forward(port: MessagePort): Promise<void> {
-  const registration = await container.ready;
-  await activated(registration);
-  registration.active?.postMessage({ type: SW_ATTACH }, [port]);
+/** Registers the worker and waits until one is active. An install that fails is tried again. */
+async function worker(): Promise<ServiceWorker> {
+  for (let attempt = 0; attempt < REGISTER_ATTEMPTS; attempt++) {
+    const registration = await container.register(SW_PATH, { scope: "/", updateViaCache: "none" });
+    const active = await activeWorker(registration);
+    if (active) return active;
+  }
+  throw new Error("The preview service worker did not activate");
 }
 
 async function start(): Promise<void> {
@@ -37,14 +50,14 @@ async function start(): Promise<void> {
     if (event.source !== parent || !allowed.includes(event.origin)) return;
     const port = event.ports[0];
     if (relayMessage(event.data)?.event !== "attach" || !port) return;
-    void forward(port);
+    // The worker may have been replaced since this page loaded, so each port goes to the current one.
+    void worker().then(active => active.postMessage({ type: SW_ATTACH }, [port]));
   });
   container.addEventListener("message", event => {
     if ((event.data as { type?: unknown } | null)?.type === SW_NEED_PORT) tell("need-port");
   });
   container.startMessages();
-  const registration = await container.register(SW_PATH, { scope: "/", updateViaCache: "none" });
-  await activated(registration);
+  await worker();
   tell("ready");
 }
 

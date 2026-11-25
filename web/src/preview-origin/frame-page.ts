@@ -26,6 +26,7 @@ function start(): void {
   if (!target) { fail("This link does not name a preview of this IDE."); return; }
   const frame = document.createElement("iframe");
   frame.title = "App preview";
+  frame.allow = "cross-origin-isolated";
   frame.src = target.href;
   let retries = 0;
   addEventListener("message", event => {

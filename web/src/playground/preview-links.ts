@@ -56,6 +56,7 @@ export function installPreviewLinks(term: Terminal, previews: Previews, ports: R
     button.textContent = "Close preview";
     const frame = document.createElement("iframe");
     frame.title = "App preview";
+    frame.allow = "cross-origin-isolated";
     frame.src = url;
     const frameLifetime = new AbortController();
     const signal = frameLifetime.signal;

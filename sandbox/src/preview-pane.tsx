@@ -17,7 +17,8 @@ export function PreviewPane(handle: Handle<{ sandbox: Sandbox }>) {
             aria-disabled={state === undefined ? undefined : state !== "up"}
           >↗</a>
         </div>
-        <iframe id="preview" title="App preview" mix={attach}></iframe>
+        {/* A preview on its own origin stays cross-origin isolated only when the frame says so. */}
+        <iframe id="preview" title="App preview" allow="cross-origin-isolated" mix={attach}></iframe>
       </section>
     );
   };

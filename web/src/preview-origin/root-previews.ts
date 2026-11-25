@@ -39,9 +39,15 @@ interface Listening {
   origin?: string;
   relay?: PreviewHostRelay;
   jar?: CookieJar;
-  frame?: HTMLIFrameElement;
   session?: PortSession;
   timer?: ReturnType<typeof setTimeout>;
+}
+
+/** The hidden frame of one preview origin. It holds no capability, so it outlives listener generations. */
+interface RelayFrame {
+  readonly frame: HTMLIFrameElement;
+  /** The frame registered its service worker and listens for ports. */
+  ready: boolean;
 }
 
 const COOKIE_KEY = "bunwasm-preview-cookies:";
@@ -71,6 +77,8 @@ function readStored(store: Storage, key: string): { saved?: unknown; cookies?: u
 
 export class RootPreviews extends Previews {
   private readonly listening = new Map<number, Listening>();
+  /** By preview origin. */
+  private readonly relays = new Map<string, RelayFrame>();
   private readonly origins: Map<number, string>;
   private readonly config: PreviewOriginConfig;
   private readonly identity: RootPreviewsOptions["identity"];
@@ -85,7 +93,10 @@ export class RootPreviews extends Previews {
     const message = relayMessage(event.data);
     if (!message || message.event === "attach") return;
     // The frame and its origin identify the grant; nothing in the message does.
-    const entry = Array.from(this.listening.values()).find(item => item.frame?.contentWindow === event.source && item.origin === event.origin);
+    const relay = this.relays.get(event.origin);
+    if (!relay || relay.frame.contentWindow !== event.source) return;
+    relay.ready = true;
+    const entry = Array.from(this.listening.values()).find(item => item.origin === event.origin);
     if (entry) this.attach(entry);
   };
 
@@ -132,6 +143,17 @@ export class RootPreviews extends Previews {
     return () => window.removeEventListener("message", handler);
   }
 
+  /**
+   * Closes a port's current channel without touching its listener. The service worker then asks
+   * for a new one at its next request, exactly as after a restart; tests use it where a browser
+   * offers no way to stop a worker.
+   */
+  dropAttachment(port: number): void {
+    const entry = this.listening.get(port);
+    entry?.session?.close();
+    if (entry) entry.session = undefined;
+  }
+
   private live(entry: Listening): boolean {
     return !this.rootDisposed && this.listening.get(entry.port) === entry && !entry.lifetime.signal.aborted;
   }
@@ -158,7 +180,13 @@ export class RootPreviews extends Previews {
     } catch { /* A full or blocked store keeps the cookies for this tab only. */ }
   }
 
-  private mountRelay(origin: string): HTMLIFrameElement {
+  /**
+   * The origin's relay frame, mounted once. A dev server that restarts gets a new port on the same
+   * frame, so the service worker registration is never torn down halfway.
+   */
+  private relayFrame(origin: string): RelayFrame {
+    const mounted = this.relays.get(origin);
+    if (mounted) return mounted;
     const frame = document.createElement("iframe");
     frame.title = "Preview relay";
     frame.setAttribute("aria-hidden", "true");
@@ -166,7 +194,9 @@ export class RootPreviews extends Previews {
     frame.style.display = "none";
     frame.src = `${origin}${RELAY_PATH}`;
     (document.body ?? document.documentElement).appendChild(frame);
-    return frame;
+    const relay: RelayFrame = { frame, ready: false };
+    this.relays.set(origin, relay);
+    return relay;
   }
 
   private async start(entry: Listening): Promise<void> {
@@ -180,12 +210,12 @@ export class RootPreviews extends Previews {
     entry.relay = relay;
     entry.jar = this.loadJar(origin);
     entry.timer = setTimeout(() => this.fail(entry), this.relayTimeoutMs);
-    entry.frame = this.mountRelay(origin);
+    if (this.relayFrame(origin).ready) this.attach(entry);
   }
 
   /** A fresh port for the relay frame: at first, and again whenever its service worker restarted. */
   private attach(entry: Listening): void {
-    const target = entry.frame?.contentWindow;
+    const target = entry.origin ? this.relays.get(entry.origin)?.frame.contentWindow : null;
     if (!this.live(entry) || !target || !entry.relay || !entry.jar || !entry.origin) return;
     entry.session?.close();
     const channel = new MessageChannel();
@@ -211,15 +241,13 @@ export class RootPreviews extends Previews {
     entry.ready.resolve("failed");
   }
 
-  /** Revokes the port, the grant and the relay frame of a listener generation together. */
+  /** Revokes the port and the grant of a listener generation together, with everything in flight on them. */
   private retire(entry: Listening): void {
     this.fail(entry);
     entry.state = "failed";
     entry.session?.close();
     entry.session = undefined;
     entry.lifetime.abort();
-    entry.frame?.remove();
-    entry.frame = undefined;
   }
 
   private registerRoot(port: number, server: PreviewServer): symbol {
@@ -238,7 +266,8 @@ export class RootPreviews extends Previews {
     this.registerRouter(port, server);
     this.listening.set(port, entry);
     void this.start(entry).catch(error => {
-      console.warn("preview origin failed to start:", error);
+      // A listener replaced while it was starting is not a failure worth a warning.
+      if (this.live(entry)) console.warn("preview origin failed to start:", error);
       this.fail(entry);
     });
     return entry.token;
@@ -302,6 +331,8 @@ export class RootPreviews extends Previews {
     }
     this.listening.clear();
     this.origins.clear();
+    for (const relay of this.relays.values()) relay.frame.remove();
+    this.relays.clear();
     return super.dispose();
   }
 }
