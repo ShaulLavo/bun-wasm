@@ -404,11 +404,13 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       this.shell?.interrupt();
       return;
     }
-    if (phase.kind === "launched" && phase.launch.interrupted) {
-      void this.forceStop(phase.launch).catch(this.report);
+    // The foreground launch, or one still running after a cancelled demo switch left the phase idle.
+    const launch = phase.kind === "launched" ? phase.launch : this.lastLaunch;
+    if (launch?.interrupted) {
+      void this.forceStop(launch).catch(this.report);
       return;
     }
-    if (phase.kind === "launched") phase.launch.interrupted = true;
+    if (launch) launch.interrupted = true;
     this.shell?.interrupt();
   }
 
@@ -590,6 +592,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const idle = () => signal.aborted || (!shell.running && this.submitting === 0);
     if (idle()) return;
     shell.interrupt();
+    // If this switch is cancelled, the next Stop on that launch kills it.
+    if (this.lastLaunch) this.lastLaunch.interrupted = true;
     if (await waitUntil(idle, DEMO_INTERRUPT_MS)) return;
     const foreground = this.lastLaunch;
     if (foreground) await this.forceStop(foreground);
