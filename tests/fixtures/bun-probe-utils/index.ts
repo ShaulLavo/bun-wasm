@@ -62,7 +62,7 @@ await check("Bun hash buffer output and digest retry", () => {
   const short = new Bun.SHA256().update("bun");
   let tooSmall;
   try { short.digest(new Uint8Array(4) as unknown as "hex"); } catch (error) { tooSmall = (error as { code?: string }).code; }
-  return [Buffer.isBuffer(sha), sha.toString("hex"), Buffer.isBuffer(sha256), bogus, retried, tooSmall, short.digest("hex"), Buffer.isBuffer(new Bun.SHA1().update("x").digest("buffer" as "hex"))];
+  return [Buffer.isBuffer(sha), sha.toString("hex"), Buffer.isBuffer(sha256), bogus, retried, tooSmall, short.digest("hex"), Buffer.isBuffer(new Bun.SHA1().update("x").digest("buffer" as "hex")), Buffer.isBuffer(Bun.sha("bun", "BUFFER" as "hex"))];
 });
 await check("Bun.password argon2id", async () => {
   const hash = await Bun.password.hash("hunter2");

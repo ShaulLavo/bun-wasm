@@ -234,7 +234,10 @@ function table(results: EngineResult[]): string {
     `| --- | ---: | --- | ---: |`,
     ...results.map(result => {
       const checks = result.cases.flatMap(probe => probe.checks);
-      const passing = checks.length ? `${checks.filter(check => check.verdict === "pass").length}/${checks.length}` : result.status;
+      const count = `${checks.filter(check => check.verdict === "pass").length}/${checks.length}`;
+      // An engine that stopped early shows why next to what it finished.
+      const stopped = result.status.startsWith("failed") || result.status.startsWith("not ready");
+      const passing = !checks.length ? result.status : stopped ? `${count} (${result.status})` : count;
       return `| ${result.engine} | ${result.bootMs} | ${result.helloMs.join(", ")} | ${passing} |`;
     }),
   ];

@@ -48,7 +48,7 @@ ok Bun.sha: [ "a6e3d070c0dd9f6da143d6f2258819b2749340f394cccec10447543e27437f50"
 ok Bun hash buffer output and digest retry: [ true, "a6e3d070c0dd9f6da143d6f2258819b2749340f394cccec10447543e27437f50", true,
   "ERR_INVALID_ARG_VALUE", "08d1082cc8d85a0833da8815ff1574675c415760e0aff7fb4e32de6de27faf86",
   "ERR_INVALID_ARG_TYPE", "08d1082cc8d85a0833da8815ff1574675c415760e0aff7fb4e32de6de27faf86",
-  true
+  true, true
 ]
 ok Bun.password argon2id: [ true, false ]
 ok Bun.password empty verify settles at once: [

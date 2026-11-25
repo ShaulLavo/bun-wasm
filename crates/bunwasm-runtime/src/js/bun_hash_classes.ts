@@ -31,7 +31,7 @@
     }
     const { Buffer } = internal.require("buffer");
     const encoding = String(target);
-    if (encoding === "buffer") return Buffer.from(bytes);
+    if (encoding.toLowerCase() === "buffer") return Buffer.from(bytes);
     if (!Buffer.isEncoding(encoding)) throw typeError(`Unknown encoding: ${encoding}`, "ERR_INVALID_ARG_VALUE");
     return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(encoding);
   }
