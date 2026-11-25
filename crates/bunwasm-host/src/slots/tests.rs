@@ -41,7 +41,7 @@ fn bash_54a_terminal_geometry_phase_and_no_prompt_contract() {
     let mut imports = ImportSection::new();
     imports.import("shell_terminal", "columns", EntityType::Function(0));
     imports.import("shell_terminal", "rows", EntityType::Function(0));
-    imports.import("shell_terminal", "phase", EntityType::Function(1));
+    imports.import("shell_terminal", "phase", EntityType::Function(3));
     imports.import("shell_terminal", "prompt_names", EntityType::Function(3));
     imports.import("shell_terminal", "prompt", EntityType::Function(4));
     imports.import("shell_terminal", "prompt_update", EntityType::Function(5));
@@ -63,6 +63,7 @@ fn bash_54a_terminal_geometry_phase_and_no_prompt_contract() {
         Instruction::LocalGet(0),
         Instruction::LocalGet(1),
         Instruction::Call(2),
+        Instruction::Drop,
         Instruction::Call(0),
         Instruction::Call(1),
         Instruction::End,

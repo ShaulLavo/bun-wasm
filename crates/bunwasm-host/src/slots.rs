@@ -588,7 +588,7 @@ pub fn add_shell_imports(linker: &mut Linker<Host>) -> Result<()> {
     })?;
     linker.func_wrap("shell_terminal", "columns", || -> i32 { 80 })?;
     linker.func_wrap("shell_terminal", "rows", || -> i32 { 24 })?;
-    linker.func_wrap("shell_terminal", "phase", |_: i32, _: i32| {})?;
+    linker.func_wrap("shell_terminal", "phase", |_: i32, _: i32| -> i32 { 0 })?;
     linker.func_wrap("shell_terminal", "prompt_names", |_: i32, _: i32| -> i32 {
         -1
     })?;
