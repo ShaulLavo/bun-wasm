@@ -7,6 +7,7 @@ import { browserBuildConfig } from "./browser-build";
 import { buildSite, verifySite } from "./browser-guest-site";
 import { openPlaygroundPage } from "../web/tests/playground-navigation";
 import { navigateTestPage } from "../web/tests/navigate-test-page";
+import { isCancelledLoadingStatusPoll } from "./preview-loading-noise";
 
 // Real browser persistent-VFS crash/reload stress across IndexedDB and OPFS; timeout only catches a hang.
 setDefaultTimeout(360_000);
@@ -202,6 +203,7 @@ function startLocalRegistry(packageCount = 16): LocalRegistry {
 function attachCorruptionGuard(page: Page, errors: string[], isInterrupting?: () => boolean): void {
   page.on("pageerror", error => {
     const message = error.message;
+    if (isCancelledLoadingStatusPoll(message)) return;
     // WebKit surfaces aborted cross-origin fetches during intentional reload/close as access-control pageerrors.
     if (isInterrupting?.() && /due to access control checks|cancelled|aborted|Load failed/i.test(message)) return;
     errors.push(`pageerror: ${message}`);
