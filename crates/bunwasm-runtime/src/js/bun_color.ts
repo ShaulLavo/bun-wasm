@@ -28,22 +28,38 @@
     return [(int >>> 16) & 0xff, (int >>> 8) & 0xff, int & 0xff, int > 0xffffff ? (int >>> 24) & 0xff : 255];
   }
 
-  // JSC's is_array_like: arrays (not proxies around them), typed arrays and array buffers, whose
-  // length is their byte length and whose elements read as undefined.
-  function arrayLike(value: object): ArrayLike<unknown> | undefined {
-    if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer === "function" && value instanceof SharedArrayBuffer)) {
-      return { length: value.byteLength };
+  // Intrinsic length getters, so an own `length` or `byteLength` cannot change what is read.
+  const getter = (prototype: object, name: string) => Object.getOwnPropertyDescriptor(prototype, name)!.get as (this: unknown) => number;
+  const typedLength = getter(Object.getPrototypeOf(Uint8Array.prototype), "length");
+  const bufferLength = getter(ArrayBuffer.prototype, "byteLength");
+  const sharedLength = typeof SharedArrayBuffer === "function" ? getter(SharedArrayBuffer.prototype, "byteLength") : undefined;
+
+  // The getter's value if `value` has its brand.
+  function branded(read: ((this: unknown) => number) | undefined, value: object): number | undefined {
+    if (!read) return undefined;
+    try {
+      return read.call(value);
+    } catch {
+      return undefined;
     }
-    if (ArrayBuffer.isView(value)) return value instanceof DataView ? undefined : value as unknown as ArrayLike<unknown>;
+  }
+
+  // JSC's is_array_like, read once: typed arrays by their length, array buffers by their byte
+  // length, and arrays (not proxies around them). DataViews and other objects are not array-like.
+  function arrayLikeLength(value: object): number | undefined {
+    if (ArrayBuffer.isView(value)) return branded(typedLength, value);
+    const bytes = branded(bufferLength, value) ?? branded(sharedLength, value);
+    if (bytes !== undefined) return bytes;
     // The browser engine cannot tell a proxy from JavaScript (its isProxy is always false).
-    if (Array.isArray(value) && !native.isProxy?.(value)) return value;
+    if (Array.isArray(value) && !native.isProxy?.(value)) return value.length;
     return undefined;
   }
 
-  function fromArray(value: ArrayLike<unknown>): number[] {
-    if (value.length !== 3 && value.length !== 4) throw new Error("Expected array length 3 or 4");
-    const out = Array.from({ length: value.length }, (_, index) => channel(value[index], `[${index}]`));
-    return value.length === 3 ? out.concat([255]) : out;
+  // Elements are read from the object itself, so an ArrayBuffer's own index properties count.
+  function fromArray(value: Record<number, unknown>, length: number): number[] {
+    if (length !== 3 && length !== 4) throw new Error("Expected array length 3 or 4");
+    const out = Array.from({ length }, (_, index) => channel(value[index], `[${index}]`));
+    return length === 3 ? out.concat([255]) : out;
   }
 
   // Alpha is a 0..1 number (get_truthy keeps 0 and NaN); anything else, or none, is opaque.
@@ -57,8 +73,8 @@
   function rgba(input: unknown): number[] | undefined {
     if (typeof input === "number") return fromNumber(input);
     if (input === null || (typeof input !== "object" && typeof input !== "function")) return undefined;
-    const array = arrayLike(input);
-    return array ? fromArray(array) : fromObject(input as Record<string, unknown>);
+    const length = arrayLikeLength(input);
+    return length === undefined ? fromObject(input as Record<string, unknown>) : fromArray(input as Record<number, unknown>, length);
   }
 
   return function color(input: unknown, format?: unknown) {

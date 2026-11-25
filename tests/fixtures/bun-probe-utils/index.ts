@@ -226,6 +226,19 @@ await check("Bun.color inputs", () => {
     attempt(() => Bun.color(true as unknown as string, "hex")), attempt(() => Bun.color(5n as unknown as string, "hex")),
   ];
 });
+await check("Bun.color array lengths", () => {
+  const grows = [1, 2, 3];
+  Object.defineProperty(grows, 0, { get() { grows.push(4); return 10; } });
+  const typed = Object.defineProperty(new Uint8Array([5, 6, 7]), "length", { value: 4 });
+  return [Bun.color(Object.assign(new ArrayBuffer(3), { 0: 1, 1: 2, 2: 3 }), "[rgba]"), Bun.color(grows, "[rgba]"), grows.length, Bun.color(typed, "[rgba]")];
+});
+await check("Bun.color is assignable", () => {
+  const original = Bun.color;
+  Bun.color = (() => "replaced") as unknown as typeof Bun.color;
+  const seen = Bun.color("red");
+  Bun.color = original;
+  return [seen, Bun.color("red", "hex"), Object.getOwnPropertyDescriptor(Bun, "color")?.writable];
+});
 await check("Bun.inspect escapes outside Latin-1", () => Bun.inspect(["\u20ac\x1b", "\xe9\x1b", "\u0100\x7f\x1f", "\u{1F600}\x01"]));
 await check("structuredClone + Bun types", () => structuredClone({ d: new Date(0), m: new Map([[1, 2]]) }));
 await check("fetch data url", async () => await (await fetch("data:text/plain,hi%20bun")).text());
