@@ -98,7 +98,8 @@ export function createRoutedPreviewServiceWorker(options: RoutedPreviewSWOptions
   const prefix = scope.pathname;
   const escaped = escapeRegex(prefix);
   const routedPath = new RegExp(`^${escaped}(?:r/((?:ws|mem|pg)-[a-zA-Z0-9._-]+)/)?(\\d{1,5})(/.*)?$`);
-  const headTimeoutMs = options.headTimeoutMs ?? 15_000;
+  // Must exceed WebKit's 70s pre-head watchdog (and slow cold dev compiles) so previewNavigations can hold slow responses.
+  const headTimeoutMs = options.headTimeoutMs ?? 180_000;
   const hydrateTimeoutMs = options.hydrateTimeoutMs ?? 150;
   const baseCreateChannel = options.createChannel ?? (() => new MessageChannel());
   const unavailableResponse = options.unavailableResponse ?? ((port: number) =>

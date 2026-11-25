@@ -635,7 +635,10 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     let startedShell: BrowserSession | undefined;
     let retiring: Promise<void> | undefined;
     const retireShell = () => {
-      if (startedShell) retiring ??= startedShell.dispose().catch(() => {});
+      if (startedShell) {
+        if (this.shell === startedShell) this.shell = undefined;
+        retiring ??= startedShell.dispose().catch(() => {});
+      }
       return retiring;
     };
     fs.onOwnershipLost = () => {
@@ -872,38 +875,39 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     shellState: (state: SessionState, detail?: string) => void;
     onStarted: (shell: BrowserSession) => void;
   }): Promise<BrowserSession> {
+    const { runtime, term, bootSignal, programsReady, sessionModule, promptModule, engineEnv, shellState, onStarted } = params;
     const [programs, { BrowserSession }, prompts] = await Promise.all([
-      params.programsReady,
-      params.sessionModule,
-      params.promptModule,
+      programsReady,
+      sessionModule,
+      promptModule,
     ]);
     if (this.attachEnabled) {
       const identity = this.getIdentity();
       if (!identity) throw new Error("Worker identity missing before shell start");
-      this.shellClaimHandle = await acquireWriterClaim(this.workspaceName, identity, this.ownClaimIds, { signal: params.bootSignal });
+      this.shellClaimHandle = await acquireWriterClaim(this.workspaceName, identity, this.ownClaimIds, { signal: bootSignal });
     }
     const prompt = prompts?.createPrompt({
-      filesystem: params.runtime.filesystem,
+      filesystem: runtime.filesystem,
       versions: HOST_VERSIONS,
       file: true,
       logger: (message: string, error?: unknown) => console.warn(`[prompt] ${message}`, error ?? ""),
     });
     const shell = await BrowserSession.create({
-      runtime: params.runtime,
+      runtime,
       cwd: HOME,
-      env: { ...params.engineEnv, HOME, USER: "user", PATH: `${ENGINE_BIN[this.engine]}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
-      cols: params.term.cols,
-      rows: params.term.rows,
+      env: { ...engineEnv, HOME, USER: "user", PATH: `${ENGINE_BIN[this.engine]}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
+      cols: term.cols,
+      rows: term.rows,
       wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
       workerUrl: entryAssetUrl("./shell-worker.js"),
       lineEditor: { mode: "zsh" },
       prompt,
-      onOutput: bytes => params.term.write(bytes),
-      onState: params.shellState,
+      onOutput: bytes => term.write(bytes),
+      onState: shellState,
     });
     stage("shell-created");
-    params.onStarted(shell);
-    params.term.onResize(({ cols, rows }) => shell.resize(cols, rows));
+    onStarted(shell);
+    term.onResize(({ cols, rows }) => shell.resize(cols, rows));
     return shell;
   }
 
@@ -930,6 +934,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
         })(context, service);
       },
       abandoned: () => this.abandoned,
+      onAbandon: (cleanup) => this.onAbandon(cleanup),
       runTransaction: (fn) => this.admitProvision(runtime, fn),
       onStateChange: (state) => { this.provisioningState.set("bun", state); },
     });
@@ -1014,7 +1019,7 @@ function createTerminal(): Terminal {
     convertEol: true,
     cursorBlink: true,
     fontFamily: 'ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace',
-    fontSize: window.matchMedia("(max-width: 800px)").matches ? 13 : 14,
+    fontSize: typeof window !== "undefined" && window.matchMedia("(max-width: 800px)").matches ? 13 : 14,
     scrollback: 5000,
     theme: { background: "#14151a", foreground: "#e6e6e6", cursor: "#fbf0df", selectionBackground: "#3a3d4a" },
   });

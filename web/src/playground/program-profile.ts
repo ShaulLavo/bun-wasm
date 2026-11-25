@@ -38,6 +38,8 @@ export async function registerPlaygroundBun(options: {
   loadModule(engine: Engine, profile: PlaygroundProfile): Promise<WebAssembly.Module>;
   /** True once the page gave up on startup; registration then rolls back before it commits. */
   abandoned?(): boolean;
+  /** Runs a cleanup immediately if startup is abandoned while registration or its final flush is pending. */
+  onAbandon?(cleanup: () => void): void;
   /** Optional admitted provisioning transaction wrapper (`provisionBinsLock` + `withWriterClaim`). */
   runTransaction?<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T>;
   onStateChange?(state: ProvisioningStatus): void;
@@ -57,10 +59,14 @@ export async function registerPlaygroundBun(options: {
     let packages: ReturnType<typeof packageService> | undefined;
     const removals: Array<() => void> = [];
     const created: string[] = [];
+    let disposed = false;
     const dispose = () => {
+      if (disposed) return;
+      disposed = true;
       for (const remove of removals.splice(0).reverse()) remove();
       packages?.dispose();
     };
+    options.onAbandon?.(dispose);
     const proceed = () => {
       if (signal.aborted || options.abandoned?.() || runtime.disposed) {
         throw new Error("Bun registration was abandoned with its startup");

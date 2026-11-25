@@ -698,8 +698,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     }
     try {
       const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
-      this.ensurePageUI();
       if (mode === "fast") {
+        this.ensurePageUI();
         this.launchPersistent();
         return;
       }
@@ -710,6 +710,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private startWorkspace(): void {
     try {
       this.workspace = this.createWorkspaceRuntime();
+      this.ensurePageUI();
       this.editorMounted = true;
       if (this.previews instanceof HostedPreviews) this.previews.attachRuntime(this.workspace.runtime);
       this.publishGlobalSandbox();
@@ -2354,7 +2355,7 @@ function createTerminal(): Terminal {
     disableStdin: true,
     cursorBlink: false,
     fontFamily: 'ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace',
-    fontSize: window.matchMedia("(max-width: 800px)").matches ? 11 : 13,
+    fontSize: typeof window !== "undefined" && window.matchMedia("(max-width: 800px)").matches ? 11 : 13,
     scrollback: 5000,
     theme: { background: "#14151a", foreground: "#e6e6e6", cursor: "#14151a", selectionBackground: "#3a3d4a" },
   });
