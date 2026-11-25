@@ -13,7 +13,7 @@ function lockPackages(lockfile: string): Record<string, unknown> {
 export function lockedReleasePackages(lockfile: string): { name: string; url: string; integrity: string }[] {
   return Object.values(lockPackages(lockfile)).flatMap((entry: unknown) => {
     if (!Array.isArray(entry) || typeof entry[0] !== "string") throw new Error("Invalid locked package");
-    const match = /^(.+)@(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/releases\/download\/[^\s]+)$/.exec(entry[0]);
+    const match = /^(.+)@(https:\/\/(?:github\.com\/[\w.-]+\/[\w.-]+\/releases\/download\/[^\s]+|registry\.npmjs\.org\/bash-web\/-\/bash-web-\d+\.\d+\.\d+\.tgz))$/.exec(entry[0]);
     if (!match) return [];
     const integrity: unknown = entry.at(-1);
     if (typeof integrity !== "string" || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity)) throw new Error("Missing release integrity");

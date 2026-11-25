@@ -70,7 +70,8 @@ const flushAndDisposeSource = `(async () => {
   const api = globalThis.sandbox;
   if (!api) return;
   await api.fs.flush();
-  await api.runtime.dispose();
+  if (typeof api.dispose === "function") await api.dispose();
+  else await api.runtime.dispose();
 })()`;
 
 async function waitSandboxReady(transport: Transport, timeoutMs: number, admission: Admission): Promise<SandboxProbe> {

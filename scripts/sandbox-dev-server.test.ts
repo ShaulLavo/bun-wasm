@@ -157,3 +157,133 @@ test("installation failures keep their exit diagnostic without a dev startup err
     expect(f.output()).not.toContain("stopped before it was ready");
   } finally { await f.cleanup(); }
 });
+
+test("follower tab navigates to the owner's broadcast cross-origin hosted preview URL and handles cross-origin frame load", async () => {
+  const page = await models(undefined, sources);
+  const sandbox = new page.Sandbox("");
+  try {
+    // Simulate a HostedPreviews router on a follower tab that has no owner binding for port 5173.
+    const previews = Reflect.get(sandbox, "previews") as { url: (port: number, path?: string) => string };
+    previews.url = () => { throw new Error("No hosted preview binding on follower"); };
+
+    const listeners = new Map<string, Array<(event: Event) => void>>();
+    const frame = {
+      src: "",
+      get contentDocument(): Document | null {
+        throw new DOMException("Blocked a frame from accessing a cross-origin frame.", "SecurityError");
+      },
+      addEventListener(type: string, fn: (event: Event) => void) {
+        const list = listeners.get(type) ?? [];
+        list.push(fn);
+        listeners.set(type, list);
+      },
+      removeEventListener(type: string, fn: (event: Event) => void) {
+        const list = listeners.get(type);
+        if (!list) return;
+        const idx = list.indexOf(fn);
+        if (idx >= 0) list.splice(idx, 1);
+      },
+    } as unknown as HTMLIFrameElement;
+    sandbox.attachPreview(frame);
+
+    const hostedUrl = "https://tok123.preview.example.test/";
+    method<(state: unknown) => void>(sandbox, "handleObservedOwnerState")({
+      ownerId: "owner-1",
+      attemptId: "attempt-1",
+      generation: 1,
+      engine: "browser",
+      state: "up",
+      text: "localhost:5173/",
+      port: 5173,
+      url: hostedUrl,
+    });
+
+    expect(sandbox.serverState.state).toBe("up");
+    expect(sandbox.serverState.url).toBe(hostedUrl);
+    expect(frame.src).toBe(hostedUrl);
+
+    for (const fn of [...(listeners.get("load") ?? [])]) {
+      fn({ isTrusted: true } as Event);
+    }
+    expect(sandbox.status.kind).toBe("ok");
+    expect(sandbox.status.text).toContain("shared workspace live");
+    expect((Reflect.get(sandbox, "preview") as { loaded: unknown } | null)?.loaded).toEqual({ document: null, url: hostedUrl });
+  } finally {
+    await page.cleanup();
+  }
+});
+
+test("a second concurrent navigate cannot unlock the editor during teardown", async () => {
+  const f = await fixture();
+  try {
+    const devRun = await f.dev();
+    await f.sandbox.editor?.open("src/App.tsx");
+    const assigned: string[] = [];
+    f.page.boundary.location.assign = (next: URL | string) => { assigned.push(String(next)); };
+    const teardownGate = Promise.withResolvers<void>();
+    const origTeardown = f.sandbox.teardown.bind(f.sandbox);
+    f.sandbox.teardown = async () => {
+      await teardownGate.promise;
+      devRun.done.resolve({ code: 0 });
+      await origTeardown();
+    };
+    const first = f.sandbox.navigate("engine", "quickjs");
+    await turn();
+    expect(f.sandbox.navigating).toBe(true);
+    expect(f.sandbox.editor?.view.state.readOnly).toBe(true);
+    const html = await f.page.renderSandbox(f.sandbox);
+    expect(html).toContain('id="engine"');
+    expect(html).toContain("disabled");
+
+    // A second navigation while the first is in teardown must be a no-op and never unlock the editor.
+    await f.sandbox.navigate("template", "vanilla");
+    expect(f.sandbox.navigating).toBe(true);
+    expect(f.sandbox.editor?.view.state.readOnly).toBe(true);
+    f.sandbox.editor?.setText("dropped edit");
+    expect(f.sandbox.editor?.view.state.doc.toString()).toBe("app");
+
+    teardownGate.resolve();
+    await first;
+    expect(assigned).toHaveLength(1);
+    expect(assigned[0]).toContain("engine=quickjs");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("follower recovers serverState up on matching owner heartbeat even if serverState was transiently reset", async () => {
+  const f = await fixture();
+  try {
+    const frame = {
+      src: "",
+      contentDocument: null,
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    f.sandbox.attachPreview(frame as unknown as HTMLIFrameElement);
+    const ownerState = {
+      ownerId: "owner-tab",
+      attemptId: "attempt-1",
+      generation: 1,
+      engine: "browser",
+      state: "up" as const,
+      text: "localhost:5173/",
+      port: 5173,
+      url: "https://preview.example.test/",
+    };
+    const handleObserved = method<(s: typeof ownerState) => void>(f.sandbox, "handleObservedOwnerState");
+    handleObserved(ownerState);
+    expect(f.sandbox.serverState.state).toBe("up");
+
+    // Simulate a transient reset of serverState (e.g. boot() racing an early owner heartbeat).
+    method<(state: "starting" | "up" | "down", text: string) => void>(f.sandbox, "setServerState")("starting", "loading…");
+    expect(f.sandbox.serverState.state).toBe("starting");
+
+    // A matching heartbeat with the same tupleKey must restore serverState to "up".
+    handleObserved(ownerState);
+    expect(f.sandbox.serverState.state).toBe("up");
+    expect(f.sandbox.serverState.url).toBe("https://preview.example.test/");
+  } finally {
+    await f.cleanup();
+  }
+});

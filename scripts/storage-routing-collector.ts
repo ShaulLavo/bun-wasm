@@ -29,7 +29,7 @@ function selected(value: Record<string, unknown>): boolean {
   const target = value.target ?? value.url;
   if (typeof target !== "string") return false;
   try {
-    const path = new URL(target, "https://diagnostic.invalid").pathname.replace(/^.*\/__preview\/\d+/, "");
+    const path = new URL(target, "https://diagnostic.invalid").pathname.replace(/^.*\/__preview\/(?:r\/[^/]+\/)?\d+/, "");
     return ["/", "/@vite/client", "/src/main.ts"].includes(path);
   } catch { return false; }
 }

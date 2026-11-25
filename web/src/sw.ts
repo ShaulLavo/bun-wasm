@@ -6,13 +6,11 @@
 // never come from here: the worker loads them as registration records (module-records.ts).
 //
 // Scope `<app>/__preview/` controls only preview tabs:
-// A request for `<app>/__preview/<port>/<path>` is forwarded to the playground window running a
-// guest server on <port> (see preview.ts), which turns it into an HTTP/1.1 connection for bun.wasm
-// and streams the parsed response back here. Root-relative requests made by a preview page (e.g.
-// `/style.css`) go to the same port.
+// A request for `<app>/__preview/(r/<route>/)?<port>/<path>` is forwarded strictly to the owning
+// window registered for `(routeKey, port)` (see preview.ts & sw-routing.ts).
 
-import { createPreviewServiceWorker } from "waffle/browser/service-worker";
 import { previewNavigations } from "./preview-navigation";
+import { createRoutedPreviewServiceWorker } from "./sw-routing";
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 const prefix = new URL(sw.registration.scope).pathname;
@@ -20,26 +18,17 @@ declare const __PREVIEW_SOCKET_SCRIPT__: string;
 const SOCKET_SCRIPT_PATH = new URL("../preview-websocket.js", sw.registration.scope).pathname;
 const MODULES = prefix.endsWith("/__bunwasm/");
 
-const previews = createPreviewServiceWorker({
+const previews = createRoutedPreviewServiceWorker({
   scope: sw.registration.scope,
   clients: sw.clients,
   fetch: request => fetch(request),
-  transformResponse(response, port) {
-    const html = response.headers.get("content-type")?.toLowerCase().includes("text/html") && !response.headers.get("content-encoding");
-    if (!html || !response.body) return response;
-    const headers = new Headers(response.headers);
-    headers.set("cross-origin-embedder-policy", "require-corp");
-    headers.set("cross-origin-opener-policy", "same-origin");
-    return new Response(injectSocket(response.body, port), { status: response.status, statusText: response.statusText, headers });
-  },
-  unavailableResponse: port => text(502, `No bun.wasm server is listening on port ${port}.\nStart one in the playground (Bun.serve), then reload this page.\n`, true),
-  serverErrorResponse: message => text(502, `bun.wasm server error: ${message}\n`, true),
-  unusableResponse: (status, error) => text(502, `bun.wasm server sent an unusable response (status ${status}): ${String(error)}\n`),
+  socketScriptPath: SOCKET_SCRIPT_PATH,
 });
+
 const navigations = previewNavigations({
   scope: sw.registration.scope,
   clients: sw.clients,
-  fetch: (request, clientId) => previews.fetch(request, clientId) ?? fetch(request),
+  fetch: (request, clientId, signal) => previews.fetch(request, clientId, signal) ?? fetch(request),
   transientRetryMs: 2000,
 });
 
@@ -64,11 +53,8 @@ sw.addEventListener("fetch", event => {
 async function moduleScope(request: Request, rest: string): Promise<Response> {
   const target = new URL(rest, new URL("..", sw.registration.scope));
   target.search = new URL(request.url).search;
-  // Tools are cached by the runner only after it verifies the decompressed bytes.
   const upstream = await fetch(target.href);
-  // The page is cross-origin isolated: a worker script needs COEP of its own.
   const headers = new Headers(upstream.headers);
-  // The body is already decoded, so a native Content-Encoding and its encoded length no longer describe it.
   if (headers.has("content-encoding")) {
     headers.delete("content-encoding");
     headers.delete("content-length");
@@ -79,52 +65,11 @@ async function moduleScope(request: Request, rest: string): Promise<Response> {
   return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers });
 }
 
-function text(status: number, body: string, transient = false): Response {
-  const headers: Record<string, string> = {
-    "content-type": "text/plain; charset=utf-8",
-    "cache-control": "no-store",
-    "cross-origin-embedder-policy": "require-corp",
-    "cross-origin-resource-policy": "same-origin",
-  };
-  if (transient) headers["x-bun-preview-transient"] = "1";
-  return new Response(body, { status, headers });
-}
-
-function injectSocket(stream: ReadableStream<Uint8Array>, port: number): ReadableStream<Uint8Array> {
-  const script = `<script src="${SOCKET_SCRIPT_PATH}" data-bun-wasm-socket="shim" data-bun-port="${port}" data-bun-prefix="${prefix}"></script>`;
-  const reader = stream.getReader();
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const chunks: Uint8Array[] = [];
-      let length = 0;
-      while (length < 1024) {
-        const { value, done } = await reader.read();
-        if (value) { chunks.push(value); length += value.length; }
-        if (done || value?.includes(62)) break;
-      }
-      const initial = new Uint8Array(length);
-      let at = 0;
-      for (const chunk of chunks) { initial.set(chunk, at); at += chunk.length; }
-      const text = new TextDecoder().decode(initial);
-      const doctype = /^\s*<!doctype[^>]*>/i.exec(text)?.[0] ?? "";
-      const offset = new TextEncoder().encode(doctype).length;
-      controller.enqueue(initial.subarray(0, offset));
-      controller.enqueue(new TextEncoder().encode(script));
-      controller.enqueue(initial.subarray(offset));
-    },
-    async pull(controller) {
-      const { value, done } = await reader.read();
-      if (done) controller.close();
-      else controller.enqueue(value);
-    },
-    cancel(reason) { return reader.cancel(reason); },
-  });
-}
-
 sw.addEventListener("message", event => {
-  if (MODULES || event.data?.type !== "preview-socket" || !event.ports[0]) return;
-  const client = event.source;
-  if (!client || !("url" in client)) return;
-  const routed = previews.socket(event.data.port, client.url, event.ports[0]);
-  if (routed) event.waitUntil(routed);
+  if (MODULES) return;
+  const source = event.source && "url" in event.source
+    ? { id: "id" in event.source ? event.source.id : undefined, url: event.source.url }
+    : null;
+  const task = previews.message({ data: event.data, ports: event.ports, source });
+  if (task) event.waitUntil(task);
 });

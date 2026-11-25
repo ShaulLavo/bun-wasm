@@ -1,6 +1,16 @@
 import { parseSnapshot, type SourceSnapshot } from "./workspace-source";
 
-export interface WorkspaceRecord { readonly template: string; readonly lastOpened: number }
+export interface WorkspaceRecord {
+  readonly template: string;
+  readonly lastOpened: number;
+  readonly resetGeneration?: number;
+  readonly resetInProgress?: boolean;
+}
+
+export interface ResetState {
+  readonly resetGeneration: number;
+  readonly resetInProgress: boolean;
+}
 
 export interface WorkspaceIndexStore {
   records(): Promise<WorkspaceRecord[]>;
@@ -9,6 +19,9 @@ export interface WorkspaceIndexStore {
   source(template: string): Promise<SourceSnapshot | undefined>;
   restored(template: string, snapshotId: string, now: number): Promise<boolean>;
   reset(template: string, now: number): Promise<void>;
+  readResetState?(template: string): Promise<ResetState>;
+  beginResetTransaction?(template: string, now?: number): Promise<number>;
+  completeResetTransaction?(template: string, now?: number): Promise<void>;
 }
 
 function completed(transaction: IDBTransaction): Promise<void> {
@@ -27,8 +40,27 @@ function requested<T>(request: IDBRequest<T>): Promise<T> {
 }
 
 function parseRecord(value: unknown): WorkspaceRecord {
-  if (!value || typeof value !== "object" || !("template" in value) || typeof value.template !== "string" || !("lastOpened" in value) || typeof value.lastOpened !== "number" || !Number.isFinite(value.lastOpened)) throw new Error("Invalid workspace index record");
-  return { template: value.template, lastOpened: value.lastOpened };
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("template" in value) ||
+    typeof value.template !== "string" ||
+    !("lastOpened" in value) ||
+    typeof value.lastOpened !== "number" ||
+    !Number.isFinite(value.lastOpened)
+  ) {
+    throw new Error("Invalid workspace index record");
+  }
+  const raw = value as Record<string, unknown>;
+  const record: WorkspaceRecord = {
+    template: value.template,
+    lastOpened: value.lastOpened,
+    ...(typeof raw.resetGeneration === "number" && Number.isInteger(raw.resetGeneration) && raw.resetGeneration >= 0
+      ? { resetGeneration: raw.resetGeneration }
+      : {}),
+    ...(typeof raw.resetInProgress === "boolean" ? { resetInProgress: raw.resetInProgress } : {}),
+  };
+  return record;
 }
 
 export class WorkspaceIndex implements WorkspaceIndexStore {
@@ -115,10 +147,60 @@ export class WorkspaceIndex implements WorkspaceIndexStore {
     });
   }
 
+  readResetState(template: string): Promise<ResetState> {
+    return this.transaction(["workspaces"], "readonly", async transaction => {
+      const value: unknown = await requested(transaction.objectStore("workspaces").get(template));
+      if (value === undefined) return { resetGeneration: 0, resetInProgress: false };
+      const parsed = parseRecord(value);
+      return {
+        resetGeneration: parsed.resetGeneration ?? 0,
+        resetInProgress: parsed.resetInProgress ?? false,
+      };
+    });
+  }
+
+  beginResetTransaction(template: string, now = Date.now()): Promise<number> {
+    return this.transaction(["workspaces"], "readwrite", async transaction => {
+      const store = transaction.objectStore("workspaces");
+      const value: unknown = await requested(store.get(template));
+      const existing = value === undefined ? undefined : parseRecord(value);
+      const nextGeneration = (existing?.resetGeneration ?? 0) + 1;
+      const lastOpened = existing ? Math.max(now, existing.lastOpened) : now;
+      store.put({
+        template,
+        lastOpened,
+        resetGeneration: nextGeneration,
+        resetInProgress: true,
+      });
+      return nextGeneration;
+    });
+  }
+
+  completeResetTransaction(template: string, now = Date.now()): Promise<void> {
+    return this.transaction(["workspaces"], "readwrite", async transaction => {
+      const store = transaction.objectStore("workspaces");
+      const value: unknown = await requested(store.get(template));
+      const existing = value === undefined ? undefined : parseRecord(value);
+      const lastOpened = existing ? Math.max(now, existing.lastOpened) : now;
+      store.put({
+        template,
+        lastOpened,
+        resetGeneration: existing?.resetGeneration ?? 0,
+        resetInProgress: false,
+      });
+    });
+  }
+
   private async touch(transaction: IDBTransaction, template: string, now: number): Promise<void> {
     const store = transaction.objectStore("workspaces");
     const value: unknown = await requested(store.get(template));
-    const lastOpened = value === undefined ? now : Math.max(now, parseRecord(value).lastOpened);
-    store.put({ template, lastOpened });
+    const existing = value === undefined ? undefined : parseRecord(value);
+    const lastOpened = existing === undefined ? now : Math.max(now, existing.lastOpened);
+    store.put({
+      template,
+      lastOpened,
+      ...(existing?.resetGeneration !== undefined ? { resetGeneration: existing.resetGeneration } : {}),
+      ...(existing?.resetInProgress !== undefined ? { resetInProgress: existing.resetInProgress } : {}),
+    });
   }
 }

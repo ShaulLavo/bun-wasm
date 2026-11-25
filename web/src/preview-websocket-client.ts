@@ -5,6 +5,7 @@ const nativeWebSocket = globalThis.WebSocket;
 const script = document.currentScript;
 const previewPort = Number(script?.getAttribute("data-bun-port"));
 const previewPrefix = script?.getAttribute("data-bun-prefix") ?? "/__preview/";
+const previewRoute = script?.getAttribute("data-bun-route") || undefined;
 const encoder = new TextEncoder();
 const accepts = new Map<string, string>();
 const connections = new Set<Connection>();
@@ -118,7 +119,10 @@ function connect(): number {
   streams.set(handle, { port: channel.port1, authority: constructingAuthority });
   const controller = navigator.serviceWorker.controller;
   if (!controller) { channel.port2.close(); return handle; }
-  controller.postMessage({ type: "preview-socket", port: previewPort }, [channel.port2]);
+  controller.postMessage(
+    previewRoute ? { type: "preview-socket", port: previewPort, route: previewRoute } : { type: "preview-socket", port: previewPort },
+    [channel.port2],
+  );
   return handle;
 }
 
@@ -145,7 +149,8 @@ function tunnelUrl(input: string | URL): { url: URL; authority: string } | null 
   if (!sameHost && !loopback) return null;
   if (!["ws:", "wss:"].includes(url.protocol)) return null;
   const marker = `${previewPrefix}${previewPort}`;
-  if (url.pathname.startsWith(marker + "/")) url.pathname = url.pathname.slice(marker.length);
+  if (url.pathname === marker) url.pathname = "/";
+  else if (url.pathname.startsWith(marker + "/")) url.pathname = url.pathname.slice(marker.length);
   const authority = url.host;
   url.protocol = "ws:";
   // connect() selects the guest port; the handshake keeps the requested authority.

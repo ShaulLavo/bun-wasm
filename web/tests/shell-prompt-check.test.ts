@@ -131,8 +131,8 @@ const nonTranscriptCallers = [
   "scripts/app-matrix/next-acceptance-observer-control.ts",
   // Navigation diagnostics and controls read public state, not terminal transcripts.
   "web/tests/playground-navigation.ts", "scripts/navigation-server-browser.test.ts",
-  // Storage checks use lifecycle and public shell state, never a terminal transcript.
-  "scripts/sandbox-storage-browser.test.ts", "scripts/sandbox-fs-observation-browser.test.ts",
+  // Storage and multi-tab checks use lifecycle, public state, and server helpers, never playground.mjs transcripts.
+  "scripts/sandbox-storage-browser.test.ts", "scripts/sandbox-fs-observation-browser.test.ts", "scripts/multitab-browser.test.ts",
 ];
 const inheritedTranscriptCallers = ["web/tests/browser-quickjs-stack.ts", "web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts", "scripts/bench-engines.test.ts", "scripts/engine-chromium-bench.ts"];
 

@@ -173,7 +173,7 @@ async function startupSteal(base: string, app: string, rejectPending: boolean) {
     await navigateTestPage(owner, `${base}/${app}/?pause-startup=1`);
     await owner.waitForFunction(() => (globalThis as any).startupFilesystem?.paused);
     const contender = await context.newPage();
-    await navigateTestPage(contender, `${base}/${app}/`);
+    await navigateTestPage(contender, `${base}/${app}/?takeover-startup=1`);
     await contender.waitForFunction(app => !!(globalThis as any)[app]?.editor, app);
     await contender.evaluate(async app => {
       const fs = (globalThis as any)[app].fs;
@@ -187,6 +187,7 @@ async function startupSteal(base: string, app: string, rejectPending: boolean) {
     assert.equal(await button.innerText(), "Reload");
     assert.equal(await button.isEnabled(), true);
     if (process.env.STARTUP_ERROR_SCREENSHOT) await owner.screenshot({ path: `${process.env.STARTUP_ERROR_SCREENSHOT}-${app}-${rejectPending ? "rejected" : "pending"}.png` });
+    await contender.close();
     await Promise.all([owner.waitForNavigation({ timeout: 4_000 }), button.click()]);
     await owner.waitForFunction(app => !!(globalThis as any)[app]?.editor, app);
     assert.equal(await owner.evaluate(async app => new TextDecoder().decode(await (globalThis as any)[app].fs.readFile("/startup-saved")), app), "saved during takeover");
@@ -275,7 +276,21 @@ try {
             export function startRun() { throw new Error("This test must not start a guest"); }
           ` }));
           build.onLoad({ filter: /\/web\/src\/preview\.ts$/ }, () => ({ loader: "ts", contents: `
-            export class Previews { ready = Promise.resolve("disabled in editor test"); }
+            export class Previews {
+              ready = Promise.resolve("disabled in editor test");
+              routePrefix = "/__preview/";
+              register() {}
+              unregister() {}
+              registerListener() { return Symbol(); }
+              unregisterListener() {}
+              hasListener() { return false; }
+              isListenerReady() { return false; }
+              waitUntilRegistered() { return Promise.resolve("disabled in editor test"); }
+              onWorkerRecovered() { return () => {}; }
+              serves() { return false; }
+              url(port, path = "/") { return location.origin + "/__preview/" + port + path; }
+              dispose() {}
+            }
           ` }));
         },
       }] satisfies Bun.BunPlugin[]).concat(config.plugins ?? []),
@@ -404,6 +419,28 @@ try {
     return { text: new TextDecoder().decode(await fs.readFile("/home/user/index.ts")), deleted: await fs.lookup("/home/user/math.test.ts") };
   }), { text: "console.log('saved playground');", deleted: undefined });
 
+  // Multi-tab default persistent attach: a second tab attaches without displacing the first and syncs edits.
+  const peer = await context.newPage();
+  const peerErrors: string[] = [];
+  peer.on("pageerror", error => peerErrors.push(error.message));
+  await navigateTestPage(peer, `${base}/playground/`);
+  await peer.waitForFunction(() => (globalThis as any).playground?.editor.path === "/home/user/index.ts");
+  assert.equal(await page.evaluate(() => (globalThis as any).playground.fs.ownershipLost), false);
+  assert.equal(await peer.evaluate(() => (globalThis as any).playground.fs.ownershipLost), false);
+  await peer.evaluate(async () => {
+    const editor = (globalThis as any).playground.editor;
+    editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: "console.log('synced across tabs');" } });
+    await editor.save();
+  });
+  await page.waitForFunction(() => (globalThis as any).playground.editor.view.state.doc.toString() === "console.log('synced across tabs');");
+  assert.deepEqual(peerErrors, []);
+  await peer.close();
+  await page.evaluate(async () => {
+    const editor = (globalThis as any).playground.editor;
+    editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: "console.log('saved playground');" } });
+    await editor.save();
+  });
+
   await page.evaluate(() => {
     const editor = (globalThis as any).playground.editor;
     editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: "unsaved older tab" } });
@@ -411,7 +448,7 @@ try {
   const contender = await context.newPage();
   const startupErrors: string[] = [];
   contender.on("pageerror", error => startupErrors.push(error.message));
-  await navigateTestPage(contender, `${base}/playground/`);
+  await navigateTestPage(contender, `${base}/playground/?takeover-startup=1`);
   await contender.waitForFunction(() => (globalThis as any).playground?.editor.path === "/home/user/index.ts");
   assert.equal(await contender.evaluate(async () => new TextDecoder().decode(await (globalThis as any).playground.fs.readFile("/home/user/index.ts"))), "console.log('saved playground');");
   await page.bringToFront();

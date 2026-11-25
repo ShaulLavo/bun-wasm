@@ -22,7 +22,8 @@ export function selectCiBrowserCoverage(base: string, head: string, options: { p
 
 function groupForBatch(name: string): string {
   switch (name) {
-    case "10-storage": return "storage";
+    case "10-storage":
+    case "11-multitab": return "storage";
     case "21-subprocess-aliases":
     case "23-engine-interruption": return "runtime";
     case "20-installer-links":

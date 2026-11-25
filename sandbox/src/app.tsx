@@ -43,8 +43,8 @@ function Header(handle: Handle<Props>) {
     void sandbox.startFresh();
   });
   return () => {
-    const { status, failure, resetting } = sandbox;
-    const locked = resetting || failure !== undefined;
+    const { status, failure, resetting, navigating } = sandbox;
+    const locked = resetting || navigating || failure !== undefined;
     return (
       <header>
         <h1><span class="logo" aria-hidden="true">🥟</span> bun<span class="dim">.wasm</span> <span class="product">sandbox</span></h1>
@@ -63,11 +63,11 @@ function Header(handle: Handle<Props>) {
           </select>
         </label>
         {sandbox.unreadable
-          ? <button id="start-fresh" type="button" title="Delete the workspace that cannot be opened and start from the template" disabled={resetting} mix={startFresh}>Start fresh</button>
-          : <button id="reset" type="button" title="Discard this workspace and restore its template" disabled={locked} mix={reset}>Reset template</button>}
+          ? <button id="start-fresh" type="button" title="Delete the workspace that cannot be opened and start from the template" disabled={resetting || navigating} mix={startFresh}>Start fresh</button>
+          : <button id="reset" type="button" title="Discard this workspace and restore its template" disabled={locked || !sandbox.workspaceInitialized} mix={reset}>Reset template</button>}
         {failure
           ? <button id="restart" type="button" title={RELOAD_TITLES[failure]} mix={restart}>{failure === "storage" ? "Retry" : "Reload"}</button>
-          : <button id="restart" type="button" title="Restart the dev server" disabled={resetting} mix={restart}>↻ Restart</button>}
+          : <button id="restart" type="button" title="Restart the dev server" disabled={resetting || navigating} mix={restart}>↻ Restart</button>}
       </header>
     );
   };

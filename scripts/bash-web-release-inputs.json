@@ -1,7 +1,7 @@
 {
-  "url": "https://github.com/ShaulLavo/bash-web/releases/download/bash-web-v0.0.113/bash-web-0.0.113.tgz",
-  "sha256": "9342422e0c3cbda686baf4a3a2c40f586ac2fa67a24fafd05b65547b2d792329",
-  "bytes": 5913054,
-  "version": "0.0.113",
-  "sourceCommit": "7c458c22b5490ac8c30419378ac9447466139fcc"
+  "url": "https://registry.npmjs.org/bash-web/-/bash-web-0.0.114.tgz",
+  "sha256": "8d5406f8dbcbf5a95636b31adf06d854699e2f9e07489314bdb7f43af31ac3a4",
+  "bytes": 5890327,
+  "version": "0.0.114",
+  "sourceCommit": "e92c9e5d7bb4b5fb9ea9c8b8471bddfe72170f99"
 }

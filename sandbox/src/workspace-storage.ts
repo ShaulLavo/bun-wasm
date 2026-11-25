@@ -1,20 +1,26 @@
 import type { Runtime } from "waffle";
 import { evictIdle, type EvictionDependencies, type EvictionReport } from "./workspace-eviction";
-import { WorkspaceIndex } from "./workspace-index";
+import { WorkspaceIndex, type ResetState } from "./workspace-index";
 import { IDLE_INSTALLS_KEPT, isStorageFull, regenerableOutputs, StorageRecovery } from "./workspace-policy";
-import { restoreSource } from "./workspace-restore";
+import { restoreSource, type RestoreSourceOptions } from "./workspace-restore";
 import { templateFiles, templateUrl } from "./template";
 import { templates } from "./template-catalog";
 import { measureStartup } from "../../web/src/startup";
 
 export type StoredWorkspaces = Pick<EvictionDependencies, "stored" | "openIdle">;
 type Filesystem = Runtime["filesystem"];
-const OPERATION_LOCK = "bun-wasm-sandbox-storage";
+const EVICT_LOCK = "bun-wasm-sandbox-evict";
+const templateLockName = (template: string) => `bun-wasm-sandbox-template:${template}`;
 const DOWNLOAD_CACHE = "bun-wasm-install-v1";
 
 export class WorkspaceStorage {
   readonly recovery: StorageRecovery;
-  private constructor(private readonly index: WorkspaceIndex, private readonly workspaces: StoredWorkspaces, readonly template: string, private readonly report: (report: EvictionReport) => void) {
+  private constructor(
+    readonly index: WorkspaceIndex,
+    private readonly workspaces: StoredWorkspaces,
+    readonly template: string,
+    private readonly report: (report: EvictionReport) => void,
+  ) {
     this.recovery = new StorageRecovery(async () => { await this.reclaim(0, true); });
   }
 
@@ -27,35 +33,63 @@ export class WorkspaceStorage {
 
   prepare(): Promise<void> { return this.reclaim(IDLE_INSTALLS_KEPT, false); }
 
-  initialize(fs: Filesystem, seed: () => Promise<void>): Promise<void> {
-    return this.operation(async () => {
-      await restoreSource(fs, this.index, this.template);
+  readResetState(): Promise<ResetState> {
+    return this.index.readResetState(this.template);
+  }
+
+  beginResetTransaction(): Promise<number> {
+    return this.index.beginResetTransaction(this.template, Date.now());
+  }
+
+  completeResetTransaction(): Promise<void> {
+    return this.index.completeResetTransaction(this.template, Date.now());
+  }
+
+  initialize(fs: Filesystem, seed: () => Promise<void>, options: RestoreSourceOptions = {}): Promise<void> {
+    return this.templateOperation(async () => {
+      await restoreSource(fs, this.index, this.template, options);
       await seed();
       await this.index.opened(this.template, Date.now());
     });
   }
 
   reset(replace: () => Promise<void>): Promise<void> {
-    return this.operation(async () => {
+    return this.templateOperation(async () => {
       await this.index.reset(this.template, Date.now());
       await replace();
     });
   }
 
-  private operation<T>(action: () => Promise<T>): Promise<T> {
-    return navigator.locks.request(OPERATION_LOCK, action);
+  private templateOperation<T>(action: () => Promise<T>): Promise<T> {
+    return navigator.locks.request(templateLockName(this.template), action);
   }
 
-  private reclaim(kept: number, recovering: boolean): Promise<void> {
-    return this.operation(async () => {
+  private async reclaim(kept: number, recovering: boolean): Promise<void> {
+    const run = async (lock: Lock | null): Promise<void> => {
+      if (!lock) return;
       const started = performance.now();
       let cleared: Promise<boolean> | undefined;
       const clearDownloadCache = () => cleared ??= caches.delete(DOWNLOAD_CACHE);
-      const report = await evictIdle({ index: this.index, ...this.workspaces, policy: preservationPolicy, clearDownloadCache }, templates.map(template => template.id), this.template, kept);
+      const report = await evictIdle(
+        { index: this.index, ...this.workspaces, policy: preservationPolicy, clearDownloadCache },
+        templates.map(template => template.id),
+        this.template,
+        kept,
+      );
       if (recovering && report.evicted.length === 0) await clearDownloadCache();
       this.report(report);
       measureStartup("storage-reclaim", started, { kept, evicted: report.evicted, protected: report.kept.length, busy: report.busy.length });
-    });
+    };
+    if (!recovering) {
+      await navigator.locks.request(EVICT_LOCK, { mode: "exclusive", ifAvailable: true }, run);
+      return;
+    }
+    try {
+      await navigator.locks.request(EVICT_LOCK, { mode: "exclusive", signal: AbortSignal.timeout(5_000) }, run);
+    } catch (error) {
+      if (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")) return;
+      throw error;
+    }
   }
 }
 

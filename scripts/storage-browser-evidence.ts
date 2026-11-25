@@ -11,7 +11,7 @@ function loadingNavigation(response: Response): boolean {
   const location = response.headers().location;
   if (!location) return false;
   const request = new URL(response.url());
-  const prefix = /^(.*\/__preview\/)\d{1,5}(?:\/|$)/.exec(request.pathname)?.[1];
+  const prefix = /^(.*\/__preview\/)(?:r\/[^/]+\/)?\d{1,5}(?:\/|$)/.exec(request.pathname)?.[1];
   if (!prefix) return false;
   try {
     const target = new URL(location, request);

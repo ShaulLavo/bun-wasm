@@ -137,8 +137,21 @@ test("real product service worker injects the configured preview even when HTTP 
       const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/__preview/" });
       const worker = registration.installing ?? registration.waiting ?? registration.active;
       if (!worker) throw new Error("Missing actual preview worker");
-      if (worker.state === "activated") return;
-      await new Promise<void>(resolve => worker.addEventListener("statechange", () => { if (worker.state === "activated") resolve(); }));
+      if (worker.state !== "activated") {
+        await new Promise<void>(resolve => worker.addEventListener("statechange", () => { if (worker.state === "activated") resolve(); }));
+      }
+      const active = registration.active ?? worker;
+      await new Promise<void>((resolve, reject) => {
+        const channel = new MessageChannel();
+        const timer = setTimeout(() => { channel.port1.close(); reject(new Error("Preview register ack timed out")); }, 5000);
+        channel.port1.onmessage = event => {
+          if (event.data?.type !== "preview-register-ack") return;
+          clearTimeout(timer);
+          channel.port1.close();
+          resolve();
+        };
+        active.postMessage({ type: "preview-register", route: "__unrouted__", port: 5173 }, [channel.port2]);
+      });
     });
     const preview = owner.url.origin + "/__preview/5173/";
     bus.configure("preview", preview);

@@ -6,7 +6,7 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=/dev/null
 source "$root/env.sh"
-commit=7c458c22b5490ac8c30419378ac9447466139fcc
+commit=e92c9e5d7bb4b5fb9ea9c8b8471bddfe72170f99
 source_dir="${BASH_WEB_SOURCE:-$CARGO_TARGET_DIR/bash-web-source}"
 if [[ "$(git -C "$source_dir" rev-parse HEAD 2>/dev/null)" != "$commit" ]]; then
   if [[ -n "${BASH_WEB_SOURCE:-}" ]]; then

@@ -1,6 +1,7 @@
 import type { WorkspaceIndexStore } from "./workspace-index";
 import { evictionOrder, isStorageFull, workspaceName } from "./workspace-policy";
 import { excludedRoots, readSource, type SourceReader, type SourceSnapshot } from "./workspace-source";
+import { acquireLockHandle, presenceLockName } from "../../web/src/web-locks";
 
 interface IdleSource extends SourceReader {
   delete(): Promise<void>;
@@ -13,6 +14,7 @@ export interface EvictionDependencies {
   readonly openIdle: (name: string, signal?: AbortSignal) => Promise<IdleSource | "busy" | "missing">;
   readonly policy: (template: string) => Promise<{ outputs: readonly string[]; templatePaths: ReadonlySet<string> }>;
   readonly clearDownloadCache: () => Promise<boolean>;
+  readonly locks?: Pick<LockManager, "request">;
 }
 
 export interface EvictionReport {
@@ -21,7 +23,7 @@ export interface EvictionReport {
   readonly kept: { readonly template: string; readonly error: unknown }[];
 }
 
-/** Caller holds the sandbox origin operation lock through this entire fresh pass. */
+/** Caller holds the sandbox eviction lock through this entire fresh pass. */
 export async function evictIdle(deps: EvictionDependencies, catalog: readonly string[], current: string, kept: number, signal?: AbortSignal): Promise<EvictionReport> {
   const report: EvictionReport = { evicted: [], busy: [], kept: [] };
   const candidates = evictionOrder(await deps.index.records(), await deps.stored(), catalog, current);
@@ -58,8 +60,22 @@ async function newestIdle(deps: EvictionDependencies, candidates: readonly strin
 }
 
 async function evictOne(deps: EvictionDependencies, template: string, preserve: (snapshot: SourceSnapshot) => Promise<void>, report: EvictionReport, signal?: AbortSignal): Promise<void> {
+  const wsName = workspaceName(template);
+  const locks = deps.locks ?? (typeof navigator !== "undefined" ? navigator.locks : undefined);
+  let presenceHandle: { release(): void } | null = null;
+  if (locks) {
+    presenceHandle = await acquireLockHandle(presenceLockName(wsName), {
+      mode: "exclusive",
+      ifAvailable: true,
+      locks,
+    });
+    if (!presenceHandle) {
+      report.busy.push(template);
+      return;
+    }
+  }
   try {
-    const handle = await deps.openIdle(workspaceName(template), signal);
+    const handle = await deps.openIdle(wsName, signal);
     if (handle === "busy") { report.busy.push(template); return; }
     if (handle === "missing") return;
     try { await preserveAndDelete(deps, handle, template, preserve, signal); } finally { await handle.close(); }
@@ -67,6 +83,8 @@ async function evictOne(deps: EvictionDependencies, template: string, preserve: 
   } catch (error) {
     if (signal?.aborted) throw error;
     report.kept.push({ template, error });
+  } finally {
+    presenceHandle?.release();
   }
 }
 

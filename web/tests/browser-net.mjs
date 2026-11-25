@@ -197,6 +197,17 @@ function check(name, ok, detail = "") {
   if (!ok) failures.push(name);
 }
 
+async function waitForSince(page, baselineLength, re, ms = 60000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    const text = await terminalText(page);
+    const delta = text.slice(baselineLength);
+    if (re.test(delta)) return delta;
+    await page.waitForTimeout(200);
+  }
+  throw new Error(`timeout waiting for ${re}\n${(await terminalText(page)).slice(baselineLength)}`);
+}
+
 async function checkHtmlEntry(page, context, appUrl, name) {
   await page.evaluate(async () => {
     const fs = globalThis.playground.fs;
@@ -204,9 +215,12 @@ async function checkHtmlEntry(page, context, appUrl, name) {
     await fs.writeFile("/home/user/app.ts", 'const message: string = "bundled HTML entry"; document.querySelector("#html-app").textContent = message; if (import.meta.hot) { import.meta.hot.accept(); import.meta.hot.on("bun:ws:connect", () => { globalThis.__hmrConnected = true; }); }');
     await fs.writeFile("/home/user/app.css", 'body { color: rgb(12, 34, 56); }');
   });
+  const htmlBaseline = (await terminalText(page)).length;
   await page.evaluate(() => void globalThis.playground.shell.submit("bun ./index.html"));
-  const output = await waitFor(page, /Started development server:|error:|crashed/);
+  const output = await waitForSince(page, htmlBaseline, /Started development server:|error:|crashed/);
   check(`${name}: HTML CLI starts a server`, output.includes("Started development server:"), output.slice(-500));
+  const htmlServed = await waitForSince(page, htmlBaseline, /\[preview\] http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\/|error:|crashed/);
+  check(`${name}: HTML CLI routed preview link printed`, /\[preview\] http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\//.test(htmlServed), htmlServed.slice(-500));
   const preview = await context.newPage();
   const logs = [];
   const ownerLog = (message) => logs.push("owner: " + message.text());
@@ -214,7 +228,7 @@ async function checkHtmlEntry(page, context, appUrl, name) {
   preview.on("console", (message) => logs.push(message.text()));
   preview.on("pageerror", (error) => logs.push(error.stack || String(error)));
   try {
-    const previewUrl = new URL("__preview/3000/", appUrl).href;
+    const previewUrl = await page.evaluate(() => globalThis.playground.previews.url(3000, "/"));
     await page.evaluate((url) => {
       const iframe = document.createElement("iframe");
       iframe.id = "hmr-fixture";
@@ -317,17 +331,18 @@ async function runEngine(browserName, engine, type, options, appUrl, fixtureBase
 
   // Bun.serve preview through the service worker
   await page.evaluate((src) => globalThis.playground.fs.writeFile("/home/user/serve.ts", src), serveTest);
+  const serveBaseline = (await terminalText(page)).length;
   await page.evaluate(() => void globalThis.playground.shell.submit("bun run serve.ts"));
-  const served = await waitFor(page, /\[preview\][^\n]*__preview\/3000\/|error:|crashed/);
-  check(`${name}: preview link printed`, /\[preview\] http:\/\/[^\s]+\/__preview\/3000\//.test(served), served.slice(-500));
-  const self = await waitFor(page, /self: .*|error:/);
-  const websocket = await waitFor(page, /websocket: browser websocket|error:|crashed/);
+  const served = await waitForSince(page, serveBaseline, /\[preview\][^\n]*__preview\/r\/pg-[^\s/]+\/3000\/|error:|crashed/);
+  check(`${name}: preview link printed`, /\[preview\] http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\//.test(served), served.slice(-500));
+  const self = await waitForSince(page, serveBaseline, /self: .*|error:/);
+  const websocket = await waitForSince(page, serveBaseline, /websocket: browser websocket|error:|crashed/);
   check(`${name}: guest WebSocket over virtual TCP`, websocket.includes("websocket: browser websocket"), websocket.slice(-500));
   check(`${name}: guest fetches its own server`, self.includes('self: {"hello":"preview","method":"POST","body":"me"}'), self.slice(-500));
 
   const preview = await context.newPage();
   preview.on("pageerror", (error) => errors.push(`preview: ${String(error)}`));
-  const previewUrl = new URL("__preview/3000/some/page?x=1", appUrl).href;
+  const previewUrl = await page.evaluate(() => globalThis.playground.previews.url(3000, "/some/page?x=1"));
   await navigateTestPage(preview, previewUrl);
   await preview.waitForFunction(() => document.title === "app.js loaded", null, { timeout: 15000 }).catch(() => {});
   check(`${name}: preview page served`, (await preview.textContent("h1").catch(() => "")) === "preview ok /some/page");

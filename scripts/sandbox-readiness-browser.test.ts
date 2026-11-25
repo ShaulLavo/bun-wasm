@@ -17,12 +17,29 @@ class Fixture {
   engine = "browser";
   wasm = { size: 1 };
   message = { text: "", kind: "" };
-  previews = { ready: Promise.resolve("ready"), register() {}, unregister() {}, url: port => location.origin + "/__preview/" + port + "/" };
+  disposed = false;
+  teardownRequested = false;
+  listenerRevision = 0;
+  coordinator = null;
+  workspace = null;
+  #activeTokens = new Map();
+  previews = {
+    ready: Promise.resolve("ready"),
+    register() {},
+    unregister() {},
+    registerListener: (port) => { const token = Symbol(); this.#activeTokens.set(port, token); return token; },
+    unregisterListener: (port, token) => { if (this.#activeTokens.get(port) === token) this.#activeTokens.delete(port); },
+    hasListener: (port, token) => this.#activeTokens.get(port) === token,
+    isListenerReady: (port, token) => this.#activeTokens.get(port) === token,
+    waitUntilRegistered: async (port, token) => (this.#activeTokens.get(port) === token ? "ready" : "failed"),
+    onWorkerRecovered: () => () => {},
+    url: port => location.origin + "/__preview/" + port + "/",
+  };
   report(error) { throw error; }
   setServerState(state) { document.querySelector("#server-dot").dataset.state = state; }
   setStatus(text, kind = "") { this.message = { text, kind }; const status = document.querySelector("#status"); status.textContent = text; status.dataset.kind = kind; }
   ${section("  private readonly network:", "  constructor(")}
-  ${section("  private async showPreview(", "  private async save(")}
+  ${section("  private isLivePreviewTarget(", "  private async save(")}
 }
 const measureStartup = () => {};
 const ENGINES = { browser: { name: "Browser (native)" } };

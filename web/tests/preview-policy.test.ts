@@ -22,6 +22,7 @@ function worker(base: string, mount: string, contentType = "text/html", encoding
   const cacheWrites: string[] = [];
   const scope = `${base}${mount}/`;
   const page = {
+    id: "page-1",
     url: `${base}index.html`,
     postMessage(_ask: unknown, ports: MessagePort[]) {
       const port = ports[0]!;
@@ -33,7 +34,7 @@ function worker(base: string, mount: string, contentType = "text/html", encoding
       port.close();
     },
   };
-  const clients = { async matchAll() { return [page]; }, async get() { return undefined; }, async claim() {} };
+  const clients = { async matchAll() { return [page]; }, async get(id: string) { return id === page.id ? page : undefined; }, async claim() {} };
   runInNewContext(source, {
     self: { registration: { scope }, clients, async skipWaiting() {}, addEventListener(type: string, handler: (event: any) => void) { handlers.set(type, handler); } },
     location: { origin: new URL(base).origin },
@@ -48,6 +49,14 @@ function worker(base: string, mount: string, contentType = "text/html", encoding
     async fetch(request: Request | string) { requests.push(typeof request === "string" ? request : request.url); return new Response("app chunk", { headers: upstream }); },
     URL, Response, Request, Headers, ReadableStream, TextEncoder, TextDecoder, MessageChannel, Uint8Array, setTimeout, clearTimeout,
   });
+  if (mount === "__preview") {
+    handlers.get("message")?.({
+      data: { type: "preview-register", route: "__unrouted__", port: 8123 },
+      source: page,
+      ports: [],
+      waitUntil() {},
+    });
+  }
   return {
     cached, requests, cacheWrites,
     install() { handlers.get("install")!({}); },

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { instrumentConsumerPreview, instrumentHelper, instrumentProjection, instrumentRouter, instrumentSandbox, instrumentWorker, verifySource } from "./storage-routing-build-source";
+import { instrumentConsumerPreview, instrumentHelper, instrumentProjection, instrumentRoutedWorker, instrumentRouter, instrumentSandbox, instrumentWorker, verifySource } from "./storage-routing-build-source";
 import release from "./waffle-release-inputs.json";
 
 const transforms = {
@@ -14,6 +14,7 @@ export function routingObservationSource(path: string, source: string): string |
   if (/\/(?:sandbox|web)\/src\/main\.ts$/.test(path) || path.endsWith("/web/src/sw.ts")) return collector + source;
   if (path.endsWith("/sandbox/src/sandbox.ts")) return instrumentSandbox(source);
   if (path.endsWith("/web/src/preview.ts")) return instrumentConsumerPreview(source);
+  if (path.endsWith("/web/src/sw-routing.ts")) return instrumentRoutedWorker(source);
   for (const [name, transform] of Object.entries(transforms)) {
     if (path.endsWith("/waffle/" + name)) return transform(source);
   }

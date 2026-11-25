@@ -143,8 +143,18 @@ navigationServerListening(server.url);
 console.log(`serving ${root} at ${server.url} (${isolate ? "cross-origin isolated" : "not isolated"})`);
 
 
-let stopping: Promise<void> | undefined;
-function stop(): Promise<void> {
-  return stopping ??= (async () => { await previewOwner.close(); await server.stop(true); })();
+let stopping: Promise<number> | undefined;
+function stop(): Promise<number> {
+  return stopping ??= (async () => {
+    const results = await Promise.allSettled([previewOwner.close(), server.stop(true)]);
+    let failed = false;
+    for (const result of results) {
+      if (result.status === "rejected") {
+        failed = true;
+        console.error("Preview server shutdown error:", result.reason);
+      }
+    }
+    return failed ? 1 : 0;
+  })();
 }
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => { void stop().finally(() => process.exit()); });
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => { void stop().then(code => process.exit(code)); });

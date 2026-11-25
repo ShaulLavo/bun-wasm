@@ -12,10 +12,16 @@
     const [code, errno] = readErrors[-result] || [`E${-result}`, undefined];
     return Object.assign(new Error(`read ${code}`), { code, errno, syscall: "read" });
   }
+  function isRegularFd(fd: number): boolean {
+    try { return (native.fstat(fd).mode & 0o170000) === 0o100000; } catch {
+      return false;
+    }
+  }
   return function makeReader(): BunWasm.ProcessReader {
     const { Readable } = internal.builtin("node:stream");
     const frames = internal.require("resource_frame");
     const subscription = new Uint8Array(16); // READABLE = 0, fd = 0, userdata = 0.
+    const regular = isRegularFd(0);
     let waiter: BunWasm.IoWaiter | undefined;
     // The pending read's frame: data and end from a read run in the frame that started it, as
     // under Bun. A read requested while one is pending joins it. The stream reads ahead while
@@ -29,6 +35,19 @@
     }
     function step(): boolean {
       if (stream.destroyed) return true;
+      if (regular) {
+        const finished = frame;
+        waiter = undefined;
+        frame = undefined;
+        try {
+          const data = native.read(0, 65536, -1);
+          if (data.length === 0) stream.push(null);
+          else stream.push(internal.require("buffer").Buffer.from(data));
+        } finally {
+          finished?.release();
+        }
+        return true;
+      }
       const chunk = native.procRead(0, 65536);
       if (chunk === -6) return false; // WASI EAGAIN, wait for descriptor readiness.
       // This read is over; a push may start the next one, with its own waiter and frame.

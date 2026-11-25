@@ -9,6 +9,9 @@ export const MAX_EXCHANGES = 64;
 export type OwnerFrame =
   | { type: "reserved"; id: string; origin: string; port: number }
   | { type: "bound"; id: string }
+  | { type: "expired"; id: string; port: number }
+  | { type: "unregistered"; id: string; port: number }
+  | { type: "busy"; id: string; port: number }
   | { type: "open"; id: string; open: PreviewHostOpen }
   | { type: "input"; id: string; input: PreviewHostInput };
 export type HostFrame =
@@ -91,6 +94,7 @@ export function ownerFrame(source: string): OwnerFrame {
   if (!record(value) || !identifier(value.id)) throw new TypeError("Invalid preview owner envelope");
   if (value.type === "reserved" && rootOrigin(value.origin) && port(value.port)) return { type: value.type, id: value.id, origin: value.origin, port: value.port };
   if (value.type === "bound") return { type: value.type, id: value.id };
+  if ((value.type === "expired" || value.type === "unregistered" || value.type === "busy") && port(value.port)) return { type: value.type, id: value.id, port: value.port };
   if (value.type === "open" && open(value.open)) return { type: value.type, id: value.id, open: value.open };
   if (value.type === "input" && input(value.input)) return { type: value.type, id: value.id, input: value.input };
   throw new TypeError("Invalid preview owner payload");
