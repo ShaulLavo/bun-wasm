@@ -2112,7 +2112,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const { frame } = this;
     if (!frame) return;
     let previous: Document | null = null;
-    try { previous = frame.contentDocument; } catch { previous = null; }
+    // A frame that shows another origin has no document to compare with, and WebKit reports the attempt as an error.
+    const showsOtherOrigin = Boolean(frame.src) && new URL(frame.src, location.href).origin !== new URL(location.href).origin;
+    if (!showsOtherOrigin) {
+      try { previous = frame.contentDocument; } catch { previous = null; }
+    }
     const requested = new URL(url, location.href);
     const requestedHref = requested.href;
     const crossOrigin = requested.origin !== location.origin;
