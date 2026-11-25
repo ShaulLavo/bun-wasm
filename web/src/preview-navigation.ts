@@ -57,7 +57,7 @@ export function previewNavigations(options: NavigationOptions) {
     navigation.clientId = clientId;
     const input = JSON.stringify({ url: navigation.url, status: `${navigation.loadingURL}/status`, cancel: `${navigation.loadingURL}/cancel/${++navigation.document}` }).replaceAll("<", "\\u003c");
     const script = `(${waitForPreview.toString()})(${input});`;
-    return new Response(`<!doctype html><meta charset="utf-8"><title>Loading preview</title><body><p role="status">Waiting for the development server…</p><script>${script}</script></body>`, {
+    return new Response(`<!doctype html><meta charset="utf-8"><title>Loading preview</title><body><p role="status" data-preview-loading="Waiting for the development server…">Waiting for the development server…</p><script>${script}</script></body>`, {
       headers: { ...headers, "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'self'" },
     });
   }

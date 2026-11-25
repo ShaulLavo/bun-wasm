@@ -6,6 +6,13 @@
   --dim: #8b8fa3;
   --accent: #fbf0df;
   --run: #f472b6;
+  --ok: #86efac;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace;
+  --radius: 4px;
+  --header-h: 48px;
+  --bar-h: 36px;
+  --control-h: 32px;
   --app-height: 100dvh;
   color-scheme: dark;
 }
@@ -36,26 +43,64 @@ body {
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
+/* Header: wordmark, page switch, status, pickers, main action. Shared shape with the sandbox. */
 header {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-height: var(--header-h);
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
   flex: none;
 }
 
-h1 {
+h1.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
   font-size: 16px;
   font-weight: 650;
   white-space: nowrap;
 }
 
+.brand .mark {
+  flex: none;
+  display: block;
+}
+
 .dim {
   color: var(--dim);
   font-weight: 400;
+}
+
+/* The two-page switch after the wordmark. */
+.site-nav {
+  display: flex;
+  flex: none;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.site-nav a.nav {
+  display: flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 3px;
+  color: var(--dim);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.site-nav a.nav[aria-current="page"] {
+  background: var(--panel);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 #status {
@@ -69,7 +114,7 @@ h1 {
 }
 
 #status[data-kind="ok"] {
-  color: #86efac;
+  color: var(--ok);
 }
 
 #status[data-kind="error"] {
@@ -87,37 +132,97 @@ button {
   touch-action: manipulation;
 }
 
-#run {
-  background: var(--run);
-  color: #1a1020;
-  border: 0;
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-weight: 650;
-  min-height: 34px;
+/* One interaction base for every control: same press, focus ring and hover rules. */
+#run,
+#start-fresh,
+#new-file,
+.copy-terminal,
+.tab,
+.demo,
+.control,
+.segmented button,
+.site-nav a.nav,
+#engine,
+#template,
+#file-select {
+  transition: transform 140ms var(--ease-out), background-color 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
-#run:disabled {
+:is(#run, #start-fresh, #new-file, .copy-terminal, .tab, .demo, .control, .segmented button, .site-nav a.nav):active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+:is(#run, #start-fresh, #new-file, .copy-terminal, .tab, .demo, .control, .segmented button, .site-nav a.nav, #engine, #template, #file-select):focus-visible {
+  outline: 2px solid var(--run);
+  outline-offset: 2px;
+}
+
+:is(#start-fresh, .copy-terminal, .control, .demo, #run):disabled {
   opacity: 0.5;
   cursor: progress;
 }
 
-#start-fresh {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 12px;
-  min-height: 34px;
+@media (hover: hover) and (pointer: fine) {
+  :is(#start-fresh, .copy-terminal, .control, #engine, #template, #file-select):hover:not(:disabled) {
+    border-color: var(--dim);
+  }
+
+  :is(.tab, #new-file, .site-nav a.nav:not([aria-current="page"]), .segmented button):hover:not(:disabled) {
+    color: var(--text);
+  }
+
+  .demo:hover:not(:disabled):not([aria-pressed="true"]) {
+    border-color: var(--dim);
+  }
+
+  #run:hover:not(:disabled) {
+    background: #f68bc6;
+  }
+}
+
+#run {
+  flex: none;
+  min-width: 82px;
+  min-height: var(--control-h);
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--run);
+  color: #1a1020;
+  font-weight: 650;
   white-space: nowrap;
 }
 
-#start-fresh:hover {
-  border-color: var(--dim);
+#run[data-state="stop"] {
+  background: var(--accent);
+  color: var(--bg);
 }
 
-#start-fresh:disabled {
-  opacity: 0.5;
-  cursor: progress;
+/* Secondary controls: Start fresh, Copy, the preview bar's buttons and links. */
+#start-fresh,
+.copy-terminal,
+.control {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+#start-fresh {
+  min-height: var(--control-h);
+  font-size: 13px;
+}
+
+.copy-terminal {
+  margin-left: auto;
 }
 
 main {
@@ -137,12 +242,13 @@ main {
 
 .editor-pane {
   border-right: 1px solid var(--border);
-  background: #282c34;
+  background: var(--panel);
 }
 
 .tabbar {
   display: flex;
   flex: none;
+  height: var(--bar-h);
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
@@ -159,35 +265,53 @@ main {
   display: none;
 }
 
+/* Fade only the edges that hide more tabs. */
+#tabs[data-more-right] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+
+#tabs[data-more-left] {
+  mask-image: linear-gradient(to right, transparent, #000 24px);
+}
+
+#tabs[data-more-left][data-more-right] {
+  mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+}
+
 #file-select {
   display: none;
   flex: 1;
   min-width: 0;
-  margin: 6px 0 6px 8px;
+  margin: 4px 0 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background-color: var(--bg);
   color: inherit;
-  font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+  font: 13px var(--mono);
 }
 
 .tab {
   flex: none;
+  height: 100%;
   background: none;
   border: 0;
   border-right: 1px solid var(--border);
-  padding: 8px 12px;
+  padding: 0 12px;
   color: var(--dim);
-  font: 13px ui-monospace, "SF Mono", Menlo, monospace;
+  font: 13px var(--mono);
   white-space: nowrap;
   max-width: 18em;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.tab[data-generated] {
+  color: #5f6375;
+}
+
 .tab[aria-selected="true"] {
   color: var(--accent);
-  background: #282c34;
+  background: var(--bg);
   box-shadow: inset 0 -2px 0 var(--run);
 }
 
@@ -208,13 +332,21 @@ main {
   min-height: 0;
 }
 
+/* The editor sits on the shell's panel colour; the syntax colours stay. */
+#editor .cm-editor,
+#editor .cm-gutters {
+  background: var(--panel);
+}
+
 #editor .cm-editor {
   height: 100%;
   font-size: 13.5px;
 }
 
 #editor .cm-scroller {
-  font-family: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace;
+  font-family: var(--mono);
+  scrollbar-width: thin;
+  scrollbar-color: #3a3d4a transparent;
 }
 
 .terminal-pane {
@@ -229,115 +361,59 @@ main {
   min-height: 0;
 }
 
+#terminal .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3d4a transparent;
+}
+
+#terminal .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+#terminal .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #3a3d4a;
+  border-radius: 3px;
+}
+
+#terminal .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* iOS zooms into focused fields under 16px; xterm's input textarea is invisible anyway. */
 .xterm .xterm-helper-textarea {
   font-size: 16px;
 }
 
-@media (max-width: 800px) {
-  #tabs {
-    display: none;
-  }
-
-  #file-select {
-    display: block;
-  }
-
-  header {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 6px 10px;
-    padding: 6px 10px;
-  }
-
-  header h1 {
-    grid-column: 1;
-    grid-row: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  header .workspace-nav {
-    gap: 6px;
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-self: start;
-    flex-wrap: wrap;
-  }
-
-  header .workspace-nav a.nav {
-    font-size: 12px;
-  }
-
-  header #status {
-    display: block;
-    grid-column: 1 / -1;
-    grid-row: 4;
-    width: 100%;
-  }
-
-  header #status:empty,
-  header #status[data-kind="ok"] {
-    display: none;
-  }
-
-  header #engine {
-    grid-column: 1;
-    grid-row: 3;
-    min-width: 0;
-    max-width: 100%;
-    justify-self: start;
-  }
-
-  header #run {
-    grid-column: 2;
-    grid-row: 3;
-    min-height: 34px;
-  }
-
-  header #start-fresh {
-    grid-column: 1 / -1;
-    grid-row: 5;
-    justify-self: start;
-  }
-
-  #engine {
-    min-width: 0;
-    max-width: 100%;
-    min-height: 34px;
-  }
-
-  main {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 46fr) minmax(0, 54fr);
-  }
-
-  .editor-pane {
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-  }
-
-  h1 .dim {
-    display: none;
-  }
-
-  #editor .cm-editor {
-    font-size: 13px;
-  }
+.field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--dim);
 }
 
-#engine {
+/* Pickers size to their text, within limits, and end with an ellipsis when cut. */
+#engine,
+#template {
   flex: none;
-  max-width: 11em;
+  field-sizing: content;
+  min-width: 170px;
+  max-width: 220px;
+  min-height: var(--control-h);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background-color: var(--bg, #15171c);
+  border-radius: var(--radius);
+  background-color: var(--bg);
   color: inherit;
   font: inherit;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 #engine,
+#template,
 #file-select {
   appearance: none;
   -webkit-appearance: none;
@@ -348,30 +424,12 @@ main {
   padding: 4px 30px 4px 10px;
 }
 
-.workspace-nav {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-a.nav {
-  flex: none;
-  color: var(--dim);
-  font-size: 13px;
-  text-decoration: none;
-}
-
-a.nav:hover {
-  color: inherit;
-  text-decoration: underline;
-}
-
 .bar {
   display: flex;
   align-items: center;
   gap: 8px;
   flex: none;
-  min-height: 34px;
+  height: var(--bar-h);
   padding: 0 10px;
   font-size: 12px;
   color: var(--dim);
@@ -379,6 +437,7 @@ a.nav:hover {
   background: var(--panel);
 }
 
+/* Safari's full-screen preview overlay for terminal links. */
 .playground-preview {
   position: fixed;
   inset: 0;
@@ -400,7 +459,7 @@ a.nav:hover {
   min-height: 34px;
   padding: 2px 8px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius);
   background: var(--bg);
 }
 
@@ -409,25 +468,7 @@ a.nav:hover {
   min-height: 0;
   width: 100%;
   border: 0;
-  background: white;
-  color-scheme: normal;
-}
-
-#copy-terminal {
-  flex: none;
-  margin-left: auto;
-  min-height: 30px;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
   background: var(--bg);
-  color: var(--text);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-#copy-terminal:hover {
-  border-color: var(--dim);
 }
 
 /* Phones held sideways are wider than 800px but short: they get the file dropdown too. */
@@ -441,7 +482,434 @@ a.nav:hover {
   }
 }
 
+/* Demo bar: one-click Bun API demos above the editor (examples workspace only). */
+.demo-bar {
+  flex: none;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.demo-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.demo-label {
+  flex: none;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.demos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.demo {
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--accent);
+  font: 13px var(--mono);
+  white-space: nowrap;
+}
+
+.demo[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.demo-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 16px;
+  margin: 6px 0 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.compat a {
+  color: var(--accent);
+}
+
+/* Phone-only pieces: the pane switch and the compatibility footer. */
+.pane-switch,
+.compat-foot {
+  display: none;
+}
+
+/* The output column holds a docked server preview above the terminal. */
+.output-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.output-column > .terminal-pane {
+  flex: 1;
+}
+
+.preview-dock {
+  flex: 0 0 55%;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.live {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.preview-dock .preview-address {
+  font-family: var(--mono);
+}
+
+.preview-frame {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.preview-frame iframe {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: var(--bg);
+  opacity: 0;
+  transition: opacity 150ms var(--ease-out);
+}
+
+.preview-dock[data-frame="loaded"] .preview-frame iframe {
+  opacity: 1;
+}
+
+.preview-waiting {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--dim);
+  font: 13px system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--dim);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.segmented {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.segmented button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 38px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--dim);
+  font-size: 13px;
+}
+
+.segmented button[aria-selected="true"] {
+  background: var(--panel);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.segmented button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (max-width: 800px) {
+  #tabs {
+    display: none;
+  }
+
+  #file-select {
+    display: block;
+  }
+
+  /* Row one: mark, page switch, Run. Row two: both pickers, side by side. */
+  header {
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 0;
+    padding: 4px 10px;
+  }
+
+  header h1.brand {
+    min-width: 0;
+  }
+
+  .site-nav {
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+
+  .site-nav a.nav {
+    min-height: 40px;
+  }
+
+  header #run {
+    order: 1;
+    margin-left: auto;
+    min-height: 40px;
+  }
+
+  header .field {
+    order: 2;
+    flex: 1 1 calc(50% - 4px);
+  }
+
+  header #status {
+    display: block;
+    order: 3;
+    flex: 1 1 100%;
+  }
+
+  header #status:empty,
+  header #status[data-kind="ok"] {
+    display: none;
+  }
+
+  header #start-fresh {
+    order: 4;
+  }
+
+  header .field .label {
+    display: none;
+  }
+
+  header .field select {
+    flex: 1;
+    width: 100%;
+  }
+
+  #engine,
+  #template {
+    min-width: 0;
+    max-width: 100%;
+    min-height: 40px;
+  }
+
+  main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 46fr) minmax(0, 54fr);
+  }
+
+  .editor-pane {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  #editor .cm-editor {
+    font-size: 13px;
+  }
+
+  .tabbar {
+    height: 44px;
+  }
+
+  #file-select,
+  #new-file {
+    min-height: 40px;
+  }
+
+  /* Examples workspace: three demo columns of 40 px targets, then one pane at a time. */
+  .demo-bar {
+    padding: 6px 10px;
+  }
+
+  .demo-label,
+  .demo-meta {
+    display: none;
+  }
+
+  .demos {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .demo {
+    min-height: 40px;
+    padding: 0 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pane-switch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    padding: 0 10px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .segmented {
+    flex: 1 1 0;
+  }
+
+  .segmented button {
+    min-height: 40px;
+    padding: 0 4px;
+  }
+
+  .pane-switch .engine-field {
+    flex: 0 1 44%;
+  }
+
+  .pane-switch .engine-field .label {
+    display: none;
+  }
+
+  .pane-switch #engine {
+    flex: 1;
+    width: 100%;
+  }
+
+  .preview-dock .bar .control,
+  .terminal-pane .copy-terminal {
+    min-height: 40px;
+  }
+
+  main[data-pane] {
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "stack";
+  }
+
+  main[data-pane] .output-column {
+    display: contents;
+  }
+
+  main[data-pane] :is(.editor-pane, .preview-dock, .terminal-pane) {
+    grid-area: stack;
+    border: 0;
+    visibility: hidden;
+  }
+
+  main[data-pane="code"] .editor-pane,
+  main[data-pane="preview"] .preview-dock,
+  main[data-pane="terminal"] .terminal-pane {
+    visibility: visible;
+  }
+
+  /* The pane switch already names the terminal; Copy floats in its top corner instead of a bar. */
+  main[data-pane] .terminal-pane {
+    position: relative;
+  }
+
+  main[data-pane] .terminal-pane .bar {
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    z-index: 1;
+    height: auto;
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+
+  main[data-pane] .terminal-pane .bar > span:first-child {
+    display: none;
+  }
+
+  .preview-dock .bar,
+  .terminal-pane .bar {
+    height: 44px;
+  }
+
+  .compat-foot {
+    display: block;
+    flex: none;
+    margin: 0;
+    padding: 6px 10px;
+    border-top: 1px solid var(--border);
+    color: var(--dim);
+    font-size: 12px;
+  }
+}
+
+/* The narrowest phones keep the mark and drop the wordmark so the header stays one row. */
+@media (max-width: 379px) {
+  .brand .wordmark {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #run,
+  #start-fresh,
+  #new-file,
+  .copy-terminal,
+  .tab,
+  .demo,
+  .control,
+  .segmented button,
+  .site-nav a.nav,
+  .preview-frame iframe {
+    transition: none;
+  }
+
+  :is(#run, #start-fresh, #new-file, .copy-terminal, .tab, .demo, .control, .segmented button, .site-nav a.nav):active:not(:disabled) {
+    transform: none;
+  }
+
+  .spinner {
+    animation: none;
+  }
+}
+
 @media (forced-colors: active) {
+  #template,
   #engine,
   #file-select {
     appearance: auto;
