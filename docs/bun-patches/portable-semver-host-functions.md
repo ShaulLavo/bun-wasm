@@ -3,7 +3,7 @@
 Class **Port** for the source selection in `crates/bunwasm-semver/src/lib.rs`.
 The upstream implementation is oven-sh/bun `src/semver_jsc/SemverObject.rs`
 at pinned upstream revision `a7733435cf40429e3b35c36072769df2052b80f1` (Bun 1.4.5).
-The vendored patched tree is `13db39ec6c7f348f48a660c0b8b7d9a6a0051cc0`.
+The vendored patched tree is `2b7d8ba665744fa92e79a3039fc7bf32eed8d4a8`.
 This file is unchanged between those revisions. The adapter compiles it directly with
 `#[path]`, so no copy or generated rewrite can drift from the pinned source.
 Its `order`, `satisfies`, and `intersects_for_testing` bodies all compile.

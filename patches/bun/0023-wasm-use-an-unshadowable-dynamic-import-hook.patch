@@ -1,4 +1,4 @@
-From b5527199612ac2724b5e31b494a1de2ba7be5b0e Mon Sep 17 00:00:00 2001
+From d0e2863365254e7383022593fef01976a85e3a92 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sun, 8 Nov 2026 11:22:43 +0200
 Subject: [PATCH 23/28] wasm: use an unshadowable dynamic import hook

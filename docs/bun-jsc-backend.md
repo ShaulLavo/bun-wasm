@@ -79,7 +79,7 @@ host collection remains available only when the host exposes a GC function.
 ## API inventory and coverage
 
 The pinned upstream revision is `a7733435cf40429e3b35c36072769df2052b80f1` (Bun 1.4.5).
-The locally patched vendor HEAD is `13db39ec6c7f348f48a660c0b8b7d9a6a0051cc0`.
+The locally patched vendor HEAD is `2b7d8ba665744fa92e79a3039fc7bf32eed8d4a8`.
 The selected semver file is identical at both revisions.
 
 [bun-jsc-inventory.json](bun-jsc-inventory.json) records the complete lexical

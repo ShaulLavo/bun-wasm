@@ -17,7 +17,7 @@ Class **Port**. Upstream remains Bun
   to its parent, matching the other platform implementations.
 - `src/crash_handler/lib.rs` excludes a native-only import and explicitly
   consumes the report URL on WASI, where automatic crash reporting is disabled.
-- `src/io/lib.rs` and `src/io/posix_event_loop.rs` exclude unused native imports.
+- `src/io/lib.rs` and `src/io/posix_event_loop.rs` exclude unused native imports. At Bun 1.4.5, `IoRequestLoop::load` in `src/io/lib.rs` also joins upstream's macOS arm on WASI: no `FdExt` import, and the new loop and waker fd are explicitly consumed, because WASI registers neither with a poller.
   Their specific native poller logger, descriptor accessor, packed pollables,
   dispatch helpers and unused WASI waker accessor receive WASI-only `dead_code`
   allowances. `src/watcher/Watcher.rs` and `WatcherTrace.rs` do the same only for

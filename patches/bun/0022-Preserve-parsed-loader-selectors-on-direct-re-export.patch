@@ -1,4 +1,4 @@
-From 2d1ef9fa372b5f06c57f37fa22f1a8aaf37f740e Mon Sep 17 00:00:00 2001
+From 29a9f45dab3a14a95dbc83638a6e491b543619d3 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sun, 8 Nov 2026 09:45:45 +0200
 Subject: [PATCH 22/28] Preserve parsed loader selectors on direct re-exports

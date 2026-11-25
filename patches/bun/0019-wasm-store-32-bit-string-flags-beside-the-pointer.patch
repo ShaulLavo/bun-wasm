@@ -1,4 +1,4 @@
-From 509783e950a49aaa70d1dd52fad9cd81a0540c50 Mon Sep 17 00:00:00 2001
+From d7cc6c3796f614290a41d1f2d0d34a8d687baa39 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 29 Oct 2026 16:21:28 +0200
 Subject: [PATCH 19/28] wasm: store 32-bit string flags beside the pointer

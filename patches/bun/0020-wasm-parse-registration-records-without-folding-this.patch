@@ -1,4 +1,4 @@
-From 1143e62da822f84a2d3ff9f57663d820fa0451da Mon Sep 17 00:00:00 2001
+From d264885c0f6778ae0dc8f9a16bda5f39eba83894 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Fri, 6 Nov 2026 03:35:54 +0200
 Subject: [PATCH 20/28] wasm: parse registration records without folding this

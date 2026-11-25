@@ -1,4 +1,4 @@
-From 13db39ec6c7f348f48a660c0b8b7d9a6a0051cc0 Mon Sep 17 00:00:00 2001
+From 2b7d8ba665744fa92e79a3039fc7bf32eed8d4a8 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Wed, 25 Nov 2026 12:00:00 +0200
 Subject: [PATCH 28/28] sema: keep generic argument serials 64-bit on 32-bit

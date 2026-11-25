@@ -1,4 +1,4 @@
-From 3114b4ea2178982d76723f14cf2b581053ed88c2 Mon Sep 17 00:00:00 2001
+From 79fa218db5bfdd4da93cda19a0cc7ed2c7ff9194 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 29 Oct 2026 08:27:56 +0200
 Subject: [PATCH 17/28] wasm: print ES module bodies for registration records

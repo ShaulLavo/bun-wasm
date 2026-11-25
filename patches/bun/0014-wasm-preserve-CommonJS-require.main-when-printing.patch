@@ -1,4 +1,4 @@
-From 8869577ea2759baa1d861a70659f2b2957f5aa8e Mon Sep 17 00:00:00 2001
+From 138218bda0a861fd9f8f6706e21433bd3dcb60f2 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sun, 25 Oct 2026 17:06:30 +0200
 Subject: [PATCH 14/28] wasm: preserve CommonJS require.main when printing

@@ -1,5 +1,5 @@
 {
-  "bun_revision": "13db39ec6c7f348f48a660c0b8b7d9a6a0051cc0",
+  "bun_revision": "2b7d8ba665744fa92e79a3039fc7bf32eed8d4a8",
   "semver_source_sha256": "2f1bbf41711310b90860e61140253b90d701ef40152bacd12b247b0c1ed4872a",
   "method": "Lexical imports and identifier references outside use declarations; comments and strings excluded. Not method resolution; aliases may be shadowed. Wildcard and extension-trait calls are not attributable.",
   "scopes": [

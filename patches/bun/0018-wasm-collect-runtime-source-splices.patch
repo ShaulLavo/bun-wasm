@@ -1,4 +1,4 @@
-From 10bf916aa7324cad671943b51597b99498fa5323 Mon Sep 17 00:00:00 2001
+From 922310212fb525debb70afa7447619b1ada1bfc6 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 29 Oct 2026 14:01:56 +0200
 Subject: [PATCH 18/28] wasm: collect runtime source splices and prepare eval

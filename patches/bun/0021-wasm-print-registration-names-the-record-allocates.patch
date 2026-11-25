@@ -1,4 +1,4 @@
-From ea4328892f2ed190c2a6dd301fd84f5a3baa5154 Mon Sep 17 00:00:00 2001
+From ebae69bd278cb42d4e0c10090e3018bbcae7887d Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Fri, 6 Nov 2026 06:15:03 +0200
 Subject: [PATCH 21/28] wasm: print registration names the record allocates

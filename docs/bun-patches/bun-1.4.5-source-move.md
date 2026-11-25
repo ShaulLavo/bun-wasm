@@ -13,10 +13,11 @@ clone with the exported patches gives the same patched commit.
 
 | Patches | State | What changed |
 | --- | --- | --- |
-| 0002 to 0007, 0009, 0010, 0012 to 0018, 0020 to 0027 | Same change | Only hunk positions and context moved. |
+| 0002 to 0007, 0009, 0010, 0012, 0014 to 0018, 0020 to 0027 | Same change | Only hunk positions and context moved. |
 | [0001](0001-platform-selection-and-pointer-layout.md) | Adjusted | WASI stays out of the new signal re-raise path; the interim 32-bit string tags lose the removed "global" bit. |
 | 0008 | Adjusted | The `finally` handler hook takes upstream's new `body_loc`. |
 | [0011](0011-lint-layout-assertions.md) | Smaller | The `TypeArguments` size hunk is gone: upstream's assertion holds on wasm32 now. |
+| [0013](0013-strict-wasi-lint-boundaries.md) | Adjusted | One more function in `src/io/lib.rs` keeps its native-only locals out of the WASI build. |
 | [0019](0019-wasm32-string-flags.md) | Rewritten | Two string flags instead of three, after upstream removed the "global" flag. |
 | [0028](0028-generic-argument-serials.md) | New | A 32-bit shift overflow in the type checker that 1.4.5 introduced. |
 

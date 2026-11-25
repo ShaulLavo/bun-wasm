@@ -1,4 +1,4 @@
-From 4f761e375e07fd8d9cb6b95c6e65bb907371246b Mon Sep 17 00:00:00 2001
+From 6342b823b77edec777aa70d1507c8204d1e09862 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sun, 8 Nov 2026 22:43:51 +0200
 Subject: [PATCH 25/28] wasm: preserve namespaces in required ES module imports

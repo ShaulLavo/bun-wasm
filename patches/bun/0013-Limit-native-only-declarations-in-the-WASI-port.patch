@@ -1,4 +1,4 @@
-From ddbf967e18dd453e86312a855783389f729b7a69 Mon Sep 17 00:00:00 2001
+From 6de5abe2113709678ee42a8b3cd2b0d1b0f8d3b7 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sun, 18 Oct 2026 16:16:51 +0300
 Subject: [PATCH 13/28] Limit native-only declarations in the WASI port
@@ -9,7 +9,7 @@ Subject: [PATCH 13/28] Limit native-only declarations in the WASI port
  src/bun_core/util.rs        |  6 +++---
  src/crash_handler/lib.rs    |  4 +++-
  src/errno/wasi_errno.rs     |  1 -
- src/io/lib.rs               | 10 +++++++++-
+ src/io/lib.rs               | 14 +++++++++++---
  src/io/posix_event_loop.rs  |  9 ++++++++-
  src/sys/copy_file.rs        |  4 ++--
  src/sys/lib.rs              |  9 +++++----
@@ -17,7 +17,7 @@ Subject: [PATCH 13/28] Limit native-only declarations in the WASI port
  src/threading/ThreadPool.rs |  1 +
  src/watcher/Watcher.rs      |  8 ++++++++
  src/watcher/WatcherTrace.rs |  1 +
- 13 files changed, 45 insertions(+), 15 deletions(-)
+ 13 files changed, 47 insertions(+), 17 deletions(-)
 
 diff --git a/src/bun_core/Global.rs b/src/bun_core/Global.rs
 index 175d6261..423d24b4 100644
@@ -119,7 +119,7 @@ index 5c144e36..4becfdc8 100644
  // wasi-libc wrappers return -1 and set the thread-local errno.
  impl_get_errno_libc!(i32, u32, isize, i64, usize);
 diff --git a/src/io/lib.rs b/src/io/lib.rs
-index 7d3d466b..819f7597 100644
+index 7d3d466b..b98c4aa4 100644
 --- a/src/io/lib.rs
 +++ b/src/io/lib.rs
 @@ -671,7 +671,7 @@ pub use open_for_writing_mod::{open_for_writing, open_for_writing_impl};
@@ -147,6 +147,24 @@ index 7d3d466b..819f7597 100644
      use core::ffi::c_int;
      unsafe extern "C" {
          #[cfg(any(target_os = "macos", target_os = "freebsd"))]
+@@ -813,7 +815,7 @@ impl IoRequestLoop {
+     /// Initializes `LOOP`. On failure, closes the fds it opened so a later call can retry.
+     #[cfg(not(windows))]
+     fn load() -> sys::Result<()> {
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(any(target_os = "macos", target_os = "wasi")))]
+         use bun_sys::FdExt as _;
+ 
+         let waker = Waker::init().map_err(|err| {
+@@ -913,7 +915,7 @@ impl IoRequestLoop {
+             }
+         }
+ 
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "wasi"))]
+         let _ = (loop_, waker_fd);
+         Ok(())
+     }
 @@ -1137,6 +1139,7 @@ impl IoRequestLoop {
      // these so any Windows call site fails at compile time rather than
      // compiling cleanly and only panicking at runtime.

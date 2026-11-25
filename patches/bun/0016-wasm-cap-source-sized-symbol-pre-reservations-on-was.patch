@@ -1,4 +1,4 @@
-From 62d7d8fa38597e573d6b27a57abaf802c5659e1c Mon Sep 17 00:00:00 2001
+From 8519b8926c00e534f5edb7e06ddd48dd60dd2b9e Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Wed, 28 Oct 2026 03:36:30 +0200
 Subject: [PATCH 16/28] wasm: cap source-sized symbol pre-reservations on

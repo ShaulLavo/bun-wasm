@@ -1,4 +1,4 @@
-From e879956c5cd5bfe92d387108860c6e587780cef3 Mon Sep 17 00:00:00 2001
+From fffbc868839c21b3c03145f0195f0b3749dfa455 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sun, 22 Nov 2026 23:29:45 +0200
 Subject: [PATCH 27/28] wasm: gate react_compiler behind a cargo feature in
