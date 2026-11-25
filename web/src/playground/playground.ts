@@ -1042,7 +1042,11 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
         if (state === "ready" && announcedPorts.has(port)) return;
         if (state === "ready") announcedPorts.add(port);
         term.write(previewLine(previews, port, state));
-        if (state === "ready" && !this.template) this.dockPreview(previews.url(port), port, this.helperLaunches.get(rec.helper));
+        // Only a server the playground started (Run or a demo) opens the docked preview: its frame
+        // sends an HTTP request, which a server typed in the terminal may not expect (a raw TCP
+        // test server, for one). Other servers keep the terminal link.
+        const launch = this.helperLaunches.get(rec.helper);
+        if (state === "ready" && !this.template && launch) this.dockPreview(previews.url(port), port, launch);
         return;
       }
     };

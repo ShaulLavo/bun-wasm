@@ -183,20 +183,22 @@ async function attributionAndFailure(browser: Browser, url: string): Promise<voi
       "slow.ts": "Bun.serve({ port: 3002, fetch: async () => { await Bun.sleep(60000); return new Response('slow'); } });\nconsole.log('SLOW' + '_UP');\n",
     });
 
-    // A background server that starts listening while Run is active is not Run's server.
+    // A background server that starts listening while Run is active is not Run's server: it gets
+    // its terminal line but no docked preview (and so no Restart).
     expect((await run(page, "bun run late.ts &", 30_000)).code).toBe(0);
     await page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as Shell).editor.open("/home/user/wait.ts"));
     await page.locator("#run").click();
-    await page.locator(".preview-dock iframe").waitFor({ timeout: HANG_MS });
+    await terminalIncludes(page, "LATE_UP");
+    await terminalIncludes(page, "[preview] localhost:3001");
     expect(await page.locator("#run").getAttribute("data-state")).toBe("stop");
-    expect(await page.locator(".preview-dock button", { hasText: "Restart" }).count()).toBe(0);
+    expect(await page.locator(".preview-dock").count()).toBe(0);
     await page.locator("#run").click();
     await page.waitForFunction(() => document.querySelector("#run")?.getAttribute("data-state") === "run", undefined, { timeout: HANG_MS });
     expect((await run(page, "kill %1; wait; true", 30_000)).code).toBe(0);
-    await page.locator(".preview-dock").waitFor({ state: "detached", timeout: HANG_MS });
 
     // A preview whose request fails says so instead of spinning forever.
-    void page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as Shell).shell.submit("bun run slow.ts"));
+    await page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as Shell).editor.open("/home/user/slow.ts"));
+    await page.locator("#run").click();
     const frameElement = await page.locator(".preview-dock iframe").elementHandle({ timeout: HANG_MS });
     const frame = await frameElement!.contentFrame();
     await frame!.waitForFunction(() => document.querySelector("[data-preview-loading]") !== null, undefined, { timeout: HANG_MS });
@@ -319,10 +321,18 @@ async function oneTab(browser: Browser, url: string): Promise<void> {
     await page.locator("#run").click();
     await page.waitForFunction(() => document.querySelector("#run")?.getAttribute("data-state") === "run", undefined, { timeout: HANG_MS });
 
-    // A server started from the terminal is previewed without a Restart it could not honour.
+    // A server started from the terminal keeps its terminal link but opens no docked preview,
+    // whose request it may not expect.
+    const typedBaseline = (await terminalText(page)).length;
     void page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as { shell: { submit(command: string): Promise<void> } }).shell.submit("bun run serve.ts"));
-    await page.locator(".preview-dock iframe").waitFor({ timeout: HANG_MS });
-    expect(await page.locator(".preview-dock button", { hasText: "Restart" }).count()).toBe(0);
+    await terminalIncludes(page, "Bun.serve is listening");
+    await page.waitForFunction(start => {
+      const buffer = (Reflect.get(globalThis, "playground") as unknown as PageApi).term.buffer.active;
+      let text = "";
+      for (let row = 0; row < buffer.length; row++) text += `${buffer.getLine(row)?.translateToString(true) ?? ""}\n`;
+      return text.slice(start).includes("[preview] localhost:3000");
+    }, typedBaseline, { timeout: HANG_MS });
+    expect(await page.locator(".preview-dock").count()).toBe(0);
 
     // Every other demo stops the running server first, then runs; the preview closes with it.
     for (const [id, lines] of Object.entries(OUTPUT)) {
