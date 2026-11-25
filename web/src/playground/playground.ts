@@ -502,9 +502,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     // Case B: failed before startup with verified zero worker locks held.
     if (
       failedBeforeStartup &&
-      this.terminalDisposalFailures.length === 0 &&
       !anyRollbackFailed &&
-      initialFs?.state.status === "disposed" &&
+      (initialFs?.state.status === "disposed" || initialFs?.state.status === "failed") &&
       (await verifyWorkerLocksReleased(initialWorkerIdentity))
     ) {
       await releaseAllLocks();

@@ -237,8 +237,24 @@ for (const browserName of browsers) {
       expect(tab1Counter).toBe("count is 1");
       expect(tab2Counter).toBe("count is 1");
 
-      // Reload Tab 1 (Owner reload failover): Tab 2 must explicitly take ownership, Tab 1 reattaches cleanly without ownershipLost.
-      await tab1.reload();
+      // Reload Tab 1 (Owner reload failover): delay only the reloaded document response briefly so
+      // Tab 1 unloads and releases its locks before booting again, letting Tab 2 deterministically
+      // take ownership even on fast WebKit reloads, and Tab 1 reattaches cleanly without ownershipLost.
+      const reloadUrl = tab1.url();
+      let delayedReload = false;
+      const delayReload = async (route: import("playwright").Route) => {
+        if (!delayedReload && route.request().isNavigationRequest() && route.request().url() === reloadUrl) {
+          delayedReload = true;
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
+        }
+        await route.continue();
+      };
+      await tab1.route("**/*", delayReload);
+      try {
+        await tab1.reload();
+      } finally {
+        await tab1.unroute("**/*", delayReload);
+      }
       await tab2.waitForFunction(
         () => Reflect.get(globalThis, "sandbox")?.role?.() === "owner" && document.querySelector("#server-dot")?.getAttribute("data-state") === "up",
         null,
@@ -342,8 +358,20 @@ for (const browserName of browsers) {
       const previewPage1 = await context.newPage();
       const previewPage2 = await context.newPage();
       await Promise.all([navigateTestPage(previewPage1, url1), navigateTestPage(previewPage2, url2)]);
-      expect(await previewPage1.locator("body").innerText()).toContain(`pg-tab1-${browserName}`);
-      expect(await previewPage2.locator("body").innerText()).toContain(`pg-tab2-${browserName}`);
+      const pgMarker1 = `pg-tab1-${browserName}`;
+      const pgMarker2 = `pg-tab2-${browserName}`;
+      await Promise.all([
+        previewPage1.waitForFunction((needle) => (document.body?.innerText ?? "").includes(needle), pgMarker1, { timeout: 30_000 }),
+        previewPage2.waitForFunction((needle) => (document.body?.innerText ?? "").includes(needle), pgMarker2, { timeout: 30_000 }),
+      ]);
+      const [pgBody1, pgBody2] = await Promise.all([
+        previewPage1.locator("body").innerText(),
+        previewPage2.locator("body").innerText(),
+      ]);
+      expect(pgBody1).toContain(pgMarker1);
+      expect(pgBody1).not.toContain(pgMarker2);
+      expect(pgBody2).toContain(pgMarker2);
+      expect(pgBody2).not.toContain(pgMarker1);
       expect(errors).toEqual([]);
     });
   }, 240_000);

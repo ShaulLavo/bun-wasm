@@ -37,7 +37,7 @@ function installReadiness(): void {
     if (failure) throw new Error(failure);
     if (typeof sandbox === "undefined") return;
     if (sandbox.status().kind === "error") throw new Error(sandbox.status().text);
-    if (sandbox.fs.state.status === "failed") throw sandbox.fs.state.error;
+    if (sandbox.fs?.state.status === "failed") throw sandbox.fs.state.error;
   };
   const candidate = (selector: string) => {
     checkErrors();
@@ -55,7 +55,7 @@ function installReadiness(): void {
       return document === parent && sandbox === api && api.server() === server && api.preview() === navigation && navigation.server === server
         && document.querySelector("#preview") === navigation.frame && navigation.frame.contentDocument === preview
         && navigation.loaded === loaded && navigation.frame.src === navigation.url && preview.URL === loaded.url && preview.readyState === "complete"
-        && api.started?.() === true && api.fs.state.status === "ready" && document.querySelector("#server-dot")?.getAttribute("data-state") === "up"
+        && api.started?.() === true && api.fs?.state.status === "ready" && document.querySelector("#server-dot")?.getAttribute("data-state") === "up"
         && api.status().kind === "ok" && status?.dataset.kind === "ok" && /dev server ready/.test(status.textContent ?? "")
         && preview.querySelector(selector) !== null;
     };
@@ -292,7 +292,7 @@ export async function diagnostic(page: Page): Promise<StoragePageDiagnostic | st
       return { src: frame.src, body: current?.body?.innerText.slice(0, 2000), documentUrl: current?.URL,
         readyState: current?.readyState, acceptedDocument: current !== null && api?.preview()?.loaded?.document === current };
     });
-    const runtime = api ? { filesystem: { ...api.fs.state, error: api.fs.state.error?.message }, started: api.started?.() ?? null, editorPath: api.editor.path, pending: api.editor.hasPending } : null;
+    const runtime = api ? { filesystem: api.fs ? { ...api.fs.state, error: api.fs.state.error?.message } : { status: "reopening" }, started: api.started?.() ?? null, editorPath: api.editor.path, pending: api.editor.hasPending } : null;
     return { url: location.href, status: document.querySelector("#status")?.textContent, storage: document.querySelector("#storage-status")?.textContent, terminal, frames, runtime, starts };
   }).catch(error => String(error));
 }
@@ -515,7 +515,7 @@ export async function accumulation(context: BrowserContext, base: string, templa
       const status = await page.locator("#status").textContent() ?? "";
       const storage = await page.evaluate(async () => ({ ...await navigator.storage.estimate(), databases: (await indexedDB.databases()).map(database => database.name) }));
       const eviction = await page.evaluate(() => performance.getEntriesByName("bunwasm:storage-reclaim").map(entry => entry.toJSON()));
-      const runtime = await page.evaluate(() => typeof sandbox === "undefined" ? null : { filesystem: { ...sandbox.fs.state, error: sandbox.fs.state.error?.message }, started: sandbox.started?.() ?? null, editorPath: sandbox.editor.path, pending: sandbox.editor.hasPending });
+      const runtime = await page.evaluate(() => typeof sandbox === "undefined" ? null : { filesystem: sandbox.fs ? { ...sandbox.fs.state, error: sandbox.fs.state.error?.message } : { status: "reopening" }, started: sandbox.started?.() ?? null, editorPath: sandbox.editor.path, pending: sandbox.editor.hasPending });
       const details = error ? await diagnostic(page) : undefined;
       rows.push({ template, elapsedMs: Math.round(performance.now() - started), status, error, storage, eviction, runtime, diagnostic: details });
       if (error) break;

@@ -237,3 +237,35 @@ test("startup rejection cannot turn ownership loss into a storage retry", async 
     expect(page.boundary.location.reloads).toBe(1);
   } finally { await page.cleanup(); }
 });
+
+test("Start fresh releases presenceLock via Case B when failed-before-startup runtime.dispose rejects", async () => {
+  const { MemoryLockManager, acquireLockHandle, presenceLockName } = await import("../web/src/workspace-claims");
+  const locks = new MemoryLockManager();
+  const prevNavigator = globalThis.navigator;
+  const { page, sandbox } = await unreadableSandbox("busy");
+  Object.defineProperty(globalThis, "navigator", { value: { locks }, configurable: true });
+  try {
+    const wsName = `bun-wasm-sandbox-${sandbox.template}`;
+    // Simulate attachEnabled state holding presenceLock with a failed-before-startup worker that released its locks.
+    const sb = sandbox as unknown as Record<string, unknown>;
+    sb.attachEnabled = true;
+    sb.presenceLock = await acquireLockHandle(presenceLockName(wsName), { mode: "shared", locks });
+    const ws = sb.workspace as { getPartialWorkerIdentity: () => { workerClientId: string | null; peerAliveLock: string | null } };
+    ws.getPartialWorkerIdentity = () => ({ workerClientId: "dead-worker-client", peerAliveLock: "waffle:multitab:v1:peer-alive:dead" });
+    page.runtime.dispose = async () => {
+      page.storageEvents.push("dispose-reject");
+      throw new Error("MultiTabReleaseError: Incompatible IndexedDB filesystem format identity");
+    };
+    await sandbox.startFresh();
+    expect(page.boundary.location.reloads).toBe(0);
+    expect(sandbox.status.text).toContain("open in another tab");
+    expect(sb.presenceLock).toBeNull();
+    // Once the other tab releases its lock, a second Start fresh acquires presenceLock and reloads.
+    page.boundary.deleteResult = "deleted";
+    await sandbox.startFresh();
+    expect(page.boundary.location.reloads).toBe(1);
+  } finally {
+    Object.defineProperty(globalThis, "navigator", { value: prevNavigator, configurable: true });
+    await page.cleanup();
+  }
+});

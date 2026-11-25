@@ -2162,17 +2162,19 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
           if (!options.resolveConflict && editResetGen !== currentGen) {
             throw new ResetGenerationMismatchError();
           }
-          const write = () => this.retryStorage(async () => {
-            await ws.fs.writeFile(abs(path), text);
-            await ws.fs.flush(abs(path));
+          await this.retryStorage(async () => {
+            const write = async () => {
+              await ws.fs.writeFile(abs(path), text);
+              await ws.fs.flush(abs(path));
+            };
+            if (this.attachEnabled) {
+              const identity = ws.getIdentity();
+              if (!identity) throw new Error("Worker identity unavailable for save");
+              await withWriterClaim(workspaceName(this.template), identity, this.ownClaimIds, write);
+            } else {
+              await write();
+            }
           });
-          if (this.attachEnabled) {
-            const identity = ws.getIdentity();
-            if (!identity) throw new Error("Worker identity unavailable for save");
-            await withWriterClaim(workspaceName(this.template), identity, this.ownClaimIds, write);
-          } else {
-            await write();
-          }
         },
         { write: true },
       );
@@ -2326,12 +2328,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
     // Case B: failed before startup with verified zero worker locks held.
     if (
-      !retireResult.ok &&
       !bootJoin.timedOut &&
       failedBeforeStartup &&
-      this.terminalDisposalFailures.length === 0 &&
       !anyPendingOrFailedProvision &&
-      initialFs?.state.status === "disposed" &&
+      (initialFs?.state.status === "disposed" || initialFs?.state.status === "failed") &&
       (await verifyWorkerLocksReleased(initialWorkerIdentity))
     ) {
       await releaseAll();
