@@ -19,12 +19,11 @@ function RestartIcon() {
   );
 }
 
-/** A counter-clockwise arrow: put the template back. */
+/** A bin: Reset template discards the workspace's changes, so it must not look like Restart. */
 function ResetIcon() {
   return () => (
     <svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M3 8a5 5 0 1 0 1.46-3.54" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-      <path d="M3 2.5V5h2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6l.7-8.5M6.8 7v4M9.2 7v4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   );
 }

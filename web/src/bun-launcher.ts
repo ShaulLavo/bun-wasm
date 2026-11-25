@@ -129,6 +129,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     relay = await runtimeRelay(options.runtime, options.network?.relay);
     if (!active()) throw new Error("Bun process launch was revoked");
     helper = createBunNetworkHelper(network, ring, { ...options.network, connect: options.network?.connect ?? relay?.connect, pathScope });
+    options.network?.started?.(helper, { argv: context.request.argv, cwd: context.request.cwd });
     if (engine === "browser" && typeof BroadcastChannel === "function") {
       lookupChannel = new BroadcastChannel(`bun-wasm-dns-${crypto.randomUUID()}`);
       disposeLookup = installLookupServer(lookupChannel, network);

@@ -476,8 +476,14 @@ main {
     min-width: 0;
   }
 
+  .site-nav {
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+
   .site-nav a.nav {
-    min-height: 34px;
+    min-height: 40px;
   }
 
   header #restart {
@@ -532,6 +538,24 @@ main {
 
   #file-select {
     min-width: 0;
+    min-height: 40px;
+  }
+
+  .copy-terminal {
+    min-height: 40px;
+  }
+
+  #open-preview {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .pane-title,
+  .bar {
+    height: 44px;
   }
 
   #save-state {
@@ -546,7 +570,8 @@ main {
 
   main {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 42fr) minmax(0, 40fr) minmax(0, 18fr);
+    /* The live preview gets most of the height; the terminal keeps about five lines. */
+    grid-template-rows: minmax(0, 1fr) minmax(0, 3fr) minmax(128px, 1fr);
     grid-template-areas:
       "editor"
       "preview"
@@ -575,6 +600,35 @@ main {
 
   #editor .cm-scroller {
     font-size: 12px;
+  }
+}
+
+/* Half-width laptop windows: pickers lose their labels and Reset and Restart become icons, so the header fits one row. */
+@media (min-width: 801px) and (max-width: 1040px) {
+  .engine .label,
+  header #restart .label,
+  header #reset .label {
+    display: none;
+  }
+
+  #engine,
+  #template {
+    min-width: 120px;
+  }
+
+  header #restart,
+  header #reset {
+    justify-content: center;
+    min-width: var(--control-h);
+    padding: 0 8px;
+  }
+}
+
+/* Reset deletes the workspace's changes, so it warns on hover. */
+@media (hover: hover) and (pointer: fine) {
+  #reset:hover:not(:disabled) {
+    border-color: var(--bad);
+    color: var(--bad);
   }
 }
 

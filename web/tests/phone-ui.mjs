@@ -7,8 +7,9 @@ export async function fits(page, label) {
   const size = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
   assert.ok(size.scroll <= size.width, `${label}: page width ${size.scroll} exceeds viewport ${size.width}`);
   // A clipped header also passes scrollWidth, so check the controls themselves.
-  // The playground's examples workspace puts Copy in its phone pane switch.
-  const selectors = ["header h1", "header a.nav", "#engine", "#run, #restart", "#copy-terminal, #copy-terminal-phone"];
+  // The playground's examples workspace shows one pane at a time on phones: Copy is on the
+  // Terminal pane, and the pane switch that reaches it is always visible.
+  const selectors = ["header h1", "header a.nav", "#engine", "#run, #restart", "#copy-terminal, .pane-switch"];
   const groups = await page.evaluate(selectors => selectors.map(selector =>
     Array.from(document.querySelectorAll(selector))
       .filter(control => control.checkVisibility({ visibilityProperty: true }))
@@ -56,6 +57,8 @@ async function copyOutput(page, app, chromium, expected) {
     term.clearSelection();
     return text;
   }, app);
+  const terminalTab = page.locator(".pane-switch [role=tab]", { hasText: "Terminal" });
+  if (await terminalTab.isVisible()) await terminalTab.click();
   await page.getByRole("button", { name: "Copy", exact: true }).click();
   await page.getByRole("button", { name: "Copied", exact: true }).waitFor();
   if (chromium) {
@@ -65,6 +68,8 @@ async function copyOutput(page, app, chromium, expected) {
   }
   // Wait for the button to reset before the next width.
   await page.getByRole("button", { name: "Copy", exact: true }).waitFor();
+  const codeTab = page.locator(".pane-switch [role=tab]", { hasText: "Code" });
+  if (await codeTab.isVisible()) await codeTab.click();
 }
 
 async function printSandboxOutput(page, long) {

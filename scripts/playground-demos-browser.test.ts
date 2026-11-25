@@ -6,6 +6,7 @@ import { chromium, webkit, type Browser, type BrowserContext, type Page } from "
 import { buildSite, verifySite } from "./browser-guest-site";
 import { ready, run, session, terminalText } from "../web/tests/playground.mjs";
 import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
+import { examples } from "../web/src/examples";
 
 // Real browsers and the real Bun guest. The limits only catch a hang.
 setDefaultTimeout(400_000);
@@ -32,6 +33,131 @@ type Scenario = (browser: Browser, url: string) => Promise<void>;
 for (const browserName of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",")) {
   test(`${browserName}: demos run in one click, keep edits, restore deleted files and survive reload`, () => withBrowser(browserName, oneTab));
   test(`${browserName}: two tabs never share demo databases or overwrite a peer's restored file`, () => withBrowser(browserName, twoTabs));
+  test(`${browserName}: a returning visitor's unedited old examples are upgraded and edited ones kept`, () => withBrowser(browserName, returningVisitor));
+  test(`${browserName}: Run cannot slip into a preparing demo, and Stop cancels it`, () => withBrowser(browserName, runStopRace));
+  test(`${browserName}: Restart belongs to the launch's own process, and a failed preview stops spinning`, () => withBrowser(browserName, attributionAndFailure));
+}
+
+type Shell = { shell: { submit(command: string): Promise<void> }; editor: { open(path: string): Promise<void> } };
+
+async function writeHome(page: Page, files: Record<string, string>): Promise<void> {
+  await page.evaluate(async files => {
+    const { fs } = Reflect.get(globalThis, "playground") as unknown as PageApi & { fs: { flush(): Promise<void> } };
+    for (const [name, text] of Object.entries(files)) await fs.writeFile(`/home/user/${name}`, text);
+    // Durable before the page closes, as a visitor's earlier session would have left them.
+    await fs.flush();
+  }, files);
+}
+
+/** Workspaces seeded before this change keep main's examples (bun-wasm 7b25271e). */
+async function returningVisitor(browser: Browser, url: string): Promise<void> {
+  const legacy = await Bun.file(join(import.meta.dir, "../web/tests/fixtures/legacy-examples.json")).json() as Record<string, string[]>;
+  const editedMath = `${legacy["math.ts"]![0]}// edited by the visitor\n`;
+  const context = await browser.newContext();
+  try {
+    // The earlier visit left a workspace holding main's examples, one of them edited.
+    const page = await open(context, url);
+    await writeHome(page, { "db.ts": legacy["db.ts"]![0]!, "files.ts": legacy["files.ts"]![0]!, "math.ts": editedMath });
+    // The visitor comes back: the same tab loads the page again over that workspace.
+    await page.reload();
+    expect(await ready(page)).toContain("ready");
+    await page.waitForFunction(async edited => {
+      const { fs } = Reflect.get(globalThis, "playground") as unknown as PageApi;
+      return new TextDecoder().decode(await fs.readFile("/home/user/math.ts")) === edited;
+    }, editedMath, { timeout: HANG_MS });
+    // The demos run the current examples: the old stock db.ts and files.ts are upgraded.
+    expect(await runDemo(page, "sqlite", OUTPUT.sqlite!)).toContain("1 open todo(s)");
+    expect(await readText(page, "/home/user/db.ts")).toBe(examples["db.ts"]!);
+    expect(await runDemo(page, "test", OUTPUT.test!)).toContain("5 pass");
+    expect(await readText(page, "/home/user/math.ts")).toBe(editedMath);
+    expect((await run(page, "cd /tmp", 30_000)).code).toBe(0);
+    expect(await runDemo(page, "file", OUTPUT.file!)).toContain("exists: true");
+    expect(await readText(page, "/home/user/files.ts")).toBe(examples["files.ts"]!);
+    const files = await page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as { fs: { listFiles(path: string): Promise<string[]> } }).fs.listFiles("/home/user"));
+    expect(files.filter(path => path.endsWith(".sqlite"))).toEqual([]);
+    expect(files).toContain("/home/user/notes/hello.txt");
+  } finally {
+    await context.close();
+  }
+}
+
+async function runStopRace(browser: Browser, url: string): Promise<void> {
+  const context = await browser.newContext();
+  try {
+    const page = await open(context, url);
+    await page.locator('.demo[data-demo="serve"]').click();
+    await page.frameLocator(".preview-dock iframe").locator("h1", { hasText: "Hello from Bun.serve" }).waitFor({ timeout: HANG_MS });
+
+    // Build's preparation stops the server, then waits on its write claim, held here.
+    await page.evaluate(holdClaimsStore);
+    await page.locator('.demo[data-demo="build"]').click();
+    await page.locator(".preview-dock").waitFor({ state: "detached", timeout: HANG_MS });
+    const before = await terminalText(page);
+    // The server has reached its prompt; Run (button state and keyboard) must not slip in.
+    expect(await page.locator("#run").getAttribute("data-state")).toBe("stop");
+    await page.locator("#editor .cm-content").focus();
+    await page.keyboard.press("Control+Enter");
+    await page.waitForTimeout(500);
+    expect(await terminalText(page)).toBe(before);
+
+    // Stop cancels the pending demo: after the claim is released, Build never runs.
+    await page.locator("#run").click();
+    await page.waitForFunction(() => document.querySelector("#run")?.getAttribute("data-state") === "run", undefined, { timeout: HANG_MS });
+    await page.evaluate(() => (Reflect.get(globalThis, "releaseClaims") as () => void)());
+    await page.waitForTimeout(3000);
+    const after = await terminalText(page);
+    expect(after).not.toContain("entry-point");
+    expect(after.split("bun run serve.ts").length - 1).toBe(1);
+    expect(await page.locator("#run").getAttribute("data-state")).toBe("run");
+
+    // The machine is usable again: the next demo runs normally.
+    expect(await runDemo(page, "build", OUTPUT.build!)).toContain("entry-point dist/math.js");
+  } finally {
+    await context.close();
+  }
+}
+
+async function attributionAndFailure(browser: Browser, url: string): Promise<void> {
+  const context = await browser.newContext();
+  try {
+    const page = await open(context, url);
+    await writeHome(page, {
+      "late.ts": "await Bun.sleep(2500);\nBun.serve({ port: 3001, fetch: () => new Response('<h1>late</h1>', { headers: { 'content-type': 'text/html' } }) });\nconsole.log('LATE' + '_UP');\n",
+      "wait.ts": "console.log('WAIT' + '_START');\nawait Bun.sleep(20000);\n",
+      "slow.ts": "Bun.serve({ port: 3002, fetch: async () => { await Bun.sleep(60000); return new Response('slow'); } });\nconsole.log('SLOW' + '_UP');\n",
+    });
+
+    // A background server that starts listening while Run is active is not Run's server.
+    expect((await run(page, "bun run late.ts &", 30_000)).code).toBe(0);
+    await page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as Shell).editor.open("/home/user/wait.ts"));
+    await page.locator("#run").click();
+    await page.locator(".preview-dock iframe").waitFor({ timeout: HANG_MS });
+    expect(await page.locator("#run").getAttribute("data-state")).toBe("stop");
+    expect(await page.locator(".preview-dock button", { hasText: "Restart" }).count()).toBe(0);
+    await page.locator("#run").click();
+    await page.waitForFunction(() => document.querySelector("#run")?.getAttribute("data-state") === "run", undefined, { timeout: HANG_MS });
+    expect((await run(page, "kill %1; wait; true", 30_000)).code).toBe(0);
+    await page.locator(".preview-dock").waitFor({ state: "detached", timeout: HANG_MS });
+
+    // A preview whose request fails says so instead of spinning forever.
+    void page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as Shell).shell.submit("bun run slow.ts"));
+    const frameElement = await page.locator(".preview-dock iframe").elementHandle({ timeout: HANG_MS });
+    const frame = await frameElement!.contentFrame();
+    await frame!.waitForFunction(() => document.title === "Loading preview", undefined, { timeout: HANG_MS });
+    // The loading page polls its status with the global fetch; make the next poll fail.
+    await frame!.evaluate(() => { Reflect.set(globalThis, "fetch", () => Promise.reject(new Error("offline"))); });
+    await page.locator(".preview-dock .preview-failed").waitFor({ timeout: HANG_MS });
+    expect(await page.locator(".preview-dock .spinner").count()).toBe(0);
+    // Stop interrupts the server; pressing again forces it, as its title says.
+    await page.locator("#run").click();
+    const stopped = () => page.waitForFunction(() => document.querySelector("#run")?.getAttribute("data-state") === "run", undefined, { timeout: 10_000 });
+    await stopped().catch(async () => {
+      await page.locator("#run").click();
+      await page.waitForFunction(() => document.querySelector("#run")?.getAttribute("data-state") === "run", undefined, { timeout: HANG_MS });
+    });
+  } finally {
+    await context.close();
+  }
 }
 
 async function withBrowser(browserName: string, scenario: Scenario): Promise<void> {

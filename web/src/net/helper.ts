@@ -31,8 +31,16 @@ export interface BunNetworkOptions {
   readonly relay?: BunRelayOptions;
   readonly connect?: NetConnect;
   readonly pathScope?: Parameters<RuntimeNetwork["createHelper"]>[0]["pathScope"];
+  /** A Bun process got its network helper, before it runs any guest code. */
+  started?(helper: RuntimeNetworkHelper, process: BunProcessStart): void;
   listening?(port: number, helper: RuntimeNetworkHelper): void;
   stopped?(port: number, helper: RuntimeNetworkHelper): void;
+}
+
+/** What a Bun process was started with, so a host can tell which command a server belongs to. */
+export interface BunProcessStart {
+  readonly argv: readonly string[];
+  readonly cwd: string;
 }
 
 export function createBunNetworkHelper(

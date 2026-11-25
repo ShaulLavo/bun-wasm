@@ -12,7 +12,8 @@ import { installCompileObserver, measurementEnvironment } from "../compile-obser
 import { HOME, examples } from "../examples";
 import { normalize } from "../fs";
 import { HostedPreviews } from "../hosted-previews";
-import type { BunNetworkOptions, RuntimeNetworkHelper } from "../net/helper";
+import type { BunNetworkOptions, BunProcessStart, RuntimeNetworkHelper } from "../net/helper";
+import { legacyExamples, textHash } from "../legacy-examples";
 import { Previews } from "../preview";
 import { installRuntimeSharedObjects } from "../shared-objects/runtime";
 import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "../shared-fs";
@@ -57,9 +58,39 @@ import { startWorkspaceWatch, type WorkspaceWatchHandle } from "../workspace-wat
 type Filesystem = Runtime["filesystem"];
 export type Status = { text: string; kind: "" | "ok" | "error" };
 /** A command the playground started: Run's file or a demo's. */
-export type Launch = { readonly path: string; readonly demo?: Demo };
+/**
+ * A command the playground started: Run's file or a demo's. `argument` is what the echoed command
+ * names (a demo runs from ~ by file name, Run by absolute path); `bound` records that its process
+ * has been identified.
+ */
+export type Launch = { readonly path: string; readonly argument: string; readonly demo?: Demo; bound: boolean; sent: boolean };
+type Phase =
+  | { readonly kind: "idle" }
+  | { readonly kind: "preparing"; readonly cancel: AbortController }
+  | { readonly kind: "launched"; readonly launch: Launch };
+
+function newLaunch(path: string, demo?: Demo): Launch {
+  return { path, argument: demo ? path.slice(HOME.length + 1) : path, demo, bound: false, sent: false };
+}
+
+function launchSubcommand(path: string): string {
+  return /\.(test|spec)\.[cm]?[jt]sx?$/.test(path) ? "test" : "run";
+}
+
+/** The process runs this launch's command: `bun <subcommand> <argument>`, from ~ for a demo. */
+function matchesLaunch(launch: Launch, process: BunProcessStart): boolean {
+  const [subcommand, argument] = process.argv.slice(1);
+  if (subcommand !== launchSubcommand(launch.path) || argument !== launch.argument) return false;
+  return !launch.demo || process.cwd === HOME;
+}
+
+/** Quotes for the shell only when needed, so ordinary file names echo as typed. */
+function shellWord(word: string): string {
+  return /^[\w./-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
+}
 export type Pane = "code" | "preview" | "terminal";
 const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 /** WASI EEXIST, as the filesystem worker reports an exclusive create of an existing path. */
 const ERRNO_EXIST = 20;
 
@@ -91,8 +122,12 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   dockedPreview: { url: string; port: number; key: number; launch: Launch | undefined } | undefined;
   /** The pane a phone shows in the examples workspace. */
   pane: Pane = "code";
-  /** The file the playground itself started (Run or a demo), while that command runs. */
-  private launch: Launch | undefined;
+  /** Who owns the foreground: nothing, a demo or Restart preparing, or a launch the playground submitted. */
+  private phase: Phase = { kind: "idle" };
+  /** Launch submissions still in flight (including a stopped one that has not reached its prompt). */
+  private submitting = 0;
+  /** The playground launch each Bun process's network helper belongs to, recorded at process start. */
+  private readonly helperLaunches = new WeakMap<RuntimeNetworkHelper, Launch>();
   term?: Terminal;
   editor?: Editor;
   failure?: Failure;
@@ -115,8 +150,6 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   private identityObserver?: WorkerIdentityObserver;
   private shell?: BrowserSession;
   private shellState: SessionState = "starting";
-  private runPending = false;
-  private demoPending = false;
   private previewKey = 0;
   private message: Status = { text: "", kind: "" };
   private disposePreviewLinks?: () => void;
@@ -195,7 +228,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   }
 
   get canRun(): boolean {
-    return this.ready && this.shellState === "ready" && !this.runPending && !this.shell?.running;
+    return this.ready && this.shellState === "ready" && this.phase.kind === "idle" && this.submitting === 0 && !this.shell?.running;
   }
 
   async start(): Promise<void> {
@@ -324,114 +357,189 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
 
   /** A foreground command is running or about to: the Run button offers Stop. */
   get busy(): boolean {
-    return this.ready && (this.runPending || this.shell?.running === true);
+    return this.ready && (this.phase.kind !== "idle" || this.shell?.running === true);
   }
 
-  /** Saves the open file and runs it. Resolves when the command ends. */
+  /** Saves the open file and runs it by absolute path. Resolves when the command ends. */
   async run(): Promise<void> {
     const { editor, shell } = this;
-    if (!this.ready || !editor || !shell || shell.running || this.runPending) return;
-    this.runPending = true;
+    if (!this.ready || !editor || !shell || shell.running || this.phase.kind !== "idle" || this.submitting > 0) return;
+    const launch = newLaunch(editor.path);
+    this.phase = { kind: "launched", launch };
     this.changed();
-    const path = editor.path;
     try {
       await editor.save();
     } catch (error) {
-      this.runPending = false;
-      this.changed();
+      this.settle(launch);
       throw error;
     }
-    await this.submitLaunch({ path });
+    await this.submitLaunch(launch);
   }
 
-  /** Stop: Ctrl-C for the foreground command; a second Stop kills it. */
+  /**
+   * Stop: while a demo or Restart is still preparing, cancel it (and interrupt anything still
+   * running); otherwise Ctrl-C for the foreground command. A second Stop kills it.
+   */
   stop(): void {
+    const { phase } = this;
+    if (phase.kind === "preparing") phase.cancel.abort();
+    // A demo still running its `cd ~` has not sent its command; dropping the phase skips it.
+    if (phase.kind === "preparing" || (phase.kind === "launched" && !phase.launch.sent)) {
+      this.phase = { kind: "idle" };
+      this.changed();
+    }
     this.shell?.interrupt();
   }
 
-  /** Runs `launch.path` by absolute path. The caller has set runPending; this clears it when the command ends. */
+  /** Returns to idle if `launch` still owns the foreground. */
+  private settle(launch: Launch): void {
+    if (this.phase.kind !== "launched" || this.phase.launch !== launch) return;
+    this.phase = { kind: "idle" };
+    this.changed();
+  }
+
+  /**
+   * Submits `launch`. A demo first runs `cd ~` and clears the screen, so it echoes a short
+   * `bun run serve.ts` from the workspace, and its prompt starts from a zero exit status.
+   */
   private async submitLaunch(launch: Launch): Promise<void> {
     const { shell } = this;
-    this.launch = launch;
-    this.changed();
+    this.submitting++;
     try {
       if (!shell) return;
-      const quoted = `'${launch.path.replace(/'/g, "'\\''")}'`;
-      const command = /\.(test|spec)\.[cm]?[jt]sx?$/.test(launch.path) ? "test" : "run";
-      await shell.submit(`bun ${command} ${quoted}`);
+      const command = launchSubcommand(launch.path);
+      if (launch.demo) {
+        await shell.submit("cd ~");
+        await this.clearTerminal();
+      }
+      if (this.phase.kind !== "launched" || this.phase.launch !== launch) return;
+      launch.sent = true;
+      await shell.submit(`bun ${command} ${shellWord(launch.argument)}`);
     } finally {
-      if (this.launch === launch) this.launch = undefined;
-      this.runPending = false;
-      this.changed();
+      this.submitting--;
+      this.settle(launch);
     }
+  }
+
+  private clearTerminal(): Promise<void> {
+    const { term } = this;
+    if (!term) return Promise.resolve();
+    return new Promise(resolve => term.write("", () => { term.clear(); resolve(); }));
   }
 
   /** Demos can start while a command runs: the running command (often a server) is stopped first. */
   get canStartDemo(): boolean {
     const shellUp = this.shellState === "ready" || this.shellState === "running";
-    return this.ready && shellUp && !this.demoPending && this.failure === undefined;
+    return this.ready && shellUp && this.phase.kind !== "preparing" && this.failure === undefined;
   }
 
   /**
-   * Stops the foreground command, restores the demo's missing files (never replacing one that
-   * exists), opens its file and runs that file. Holding runPending from the stop to the launch
-   * keeps Run and other demos out until the demo's own command is submitted.
+   * Stops the foreground command, restores the demo's files (creating missing ones, upgrading
+   * unedited older stock copies, keeping edits), opens its file and runs it from ~.
    */
   async runDemo(demo: Demo): Promise<void> {
-    const { editor, shell } = this;
-    if (!this.canStartDemo || !editor || !shell) return;
-    this.demoPending = true;
+    const { editor } = this;
+    if (!this.canStartDemo || !editor) return;
     this.activeDemo = demo;
     this.syncDemoParam(demo);
-    this.changed();
     const path = `${HOME}/${demo.file}`;
-    let launched = false;
-    try {
-      await this.stopForeground(shell);
-      this.runPending = true;
-      this.changed();
-      for (const name of demo.files) await this.createIfMissing(`${HOME}/${name}`, encoder.encode(examples[name]!));
+    await this.prepareLaunch(newLaunch(path, demo), async (signal) => {
+      for (const name of demo.files) {
+        if (signal.aborted) return;
+        await this.restoreExample(name);
+      }
+      if (signal.aborted) return;
       await editor.open(path);
+      if (signal.aborted) return;
       if (editor.path === path && editor.dirty(path)) await editor.save();
-      this.term?.clear();
       this.pane = "terminal";
-      launched = true;
-      // The launch resolves when the command ends, which for a server is when it is stopped.
-      void this.submitLaunch({ path, demo }).catch(this.report);
-    } finally {
-      if (!launched) this.runPending = false;
-      this.demoPending = false;
-      this.changed();
-    }
+    });
   }
 
   /** Restart in the preview bar: reruns the launch that started the previewed server. */
   async restartPreview(): Promise<void> {
     const launch = this.dockedPreview?.launch;
-    const { editor, shell } = this;
-    if (!launch || !editor || !shell || this.demoPending) return;
+    const { editor } = this;
+    if (!launch || !editor || !this.canStartDemo) return;
     if (launch.demo) return this.runDemo(launch.demo);
-    this.demoPending = true;
-    this.changed();
-    let launched = false;
-    try {
-      await this.stopForeground(shell);
-      this.runPending = true;
-      this.changed();
+    await this.prepareLaunch(newLaunch(launch.path), async () => {
       if (editor.path === launch.path && editor.dirty(launch.path)) await editor.save();
-      launched = true;
-      void this.submitLaunch({ path: launch.path }).catch(this.report);
-    } finally {
-      if (!launched) this.runPending = false;
-      this.demoPending = false;
+    });
+  }
+
+  /**
+   * The one way a demo or Restart takes the foreground: it stops what runs, prepares while Run
+   * and other demos stay out (Stop cancels it), then submits its own launch.
+   */
+  private async prepareLaunch(launch: Launch, prepare: (signal: AbortSignal) => Promise<void>): Promise<void> {
+    const { shell } = this;
+    if (!shell || this.phase.kind === "preparing") return;
+    const cancel = new AbortController();
+    const phase: Phase = { kind: "preparing", cancel };
+    this.phase = phase;
+    this.changed();
+    try {
+      await this.stopForeground(shell, cancel.signal);
+      if (cancel.signal.aborted) return;
+      await prepare(cancel.signal);
+      if (cancel.signal.aborted || this.phase !== phase) return;
+      this.phase = { kind: "launched", launch };
       this.changed();
+      // The launch resolves when the command ends, which for a server is when it is stopped.
+      void this.submitLaunch(launch).catch(this.report);
+    } finally {
+      if (this.phase === phase) {
+        this.phase = { kind: "idle" };
+        this.changed();
+      }
     }
+  }
+
+  /**
+   * Attributes a starting Bun process to the playground launch it belongs to: the launch's own
+   * command (same subcommand and file, and ~ for a demo), first match only. A server started by
+   * any other process, such as a background job typed in the terminal, gets no Restart.
+   */
+  private attribute(helper: RuntimeNetworkHelper, process: BunProcessStart): void {
+    if (this.phase.kind !== "launched") return;
+    const { launch } = this.phase;
+    if (launch.bound || !matchesLaunch(launch, process)) return;
+    launch.bound = true;
+    this.helperLaunches.set(helper, launch);
   }
 
   /** Phones show one pane at a time in the examples workspace. */
   setPane(pane: Pane): void {
     this.pane = pane;
     this.changed();
+  }
+
+  /** Creates a missing example, or upgrades an unedited copy of an older stock version. Edits are kept. */
+  private async restoreExample(name: string): Promise<void> {
+    if (await this.createIfMissing(`${HOME}/${name}`, encoder.encode(examples[name]!))) return;
+    await this.upgradeLegacyExample(name);
+  }
+
+  /**
+   * Returning visitors keep the examples they were seeded with. A file whose text is exactly an
+   * older stock version was never edited, so it is replaced by the current one (for example the
+   * old db.ts that opened todos.sqlite). Any other text is the visitor's and stays.
+   */
+  private async upgradeLegacyExample(name: string): Promise<void> {
+    const older = legacyExamples[name];
+    if (!older) return;
+    const path = `${HOME}/${name}`;
+    const fs = this.fs;
+    if (!fs) return;
+    let bytes: Uint8Array | undefined;
+    try { bytes = await fs.readFile(path); } catch { return; }
+    if (!bytes || !older.includes(await textHash(decoder.decode(bytes)))) return;
+    // Compare-and-swap: remove only if the bytes are still the old stock ones, then create the
+    // current example only if nothing appeared meanwhile. An edit from another tab always wins.
+    const removed = await this.withPlaygroundPageWrite(liveFs => liveFs.remove(path, { ifContent: bytes }));
+    if (!removed) return;
+    await this.createIfMissing(path, encoder.encode(examples[name]!));
+    await this.editor?.syncPaths([path]);
   }
 
   /** Creates `path` holding `bytes` unless it already exists. The check and create are one filesystem call. */
@@ -451,9 +559,9 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     });
   }
 
-  /** Interrupts the foreground command, then kills it if it ignores the interrupt. */
-  private async stopForeground(shell: BrowserSession): Promise<void> {
-    const idle = () => !shell.running && !this.runPending;
+  /** Interrupts the foreground command, then kills it if it ignores the interrupt. Stop ends the wait. */
+  private async stopForeground(shell: BrowserSession, signal: AbortSignal): Promise<void> {
+    const idle = () => signal.aborted || (!shell.running && this.submitting === 0);
     if (idle()) return;
     shell.interrupt();
     if (await waitUntil(idle, DEMO_INTERRUPT_MS)) return;
@@ -469,13 +577,13 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   }
 
   /**
-   * Each announcement gets a fresh frame, so a restarted server is loaded again. The preview
-   * remembers the playground launch that was running when the server started (Run or a demo);
-   * a server started from the terminal has none, so its preview offers no Restart.
+   * Each announcement gets a fresh frame, so a restarted server is loaded again. `launch` is the
+   * playground launch whose process opened the port (see attribute()); a server from any other
+   * process has none, so its preview offers no Restart.
    */
-  private dockPreview(url: string, port: number): void {
-    this.dockedPreview = { url, port, key: ++this.previewKey, launch: this.launch };
-    if (this.launch?.demo) this.pane = "preview";
+  private dockPreview(url: string, port: number, launch: Launch | undefined): void {
+    this.dockedPreview = { url, port, key: ++this.previewKey, launch };
+    if (launch?.demo) this.pane = "preview";
     this.changed();
   }
 
@@ -902,7 +1010,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
         if (state === "ready" && announcedPorts.has(port)) return;
         if (state === "ready") announcedPorts.add(port);
         term.write(previewLine(previews, port, state));
-        if (state === "ready" && !this.template) this.dockPreview(previews.url(port), port);
+        if (state === "ready" && !this.template) this.dockPreview(previews.url(port), port, this.helperLaunches.get(rec.helper));
         return;
       }
     };
@@ -917,6 +1025,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     });
 
     const network: BunNetworkOptions = {
+      started: (helper, process) => this.attribute(helper, process),
       listening: (port, helper) => {
         const token = previews.registerListener(port, helper);
         previewPorts.add(port);
@@ -1021,10 +1130,20 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     if (this.ready) this.afterReady();
   }
 
-  /** A `?demo=` link starts its demo; otherwise the first command's code loads while idle. */
+  /**
+   * Upgrades unedited older stock examples, then a `?demo=` link starts its demo; otherwise the
+   * first command's code loads while idle.
+   */
   private afterReady(): void {
-    if (this.activeDemo) void this.runDemo(this.activeDemo).catch(this.report);
-    else whenIdle(warmFirstCommand);
+    if (this.template) {
+      whenIdle(warmFirstCommand);
+      return;
+    }
+    void (async () => {
+      for (const name of Object.keys(legacyExamples)) await this.upgradeLegacyExample(name);
+      if (this.activeDemo) await this.runDemo(this.activeDemo);
+      else whenIdle(warmFirstCommand);
+    })().catch(this.report);
   }
 
   private printWelcomeBanner(term: Terminal, fs: Filesystem): void {

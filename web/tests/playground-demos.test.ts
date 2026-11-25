@@ -3,6 +3,7 @@ import { examples } from "../src/examples";
 import { demo, demos } from "../src/playground/demos";
 import { copy } from "../src/playground/showcase-copy";
 import { orderFiles } from "../src/playground/editor-pane";
+import { legacyExamples, textHash } from "../src/legacy-examples";
 import { visibleLength, wrapWords } from "../src/playground/playground";
 
 test("every demo runs a seeded example and restores only seeded files", () => {
@@ -22,6 +23,17 @@ test("demo ids from the address resolve, unknown ones do not", () => {
 
 test("the Bun.serve demo listens on a fixed port so its preview and Restart find it", () => {
   expect(examples["serve.ts"]).toContain("port: 3000");
+});
+
+test("every older stock example hash matches its recorded text, and the current example differs", async () => {
+  const texts = await Bun.file(new URL("./fixtures/legacy-examples.json", import.meta.url)).json() as Record<string, string[]>;
+  expect(Object.keys(legacyExamples).sort()).toEqual(Object.keys(texts).sort());
+  for (const [name, hashes] of Object.entries(legacyExamples)) {
+    expect(await Promise.all(texts[name]!.map(textHash))).toEqual(hashes.slice());
+    expect(hashes).not.toContain(await textHash(examples[name]!));
+  }
+  // The old db.ts is the reason for the upgrade: it opened a file database every tab shared.
+  expect(texts["db.ts"]![0]).toContain('new Database("todos.sqlite")');
 });
 
 test("demo databases are in memory, so two tabs never write one SQLite file", () => {

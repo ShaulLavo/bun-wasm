@@ -598,7 +598,7 @@ main {
   transition: opacity 150ms var(--ease-out);
 }
 
-.preview-dock[data-loaded] .preview-frame iframe {
+.preview-dock[data-frame="loaded"] .preview-frame iframe {
   opacity: 1;
 }
 
@@ -678,15 +678,22 @@ main {
   header {
     flex-wrap: wrap;
     gap: 8px;
-    padding: 6px 10px;
+    min-height: 0;
+    padding: 4px 10px;
   }
 
   header h1.brand {
     min-width: 0;
   }
 
+  .site-nav {
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+
   .site-nav a.nav {
-    min-height: 34px;
+    min-height: 40px;
   }
 
   header #run {
@@ -746,7 +753,7 @@ main {
   }
 
   .tabbar {
-    height: 48px;
+    height: 44px;
   }
 
   #file-select,
@@ -756,7 +763,7 @@ main {
 
   /* Examples workspace: three demo columns of 40 px targets, then one pane at a time. */
   .demo-bar {
-    padding: 8px 10px;
+    padding: 6px 10px;
   }
 
   .demo-label,
@@ -783,13 +790,35 @@ main {
     align-items: center;
     gap: 8px;
     flex: none;
-    padding: 8px 10px;
+    padding: 0 10px 6px;
     border-bottom: 1px solid var(--border);
   }
 
-  .pane-switch .copy-terminal {
+  .segmented {
+    flex: 1 1 0;
+  }
+
+  .segmented button {
     min-height: 40px;
-    margin-left: 0;
+    padding: 0 4px;
+  }
+
+  .pane-switch .engine-field {
+    flex: 0 1 44%;
+  }
+
+  .pane-switch .engine-field .label {
+    display: none;
+  }
+
+  .pane-switch #engine {
+    flex: 1;
+    width: 100%;
+  }
+
+  .preview-dock .bar .control,
+  .terminal-pane .copy-terminal {
+    min-height: 40px;
   }
 
   main[data-pane] {
@@ -813,9 +842,29 @@ main {
     visibility: visible;
   }
 
-  /* The pane switch already names the terminal and holds Copy. */
+  /* The pane switch already names the terminal; Copy floats in its top corner instead of a bar. */
+  main[data-pane] .terminal-pane {
+    position: relative;
+  }
+
   main[data-pane] .terminal-pane .bar {
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    z-index: 1;
+    height: auto;
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+
+  main[data-pane] .terminal-pane .bar > span:first-child {
     display: none;
+  }
+
+  .preview-dock .bar,
+  .terminal-pane .bar {
+    height: 44px;
   }
 
   .compat-foot {

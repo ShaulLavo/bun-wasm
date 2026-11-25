@@ -21,14 +21,19 @@ loads a different module at runtime; `?trace` logs every WASI call to the worker
 
 The examples workspace shows a demo bar: Bun.serve, bun:sqlite, bun test, Bun.build, Bun.$ and
 Bun.file. A click stops any running command, restores the demo's files if they were deleted (edits
-are kept), opens the file and runs it by absolute path. Restoring is one exclusive-create call, so
-it never replaces a file another tab wrote meanwhile. Demos resolve their files from
+are kept), opens the file and runs it from `~` (it runs `cd ~`, clears the screen and echoes
+`bun run serve.ts`). Restoring is one exclusive-create call, so it never replaces a file another
+tab wrote meanwhile. An unedited copy of an older stock example (its SHA-256 is listed in
+`web/src/legacy-examples.ts`, texts in `web/tests/fixtures/legacy-examples.json`) is upgraded at
+startup and by its demo, with a conditional remove plus exclusive create; any other text is kept.
+While a demo prepares, Run stays out and Stop cancels it. Demos resolve their files from
 `import.meta.dir`, so they work from any shell directory, and the SQLite demos use in-memory
 databases: every tab runs its own processes, and SQLite here allows one writer per file.
 
 While a command runs, Run becomes Stop (Ctrl-C; a second Stop forces it). A server started there
-opens in a preview above the terminal. Restart reruns the Run or demo launch that started it; a
-server typed into the terminal gets no Restart. At 800 px and narrower the examples workspace shows
+opens in a preview above the terminal. Restart reruns the Run or demo launch whose own Bun process
+opened the port (matched at process start by subcommand, file and directory); a server from any
+other process gets no Restart. If the preview request fails, the dock says so instead of waiting. At 800 px and narrower the examples workspace shows
 one pane at a time (Code, Preview, Terminal). `?demo=<id>` (for example `/playground/?demo=serve`)
 starts a demo once the page is ready, and the address follows the last demo clicked. The page
 switch in both headers links the sandbox at `/` and `?demo=serve`. Visible strings live in
