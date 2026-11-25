@@ -6,12 +6,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 import {
-  parseGuestDescriptor, describeGuest, GUEST_CACHE_CONTROL, GUEST_ORIGIN, prepareGuest, verifyGuest, writeGuestDescriptor,
+  parseGuestDescriptor, parseGuestFileDescriptor, describeGuest, GUEST_CACHE_CONTROL, GUEST_ORIGIN,
+  prepareArtifact, prepareGuest, readArtifactFile, validateArtifactName, verifyGuest, writeGuestDescriptor,
 } from "../../scripts/guest-artifact.ts";
-import { createR2Publisher, publishGuest, verifyPublicGuest } from "../../scripts/publish-guest.ts";
+import { createR2Publisher, publishArtifact, publishGuest, verifyPublicGuest } from "../../scripts/publish-guest.ts";
 import type { GuestFile } from "../../scripts/guest-artifact.ts";
 import type { GuestPublisher } from "../../scripts/publish-guest.ts";
 import { loadBunWasm, programMetadata } from "../../src/assets";
+import { appendCustomSection } from "../../src/engine-kind";
 import { quickjsPair } from "./quickjs-plan-fixture";
 import { linkedFixtureValue } from "./linked-fixture";
 
@@ -248,4 +250,96 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} publication verifi
   const mismatched = { ...pair, descriptor: { ...pair.descriptor, side: { ...pair.descriptor.side, sha256: "0".repeat(64) } } };
   await expect(publishGuest(mismatched, store)).rejects.toThrow("paired engine identity");
   expect(reads).toHaveLength(2);
+});
+
+test("standalone named artifacts validate names, hash decompressed bytes, and publish safely", async () => {
+  const name = "shell-engine.wasm";
+  const rawHash = createHash("sha256").update(wasm).digest("hex");
+  const prepared = prepareArtifact(wasm, GUEST_ORIGIN, name);
+  expect(prepared.key).toBe(`${rawHash}/${name}.gz`);
+  expect(prepared.descriptor).toEqual({ url: `${GUEST_ORIGIN}/${rawHash}/${name}.gz`, sha256: rawHash, bytes: wasm.length });
+  expect(parseGuestFileDescriptor(prepared.descriptor)).toEqual(prepared.descriptor);
+  expect(prepareArtifact(gzipSync(wasm), GUEST_ORIGIN, name).descriptor).toEqual(prepared.descriptor);
+  for (const bad of ["", "shell.txt", "../shell.wasm", "dir/shell.wasm", "Shell.wasm", "a..b.wasm", ".wasm"]) {
+    expect(() => validateArtifactName(bad)).toThrow("Invalid WASM artifact name");
+    expect(() => describeGuest(wasm, GUEST_ORIGIN, bad)).toThrow("Invalid WASM artifact name");
+  }
+
+  const uploads: GuestFile[] = [];
+  const reads: string[] = [];
+  const mutable = { key: prepared.key, gzip: new Uint8Array(prepared.gzip), descriptor: { ...prepared.descriptor } };
+  const store: GuestPublisher = {
+    async read(key) {
+      reads.push(key);
+      mutable.key = "mutated/shell-engine.wasm.gz";
+      mutable.gzip.fill(0);
+      return null;
+    },
+    async upload(value) { uploads.push(value); },
+    async fetch(input, init) {
+      expect(input).toBe(prepared.descriptor.url);
+      expect(new Headers(init?.headers).get("origin")).toBe("https://example.com");
+      return new Response(wasm, { headers: publicHeaders });
+    },
+  };
+  expect(await publishArtifact(mutable, name, store)).toEqual(prepared.descriptor);
+  expect(reads).toEqual([prepared.key]);
+  expect(uploads).toEqual([prepared]);
+
+  const existingUploads: GuestFile[] = [];
+  const idempotent: GuestPublisher = {
+    ...store,
+    async read() { return gzipSync(wasm, { level: 0 }); },
+    async upload(value) { existingUploads.push(value); },
+  };
+  expect(await publishArtifact(prepared, name, idempotent)).toEqual(prepared.descriptor);
+  expect(existingUploads).toHaveLength(0);
+
+  const mismatched: GuestPublisher = {
+    ...idempotent,
+    async read() { return gzipSync(Buffer.concat([wasm, new Uint8Array([0, 1, 0])])); },
+  };
+  await expect(publishArtifact(prepared, name, mismatched)).rejects.toThrow("integrity mismatch");
+  expect(existingUploads).toHaveLength(0);
+
+  await expect(publishArtifact({ ...prepared, descriptor: { ...prepared.descriptor, url: `${GUEST_ORIGIN}/${rawHash}/other.wasm.gz` } }, name, store)).rejects.toThrow("plain HTTPS URL");
+  await expect(publishArtifact({ ...prepared, key: `latest/${name}.gz` }, name, store)).rejects.toThrow("key does not match");
+});
+
+test("readArtifactFile and publish-guest --name enforce single modules, name-free bytes, and reserved Bun names", async () => {
+  const scratch = await mkdtemp(join(scratchRoot, "bun-wasm-standalone-artifact-test-"));
+  try {
+    const singlePath = join(scratch, "shell.wasm");
+    const namedPath = join(scratch, "shell-named.wasm");
+    const pairedPath = join(scratch, "paired.wasm");
+    const outputPath = join(scratch, "descriptor.ts");
+    await writeFile(singlePath, wasm);
+    await writeFile(namedPath, appendCustomSection(wasm, "name", new Uint8Array([1, 0])));
+    await writeFile(pairedPath, quickjsPair().core);
+    await writeFile(outputPath, "untouched\n");
+
+    const loaded = await readArtifactFile(singlePath, GUEST_ORIGIN, "shell-engine.wasm");
+    expect(loaded.key).toBe(`${createHash("sha256").update(wasm).digest("hex")}/shell-engine.wasm.gz`);
+    await expect(readArtifactFile(pairedPath, GUEST_ORIGIN, "shell-engine.wasm")).rejects.toThrow("single-module WASM");
+
+    const env = { ...process.env, CLOUDFLARE_API_TOKEN: "test-invalid-not-a-credential" };
+    const runCli = (args: string[]) => Bun.spawnSync([process.execPath, "scripts/publish-guest.ts"].concat(args), { cwd: process.cwd(), env });
+
+    for (const reserved of ["bun.wasm", "bun-browser.wasm", "bun-jsc.wasm", "quickjs.wasm", "jsc-engine.wasm"]) {
+      const blocked = runCli([singlePath, "--name", reserved, "--account-id", "a".repeat(32)]);
+      expect(blocked.exitCode).not.toBe(0);
+      expect(blocked.stderr.toString()).toContain("default Bun guest path");
+    }
+
+    const withOutput = runCli([singlePath, "--name", "shell-engine.wasm", "--output", outputPath, "--account-id", "a".repeat(32)]);
+    expect(withOutput.exitCode).not.toBe(0);
+    expect(withOutput.stderr.toString()).toContain("--output");
+    expect(await readFile(outputPath, "utf8")).toBe("untouched\n");
+
+    const withNames = runCli([namedPath, "--name", "shell-engine.wasm", "--account-id", "a".repeat(32)]);
+    expect(withNames.exitCode).not.toBe(0);
+    expect(withNames.stderr.toString()).toContain("name section");
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
 });
