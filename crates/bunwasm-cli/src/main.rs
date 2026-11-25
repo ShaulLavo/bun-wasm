@@ -678,7 +678,7 @@ fn usage_error(message: &str) -> Command {
 }
 
 fn parse(args: Vec<String>, executable: &str) -> Command {
-    if matches!(executable.rsplit('/').next(), Some("node" | "nodejs")) {
+    if tool_args::is_node(executable) {
         return node_command(args);
     }
     if tool_args::before_command(&args).is_some() {

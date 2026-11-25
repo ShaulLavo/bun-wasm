@@ -8,6 +8,7 @@ mod check_command;
 mod host;
 mod lint_command;
 #[path = "../../bunwasm-cli/src/tool_args.rs"]
+#[allow(dead_code)] // Shared with the hosts; the tools guest is only started for a tool command.
 mod tool_args;
 #[path = "../../../vendor/bun/src/runtime/cli/typescript_libs.rs"]
 mod typescript_libs;
