@@ -6,14 +6,36 @@ export const START_FRESH_BUSY = "This workspace is open in another tab. Close th
 
 type FilesystemState = { readonly status: string; readonly error?: unknown };
 
+const UNREADABLE_FORMAT_MESSAGE =
+  /Incompatible (?:IndexedDB|OPFS) (?:database version|database schema|filesystem format identity|metadata layout)|Invalid persisted filesystem metadata|Existing (?:filesystem|OPFS filesystem) storage is corrupt|Unrecognized OPFS workspace without a snapshot|Invalid filesystem payload chunks|Invalid required staged commit head/;
+
 /**
  * Whether startup failed because Waffle cannot read the stored workspace's format
- * (INVALID_VFS_FORMAT). Every other failure (a worker script that did not load, a lost
- * IndexedDB connection, full storage, running out of memory) can pass on a retry with the same
- * workspace, so it keeps the Retry path and gets no Start fresh.
+ * (INVALID_VFS_FORMAT, including MultiTabReleaseError wrapping an incompatible format).
+ * Every other failure (a worker script that did not load, a lost IndexedDB connection,
+ * full storage, running out of memory) can pass on a retry with the same workspace, so
+ * it keeps the Retry path and gets no Start fresh.
  */
 export function unreadableWorkspace(error: unknown, state: FilesystemState | undefined): boolean {
-  return codes(error).includes("INVALID_VFS_FORMAT") || codes(state?.error).includes("INVALID_VFS_FORMAT");
+  return (
+    codes(error).includes("INVALID_VFS_FORMAT") ||
+    codes(state?.error).includes("INVALID_VFS_FORMAT") ||
+    isWrappedUnreadableFormat(error) ||
+    isWrappedUnreadableFormat(state?.error)
+  );
+}
+
+function isWrappedUnreadableFormat(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  for (let current = error; current && typeof current === "object" && !seen.has(current); current = "cause" in current ? current.cause : undefined) {
+    seen.add(current);
+    const name = "name" in current && typeof current.name === "string" ? current.name : "";
+    const message = "message" in current && typeof current.message === "string" ? current.message : "";
+    if ((name === "MultiTabReleaseError" || message.includes("MultiTabReleaseError:")) && UNREADABLE_FORMAT_MESSAGE.test(message)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** The VfsError codes along an error's cause chain. Errors cross the filesystem worker as VfsError. */

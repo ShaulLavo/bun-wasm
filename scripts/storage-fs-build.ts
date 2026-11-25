@@ -43,7 +43,7 @@ export function storageObservationPlugin(runtimePath: () => string): Bun.BunPlug
     // The helper is private consumer code. Resolve its private type/implementation imports
     // through this app's exact installation, including Sandbox and shell builds.
     build.onResolve({ filter: /node_modules\/waffle\// }, ({ path }) => ({ path: Bun.resolveSync("./" + path.split("node_modules/waffle/")[1]!, runtimePath()) }));
-    build.onLoad({ filter: /(?:\/(?:web|sandbox)\/src\/(?:main|sandbox|sw|preview|worker-main|preview1-worker|fs-worker)|\/bash-web\/src\/runtime\/worker|\/waffle\/(?:runtime|browser\/(?:shared-fs|preview|service-worker|net\/(?:helper|runtime))|fs\/(?:client|service)))\.ts$/ }, ({ path }) => {
+    build.onLoad({ filter: /(?:\/(?:web|sandbox)\/src\/(?:main|sandbox|sw|sw-routing|preview|worker-main|preview1-worker|fs-worker)|\/bash-web\/src\/runtime\/worker|\/waffle\/(?:runtime|browser\/(?:shared-fs|preview|service-worker|net\/(?:helper|runtime))|fs\/(?:client|service)))\.ts$/ }, ({ path }) => {
       const contents = storageObservationSource(path, readFileSync(path, "utf8"));
       return contents === undefined ? undefined : { contents, loader: "ts" };
     });

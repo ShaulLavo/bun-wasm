@@ -37,6 +37,19 @@ test("a workspace that cannot be opened offers Start fresh, which deletes only i
   } finally { await page.cleanup(); }
 });
 
+test("a workspace wrapped in MultiTabReleaseError for an incompatible format still offers Start fresh", async () => {
+  const wrapped = Object.assign(
+    new Error("Filesystem worker failed: MultiTabReleaseError: Incompatible IndexedDB filesystem format identity"),
+    { name: "MultiTabReleaseError" },
+  );
+  const { page, sandbox } = await unreadableSandbox("deleted", wrapped);
+  try {
+    expect(sandbox.failure).toBe("storage");
+    expect(sandbox.unreadable).toBe(true);
+    expect(sandbox.status.text).toContain("cannot be opened");
+  } finally { await page.cleanup(); }
+});
+
 test("a filesystem that failed for a reason a retry can fix keeps the workspace and offers no Start fresh", async () => {
   const { page, sandbox } = await unreadableSandbox("deleted", new Error("Failed to load worker script fs-worker.js"));
   try {

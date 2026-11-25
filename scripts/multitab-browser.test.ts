@@ -117,12 +117,18 @@ async function clickPreviewCounter(page: Page, expectedAfter: string, timeout = 
 async function playgroundTerminalText(page: Page): Promise<string> {
   return page.evaluate(() => {
     const pg = Reflect.get(globalThis, "playground") as {
-      term?: { buffer?: { active?: { length: number; getLine(i: number): { translateToString(trim: boolean): string } | undefined } } };
+      term?: { buffer?: { active?: { length: number; getLine(i: number): { isWrapped?: boolean; translateToString(trim: boolean): string } | undefined } } };
     } | undefined;
     const buf = pg?.term?.buffer?.active;
     if (!buf) return "";
     let text = "";
-    for (let i = 0; i < buf.length; i++) text += (buf.getLine(i)?.translateToString(true) ?? "") + "\n";
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (!line) continue;
+      if (i > 0 && !line.isWrapped) text += "\n";
+      const nextWrapped = buf.getLine(i + 1)?.isWrapped === true;
+      text += line.translateToString(!nextWrapped);
+    }
     return text;
   });
 }
@@ -139,18 +145,24 @@ async function runPlaygroundServer(page: Page, marker: string): Promise<string> 
     await pg.fs.flush();
   }, marker);
   const baseline = (await playgroundTerminalText(page)).length;
-  await page.locator(".xterm-helper-textarea").focus();
-  await page.keyboard.type(`bun run /home/user/srv-${marker}.ts`);
-  await page.keyboard.press("Enter");
+  await page.evaluate((file) => {
+    const pg = Reflect.get(globalThis, "playground") as unknown as { shell: { submit(command: string): Promise<void> } };
+    void pg.shell.submit(`bun run ${file}`);
+  }, `/home/user/srv-${marker}.ts`);
   await page.waitForFunction(
     (start) => {
       const pg = Reflect.get(globalThis, "playground") as {
-        term?: { buffer?: { active?: { length: number; getLine(i: number): { translateToString(trim: boolean): string } | undefined } } };
+        term?: { buffer?: { active?: { length: number; getLine(i: number): { isWrapped?: boolean; translateToString(trim: boolean): string } | undefined } } };
       } | undefined;
       const buf = pg?.term?.buffer?.active;
       if (!buf) return false;
       let text = "";
-      for (let i = 0; i < buf.length; i++) text += (buf.getLine(i)?.translateToString(true) ?? "") + "\n";
+      for (let i = 0; i < buf.length; i++) {
+        const line = buf.getLine(i);
+        if (!line) continue;
+        if (i > 0 && !line.isWrapped) text += "\n";
+        text += line.translateToString(!line.isWrapped);
+      }
       return /\[preview\] http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\//.test(text.slice(start));
     },
     baseline,
@@ -302,8 +314,8 @@ for (const browserName of browsers) {
         navigateTestPage(tab2, `${origin}/`),
       ]);
       await Promise.all([
-        tab1.waitForFunction(() => (Reflect.get(globalThis, "playground") as any)?.editor?.path === "/home/user/index.ts", null, { timeout: 60_000 }),
-        tab2.waitForFunction(() => (Reflect.get(globalThis, "playground") as any)?.editor?.path === "/home/user/index.ts", null, { timeout: 60_000 }),
+        tab1.waitForFunction(() => (Reflect.get(globalThis, "playground") as any)?.editor?.path === "/home/user/index.ts" && document.querySelector("#status")?.getAttribute("data-kind") === "ok", null, { timeout: 60_000 }),
+        tab2.waitForFunction(() => (Reflect.get(globalThis, "playground") as any)?.editor?.path === "/home/user/index.ts" && document.querySelector("#status")?.getAttribute("data-kind") === "ok", null, { timeout: 60_000 }),
       ]);
 
       expect(await tab1.evaluate(() => (Reflect.get(globalThis, "playground") as any).fs.ownershipLost)).toBe(false);

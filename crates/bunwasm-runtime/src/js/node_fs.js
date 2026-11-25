@@ -1041,7 +1041,7 @@
 
   callbackApi.read = function read(...callArgs) {
     const args = readCallArguments(callArgs);
-    if (args[0] !== 0 || !native.hostCaps.proc_spawn) return readCallback(...args);
+    if (args[0] !== 0 || !native.hostCaps.proc_spawn || isRegularReadFd(args[0])) return readCallback(...args);
     const callback = args.pop();
     if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
     const context = native.getAsyncContext();

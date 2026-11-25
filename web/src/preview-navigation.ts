@@ -176,18 +176,24 @@ export function previewNavigations(options: NavigationOptions) {
 function waitForPreview(input: { url: string; status: string; cancel: string }): void {
   let navigating = false;
   let stopped = false;
+  let controller = new AbortController();
   addEventListener("pagehide", () => {
     stopped = true;
+    controller.abort();
     if (!navigating) void fetch(input.cancel, { method: "POST", keepalive: true }).catch(() => {});
   }, { once: true });
   async function poll(): Promise<void> {
+    if (stopped) return;
+    controller = new AbortController();
     try {
-      const response = await fetch(input.status, { cache: "no-store" });
+      const response = await fetch(input.status, { cache: "no-store", signal: controller.signal });
+      if (stopped) return;
       if (!response.ok) throw new Error("The preview request is no longer available.");
       const state: unknown = await response.json();
       if (stopped) return;
       if (state && typeof state === "object" && "ready" in state && state.ready === true) {
         navigating = true;
+        controller.abort();
         const target = new URL(input.url);
         target.hash = location.hash;
         location.replace(target.href);
@@ -195,6 +201,7 @@ function waitForPreview(input: { url: string; status: string; cancel: string }):
       }
       setTimeout(() => { void poll(); }, 250);
     } catch {
+      if (stopped || controller.signal.aborted) return;
       const message = document.querySelector('[role="status"]');
       if (message) message.textContent = "The preview request failed. Reload to try again.";
     }
