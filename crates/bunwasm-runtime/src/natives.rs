@@ -2111,7 +2111,8 @@ fn install_crypto(t: &mut Table) {
     });
     t.add("wyhash", |a| {
         // Bun.hash: (data, seed high 32 bits, seed low 32 bits).
-        let seed = ((a.opt_num(1).unwrap_or(0.0) as u64) << 32) | a.opt_num(2).unwrap_or(0.0) as u64;
+        let seed =
+            ((a.opt_num(1).unwrap_or(0.0) as u64) << 32) | a.opt_num(2).unwrap_or(0.0) as u64;
         Ok(Val::BigUint(bun_wyhash::hash_with_seed(seed, a.bytes(0)?)))
     });
     // node:zlib's processChunkSync for the sync and callback convenience

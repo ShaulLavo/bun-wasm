@@ -181,9 +181,13 @@ fn normalise_argon2_version(encoded: &str) -> Result<std::borrow::Cow<'_, str>, 
 /// address space and usually much less, and rust-argon2 aborts when its allocation fails.
 /// Reserve the cost up front so an unaffordable one is an error instead of a crash.
 fn ensure_memory(kib: u32) -> Result<(), Error> {
-    let bytes = (kib as usize).checked_mul(1024).ok_or(Error::OutOfMemory(kib))?;
+    let bytes = (kib as usize)
+        .checked_mul(1024)
+        .ok_or(Error::OutOfMemory(kib))?;
     let mut probe: Vec<u8> = Vec::new();
-    probe.try_reserve_exact(bytes).map_err(|_| Error::OutOfMemory(kib))
+    probe
+        .try_reserve_exact(bytes)
+        .map_err(|_| Error::OutOfMemory(kib))
 }
 
 fn check_argon2_limits(encoded: &str) -> Result<(), Error> {
