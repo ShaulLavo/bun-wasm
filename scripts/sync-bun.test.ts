@@ -1,5 +1,5 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -272,10 +272,57 @@ test("a checkout at the old pin syncs to a new pin with fresh codegen and depend
     expect(sync(["--check"]).exitCode).toBe(0);
 
     // Nothing changed, so a second sync leaves the dependencies and generated files alone.
-    writeFileSync(join(vendor, "vendor/lolhtml/kept"), "");
+    const unpacked = ["vendor/lolhtml", "vendor/rust-argon2"].map(path => statSync(join(vendor, path)).ino);
     writeFileSync(join(vendor, "build/debug/codegen/kept"), "");
     expect(sync().exitCode).toBe(0);
-    expect(read("vendor/lolhtml/kept")).toBe("");
+    expect(["vendor/lolhtml", "vendor/rust-argon2"].map(path => statSync(join(vendor, path)).ino)).toEqual(unpacked);
     expect(read("build/debug/codegen/kept")).toBe("");
+    expect(readdirSync(join(vendor, "vendor")).toSorted()).toEqual([".bun-wasm-lolhtml.source", ".bun-wasm-rust-argon2.source", "lolhtml", "rust-argon2"]);
+  });
+});
+
+// Bun's .gitignore hides vendor/, so the script itself has to notice work in the dependency trees.
+for (const markers of [true, false]) test(`local work in a dependency tree ${markers ? "with" : "without"} its marker is never replaced`, () => {
+  upgradeFixture(({ vendor, git, pin, sync }) => {
+    const read = (path: string) => readFileSync(join(vendor, path), "utf8");
+    pin("old");
+    expect(sync().exitCode).toBe(0);
+    if (!markers) for (const name of ["lolhtml", "rust-argon2"]) rmSync(join(vendor, "vendor", `.bun-wasm-${name}.source`));
+    writeFileSync(join(vendor, "vendor/rust-argon2/Cargo.toml"), "# my edit\n");
+    writeFileSync(join(vendor, "vendor/lolhtml/mine.txt"), "my file\n");
+    expect(git(vendor, "status", "--porcelain", "--untracked-files=normal")).toBe("");
+
+    // The same pin first: nothing needs replacing, and the work must still survive.
+    for (const which of ["old", "new"] as const) {
+      pin(which);
+      const refused = sync();
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr).toContain("refusing to replace it");
+      expect(refused.stderr).toContain(`rm -rf ${join(vendor, "vendor/lolhtml")}`);
+      expect(read("vendor/rust-argon2/Cargo.toml")).toBe("# my edit\n");
+      expect(read("vendor/lolhtml/mine.txt")).toBe("my file\n");
+      expect(readdirSync(join(vendor, "vendor")).filter(name => !name.endsWith(".source")).toSorted()).toEqual(["lolhtml", "rust-argon2"]);
+    }
+
+    // Removing the trees, as the message says, lets the sync finish.
+    for (const name of ["lolhtml", "rust-argon2"]) rmSync(join(vendor, "vendor", name), { recursive: true });
+    const synced = sync();
+    expect(synced.exitCode, synced.stderr).toBe(0);
+    expect(read("vendor/lolhtml/lib.txt")).toBe("new html\n");
+    expect(read("vendor/rust-argon2/lib.txt")).toBe("one patched\ntwo patched\nthree\n");
+  });
+});
+
+test("an untouched dependency tree from before the markers moves to the new patches", () => {
+  upgradeFixture(({ vendor, pin, sync }) => {
+    pin("old");
+    expect(sync().exitCode).toBe(0);
+    // The commit is the same at both pins, so the old tree is the pinned archive with its first patch.
+    rmSync(join(vendor, "vendor/.bun-wasm-rust-argon2.source"));
+    pin("new");
+    const synced = sync();
+    expect(synced.exitCode, synced.stderr).toBe(0);
+    expect(readFileSync(join(vendor, "vendor/rust-argon2/lib.txt"), "utf8")).toBe("one patched\ntwo patched\nthree\n");
+    expect(readFileSync(join(vendor, "vendor/.bun-wasm-rust-argon2.source"), "utf8")).toContain("\ntree ");
   });
 });

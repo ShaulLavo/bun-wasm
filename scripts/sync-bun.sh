@@ -112,27 +112,64 @@ fi
 
 # A vendored dependency is unpacked again when Bun pins another commit for it or changes
 # its patches, so a checkout that moves to a new Bun pin does not keep the old dependency.
+# Bun's .gitignore covers vendor/, so the local-changes check above cannot see work there.
+# A tree is replaced only when its content is known: what this script last put there, or
+# the pinned archive with none, some or all of its patches (a tree from before the markers).
+staging=""
+trap '[[ -z "$staging" ]] || rm -rf "$staging"' EXIT
+trap 'exit 130' INT TERM
+tree_digest() { # <dir>: one digest over the content of every file and link below it
+  (
+    cd "$1"
+    find . -type f -print0 | sort -z | xargs -0 -r sha256sum
+    find . -type l -printf '%p -> %l\n' | sort
+  ) | sha256sum | cut -d' ' -f1
+}
+refuse_dependency() { # <dir>
+  echo "error: $1 has content this script did not put there, and git does not track it; refusing to replace it" >&2
+  echo "save what you need from it, remove it (rm -rf $1) and run scripts/sync-bun.sh again" >&2
+  exit 1
+}
 fetch() { # <dir> <repo> <commit> [patch, relative to vendor/bun]...
   local name=$1 repo=$2 commit=$3
   shift 3
   local dir=$bun_dir/vendor/$name stamp=$bun_dir/vendor/.bun-wasm-$name.source
-  local want file
+  local want file current="" recorded="" stage
   want=$(
     printf '%s\n' "$commit"
     for file in "$@"; do
       printf '%s %s\n' "$(sha256sum < "$bun_dir/$file" | cut -d' ' -f1)" "$file"
     done
   )
-  if [[ -f "$dir/Cargo.toml" && "$(cat "$stamp" 2>/dev/null)" == "$want" ]]; then
-    return
+  if [[ -d "$dir" && -n "$(ls -A "$dir")" ]]; then
+    current=$(tree_digest "$dir")
+    recorded=$(sed -n 's/^tree //p' "$stamp" 2>/dev/null || true)
+  fi
+  if [[ -n "$recorded" ]]; then
+    [[ "$current" == "$recorded" ]] || refuse_dependency "$dir"
+    if [[ "$(grep -v '^tree ' "$stamp")" == "$want" ]]; then
+      return
+    fi
+  fi
+  # Unpack and patch beside the tree, and move the result in only once it is complete.
+  mkdir -p "$bun_dir/vendor"
+  staging=$(mktemp -d "$bun_dir/vendor/.bun-wasm-$name.XXXXXX")
+  curl -fsSL "https://github.com/$repo/archive/$commit.tar.gz" | tar xz --strip-components=1 -C "$staging"
+  local -a stages=("$(tree_digest "$staging")")
+  for file in "$@"; do
+    patch -d "$staging" -p1 < "$bun_dir/$file"
+    stages+=("$(tree_digest "$staging")")
+  done
+  if [[ -n "$current" && -z "$recorded" ]]; then
+    for stage in "${stages[@]}"; do
+      [[ "$stage" != "$current" ]] || current=""
+    done
+    [[ -z "$current" ]] || refuse_dependency "$dir"
   fi
   rm -rf "$dir"
-  mkdir -p "$dir"
-  curl -fsSL "https://github.com/$repo/archive/$commit.tar.gz" | tar xz --strip-components=1 -C "$dir"
-  for file in "$@"; do
-    patch -d "$dir" -p1 < "$bun_dir/$file"
-  done
-  printf '%s\n' "$want" > "$stamp"
+  mv "$staging" "$dir"
+  staging=""
+  printf '%s\ntree %s\n' "$want" "${stages[-1]}" > "$stamp"
 }
 lolhtml=$(grep -oP 'LOLHTML_COMMIT = "\K[0-9a-f]+' "$bun_dir/scripts/build/deps/lolhtml.ts")
 argon2=$(grep -oP 'RUST_ARGON2_COMMIT = "\K[0-9a-f]+' "$bun_dir/scripts/build/deps/rust-argon2.ts")
