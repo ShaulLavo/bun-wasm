@@ -1,11 +1,15 @@
 // The preview runs the runtime's existing WebSocket implementation over a MessagePort TCP stream.
 import websocketFactory from "bun-wasm:websocket";
+import { SW_SOCKET } from "./preview-origin/protocol";
 
 const nativeWebSocket = globalThis.WebSocket;
 const script = document.currentScript;
 const previewPort = Number(script?.getAttribute("data-bun-port"));
 const previewPrefix = script?.getAttribute("data-bun-prefix") ?? "/__preview/";
 const previewRoute = script?.getAttribute("data-bun-route") || undefined;
+// On a preview origin the app owns `/`: the IDE page opens the socket from structured fields
+// (preview-origin/port-session.ts), so this side sends them instead of raw upgrade bytes.
+const rootOrigin = script?.getAttribute("data-bunwasm-preview") === "shim";
 const encoder = new TextEncoder();
 const accepts = new Map<string, string>();
 const connections = new Set<Connection>();
@@ -78,12 +82,15 @@ class Connection {
   }
 
   private async writeReady(bytes: Uint8Array): Promise<void> {
-    if (this.upgrading) bytes = await this.upgradeRequest(bytes);
+    const upgrade = this.upgrading ? await this.upgradeRequest(bytes) : null;
     this.queue.shift();
-    if (!this.closed) this.port.postMessage({ type: "data", chunk: bytes }, [bytes.buffer]);
+    if (this.closed) return;
+    if (upgrade instanceof Uint8Array) bytes = upgrade;
+    else if (upgrade) { this.port.postMessage(upgrade); return; }
+    this.port.postMessage({ type: "data", chunk: bytes }, [bytes.buffer]);
   }
 
-  private async upgradeRequest(bytes: Uint8Array): Promise<Uint8Array> {
+  private async upgradeRequest(bytes: Uint8Array): Promise<Uint8Array | ReturnType<typeof rootOpen>> {
     this.upgrading = false;
     const request = new TextDecoder().decode(bytes);
     const key = /^sec-websocket-key:\s*(\S+)\r?$/im.exec(request)?.[1];
@@ -93,6 +100,7 @@ class Connection {
     this.acceptInput = input;
     const digest = await crypto.subtle.digest("SHA-1", encoder.encode(input));
     if (!this.closed) accepts.set(input, btoa(String.fromCharCode(...new Uint8Array(digest))));
+    if (rootOrigin) return rootOpen(request);
     return encoder.encode(request.replace(/^host:[^\r\n]*/im, () => `host: ${this.authority}`)
       .replace(/\r\n\r\n$/, () => `\r\norigin: ${location.origin}\r\n\r\n`));
   }
@@ -112,6 +120,18 @@ class Connection {
   }
 }
 
+/** The upgrade as fields. The IDE page supplies Host, Cookie and the socket's Origin itself. */
+function rootOpen(request: string): { type: "open"; url: string; method: string; headers: [string, string][] } {
+  const [start = "", ...lines] = request.split("\r\n");
+  const [method = "GET", target = "/"] = start.split(" ");
+  const headers = lines.flatMap((line): [string, string][] => {
+    const at = line.indexOf(":");
+    const name = line.slice(0, Math.max(at, 0)).trim();
+    return name === "" || /^(?:host|origin|cookie)$/i.test(name) ? [] : [[name, line.slice(at + 1).trim()]];
+  });
+  return { type: "open", url: new URL(target, location.origin).href, method, headers };
+}
+
 function connect(): number {
   if (constructingAuthority === undefined) throw new Error("Missing preview request authority");
   const channel = new MessageChannel();
@@ -119,6 +139,7 @@ function connect(): number {
   streams.set(handle, { port: channel.port1, authority: constructingAuthority });
   const controller = navigator.serviceWorker.controller;
   if (!controller) { channel.port2.close(); return handle; }
+  if (rootOrigin) { controller.postMessage({ type: SW_SOCKET }, [channel.port2]); return handle; }
   controller.postMessage(
     previewRoute ? { type: "preview-socket", port: previewPort, route: previewRoute } : { type: "preview-socket", port: previewPort },
     [channel.port2],
@@ -146,8 +167,12 @@ function tunnelUrl(input: string | URL): { url: URL; authority: string } | null 
   if (url.protocol === "https:") url.protocol = "wss:";
   const sameHost = url.host === location.host;
   const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) && Number(url.port || 80) === previewPort;
-  if (!sameHost && !loopback) return null;
+  if (!sameHost && (rootOrigin || !loopback)) return null;
   if (!["ws:", "wss:"].includes(url.protocol)) return null;
+  if (rootOrigin) {
+    url.protocol = "ws:";
+    return { url, authority: url.host };
+  }
   const marker = `${previewPrefix}${previewPort}`;
   if (url.pathname === marker) url.pathname = "/";
   else if (url.pathname.startsWith(marker + "/")) url.pathname = url.pathname.slice(marker.length);

@@ -11,7 +11,7 @@ export function PreviewPane(handle: Handle<{ sandbox: Sandbox }>) {
       <section class="pane preview-pane" aria-label="Preview">
         <div class="bar">
           <span class="dot" id="server-dot" aria-hidden="true" data-state={state}></span>
-          <a id="preview-url" href={url} target="_blank" rel="noopener" title="Open the preview in a new tab">{text}</a>
+          <a id="preview-url" href={url ? previewLink : undefined} target="_blank" rel="noopener" title="Open the preview in a new tab">{text}</a>
           <a
             id="open-preview" href={previewLink} target="_blank" rel="noopener" title="Open the preview in a new tab"
             aria-disabled={state === undefined ? undefined : state !== "up"}

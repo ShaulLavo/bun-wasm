@@ -200,6 +200,15 @@ export class Previews extends PreviewRouter {
     return new URL(`${this.routePrefix}${port}${path}`, this.mountBaseURL).href;
   }
 
+  /** The link that opens a preview URL in a new tab. Mounted previews are their own link; preview origins use a wrapper page. */
+  linkFor(url: string): string {
+    return url;
+  }
+
+  linkUrl(port: number, path = "/"): string {
+    return this.linkFor(this.url(port, path));
+  }
+
   get ready(): Promise<PreviewState> {
     if (this.disposed) return Promise.resolve("failed");
     if (this.workerScope === undefined) return Promise.resolve("ready");

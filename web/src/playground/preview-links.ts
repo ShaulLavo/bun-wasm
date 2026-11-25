@@ -18,6 +18,10 @@ function registeredPreview(uri: string, previews: Previews, ports: ReadonlySet<n
     if (!previews.serves(port)) continue;
     const base = new URL(previews.url(port));
     if (url.origin === base.origin && url.pathname.startsWith(base.pathname)) return true;
+    // A preview origin's link is its IDE-origin wrapper page.
+    const link = new URL(previews.linkUrl?.(port) ?? base);
+    const framed = url.origin === link.origin && url.pathname === link.pathname ? url.searchParams.get("url") : null;
+    if (framed && link.href !== base.href && framed.startsWith(base.href)) return true;
   }
   return false;
 }

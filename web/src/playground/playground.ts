@@ -14,6 +14,8 @@ import { normalize } from "../fs";
 import { HostedPreviews } from "../hosted-previews";
 import type { BunNetworkOptions, RuntimeNetworkHelper } from "../net/helper";
 import { Previews } from "../preview";
+import { previewHostEnv, resolvePreviewOriginConfig, type PreviewOriginConfig } from "../preview-origin/protocol";
+import { RootPreviews } from "../preview-origin/root-previews";
 import { installRuntimeSharedObjects } from "../shared-objects/runtime";
 import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "../shared-fs";
 import type { BrowserSession, SessionState } from "bash-web/session";
@@ -64,6 +66,7 @@ const STOP_WAIT_MS = 30_000;
 /** The playground page: one Waffle runtime, the ~ workspace, bun.wasm, and an interactive bash-web shell. */
 export class Playground extends TypedEventTarget<{ change: Event }> {
   readonly tabId = crypto.randomUUID();
+  private previewOrigins: PreviewOriginConfig | null = null;
   readonly engine: Engine;
   readonly profile: PlaygroundProfile;
   private readonly requestedProfile: PlaygroundProfile | undefined;
@@ -717,9 +720,13 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     stage("workspace-ready");
 
     const previewRoute = `pg-${this.tabId}`;
+    this.previewOrigins = resolvePreviewOriginConfig(location, Reflect.get(globalThis, "__bunwasmPreviewOrigin"));
     const previews = this.previews = this.params.has("root-previews")
       ? new HostedPreviews(() => runtime!, location.href, { managePageHide: false })
-      : new Previews({ baseURL: location.href, prefix: "__preview", route: previewRoute });
+      : this.previewOrigins
+        // Servers belong to this tab, so their origins do too.
+        ? new RootPreviews({ config: this.previewOrigins, identity: previewRoute })
+        : new Previews({ baseURL: location.href, prefix: "__preview", route: previewRoute });
 
     const term = this.term = createTerminal();
     term.loadAddon(this.fit);
@@ -894,7 +901,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const shell = await BrowserSession.create({
       runtime,
       cwd: HOME,
-      env: { ...engineEnv, HOME, USER: "user", PATH: `${ENGINE_BIN[this.engine]}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
+      env: { ...engineEnv, ...previewHostEnv(this.previewOrigins), HOME, USER: "user", PATH: `${ENGINE_BIN[this.engine]}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
       cols: term.cols,
       rows: term.rows,
       wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
@@ -1026,7 +1033,7 @@ function createTerminal(): Terminal {
 
 function previewLine(previews: Previews, port: number, state: string): string {
   if (state !== "ready") return `\x1b[2m[preview] port ${port}: preview transport is ${state}\x1b[0m\r\n`;
-  const url = previews.url(port);
+  const url = previews.linkUrl(port);
   return `\x1b[2m[preview]\x1b[0m \x1b]8;;${url}\x07\x1b[4;36m${url}\x1b[0m\x1b]8;;\x07 \x1b[2m(Ctrl-C stops the server)\x1b[0m\r\n`;
 }
 

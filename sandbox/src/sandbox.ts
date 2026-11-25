@@ -13,6 +13,9 @@ import { decode } from "../../web/src/fs";
 import { HostedPreviews } from "../../web/src/hosted-previews";
 import type { BunNetworkOptions, RuntimeNetworkHelper } from "../../web/src/net/helper";
 import { Previews, type PreviewState } from "../../web/src/preview";
+import { previewHostEnv, resolvePreviewOriginConfig, type PreviewOriginConfig } from "../../web/src/preview-origin/protocol";
+import { RootPreviews } from "../../web/src/preview-origin/root-previews";
+import { createPreviewIdentity, readPreviewIdentity } from "../../web/src/preview-origin/workspace-identity";
 import type { Run, RunHooks, RunOptions, RunResult } from "../../web/src/runner";
 import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "../../web/src/shared-fs";
 import { START_FRESH_BUSY, startFresh, unreadableWorkspace } from "../../web/src/start-fresh";
@@ -154,6 +157,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private frame?: HTMLIFrameElement;
   private filesRevision = 0;
   private previews!: Previews;
+  private previewOrigins: PreviewOriginConfig | null = null;
+  private stopFrameReports?: () => void;
   private coordinator: DevServerCoordinator | null = null;
   private watch: WorkspaceWatchHandle | null = null;
   private disposePreviewRecovery?: () => void;
@@ -242,12 +247,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.attachEnabled = mode === "fast" && hasWebLocks && hasBroadcastChannel;
     const wsName = workspaceName(this.template);
     const previewRoute = this.attachEnabled ? `ws-${wsName}` : `mem-${this.tabId}`;
-    this.previews = this.params.has("root-previews")
-      ? new HostedPreviews(() => {
-        if (!this.workspace) throw new Error("Sandbox runtime unavailable");
-        return this.workspace.runtime;
-      }, location.href, { managePageHide: false, deferBind: true })
-      : new Previews({ baseURL: location.href, prefix: "__preview", route: previewRoute });
+    this.previewOrigins = resolvePreviewOriginConfig(location, Reflect.get(globalThis, "__bunwasmPreviewOrigin"));
+    this.previews = this.createPreviews(previewRoute);
 
     this.disposePreviewRecovery = this.previews.onWorkerRecovered(() => {
       if (this.disposed) return;
@@ -255,6 +256,38 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         void this.showPreview(this.server, this.serverTiming.visibleStart).catch(this.report);
       }
     });
+  }
+
+  /** Preview origins when configured, else previews mounted under this page's `/__preview/`. */
+  private createPreviews(route: string): Previews {
+    if (this.params.has("root-previews")) {
+      return new HostedPreviews(() => {
+        if (!this.workspace) throw new Error("Sandbox runtime unavailable");
+        return this.workspace.runtime;
+      }, location.href, { managePageHide: false, deferBind: true });
+    }
+    if (!this.previewOrigins) return new Previews({ baseURL: location.href, prefix: "__preview", route });
+    return new RootPreviews({ config: this.previewOrigins, identity: () => this.previewIdentity(), persistCookies: this.attachEnabled });
+  }
+
+  /**
+   * What this workspace's preview hostnames derive from. A shared workspace keeps it in a file, so
+   * its tabs agree and a recreated workspace starts over; a memory workspace is its own tab.
+   */
+  private previewIdentity(): Promise<string> {
+    if (!this.attachEnabled) return Promise.resolve(`mem-${this.tabId}`);
+    return this.withAdmittedPageOp(async (ws) => {
+      const stored = await readPreviewIdentity(ws.fs, HOME);
+      if (stored) return stored;
+      const identity = ws.getIdentity();
+      if (!identity) throw new Error("Worker identity missing for the preview identity");
+      const claim = await acquireWriterClaim(workspaceName(this.template), identity, this.ownClaimIds);
+      try {
+        return await createPreviewIdentity(ws.fs, HOME);
+      } finally {
+        await claim.release(performance.now() + 1_000).catch(() => {});
+      }
+    }, { write: true });
   }
 
   private safeMode(): ReturnType<typeof getVfsDescriptor>["mode"] | "invalid" {
@@ -1186,7 +1219,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private setServerState(state: NonNullable<ServerState["state"]>, text: string, url?: string): void {
     this.serverState = { state, text, url };
-    if (url) this.previewLink = url;
+    if (url) this.previewLink = this.previews.linkFor(url);
     this.changed();
   }
 
@@ -1913,6 +1946,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       PORT: String(PORT),
       BUN_WASM_STARTUP: "1",
       CI: "true",
+      ...previewHostEnv(this.previewOrigins),
     };
   }
 
@@ -2104,9 +2138,9 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         "ok",
       );
     };
-    const retryTransientPreview = (document: Document) => {
+    const retryTransientPreview = (document: Document | null) => {
       if (errorRetries < 4) {
-        previous = document;
+        previous = document ?? previous;
         const delay = 250 * ++errorRetries;
         clearTimeout(retryTimer);
         retryTimer = setTimeout(() => {
@@ -2154,8 +2188,40 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       }
       markReady(document, final.href);
     };
+    this.stopFrameReports?.();
+    this.stopFrameReports = undefined;
+    if (crossOrigin && this.previews instanceof RootPreviews) {
+      this.stopFrameReports = this.watchPreviewOrigin(navigation, target, markReady, retryTransientPreview);
+      frame.src = requestedHref;
+      return;
+    }
     frame.addEventListener("load", loaded);
     frame.src = requestedHref;
+  }
+
+  /**
+   * A cross-origin frame's `load` event fires for error pages too and shows nothing of the
+   * document, so a preview origin's document reports for itself (preview-origin/page-shim.ts).
+   */
+  private watchPreviewOrigin(
+    navigation: PreviewNavigation,
+    target: Server,
+    markReady: (document: Document | null, url: string) => void,
+    retry: (document: Document | null) => void,
+  ): () => void {
+    if (!(this.previews instanceof RootPreviews)) return () => {};
+    const stop = this.previews.observeFrame(navigation.frame, (message) => {
+      if (this.preview !== navigation || this.server !== target || this.frame !== navigation.frame || this.workspace?.fs.ownershipLost) {
+        stop();
+        return;
+      }
+      if (message.event === "commit") return;
+      if (message.event === "error" && message.transient) { retry(null); return; }
+      if (message.event === "error") { this.setStatus("preview failed to load · press Restart", "error"); return; }
+      if (navigation.loaded) navigation.loaded = { document: null, url: message.href };
+      else markReady(null, message.href);
+    });
+    return stop;
   }
 
   private async save(
@@ -2217,6 +2283,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     }
     this.disposePreviewRecovery?.();
     this.disposePreviewRecovery = undefined;
+    this.stopFrameReports?.();
+    this.stopFrameReports = undefined;
     this.coordinator?.abortAllAsyncActivities();
     for (const phase of this.localStartupPhases) phase.controller.abort();
     this.watch?.stop();
