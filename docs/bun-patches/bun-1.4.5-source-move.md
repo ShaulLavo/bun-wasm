@@ -34,7 +34,7 @@ Each owning record has the detail.
 | `crates/bunwasm-runtime/data/tls-roots.der` ([record](guest-tls-roots.md)) | Three roots were removed. | Re-imported: 118 roots. |
 | `scripts/check-encoded-slice.ts`, `tests/encoded-slice/probe.rs` ([record](0019-wasm32-string-flags.md)) | The "global" string flag and `String::borrow_utf16` are gone. | The probe covers the two remaining flags. |
 | `crates/bunwasm-runtime/src/natives.rs`, `bun_string_round_trip` | `String::borrow_utf16` is gone. | The test helper wraps each encoding in a `StringView`. |
-| `crates/bunwasm-lint-native/build.rs` ([record](lint-and-format-commands.md)) | A JSON lint rule normalizes keys through a new ICU binding. | An NFC and NFD version of that binding, which keeps 8.1 MB of ICU data out of the tools guest. |
+| `crates/bunwasm-lint-native/src/normalize.rs` ([record](lint-and-format-commands.md)) | A JSON lint rule normalizes keys through a new ICU binding. | The same function over ICU4X, which keeps 8.1 MB of ICU data out of the tools guest. |
 | `scripts/sync-bun.sh` | `rust-argon2` has a second patch. | The script applies every patch Bun lists for it. |
 
 ## What did not move

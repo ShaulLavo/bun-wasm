@@ -49,7 +49,6 @@ extern "C" void bunwasm_yarr_initialize() {{ WTF::initialize(); using namespace 
         .replace("#include \"root.h\"", "#include \"config.h\"")
         .replace("[[ZIG_EXPORT(nothrow)]] ", "");
     source.push_str(&conversions);
-    source.push_str(NORMALIZE);
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     fs::write(out.join("yarr.cpp"), source).unwrap();
 
@@ -118,25 +117,6 @@ extern "C" void bunwasm_yarr_initialize() {{ WTF::initialize(); using namespace 
     assert!(status.success());
     link(&out, &obj, &jsc, &sysroot);
 }
-
-// `Bun__normalizeUTF16` of Bun's `bun_icu_normalize.cpp`, for NFC and NFD only. ICU compiles
-// their data in. NFKC and NFKD load `nfkc.nrm`, and referencing it links all of ICU's data
-// (8 MB) into the tools guest, so those two forms report failure, which callers read as
-// "already normalized".
-const NORMALIZE: &str = r#"
-#include <unicode/unorm2.h>
-extern "C" int32_t Bun__normalizeUTF16(uint8_t form, const uint16_t* text, size_t length, uint16_t* out, size_t capacity)
-{
-    if (form > 1)
-        return -1;
-    UErrorCode status = U_ZERO_ERROR;
-    const UNormalizer2* normalizer = form ? unorm2_getNFDInstance(&status) : unorm2_getNFCInstance(&status);
-    if (U_FAILURE(status))
-        return -1;
-    int32_t written = unorm2_normalize(normalizer, reinterpret_cast<const UChar*>(text), static_cast<int32_t>(length), reinterpret_cast<UChar*>(out), static_cast<int32_t>(capacity), &status);
-    return U_SUCCESS(status) || status == U_BUFFER_OVERFLOW_ERROR ? written : -1;
-}
-"#;
 
 // Yarr's VM-free interpreter reads three options. Initialize the defaults from
 // the same WebKit checkout, without Options.cpp's VM/JIT initialization graph.

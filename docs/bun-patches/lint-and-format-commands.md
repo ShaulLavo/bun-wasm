@@ -11,12 +11,15 @@ The driver now also links Bun's JSON and Markdown rule crates
 canary builds only (`lint_command.rs::IS_ENABLED`); bun-wasm keeps the command.
 
 The JSON rule `no-unnormalized-keys` calls `Bun__normalizeUTF16`, which Bun
-implements in `src/jsc/bindings/bun_icu_normalize.cpp`. `crates/bunwasm-lint-native/build.rs`
-has an adapted copy of that function for NFC and NFD, the same ICU calls. It
-returns failure for NFKC and NFKD: those load `nfkc.nrm`, and referencing it
-links all of ICU's data, 8.1 MB, into `dist/bun-tools.wasm` (31.7 MB against
-23.6 MB, measured). With `form: "NFKC"` or `"NFKD"` the rule therefore reports
-nothing. NFC is its default.
+implements with ICU in `src/jsc/bindings/bun_icu_normalize.cpp`. ICU's NFKC and
+NFKD load `nfkc.nrm`, and referencing it links all of ICU's data, 8.1 MB, into
+`dist/bun-tools.wasm` (31.7 MB against 23.6 MB, measured). So
+`crates/bunwasm-lint-native/src/normalize.rs` is an original implementation of
+the same function over ICU4X's `icu_normalizer` 2.4.0 and its compiled tables,
+the version the SpiderMonkey engine already uses. It has the binding's contract:
+all four forms, the needed length when the buffer is too small, and unpaired
+surrogates kept as they are (ICU4X alone would replace them). No Bun or ICU
+source is copied.
 
 `crates/bunwasm-tools/src/lint_command.rs` calls `src/lint/driver` for both commands.
 Bun's native rule registry, parsers, semantic analysis, formatter, file discovery,
@@ -94,6 +97,6 @@ before compilation and publishes only verified bytes to its startup cache.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Lint and format command adapters](#lint-and-format-commands) | Port | Compile Bun's native linter, formatter, CLI parsers, and Yarr regex bindings for WASI. |
-| [`crates/bunwasm-lint-native/build.rs`, `Bun__normalizeUTF16`](#lint-and-format-commands) | Port | Adapted from `bun_icu_normalize.cpp`: NFC and NFD only, so the tools guest does not link ICU's data. |
+| [`crates/bunwasm-lint-native/src/normalize.rs`](#lint-and-format-commands) | Port | Original adapter: `Bun__normalizeUTF16` over ICU4X, so the tools guest does not link ICU's data. |
 
 [Ledger scope and pinned revisions](scope.md).
