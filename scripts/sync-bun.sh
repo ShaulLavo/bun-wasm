@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Recreate vendor/bun: oven-sh/bun at the pinned commit, its cargo path deps
 # (lol-html, rust-argon2), the configure-time codegen, and our patch series.
-# Safe to re-run: an existing checkout only gets missing pieces filled in.
+# Safe to re-run: an existing checkout moves to the pinned commit, and its dependencies and
+# generated files are refreshed only when what they were made from changed.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 source "$root/env.sh"
@@ -38,6 +39,15 @@ fi
 if [[ -n "$(git -C "$bun_dir" status --porcelain --untracked-files=normal)" ]]; then
   echo "error: $bun_dir has local changes; refusing to synchronize" >&2
   exit 1
+fi
+# An existing shallow checkout holds only the pin it was cloned at. The explicit check keeps
+# a partial clone from fetching the bare commit object on demand.
+if ! GIT_NO_LAZY_FETCH=1 git -C "$bun_dir" cat-file -e "$BUN_COMMIT^{commit}" 2>/dev/null; then
+  if [[ "$check_only" == 1 ]]; then
+    echo "error: vendor/bun does not have the pinned commit $BUN_COMMIT; run scripts/sync-bun.sh" >&2
+    exit 1
+  fi
+  git -C "$bun_dir" fetch --filter=blob:none --depth=1 --no-tags origin "$BUN_COMMIT"
 fi
 
 # Derive the desired tree from the checked-in patch bytes, not the name of a
@@ -100,28 +110,51 @@ if [[ "$source_only" == 1 ]]; then
   exit 0
 fi
 
-fetch() { # <dir> <repo> <commit>
-  [ -f "$bun_dir/vendor/$1/Cargo.toml" ] && return
-  mkdir -p "$bun_dir/vendor/$1"
-  curl -fsSL "https://github.com/$2/archive/$3.tar.gz" | tar xz --strip-components=1 -C "$bun_dir/vendor/$1"
+# A vendored dependency is unpacked again when Bun pins another commit for it or changes
+# its patches, so a checkout that moves to a new Bun pin does not keep the old dependency.
+fetch() { # <dir> <repo> <commit> [patch, relative to vendor/bun]...
+  local name=$1 repo=$2 commit=$3
+  shift 3
+  local dir=$bun_dir/vendor/$name stamp=$bun_dir/vendor/.bun-wasm-$name.source
+  local want file
+  want=$(
+    printf '%s\n' "$commit"
+    for file in "$@"; do
+      printf '%s %s\n' "$(sha256sum < "$bun_dir/$file" | cut -d' ' -f1)" "$file"
+    done
+  )
+  if [[ -f "$dir/Cargo.toml" && "$(cat "$stamp" 2>/dev/null)" == "$want" ]]; then
+    return
+  fi
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  curl -fsSL "https://github.com/$repo/archive/$commit.tar.gz" | tar xz --strip-components=1 -C "$dir"
+  for file in "$@"; do
+    patch -d "$dir" -p1 < "$bun_dir/$file"
+  done
+  printf '%s\n' "$want" > "$stamp"
 }
 lolhtml=$(grep -oP 'LOLHTML_COMMIT = "\K[0-9a-f]+' "$bun_dir/scripts/build/deps/lolhtml.ts")
 argon2=$(grep -oP 'RUST_ARGON2_COMMIT = "\K[0-9a-f]+' "$bun_dir/scripts/build/deps/rust-argon2.ts")
+# The patches Bun lists for the dependency, in its order.
+mapfile -t argon2_patches < <(grep -oP '"\Kpatches/rust-argon2/[^"]+\.patch' "$bun_dir/scripts/build/deps/rust-argon2.ts")
 fetch lolhtml oven-sh/lol-html "$lolhtml"
-if [ ! -f "$bun_dir/vendor/rust-argon2/Cargo.toml" ]; then
-  fetch rust-argon2 sru-systems/rust-argon2 "$argon2"
-  # The patches Bun lists for the dependency, in its order.
-  while IFS= read -r argon2_patch; do
-    patch -d "$bun_dir/vendor/rust-argon2" -p1 < "$bun_dir/$argon2_patch"
-  done < <(grep -oP '"\Kpatches/rust-argon2/[^"]+\.patch' "$bun_dir/scripts/build/deps/rust-argon2.ts")
-fi
+fetch rust-argon2 sru-systems/rust-argon2 "$argon2" "${argon2_patches[@]}"
 
 # Rust's build options and byte-class tables need only Bun's compiler-free codegen
 # configure, not the full native toolchain, SDK downloads, or host linker configuration.
-if [ ! -f "$bun_dir/build/debug/codegen/build_options.rs" ]; then
+# The output holds Bun's version and commit, so it is generated again for every new
+# vendor/bun commit. Bun pins the commit of a local debug build in git-revision at the
+# first configure; removing the pin lets it read the current one.
+codegen=$bun_dir/build/debug/codegen
+codegen_stamp=$bun_dir/build/debug/.bun-wasm-codegen
+head=$(git -C "$bun_dir" rev-parse HEAD)
+if [[ ! -f "$codegen/build_options.rs" || "$(cat "$codegen_stamp" 2>/dev/null)" != "$head" ]]; then
+  rm -f "$bun_dir/build/debug/git-revision"
   (cd "$bun_dir" && bun install --silent && BUN_DEBUG_QUIET_LOGS=1 bun scripts/build.ts --mode=codegen --profile=debug --buildDir=build/debug --configure-only)
   for generated in build_options.rs json_byte_class.rs xml_byte_class.rs; do
-    test -f "$bun_dir/build/debug/codegen/$generated"
+    test -f "$codegen/$generated"
   done
+  printf '%s\n' "$head" > "$codegen_stamp"
 fi
 echo "vendor/bun ready at $(git -C "$bun_dir" rev-parse --short HEAD)"

@@ -107,6 +107,11 @@ mod tests {
         assert_eq!(normalized(1, "caf\u{e9} \u{fb01}"), "cafe\u{301} \u{fb01}");
         assert_eq!(normalized(2, text), "caf\u{e9} fi");
         assert_eq!(normalized(3, "caf\u{e9} \u{fb01}"), "cafe\u{301} fi");
+        // Fullwidth "A" and the "ff" ligature only change under the two compatibility forms.
+        assert_eq!(normalized(0, "\u{ff21}\u{fb00}"), "\u{ff21}\u{fb00}");
+        assert_eq!(normalized(1, "\u{ff21}\u{fb00}"), "\u{ff21}\u{fb00}");
+        assert_eq!(normalized(2, "\u{ff21}\u{fb00}"), "Aff");
+        assert_eq!(normalized(3, "\u{ff21}\u{fb00}"), "Aff");
         // Hangul composes and decomposes by algorithm, and marks are reordered by class.
         assert_eq!(normalized(0, "\u{1112}\u{1161}\u{11ab}"), "\u{d55c}");
         assert_eq!(normalized(1, "\u{d55c}"), "\u{1112}\u{1161}\u{11ab}");

@@ -1,5 +1,5 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -150,5 +150,132 @@ test("cold source sync refuses a broken checked-in patch", () => {
     expect(sync().exitCode).not.toBe(0);
     expect(git(vendor, "rev-parse", "--is-shallow-repository")).toBe("true");
     expect(sync(["--check"]).exitCode).not.toBe(0);
+  });
+});
+
+// A full sync (source, vendored dependencies, codegen) against a tiny stand-in for Bun's
+// repository: two pins, each with its own dependency pins and our one patch on top.
+function upgradeFixture(run: (f: { vendor: string; oldTip: string; newTip: string; git: (cwd: string, ...args: string[]) => string; pin: (which: "old" | "new") => void; sync: (args?: string[]) => { exitCode: number; stderr: string } }) => void) {
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-source-upgrade-"));
+  try {
+    const repository = join(root, "upstream"), vendor = join(root, "vendor", "bun");
+    const git = (cwd: string, ...args: string[]) => {
+      const result = Bun.spawnSync(["git", "-C", cwd].concat(args));
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      return result.stdout.toString().trim();
+    };
+    const write = (path: string, text: string) => {
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, text);
+    };
+    // Dependency archives, as GitHub serves them: one top-level directory.
+    const archive = (repo: string, commit: string, lines: string) => {
+      const source = join(root, "unpacked", commit, "package");
+      write(join(source, "Cargo.toml"), `# ${commit}\n`);
+      write(join(source, "lib.txt"), lines);
+      mkdirSync(join(root, "archives", repo), { recursive: true });
+      expect(Bun.spawnSync(["tar", "czf", join(root, "archives", repo, `${commit}.tar.gz`), "-C", join(source, ".."), "package"]).exitCode).toBe(0);
+    };
+    const lolhtml = { old: "1".repeat(40), new: "2".repeat(40) }, argon2 = "3".repeat(40);
+    archive("oven-sh/lol-html", lolhtml.old, "old html\n");
+    archive("oven-sh/lol-html", lolhtml.new, "new html\n");
+    archive("sru-systems/rust-argon2", argon2, "one\ntwo\nthree\n");
+    const upstream = (version: string, html: string, patches: string[]) => {
+      write(join(repository, "package.json"), `${JSON.stringify({ name: "upstream", version })}\n`);
+      write(join(repository, "scripts/build/deps/lolhtml.ts"), `const LOLHTML_COMMIT = "${html}";\n`);
+      write(join(repository, "scripts/build/deps/rust-argon2.ts"), `const RUST_ARGON2_COMMIT = "${argon2}";\nexport const patches = ${JSON.stringify(patches)};\n`);
+      git(repository, "add", "-A");
+      git(repository, "commit", "-m", `upstream ${version}`);
+      return git(repository, "rev-parse", "HEAD");
+    };
+    // Our port: one commit on top of a pin, exported the way scripts/export-patches.sh does.
+    const port = (base: string, name: string) => {
+      git(repository, "checkout", "-q", "-b", `port-${name}`, base);
+      writeFileSync(join(repository, "source.txt"), "ported\n");
+      git(repository, "commit", "-am", "port to wasm");
+      git(repository, "format-patch", "--no-signature", "-o", join(root, "series", name), `${base}..HEAD`);
+      const tip = git(repository, "rev-parse", "HEAD^{tree}");
+      git(repository, "checkout", "-q", "main");
+      return tip;
+    };
+    mkdirSync(repository);
+    git(repository, "init", "-b", "main");
+    git(repository, "config", "user.name", "Source sync fixture");
+    git(repository, "config", "user.email", "fixture@example.invalid");
+    git(repository, "config", "uploadpack.allowFilter", "true");
+    git(repository, "config", "uploadpack.allowAnySHA1InWant", "true");
+    write(join(repository, ".gitignore"), "/build\n/vendor\nnode_modules\nbun.lock\n");
+    write(join(repository, "source.txt"), "native\n");
+    // Stands in for Bun's configure: like Bun, it pins the commit of a local build at first use.
+    write(join(repository, "scripts/build.ts"), `import { execSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+const pinned = "build/debug/git-revision";
+const sha = existsSync(pinned) ? readFileSync(pinned, "utf8").trim() : execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+mkdirSync("build/debug/codegen", { recursive: true });
+writeFileSync(pinned, sha + "\\n");
+const { version } = JSON.parse(readFileSync("package.json", "utf8"));
+writeFileSync("build/debug/codegen/build_options.rs", \`pub const SHA: &str = "\${sha}";\\npub const VERSION: &str = "\${version}";\\n\`);
+for (const name of ["json_byte_class.rs", "xml_byte_class.rs"]) writeFileSync("build/debug/codegen/" + name, "");
+`);
+    write(join(repository, "patches/rust-argon2/first.patch"), "--- a/lib.txt\n+++ b/lib.txt\n@@ -1,3 +1,3 @@\n-one\n+one patched\n two\n three\n");
+    const pins = { old: upstream("1.0.0", lolhtml.old, ["patches/rust-argon2/first.patch"]), new: "" };
+    write(join(repository, "patches/rust-argon2/second.patch"), "--- a/lib.txt\n+++ b/lib.txt\n@@ -1,3 +1,3 @@\n one patched\n-two\n+two patched\n three\n");
+    pins.new = upstream("1.0.1", lolhtml.new, ["patches/rust-argon2/first.patch", "patches/rust-argon2/second.patch"]);
+    const oldTip = port(pins.old, "old"), newTip = port(pins.new, "new");
+    mkdirSync(join(root, "scripts"));
+    mkdirSync(join(root, "vendor"));
+    writeFileSync(join(root, "env.sh"), 'export TMPDIR="$BUN_WASM_TEST_TMP"\n');
+    const pin = (which: "old" | "new") => {
+      rmSync(join(root, "patches", "bun"), { recursive: true, force: true });
+      mkdirSync(join(root, "patches", "bun"), { recursive: true });
+      for (const name of readdirSync(join(root, "series", which))) copyFileSync(join(root, "series", which, name), join(root, "patches", "bun", name));
+      const script = readFileSync(new URL("./sync-bun.sh", import.meta.url), "utf8")
+        .replace(/^BUN_COMMIT=.*$/m, `BUN_COMMIT=${pins[which]}`)
+        .replace("https://github.com/oven-sh/bun.git", `file://${repository}`)
+        .replace("https://github.com/$repo/archive/", `file://${root}/archives/$repo/`);
+      writeFileSync(join(root, "scripts", "sync-bun.sh"), script);
+    };
+    const sync = (args: string[] = []) => {
+      const result = Bun.spawnSync(["bash", join(root, "scripts", "sync-bun.sh")].concat(args), { env: { ...process.env, BUN_WASM_TEST_TMP: root }, stdout: "pipe", stderr: "pipe" });
+      return { exitCode: result.exitCode, stderr: result.stderr.toString() };
+    };
+    run({ vendor, oldTip, newTip, git, pin, sync });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("a checkout at the old pin syncs to a new pin with fresh codegen and dependency patches", () => {
+  upgradeFixture(({ vendor, oldTip, newTip, git, pin, sync }) => {
+    const read = (path: string) => readFileSync(join(vendor, path), "utf8");
+    pin("old");
+    const first = sync();
+    expect(first.exitCode, first.stderr).toBe(0);
+    expect(git(vendor, "rev-parse", "HEAD^{tree}")).toBe(oldTip);
+    expect(read("build/debug/codegen/build_options.rs")).toBe(`pub const SHA: &str = "${git(vendor, "rev-parse", "HEAD")}";\npub const VERSION: &str = "1.0.0";\n`);
+    expect(read("vendor/lolhtml/lib.txt")).toBe("old html\n");
+    expect(read("vendor/rust-argon2/lib.txt")).toBe("one patched\ntwo\nthree\n");
+
+    pin("new");
+    const stale = sync(["--check"]);
+    expect(stale.exitCode).toBe(1);
+    expect(stale.stderr).toContain("does not have the pinned commit");
+    expect(git(vendor, "rev-parse", "HEAD^{tree}")).toBe(oldTip);
+
+    const upgraded = sync();
+    expect(upgraded.exitCode, upgraded.stderr).toBe(0);
+    expect(git(vendor, "rev-parse", "HEAD^{tree}")).toBe(newTip);
+    expect(read("source.txt")).toBe("ported\n");
+    expect(read("build/debug/codegen/build_options.rs")).toBe(`pub const SHA: &str = "${git(vendor, "rev-parse", "HEAD")}";\npub const VERSION: &str = "1.0.1";\n`);
+    expect(read("vendor/lolhtml/lib.txt")).toBe("new html\n");
+    expect(read("vendor/rust-argon2/lib.txt")).toBe("one patched\ntwo patched\nthree\n");
+    expect(sync(["--check"]).exitCode).toBe(0);
+
+    // Nothing changed, so a second sync leaves the dependencies and generated files alone.
+    writeFileSync(join(vendor, "vendor/lolhtml/kept"), "");
+    writeFileSync(join(vendor, "build/debug/codegen/kept"), "");
+    expect(sync().exitCode).toBe(0);
+    expect(read("vendor/lolhtml/kept")).toBe("");
+    expect(read("build/debug/codegen/kept")).toBe("");
   });
 });
