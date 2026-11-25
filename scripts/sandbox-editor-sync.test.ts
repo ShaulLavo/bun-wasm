@@ -142,3 +142,54 @@ test("Sandbox Editor invalidates pending loads cleanly and falls back when activ
   await editor.syncFromFs();
   expect(editor.path).toBe("");
 });
+
+test("Sandbox Editor flushAll exits cleanly when autosave pauses mid-save and navigation lock blocks edits", async () => {
+  const fixture = filesystemFixture();
+  const page = await models(fixture);
+  cleanups.push(page.cleanup);
+
+  const files = new Map<string, string>([["src/App.tsx", "export default 'v1';"]]);
+  const saveGate = deferred<void>();
+  let saveCalls = 0;
+
+  const editor = new page.SandboxEditor({
+    app: "/home/user/app",
+    async readFile(path: string) {
+      return { text: files.get(path) ?? null, resetGeneration: 0 };
+    },
+    async save(path, text) {
+      saveCalls++;
+      if (saveCalls === 1) await saveGate.promise;
+      files.set(path, text);
+    },
+    async checkpoint() {},
+    currentResetGeneration: () => 0,
+    isResetting: () => false,
+    changed() {},
+  });
+
+  await editor.open("src/App.tsx");
+  editor.setText("export default 'first';");
+  const flushing = editor.flushAll();
+
+  // While the first save is in flight, a newer edit arrives AND a peer reset pauses autosave.
+  editor.setText("export default 'second';");
+  editor.suspendAutosaveForReset();
+  saveGate.resolve();
+
+  await flushing;
+  expect(saveCalls).toBe(1);
+  expect(editor.hasUnsavedChanges()).toBe(true);
+
+  // Navigation lock blocks edits via both setText and userEvent transactions until unlocked.
+  editor.setNavigationLock(true);
+  expect(editor.view.state.readOnly).toBe(true);
+  editor.setText("export default 'blocked';");
+  editor.view.dispatch({ changes: { from: 0, to: 1, insert: "X" }, userEvent: "input.type" });
+  expect(editor.view.state.doc.toString()).toBe("export default 'second';");
+
+  editor.setNavigationLock(false);
+  expect(editor.view.state.readOnly).toBe(false);
+  editor.setText("export default 'after-unlock';");
+  expect(editor.view.state.doc.toString()).toBe("export default 'after-unlock';");
+});

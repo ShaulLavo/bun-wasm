@@ -92,12 +92,26 @@ async function editSandboxFile(page: Page, marker: string): Promise<void> {
   await page.evaluate(async (text) => {
     const api = Reflect.get(globalThis, "sandbox");
     const current = api.editor.view.state.doc.toString();
-    const updated = current.includes("Vite")
-      ? current.replace("Vite", text)
-      : `${current}\n// ${text}\nconst el = document.querySelector("#app") ?? document.body; el.textContent = ${JSON.stringify(text)};\n`;
+    const updated = current.includes("Hello from vanilla TypeScript")
+      ? current.replace("Hello from vanilla TypeScript", text)
+      : current.replace(/<h1>[^<]*<\/h1>/, `<h1>${text}</h1>`);
     api.editor.setText(updated);
     await api.editor.flush(api.editor.path);
   }, marker);
+}
+
+async function clickPreviewCounter(page: Page, expectedAfter: string, timeout = 60_000): Promise<void> {
+  await page.waitForFunction(
+    () => Boolean(document.querySelector<HTMLIFrameElement>("#preview")?.contentDocument?.querySelector("button.counter")),
+    null,
+    { timeout },
+  );
+  await page.evaluate(() => {
+    const btn = document.querySelector<HTMLIFrameElement>("#preview")?.contentDocument?.querySelector<HTMLButtonElement>("button.counter");
+    if (!btn) throw new Error("Missing .counter button in preview frame");
+    btn.click();
+  });
+  await waitForPreviewText(page, expectedAfter, timeout);
 }
 
 async function playgroundTerminalText(page: Page): Promise<string> {
@@ -188,6 +202,12 @@ for (const browserName of browsers) {
       expect(await tab2.evaluate(() => Reflect.get(globalThis, "sandbox").fs.ownershipLost)).toBe(false);
       expect(await tab2.evaluate(() => Reflect.get(globalThis, "sandbox").role())).toBe("follower");
 
+      // Increment the vanilla HMR counter in BOTH frames BEFORE editing to prove true live HMR (not a full reload).
+      await Promise.all([
+        clickPreviewCounter(tab1, "count is 1"),
+        clickPreviewCounter(tab2, "count is 1"),
+      ]);
+
       // Edit in Tab 1 -> synced live to Tab 2's clean editor buffer AND BOTH live frames via HMR BEFORE takeover!
       const marker1 = `multitab-hmr-${browserName}-${Date.now()}`;
       await editSandboxFile(tab1, marker1);
@@ -197,21 +217,31 @@ for (const browserName of browsers) {
         { timeout: 30_000 },
       );
       await Promise.all([waitForPreviewText(tab1, marker1), waitForPreviewText(tab2, marker1)]);
+      // Counter state must be preserved by import.meta.hot.data in BOTH frames.
+      const [tab1Counter, tab2Counter] = await Promise.all([
+        tab1.evaluate(() => document.querySelector<HTMLIFrameElement>("#preview")?.contentDocument?.querySelector("button.counter")?.textContent ?? ""),
+        tab2.evaluate(() => document.querySelector<HTMLIFrameElement>("#preview")?.contentDocument?.querySelector("button.counter")?.textContent ?? ""),
+      ]);
+      expect(tab1Counter).toBe("count is 1");
+      expect(tab2Counter).toBe("count is 1");
 
-      // Reload Tab 1 (Owner reload failover): Tab 2 takes over cleanly, Tab 1 reattaches as follower without ownershipLost.
+      // Reload Tab 1 (Owner reload failover): Tab 2 must explicitly take ownership, Tab 1 reattaches cleanly without ownershipLost.
       await tab1.reload();
+      await tab2.waitForFunction(
+        () => Reflect.get(globalThis, "sandbox")?.role?.() === "owner" && document.querySelector("#server-dot")?.getAttribute("data-state") === "up",
+        null,
+        { timeout: 120_000 },
+      );
       await waitForSandboxReady(tab1);
-      await waitForSandboxReady(tab2);
+      expect(await tab2.evaluate(() => Reflect.get(globalThis, "sandbox").role())).toBe("owner");
+      expect(await tab1.evaluate(() => Reflect.get(globalThis, "sandbox").role())).toBe("follower");
       expect(await tab1.evaluate(() => Reflect.get(globalThis, "sandbox").fs.ownershipLost)).toBe(false);
       expect(await tab2.evaluate(() => Reflect.get(globalThis, "sandbox").fs.ownershipLost)).toBe(false);
       await Promise.all([waitForPreviewText(tab1, marker1), waitForPreviewText(tab2, marker1)]);
 
-      // Determine current owner and close it -> survivor must become owner and serve a fresh edit!
-      const tab1IsOwner = await tab1.evaluate(() => Reflect.get(globalThis, "sandbox").role() === "owner");
-      const currentOwner = tab1IsOwner ? tab1 : tab2;
-      const survivor = tab1IsOwner ? tab2 : tab1;
-      await currentOwner.close();
-      await survivor.waitForFunction(
+      // Close the current owner (Tab 2) -> surviving Tab 1 must become owner and serve a fresh edit!
+      await tab2.close();
+      await tab1.waitForFunction(
         () => {
           const api = Reflect.get(globalThis, "sandbox");
           return api?.role?.() === "owner" && document.querySelector("#server-dot")?.getAttribute("data-state") === "up";
@@ -219,10 +249,10 @@ for (const browserName of browsers) {
         null,
         { timeout: 120_000 },
       );
-      await waitForPreviewText(survivor, marker1);
+      await waitForPreviewText(tab1, marker1);
       const marker2 = `post-failover-${browserName}-${Date.now()}`;
-      await editSandboxFile(survivor, marker2);
-      await waitForPreviewText(survivor, marker2);
+      await editSandboxFile(tab1, marker2);
+      await waitForPreviewText(tab1, marker2);
 
       // Verify true response-body isolation: two mode=memory tabs on the same port 5173 serve distinct bodies!
       const mem1 = await context.newPage();
@@ -266,10 +296,10 @@ for (const browserName of browsers) {
       tab1.on("pageerror", (e) => errors.push(`pg1: ${e.message}`));
       tab2.on("pageerror", (e) => errors.push(`pg2: ${e.message}`));
 
-      // Concurrent startup of both persistent Playground tabs.
+      // Concurrent startup of both persistent Playground tabs (CI browser-guest site serves Playground at "/").
       await Promise.all([
-        navigateTestPage(tab1, `${origin}/playground/`),
-        navigateTestPage(tab2, `${origin}/playground/`),
+        navigateTestPage(tab1, `${origin}/`),
+        navigateTestPage(tab2, `${origin}/`),
       ]);
       await Promise.all([
         tab1.waitForFunction(() => (Reflect.get(globalThis, "playground") as any)?.editor?.path === "/home/user/index.ts", null, { timeout: 60_000 }),

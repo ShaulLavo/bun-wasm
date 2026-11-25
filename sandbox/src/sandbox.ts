@@ -106,7 +106,7 @@ export interface PreviewNavigation {
   server: Server;
   frame: HTMLIFrameElement;
   url: string;
-  loaded: { document: Document; url: string } | null;
+  loaded: { document: Document | null; url: string } | null;
 }
 
 function runCleanup(fn: () => Promise<unknown> | void): Promise<void> {
@@ -819,6 +819,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
           state: this.serverState.state,
           text: this.serverState.text,
           port: this.server?.port,
+          url: this.serverState.url,
         };
       },
       readResetState: () => this.storage ? this.storage.readResetState() : Promise.resolve({ resetGeneration: 0, resetInProgress: false }),
@@ -957,17 +958,23 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   /** Flushes debounced edits before leaving; a failed save keeps this page open. */
   async navigate(param: "engine" | "template", value: string): Promise<void> {
-    await this.editorInstance?.flushAll();
-    if (this.editorInstance?.hasUnsavedChanges()) {
-      throw new Error("Save or resolve unsaved editor changes before switching engine or template.");
+    this.editorInstance?.setNavigationLock(true);
+    try {
+      await this.editorInstance?.flushAll();
+      if (this.editorInstance?.hasUnsavedChanges()) {
+        throw new Error("Save or resolve unsaved editor changes before switching engine or template.");
+      }
+      await this.teardown();
+      const next = new URL(location.href);
+      const fallback = param === "engine" ? DEFAULT_ENGINE : defaultTemplate.id;
+      if (value === fallback) next.searchParams.delete(param);
+      else next.searchParams.set(param, value);
+      if (param === "engine") next.searchParams.delete("wasm");
+      location.assign(next);
+    } catch (error) {
+      this.editorInstance?.setNavigationLock(false);
+      throw error;
     }
-    await this.teardown();
-    const next = new URL(location.href);
-    const fallback = param === "engine" ? DEFAULT_ENGINE : defaultTemplate.id;
-    if (value === fallback) next.searchParams.delete(param);
-    else next.searchParams.set(param, value);
-    if (param === "engine") next.searchParams.delete("wasm");
-    location.assign(next);
   }
 
   restart(): void {
@@ -2000,7 +2007,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     if (!this.isLivePreviewTarget(target)) return;
     const url = this.previews.url(target.port, "/");
     this.setServerState("up", `localhost:${target.port}/`, url);
-    this.coordinator?.broadcastOwnerState("up", `localhost:${target.port}/`, target.port);
+    this.coordinator?.broadcastOwnerState("up", `localhost:${target.port}/`, target.port, url);
     this.navigatePreviewFrame(target, url, visibleStart, true);
   }
 
@@ -2022,12 +2029,25 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private handleObservedOwnerState(state: OwnerBroadcastState): void {
     if (this.disposed || this.coordinator?.role === "owner") return;
     if (state.state === "up" && state.port !== undefined) {
-      const tupleKey = `${state.ownerId}:${state.attemptId}:${state.generation}:${state.port}`;
+      const tupleKey = `${state.ownerId}:${state.attemptId}:${state.generation}:${state.port}:${state.url ?? ""}`;
       if (this.server?.remoteKey === tupleKey) return;
       const remoteServer: Server = { port: state.port, remoteKey: tupleKey };
       this.server = remoteServer;
-      const url = this.previews.url(state.port, "/");
+      let url = state.url;
+      if (!url) {
+        try {
+          url = this.previews.url(state.port, "/");
+        } catch {
+          this.setServerState("down", "preview URL unavailable from active tab");
+          return;
+        }
+      }
       this.setServerState("up", state.text, url);
+      const crossOrigin = new URL(url, location.href).origin !== location.origin;
+      if (crossOrigin) {
+        this.navigatePreviewFrame(remoteServer, url, 0, false);
+        return;
+      }
       void this.previews.ready.then((swState) => {
         if (this.disposed || this.server !== remoteServer) return;
         if (swState !== "ready") {
@@ -2048,9 +2068,12 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const previewStarted = performance.now();
     const { frame } = this;
     if (!frame) return;
-    let previous = frame.contentDocument;
-    const requested = new URL(url);
-    const navigation: PreviewNavigation = this.preview = { server: target, frame, url, loaded: null };
+    let previous: Document | null = null;
+    try { previous = frame.contentDocument; } catch { previous = null; }
+    const requested = new URL(url, location.href);
+    const requestedHref = requested.href;
+    const crossOrigin = requested.origin !== location.origin;
+    const navigation: PreviewNavigation = this.preview = { server: target, frame, url: requestedHref, loaded: null };
     let errorRetries = 0;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const isTransientPreviewError = (doc: Document): boolean => {
@@ -2060,15 +2083,32 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     };
     const isUnusablePreviewError = (doc: Document): boolean =>
       doc.contentType.startsWith("text/plain") && (doc.body?.textContent ?? "").startsWith("bun.wasm server sent an unusable response (");
+    const markReady = (document: Document | null, loadedUrl: string) => {
+      clearTimeout(retryTimer);
+      frame.removeEventListener("load", loaded);
+      navigation.loaded = { document, url: loadedUrl };
+      measureStartup("preview", previewStarted);
+      this.setStatus(
+        isOwner
+          ? `dev server ready in ${((performance.now() - visibleStart) / 1000).toFixed(1)} s · ${ENGINES[this.engine].name} · ${mb(this.wasm?.size ?? 0)}`
+          : `shared workspace live · preview served by active tab`,
+        "ok",
+      );
+    };
     const loaded = (event: Event) => {
       if (this.preview !== navigation || this.server !== target || this.frame !== frame || this.workspace?.fs.ownershipLost) {
         clearTimeout(retryTimer);
         frame.removeEventListener("load", loaded);
         return;
       }
+      if (!event.isTrusted || frame.src !== requestedHref) return;
       let document: Document | null;
       try { document = frame.contentDocument; } catch { document = null; }
-      if (!event.isTrusted || !document || document === previous || document.readyState !== "complete" || frame.src !== url) return;
+      if (crossOrigin && !document) {
+        markReady(null, requestedHref);
+        return;
+      }
+      if (!document || document === previous || document.readyState !== "complete") return;
       const final = new URL(document.URL);
       if (final.origin !== requested.origin || !final.pathname.startsWith(requested.pathname)) return;
       if (isUnusablePreviewError(document)) {
@@ -2084,7 +2124,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
           clearTimeout(retryTimer);
           retryTimer = setTimeout(() => {
             if (this.preview !== navigation || this.server !== target || this.frame !== frame || this.workspace?.fs.ownershipLost) return;
-            frame.src = url;
+            frame.src = requestedHref;
           }, delay);
           return;
         }
@@ -2093,19 +2133,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         this.setStatus("preview failed to load · press Restart", "error");
         return;
       }
-      clearTimeout(retryTimer);
-      frame.removeEventListener("load", loaded);
-      navigation.loaded = { document, url: final.href };
-      measureStartup("preview", previewStarted);
-      this.setStatus(
-        isOwner
-          ? `dev server ready in ${((performance.now() - visibleStart) / 1000).toFixed(1)} s · ${ENGINES[this.engine].name} · ${mb(this.wasm?.size ?? 0)}`
-          : `shared workspace live · preview served by active tab`,
-        "ok",
-      );
+      markReady(document, final.href);
     };
     frame.addEventListener("load", loaded);
-    frame.src = url;
+    frame.src = requestedHref;
   }
 
   private async save(

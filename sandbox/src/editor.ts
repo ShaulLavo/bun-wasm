@@ -1,8 +1,10 @@
 import { javascript } from "@codemirror/lang-javascript";
-import { EditorState, type Extension } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, type Extension } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
+
+const remoteSyncAnnotation = Annotation.define<boolean>();
 
 export type SaveState = { text: string; kind: "" | "ok" | "error" };
 
@@ -78,8 +80,19 @@ export class Editor {
   private discardGeneration = 0;
   private loadGeneration = 0;
   private autosavePaused = false;
+  private navigationLocked = false;
+  private readonly readOnlyCompartment = new Compartment();
 
   constructor(private readonly host: EditorHost) {}
+
+  private readOnlyExtensions(path: string): Extension {
+    const locked = path.startsWith("node_modules/") || this.navigationLocked;
+    return [
+      EditorState.readOnly.of(locked),
+      EditorView.editable.of(!locked),
+      EditorState.changeFilter.of((tr) => !locked || tr.annotation(remoteSyncAnnotation) === true),
+    ];
+  }
 
   private async extensions(path: string): Promise<Extension[]> {
     const readOnly = path.startsWith("node_modules/");
@@ -88,12 +101,31 @@ export class Editor {
       await language(path),
       oneDark,
       EditorView.lineWrapping,
-      EditorState.readOnly.of(readOnly),
-      keymap.of([{ key: "Mod-s", preventDefault: true, run: () => (this.flushInBackground(path, { resolveConflict: true }), true) }]),
+      this.readOnlyCompartment.of(this.readOnlyExtensions(path)),
+      keymap.of([{ key: "Mod-s", preventDefault: true, run: () => (this.navigationLocked ? true : (this.flushInBackground(path, { resolveConflict: true }), true)) }]),
       EditorView.updateListener.of((u) => {
-        if (u.docChanged && !readOnly) this.schedule(path);
+        if (u.docChanged && !readOnly && !this.navigationLocked) this.schedule(path);
       }),
     ];
+  }
+
+  setNavigationLock(locked: boolean): void {
+    if (this.navigationLocked === locked) return;
+    this.navigationLocked = locked;
+    if (this.path && this.states.has(this.path)) {
+      this.states.set(this.path, this.view.state);
+    }
+    for (const [p, state] of this.states) {
+      const next = state.update({
+        effects: this.readOnlyCompartment.reconfigure(this.readOnlyExtensions(p)),
+      }).state;
+      this.states.set(p, next);
+    }
+    if (this.path && this.states.has(this.path)) {
+      this.view.dispatch({
+        effects: this.readOnlyCompartment.reconfigure(this.readOnlyExtensions(this.path)),
+      });
+    }
   }
 
   private bumpPathRevision(path: string): number {
@@ -163,7 +195,10 @@ export class Editor {
         const already = this.states.get(path);
         if (already) return already;
         const docText = text ?? "";
-        const created = EditorState.create({ doc: docText, extensions: cachedExtensions });
+        const base = EditorState.create({ doc: docText, extensions: cachedExtensions });
+        const created = this.navigationLocked
+          ? base.update({ effects: this.readOnlyCompartment.reconfigure(this.readOnlyExtensions(path)) }).state
+          : base;
         this.states.set(path, created);
         this.saved.set(path, docText);
         this.bufferResetGen.set(path, resetGeneration);
@@ -275,12 +310,14 @@ export class Editor {
     }
     while (true) {
       signal?.throwIfAborted();
+      if (this.autosavePaused) break;
       const paths = Array.from(this.pending.keys()).filter((p) => !this.conflicted.has(p));
       if (paths.length === 0) break;
       await Promise.all(paths.map((p) => this.flush(p)));
     }
     signal?.throwIfAborted();
     await this.saves;
+    if (this.autosavePaused) return;
     signal?.throwIfAborted();
     await this.host.checkpoint(signal);
   }
@@ -396,7 +433,10 @@ export class Editor {
     const state = path === this.path ? this.view.state : this.states.get(path);
     if (!state) return;
     this.saved.set(path, text);
-    const next = state.update({ changes: { from: 0, to: state.doc.length, insert: text } }).state;
+    const next = state.update({
+      changes: { from: 0, to: state.doc.length, insert: text },
+      annotations: remoteSyncAnnotation.of(true),
+    }).state;
     this.states.set(path, next);
     if (path === this.path) this.view.setState(next);
     this.host.changed();
@@ -474,6 +514,7 @@ export class Editor {
 
   /** Replaces a file's text (tests use this to type like a person would). */
   setText(text: string): void {
+    if (this.navigationLocked || this.view.state.readOnly) return;
     this.view.dispatch({ changes: { from: 0, to: this.view.state.doc.length, insert: text } });
   }
 }

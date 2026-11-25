@@ -86,6 +86,7 @@ export interface OwnerBroadcastState {
   readonly state: "starting" | "up" | "down";
   readonly text: string;
   readonly port?: number;
+  readonly url?: string;
   readonly ownerId: string;
   readonly attemptId: string;
   readonly generation: number;
@@ -163,8 +164,8 @@ export interface CoordinatorHost {
 }
 
 type CoordinatorMessage =
-  | { type: "heartbeat"; ownerId: string; attemptId: string; generation: number; engine: string; server?: { state: "starting" | "up" | "down"; text: string; port?: number } }
-  | { type: "owner-state"; ownerId: string; attemptId: string; generation: number; engine: string; state: "starting" | "up" | "down"; text: string; port?: number }
+  | { type: "heartbeat"; ownerId: string; attemptId: string; generation: number; engine: string; server?: { state: "starting" | "up" | "down"; text: string; port?: number; url?: string } }
+  | { type: "owner-state"; ownerId: string; attemptId: string; generation: number; engine: string; state: "starting" | "up" | "down"; text: string; port?: number; url?: string }
   | { type: "owner-stopping"; ownerId: string; attemptId: string; reason: "reset" | "close" | "handover" }
   | { type: "ping"; from: string }
   | { type: "reset-begin"; resetId: string; from: string }
@@ -319,7 +320,7 @@ export class DevServerCoordinator {
     }
   }
 
-  broadcastOwnerState(state: "starting" | "up" | "down", text: string, port?: number): void {
+  broadcastOwnerState(state: "starting" | "up" | "down", text: string, port?: number, url?: string): void {
     if (this.role !== "owner" || !this.currentAttemptId || this.disposed) return;
     this.ownerGeneration++;
     this.broadcast({
@@ -331,6 +332,7 @@ export class DevServerCoordinator {
       state,
       text,
       port,
+      url,
     });
   }
 
@@ -446,7 +448,7 @@ export class DevServerCoordinator {
       this.armObservedAliveWatcher(msg.attemptId);
     }
     const server = msg.type === "owner-state"
-      ? { state: msg.state, text: msg.text, port: msg.port }
+      ? { state: msg.state, text: msg.text, port: msg.port, url: msg.url }
       : msg.server;
     if (server) {
       this.host.onObservedOwnerState({
@@ -457,6 +459,7 @@ export class DevServerCoordinator {
         state: server.state,
         text: server.text,
         port: server.port,
+        url: server.url,
       });
     }
   }

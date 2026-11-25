@@ -47,7 +47,7 @@ function installReadiness(): void {
     const navigation = api.preview();
     const server = api.server();
     const loaded = navigation?.loaded;
-    if (!navigation || !loaded || !server) return false;
+    if (!navigation || !loaded || !loaded.document || !server) return false;
     const preview = loaded.document;
     const current = () => {
       checkErrors();

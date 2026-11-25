@@ -236,3 +236,43 @@ test("workspace-watch abort settles a blocked watchOpen immediately via client.d
   expect(client.disposed).toBe(true);
   blocked.resolve();
 });
+
+test("workspace-watch rebind joins an in-flight openSession without opening or leaking a second client", async () => {
+  const blocked = Promise.withResolvers<void>();
+  const clients: MockClient[] = [];
+  const reconciles: ReconcileReason[] = [];
+
+  const handle = startWorkspaceWatch({
+    fs: { fork: () => ({}) as never },
+    targetPath: "/home/user/app",
+    createClient: () => {
+      const c = new MockClient();
+      if (clients.length === 0) c.blockWatchOpen = blocked.promise;
+      clients.push(c);
+      return c;
+    },
+    onPaths: () => {},
+    onReconcile: (reason) => { reconciles.push(reason); },
+  });
+
+  await flush();
+  expect(clients.length).toBe(1);
+  expect(clients[0]!.watchOpenPending).toBe(true);
+
+  const rebindPromise = handle.rebind({ reconcile: true });
+  await flush();
+  // Joining the in-flight open must not spawn a second client.
+  expect(clients.length).toBe(1);
+
+  blocked.resolve();
+  await Promise.all([handle.ready, rebindPromise]);
+  expect(clients.length).toBe(1);
+  expect(reconciles).toEqual(["rebound"]);
+
+  handle.stop();
+  await flush();
+  for (const c of clients) {
+    expect(c.disposed).toBe(true);
+    expect(c.retained.size).toBe(0);
+  }
+});

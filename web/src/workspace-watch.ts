@@ -124,6 +124,8 @@ export function startWorkspaceWatch(options: WorkspaceWatchOptions): WorkspaceWa
   let activeWatch: Pick<FilesystemWatch, "next" | "close"> | null = null;
   let watchedIno: string | null = null;
   let loopRunning = false;
+  let openEpoch = 0;
+  let inFlightOpen: Promise<void> | null = null;
 
   const pendingPaths = new Set<string>();
   let coalesceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -175,54 +177,64 @@ export function startWorkspaceWatch(options: WorkspaceWatchOptions): WorkspaceWa
   async function openSession(reopenSignal?: AbortSignal): Promise<void> {
     if (stopped) throw new DOMException("Watcher stopped", "AbortError");
     reopenSignal?.throwIfAborted();
+    const epoch = ++openEpoch;
     disposeSession();
 
-    const client = createClient(options.fs);
-    const onStop = () => { try { client.dispose(); } catch {} };
-    const onReopenAbort = () => { try { client.dispose(); } catch {} };
-    lifetime.signal.addEventListener("abort", onStop, { once: true });
-    reopenSignal?.addEventListener("abort", onReopenAbort, { once: true });
+    const task = (async () => {
+      const client = createClient(options.fs);
+      const onStop = () => { try { client.dispose(); } catch {} };
+      const onReopenAbort = () => { try { client.dispose(); } catch {} };
+      lifetime.signal.addEventListener("abort", onStop, { once: true });
+      reopenSignal?.addEventListener("abort", onReopenAbort, { once: true });
 
-    let retainedNode: number | null = null;
-    let openedWatch: Pick<FilesystemWatch, "next" | "close"> | null = null;
+      let retainedNode: number | null = null;
+      let openedWatch: Pick<FilesystemWatch, "next" | "close"> | null = null;
+      try {
+        if (stopped || epoch !== openEpoch) throw new DOMException("Watcher stopped", "AbortError");
+        reopenSignal?.throwIfAborted();
+        const rootHandle = await client.asyncCall("preopen", ["/"]);
+        if (stopped || epoch !== openEpoch) throw new DOMException("Watcher stopped", "AbortError");
+        reopenSignal?.throwIfAborted();
+        const rootRes = await client.asyncCall("resolve", [rootHandle, ".", true]);
+        if (stopped || epoch !== openEpoch) throw new DOMException("Watcher stopped", "AbortError");
+        reopenSignal?.throwIfAborted();
+
+        client.retain(rootRes.node);
+        retainedNode = rootRes.node;
+        openedWatch = await client.watch(rootRes.node, { recursive: true, signal: lifetime.signal });
+        if (stopped || epoch !== openEpoch || reopenSignal?.aborted) {
+          throw reopenSignal?.reason ?? new DOMException("Watcher aborted", "AbortError");
+        }
+        // Post-subscribe target inode resolution BEFORE resolving ready.
+        watchedIno = await resolveTargetIno(client, rootHandle, relTarget);
+        if (stopped || epoch !== openEpoch || reopenSignal?.aborted) {
+          throw reopenSignal?.reason ?? new DOMException("Watcher aborted", "AbortError");
+        }
+
+        activeClient = client;
+        activeRootHandle = rootHandle;
+        activeRootNode = retainedNode;
+        activeWatch = openedWatch;
+        retainedNode = null;
+        openedWatch = null;
+      } catch (error) {
+        if (openedWatch) void openedWatch.close().catch(() => {});
+        if (retainedNode !== null) {
+          try { client.release(retainedNode); } catch {}
+        }
+        try { client.dispose(); } catch {}
+        throw error;
+      } finally {
+        lifetime.signal.removeEventListener("abort", onStop);
+        reopenSignal?.removeEventListener("abort", onReopenAbort);
+      }
+    })();
+
+    inFlightOpen = task;
     try {
-      if (stopped) throw new DOMException("Watcher stopped", "AbortError");
-      reopenSignal?.throwIfAborted();
-      const rootHandle = await client.asyncCall("preopen", ["/"]);
-      if (stopped) throw new DOMException("Watcher stopped", "AbortError");
-      reopenSignal?.throwIfAborted();
-      const rootRes = await client.asyncCall("resolve", [rootHandle, ".", true]);
-      if (stopped) throw new DOMException("Watcher stopped", "AbortError");
-      reopenSignal?.throwIfAborted();
-
-      client.retain(rootRes.node);
-      retainedNode = rootRes.node;
-      openedWatch = await client.watch(rootRes.node, { recursive: true, signal: lifetime.signal });
-      if (stopped || reopenSignal?.aborted) {
-        throw reopenSignal?.reason ?? new DOMException("Watcher aborted", "AbortError");
-      }
-      // Post-subscribe target inode resolution BEFORE resolving ready.
-      watchedIno = await resolveTargetIno(client, rootHandle, relTarget);
-      if (stopped || reopenSignal?.aborted) {
-        throw reopenSignal?.reason ?? new DOMException("Watcher aborted", "AbortError");
-      }
-
-      activeClient = client;
-      activeRootHandle = rootHandle;
-      activeRootNode = retainedNode;
-      activeWatch = openedWatch;
-      retainedNode = null;
-      openedWatch = null;
-    } catch (error) {
-      if (openedWatch) void openedWatch.close().catch(() => {});
-      if (retainedNode !== null) {
-        try { client.release(retainedNode); } catch {}
-      }
-      try { client.dispose(); } catch {}
-      throw error;
+      await task;
     } finally {
-      lifetime.signal.removeEventListener("abort", onStop);
-      reopenSignal?.removeEventListener("abort", onReopenAbort);
+      if (inFlightOpen === task) inFlightOpen = null;
     }
   }
 
@@ -302,6 +314,16 @@ export function startWorkspaceWatch(options: WorkspaceWatchOptions): WorkspaceWa
     for (let attempt = 0; !stopped; attempt++) {
       const delay = backoffMs[Math.min(attempt, backoffMs.length - 1)] ?? 1000;
       if (attempt > 0 && !(await abortableSleep(delay, lifetime.signal))) return;
+      if (inFlightOpen) {
+        await inFlightOpen.catch(() => {});
+        if (stopped) return;
+      }
+      if (activeClient && activeWatch && activeRootHandle !== null) {
+        deliverChain = deliverChain.then(async () => {
+          if (!stopped) await options.onReconcile(isOverflow ? "fs-overflow" : "recovered");
+        }).catch(() => {});
+        return;
+      }
       try {
         await openSession();
         if (stopped) return;
@@ -319,10 +341,28 @@ export function startWorkspaceWatch(options: WorkspaceWatchOptions): WorkspaceWa
     if (!stopped) startPumpLoop();
   });
 
+  async function awaitWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) return promise;
+    signal.throwIfAborted();
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      signal.addEventListener("abort", onAbort, { once: true });
+      promise.then(
+        (val) => { signal.removeEventListener("abort", onAbort); resolve(val); },
+        (err) => { signal.removeEventListener("abort", onAbort); reject(err); },
+      );
+    });
+  }
+
   async function rebind(rebindOptions: { reconcile?: boolean; signal?: AbortSignal } = {}): Promise<void> {
     if (stopped) throw new DOMException("Watcher stopped", "AbortError");
     const sig = rebindOptions.signal;
     sig?.throwIfAborted();
+    while (inFlightOpen) {
+      await awaitWithSignal(inFlightOpen.catch(() => {}), sig);
+      if (stopped) throw new DOMException("Watcher stopped", "AbortError");
+      sig?.throwIfAborted();
+    }
     if (!activeClient || !activeWatch || activeRootHandle === null) {
       await openSession(sig);
       if (!stopped) startPumpLoop();
@@ -330,21 +370,11 @@ export function startWorkspaceWatch(options: WorkspaceWatchOptions): WorkspaceWa
       const client = activeClient;
       const rootHandle = activeRootHandle;
       // Honor signal during resolve by racing with abort; do not dispose healthy watcher on abort.
-      const resolvedIno = await new Promise<string | null>((resolve, reject) => {
-        if (sig?.aborted) {
-          reject(sig.reason ?? new DOMException("Aborted", "AbortError"));
-          return;
-        }
-        const onAbort = () => reject(sig?.reason ?? new DOMException("Aborted", "AbortError"));
-        sig?.addEventListener("abort", onAbort, { once: true });
-        resolveTargetIno(client, rootHandle, relTarget).then(
-          (val) => { sig?.removeEventListener("abort", onAbort); resolve(val); },
-          (err) => { sig?.removeEventListener("abort", onAbort); reject(err); },
-        );
-      });
+      const resolvedIno = await awaitWithSignal(resolveTargetIno(client, rootHandle, relTarget), sig);
       if (stopped) throw new DOMException("Watcher stopped", "AbortError");
       sig?.throwIfAborted();
       watchedIno = resolvedIno;
+      if (!stopped) startPumpLoop();
     }
     if (rebindOptions.reconcile !== false && !sig?.aborted && !stopped) {
       await options.onReconcile("rebound");
