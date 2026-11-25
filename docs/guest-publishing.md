@@ -82,17 +82,17 @@ bun scripts/guest-artifact.ts dist/bun-browser.wasm --output src/guest-asset.gen
 Publish the matching browser guest (for example after updating `vendor/bun`) and regenerate `src/guest-asset.generated.ts` in one command after building or staging all three matching engine builds in `dist/` (or pass `--dist /path/to/dist`):
 
 ```sh
+export CLOUDFLARE_ACCOUNT_ID="your-account-id"
 cf auth whoami >/dev/null && \
-CLOUDFLARE_ACCOUNT_ID=<account-id> \
 CLOUDFLARE_API_TOKEN="$(python3 -c "import json; print(json.load(open('$HOME/.config/cloudflare/config/default.json'))['oauth_token'])")" \
 bun scripts/publish-guest.ts dist/bun-browser.wasm --output src/guest-asset.generated.ts
 ```
 
-Publish a standalone single-module WASM artifact (such as `shell-engine.wasm` for `bash-web`) to `<sha256>/<name>.gz` with the same metadata, read-back, and CORS verification. Reserved Bun guest names and `--output` are rejected here so Bun guests always pass full-build acceptance:
+Publish a standalone single-module WASM artifact (such as `shell-engine.wasm` for `bash-web`) to `<sha256>/<name>.gz` with the same metadata, read-back, and CORS verification. Reserved Bun guest names, Bun guest/engine WASM signatures, and `--output` are rejected here so Bun guests always pass full-build acceptance:
 
 ```sh
+export CLOUDFLARE_ACCOUNT_ID="your-account-id"
 cf auth whoami >/dev/null && \
-CLOUDFLARE_ACCOUNT_ID=<account-id> \
 CLOUDFLARE_API_TOKEN="$(python3 -c "import json; print(json.load(open('$HOME/.config/cloudflare/config/default.json'))['oauth_token'])")" \
 bun scripts/publish-guest.ts /path/to/shell-engine.wasm --name shell-engine.wasm
 ```

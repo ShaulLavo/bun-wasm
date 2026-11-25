@@ -1,4 +1,4 @@
-import { mapProgramFiles, parseProgramFiles, programKind, programProfile, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
+import { mapProgramFiles, pairedEngineKinds, parseProgramFiles, programKind, programProfile, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
@@ -89,11 +89,31 @@ export function parseGuestDescriptor(value: unknown): GuestDescriptor {
   return parseProgramFiles(value, parseGuestFileDescriptor);
 }
 
+const BUN_GUEST_IMPORT_MODULES = new Set(["bun_package_scripts"]);
+const BUN_GUEST_EXPORTS = new Set(
+  ["bun_wasm_host_slots", "bun_core_bind_engine", "bunwasm_ready", "bunwasm_alloc", "bunwasm_call", "bunwasm_describe"]
+    .concat(pairedEngineKinds.flatMap(kind => {
+      const profile = programProfile(kind);
+      const names: string[] = [profile.run];
+      return names.concat(profile.initialize, profile.initializeMemory);
+    })),
+);
+
+export function assertStandaloneArtifactModule(module: WebAssembly.Module): void {
+  if (programKind(module) !== "single") {
+    throw new Error("Standalone artifact must be a single-module WASM file, not a Bun paired core");
+  }
+  if (WebAssembly.Module.imports(module).some(entry => BUN_GUEST_IMPORT_MODULES.has(entry.module))) {
+    throw new Error("Bun guest modules must use the default Bun guest publication path without --name");
+  }
+  if (WebAssembly.Module.exports(module).some(entry => BUN_GUEST_EXPORTS.has(entry.name))) {
+    throw new Error("Bun guest or engine modules must use the default Bun guest publication path without --name");
+  }
+}
+
 export async function readArtifactFile(path: string, origin = GUEST_ORIGIN, name = "bun.wasm"): Promise<GuestFile> {
   const bytes = decodeGuest(await readFile(path));
-  if (programKind(new WebAssembly.Module(Uint8Array.from(bytes))) !== "single") {
-    throw new Error("Standalone artifact must be a single-module WASM file");
-  }
+  assertStandaloneArtifactModule(new WebAssembly.Module(Uint8Array.from(bytes)));
   return prepareArtifact(bytes, origin, name);
 }
 

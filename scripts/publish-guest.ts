@@ -9,7 +9,8 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
   GUEST_BUCKET, GUEST_CACHE_CONTROL, GUEST_ORIGIN,
-  decodeGuest, parseGuestDescriptor, parseGuestFileDescriptor, readArtifactFile, readGuestArtifact, validateArtifactName, verifyGuest, writeGuestDescriptor,
+  assertStandaloneArtifactModule, decodeGuest, parseGuestDescriptor, parseGuestFileDescriptor,
+  readArtifactFile, readGuestArtifact, validateArtifactName, verifyGuest, writeGuestDescriptor,
 } from "./guest-artifact.ts";
 import type { GuestArtifact, GuestDescriptor, GuestFile, GuestFileDescriptor } from "./guest-artifact.ts";
 
@@ -73,6 +74,7 @@ export async function publishArtifact(file: GuestFile, name: string, publisher: 
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== `/${expectedKey}`) {
     throw new Error("Artifact URL must be a plain HTTPS URL matching its SHA-256 key");
   }
+  assertStandaloneArtifactModule(new WebAssembly.Module(Uint8Array.from(decodeGuest(snapshot.gzip))));
   await publishFile({ ...snapshot, descriptor }, validName, publisher);
   return descriptor;
 }

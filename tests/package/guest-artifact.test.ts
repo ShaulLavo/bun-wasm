@@ -306,21 +306,61 @@ test("standalone named artifacts validate names, hash decompressed bytes, and pu
   await expect(publishArtifact({ ...prepared, key: `latest/${name}.gz` }, name, store)).rejects.toThrow("key does not match");
 });
 
-test("readArtifactFile and publish-guest --name enforce single modules, name-free bytes, and reserved Bun names", async () => {
+function wasmExportingFunction(name: string): Uint8Array {
+  const encoded = Array.from(new TextEncoder().encode(name));
+  return Uint8Array.from(
+    [0, 97, 115, 109, 1, 0, 0, 0]
+      .concat([1, 4, 1, 0x60, 0, 0])
+      .concat([3, 2, 1, 0])
+      .concat([7, encoded.length + 4, 1, encoded.length], encoded, [0, 0])
+      .concat([10, 4, 1, 2, 0, 0x0b]),
+  );
+}
+
+function wasmImportingFunction(moduleName: string, fieldName: string): Uint8Array {
+  const mod = Array.from(new TextEncoder().encode(moduleName));
+  const field = Array.from(new TextEncoder().encode(fieldName));
+  return Uint8Array.from(
+    [0, 97, 115, 109, 1, 0, 0, 0]
+      .concat([1, 4, 1, 0x60, 0, 0])
+      .concat([2, mod.length + field.length + 5, 1, mod.length], mod, [field.length], field, [0, 0]),
+  );
+}
+
+test("readArtifactFile and publish-guest --name enforce single modules, name-free bytes, Bun guest signatures, and reserved Bun names", async () => {
   const scratch = await mkdtemp(join(scratchRoot, "bun-wasm-standalone-artifact-test-"));
   try {
     const singlePath = join(scratch, "shell.wasm");
     const namedPath = join(scratch, "shell-named.wasm");
     const pairedPath = join(scratch, "paired.wasm");
+    const sidePath = join(scratch, "side.wasm");
+    const bunExportPath = join(scratch, "bun-export.wasm");
+    const bunImportPath = join(scratch, "bun-import.wasm");
     const outputPath = join(scratch, "descriptor.ts");
+    const bunExportWasm = wasmExportingFunction("bunwasm_ready");
+    const bunImportWasm = wasmImportingFunction("bun_package_scripts", "handoff");
+    expect(WebAssembly.validate(bunExportWasm)).toBe(true);
+    expect(WebAssembly.validate(bunImportWasm)).toBe(true);
     await writeFile(singlePath, wasm);
     await writeFile(namedPath, appendCustomSection(wasm, "name", new Uint8Array([1, 0])));
     await writeFile(pairedPath, quickjsPair().core);
+    await writeFile(sidePath, quickjsPair().side);
+    await writeFile(bunExportPath, bunExportWasm);
+    await writeFile(bunImportPath, bunImportWasm);
     await writeFile(outputPath, "untouched\n");
 
     const loaded = await readArtifactFile(singlePath, GUEST_ORIGIN, "shell-engine.wasm");
     expect(loaded.key).toBe(`${createHash("sha256").update(wasm).digest("hex")}/shell-engine.wasm.gz`);
     await expect(readArtifactFile(pairedPath, GUEST_ORIGIN, "shell-engine.wasm")).rejects.toThrow("single-module WASM");
+    await expect(readArtifactFile(sidePath, GUEST_ORIGIN, "review-alias.wasm")).rejects.toThrow("default Bun guest publication path");
+    await expect(readArtifactFile(bunExportPath, GUEST_ORIGIN, "review-alias.wasm")).rejects.toThrow("default Bun guest publication path");
+    await expect(readArtifactFile(bunImportPath, GUEST_ORIGIN, "review-alias.wasm")).rejects.toThrow("default Bun guest publication path");
+
+    const bunArtifact = prepareArtifact(bunExportWasm, GUEST_ORIGIN, "review-alias.wasm");
+    const { store, calls, uploads } = publisher(null);
+    await expect(publishArtifact(bunArtifact, "review-alias.wasm", store)).rejects.toThrow("default Bun guest publication path");
+    expect(calls).toHaveLength(0);
+    expect(uploads).toHaveLength(0);
 
     const env = { ...process.env, CLOUDFLARE_API_TOKEN: "test-invalid-not-a-credential" };
     const runCli = (args: string[]) => Bun.spawnSync([process.execPath, "scripts/publish-guest.ts"].concat(args), { cwd: process.cwd(), env });
@@ -329,6 +369,12 @@ test("readArtifactFile and publish-guest --name enforce single modules, name-fre
       const blocked = runCli([singlePath, "--name", reserved, "--account-id", "a".repeat(32)]);
       expect(blocked.exitCode).not.toBe(0);
       expect(blocked.stderr.toString()).toContain("default Bun guest path");
+    }
+
+    for (const bunShapedPath of [bunExportPath, bunImportPath, sidePath]) {
+      const blocked = runCli([bunShapedPath, "--name", "review-alias.wasm", "--account-id", "a".repeat(32)]);
+      expect(blocked.exitCode).not.toBe(0);
+      expect(blocked.stderr.toString()).toContain("default Bun guest publication path");
     }
 
     const withOutput = runCli([singlePath, "--name", "shell-engine.wasm", "--output", outputPath, "--account-id", "a".repeat(32)]);
