@@ -155,8 +155,26 @@ test("a socket opens with the preview origin as its Origin, the jar's cookies, a
   socket.port1.close();
 });
 
+test("a session closed before the service worker confirmed its port lets go of it only on confirmation", async () => {
+  // WebKit terminates the page's process when a port is closed while its other end is in transit.
+  const f = setup();
+  f.remote.postMessage(open(1, "/early"));
+  await f.settle();
+  f.session.close();
+  f.remote.postMessage(open(2, "/after-close"));
+  await f.settle();
+  expect(f.replies).toEqual([]);
+  expect(f.dispatched.length).toBe(1);
+  f.remote.postMessage({ t: "attached" });
+  await f.until(() => f.replies.length === 1);
+  expect(f.replies).toEqual([{ t: "detach" }]);
+  expect(f.counts().attached).toBe(0);
+  f.remote.close();
+});
+
 test("closing the session ends what is in flight and tells the service worker", async () => {
   const f = setup();
+  f.remote.postMessage({ t: "attached" });
   f.remote.postMessage(open(1, "/stream"));
   await f.settle();
   const inputs: string[] = [];
@@ -167,6 +185,6 @@ test("closing the session ends what is in flight and tells the service worker", 
   f.session.close();
   await f.until(() => f.replies.some(reply => reply.t === "detach"));
   expect(inputs).toEqual(["pull", "end"]);
-  expect(f.replies).toEqual([{ t: "pong", n: 4 }, { t: "detach" }]);
+  expect(f.replies).toEqual([{ t: "cookies", cookies: [] }, { t: "pong", n: 4 }, { t: "detach" }]);
   f.remote.close();
 });

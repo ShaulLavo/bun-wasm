@@ -48,6 +48,7 @@ class Connection {
   private timer: ReturnType<typeof setTimeout>;
   private acceptInput: string | null = null;
   private upgrading = true;
+  private answered = false;
 
   constructor(handle: number) {
     const stream = streams.get(handle);
@@ -63,6 +64,8 @@ class Connection {
 
   private receive(message: unknown): void {
     if (!message || typeof message !== "object" || !("type" in message)) return;
+    this.answered = true;
+    if (this.closed) { this.port.close(); return; }
     if (message.type === "accepted") { clearTimeout(this.timer); return; }
     if (message.type === "data" && "chunk" in message && message.chunk instanceof Uint8Array) { this.onData?.(message.chunk); return; }
     if (message.type === "end") { this.onEnd?.(); this.destroy(); return; }
@@ -115,7 +118,9 @@ class Connection {
     clearTimeout(this.timer);
     this.queue.length = 0;
     this.port.postMessage({ type: "end" });
-    this.port.close();
+    // On a preview origin the other end travels page, service worker, IDE page. WebKit terminates the
+    // process of a page that closes a port whose other end is still in transit, so wait for an answer.
+    if (!rootOrigin || this.answered) this.port.close();
     this.onClose?.();
   }
 }

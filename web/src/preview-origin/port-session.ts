@@ -55,6 +55,8 @@ class SocketChannel {
     const request = socketRequest(data);
     if (!request || this.closed) return;
     if (request.type === "open") { this.open(request); return; }
+    // The page gave up before it opened anything: answer, so it may close its end, and let go.
+    if (request.type === "end" && !this.exchange) { this.send({ type: "end" }); this.close(); return; }
     this.exchange?.onmessage?.(request);
   }
 
@@ -125,6 +127,8 @@ export class PortSession {
   private readonly sockets = new Set<SocketChannel>();
   private sentCookies = -1;
   private closed = false;
+  /** The service worker holds the other end. Until then it is still travelling there. */
+  private confirmed = false;
 
   constructor(private readonly port: MessagePort, private readonly binding: SessionBinding) {
     port.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data, event.ports);
@@ -137,9 +141,15 @@ export class PortSession {
       try { exchange.onmessage?.({ type: "end" }); } catch {}
     }
     for (const socket of Array.from(this.sockets)) socket.close();
-    this.send({ t: "detach" });
     this.closed = true;
     this.exchanges.clear();
+    // WebKit terminates the page's process when a port is closed while its other end is still in
+    // transit (page, relay frame, service worker). An unconfirmed port is released on confirmation.
+    if (this.confirmed) this.release();
+  }
+
+  private release(): void {
+    try { this.port.postMessage({ t: "detach" } satisfies SessionReply); } catch {}
     this.port.onmessage = null;
     this.port.close();
   }
@@ -156,6 +166,8 @@ export class PortSession {
 
   private receive(data: unknown, ports: readonly MessagePort[]): void {
     const request = sessionRequest(data);
+    if (request?.t === "attached") this.confirmed = true;
+    if (request && this.closed && this.confirmed) { this.release(); return; }
     if (!request || this.closed) return;
     switch (request.t) {
       case "attached":
