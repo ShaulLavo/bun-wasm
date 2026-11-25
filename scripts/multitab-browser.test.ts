@@ -24,7 +24,7 @@ afterEach(async () => {
 
 function collectPageErrors(page: Page, label: string, errors: string[]): void {
   page.on("pageerror", (error) => {
-    if (isCancelledLoadingStatusPoll(error.message)) return;
+    if (isCancelledLoadingStatusPoll(error)) return;
     errors.push(`${label}: ${error.message}`);
   });
 }

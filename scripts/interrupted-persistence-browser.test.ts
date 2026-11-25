@@ -203,7 +203,7 @@ function startLocalRegistry(packageCount = 16): LocalRegistry {
 function attachCorruptionGuard(page: Page, errors: string[], isInterrupting?: () => boolean): void {
   page.on("pageerror", error => {
     const message = error.message;
-    if (isCancelledLoadingStatusPoll(message)) return;
+    if (isCancelledLoadingStatusPoll(error)) return;
     // WebKit surfaces aborted cross-origin fetches during intentional reload/close as access-control pageerrors.
     if (isInterrupting?.() && /due to access control checks|cancelled|aborted|Load failed/i.test(message)) return;
     errors.push(`pageerror: ${message}`);
