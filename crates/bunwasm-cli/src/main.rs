@@ -789,6 +789,7 @@ fn parse_command_with_flags(
                     | "init"
                     | "lint"
                     | "fmt"
+                    | "check"
                     | "add"
                     | "a"
                     | "ci"
@@ -876,7 +877,7 @@ fn parse_command_with_flags(
                     flags,
                 );
             }
-            "lint" | "fmt" => return Command::Lint,
+            "lint" | "fmt" | "check" => return Command::Lint,
             "test" => {
                 return run_command(
                     Entry::Test(rest.collect()),
@@ -915,8 +916,7 @@ fn parse_command_with_flags(
             }
             "upgrade" | "link" | "unlink" | "outdated" | "publish" | "patch" | "patch-commit"
             | "info" | "why" | "audit" | "completions" | "getcompletes" | "discord" | "dedupe"
-            | "prune" | "check" | "deploy" | "cloud" | "config" | "use" | "auth" | "login"
-            | "logout" => {
+            | "prune" | "deploy" | "cloud" | "config" | "use" | "auth" | "login" | "logout" => {
                 eprintln!("error: bun {arg} is not supported in bun-wasm");
                 return Command::Exit(1);
             }
@@ -1116,7 +1116,9 @@ fn main() {
     let (entry, args, conditions, exec_argv, flags) = match command {
         Command::Exit(code) => std::process::exit(code),
         Command::Lint => {
-            eprintln!("error: bun lint/fmt requires a host that loads dist/bun-tools.wasm");
+            eprintln!(
+                "error: bun lint, fmt and check require a host that loads dist/bun-tools.wasm"
+            );
             std::process::exit(1);
         }
         Command::Build(args) => std::process::exit(build(args)),

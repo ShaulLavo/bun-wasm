@@ -77,6 +77,16 @@ async function checkTools(name: string, engine: string, url: string): Promise<vo
   assert.equal(await progress.step("verified-compilations", () => page.evaluate(() => Number(Reflect.get(globalThis, "__bunwasmCompileCount")))), 1, "verified tools compile once");
   assert.equal((await progress.step("fmt-reuse", () => run(page, "bun fmt --check tool-source.ts"))).code, 0);
   assert.equal(downloads.length, 2, "fmt reuses compiled tools");
+  assert.equal((await progress.step("check-mkdir", () => run(page, "mkdir -p check-app/src"))).code, 0);
+  await progress.step("check-source-write", () => writeFile(page, "/home/user/check-app/tsconfig.json", '{"compilerOptions":{"strict":true,"lib":["es2022"],"noEmit":true},"include":["src"]}'));
+  await progress.step("check-clean-write", () => writeFile(page, "/home/user/check-app/src/index.ts", "export const total: number = 1 + 2;\n"));
+  const clean = await progress.step("check-clean", () => run(page, "bun check --cwd check-app --no-pretty"));
+  assert.equal(clean.code, 0, clean.output);
+  await progress.step("check-error-write", () => writeFile(page, "/home/user/check-app/src/index.ts", 'export const total: number = "three";\n'));
+  const failed = await progress.step("check-error", () => run(page, "bun check --cwd check-app --no-pretty"));
+  assert.equal(failed.code, 1, failed.output);
+  assert.ok(failed.output.includes("src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'."), failed.output);
+  assert.equal(downloads.length, 2, "check reuses compiled tools");
   await progress.step("cache-persistence", () => page.waitForFunction(() => {
     const key = new URL("bun-tools.wasm", location.href).href;
     const build = Reflect.get(globalThis, "__bunwasmBuilds")["bun-tools.wasm"];

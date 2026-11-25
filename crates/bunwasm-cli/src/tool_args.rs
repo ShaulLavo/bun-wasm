@@ -10,7 +10,7 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         match arg.as_str() {
-            "lint" | "fmt" => {
+            "lint" | "fmt" | "check" => {
                 forwarded.extend_from_slice(&args[at + 1..]);
                 return Some((arg.clone(), forwarded, globals));
             }
@@ -45,6 +45,8 @@ mod tests {
             vec!["--cwd", "lint", "fmt"],
             vec!["--cwd=project", "lint"],
             vec!["--config=x.toml", "fmt"],
+            vec!["check"],
+            vec!["--cwd", "app", "check", "--project", "tsconfig.json"],
         ] {
             assert!(
                 before_command(&args.into_iter().map(String::from).collect::<Vec<_>>()).is_some()
@@ -56,6 +58,7 @@ mod tests {
             vec!["-e", "lint"],
             vec!["--cwd", "lint"],
             vec!["index.ts", "fmt"],
+            vec!["test", "check"],
         ] {
             assert!(
                 before_command(&args.into_iter().map(String::from).collect::<Vec<_>>()).is_none()

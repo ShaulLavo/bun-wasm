@@ -1,0 +1,6 @@
+clean project exits 0
+type errors print tsc diagnostics and exit 1
+--pretty shows the source line
+--project and --cwd select the project
+files without a tsconfig and command-line compiler options
+help and unknown flags
