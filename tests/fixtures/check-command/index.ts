@@ -71,6 +71,21 @@ for (const args of [["check", "-p=", "--no-pretty"], ["check", "--project=", "--
 }
 console.log("Bun's own flags before check, and an empty project");
 
+const projectBefore = bun(["--project=app", "check", "--no-pretty"]);
+assert.equal(projectBefore.stdout, fromAbove.stdout);
+const buildIsBun = bun(["-bpfresh", "check", "fresh", "--no-pretty"]);
+assert.equal(buildIsBun.code, 0, buildIsBun.stdout + buildIsBun.stderr);
+const helpBefore = bun(["--help", "check"]);
+assert.equal(helpBefore.code, 0);
+assert.ok(helpBefore.stdout.startsWith("Usage: bun check"), helpBefore.stdout);
+writeFileSync("fresh/app.rsp", "-p\n../app\n");
+assert.equal(check(["@app.rsp", "--no-pretty"], "fresh").code, 1);
+for (const args of [["@app.rsp", "--project=", "--no-pretty"], ["--project=", "@app.rsp", "--no-pretty"]]) {
+  const result = check(args, "fresh");
+  assert.equal(result.code, 0, `${args.join(" ")}: ${result.stdout}${result.stderr}`);
+}
+console.log("check's own options before it, and --project= over a response file");
+
 mkdirSync("loose", { recursive: true });
 writeFileSync("loose/implicit.ts", "export function twice(value) {\n  return value * 2;\n}\n");
 const strict = check(["--no-pretty", "implicit.ts"], "loose");
@@ -97,7 +112,10 @@ writeFileSync("--entry.ts", 'console.log("dash file ran", process.argv.slice(2).
 const dashed = bun(["--", "--entry.ts", "check"]);
 assert.equal(dashed.code, 0, dashed.stderr);
 assert.equal(dashed.stdout, "dash file ran check\n");
-console.log("a flag value, a file after --, or a node script named check is not the command");
+const piped = Bun.spawnSync([process.execPath, "-", "check"], { stdin: new TextEncoder().encode("console.log(process.argv[2]);\n"), stdout: "pipe", stderr: "pipe" });
+assert.equal(piped.exitCode, 0, piped.stderr.toString());
+assert.equal(piped.stdout.toString(), "check\n");
+console.log("a flag value, a file after -- or -, or a node script named check is not the command");
 
 const help = check(["--help"]);
 assert.equal(help.code, 0);

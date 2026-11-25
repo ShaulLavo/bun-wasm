@@ -43,6 +43,8 @@ export function isToolCommand(args: readonly string[], executable = "bun"): bool
     if (toolWords.has(arg)) return true;
     // What follows `--` is the command or the file to run, even if it looks like a flag.
     if (arg === "--") return toolWords.has(args[at + 1] ?? "");
+    // `bun -` runs standard input: `bun - check` passes it `check`.
+    if (arg === "-") return false;
     // `bun -ptsconfig.json check`: before `check`, `-p` is its `--project`, as upstream.
     if (args[at + 1] === "check" && shortValue(arg)?.letter === "p") continue;
     if (arg === "--cwd") { at++; continue; }

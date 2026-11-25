@@ -100,16 +100,16 @@ fn is_tool(word: &str) -> bool {
 }
 
 /// What `bun <args>` passes to the tool. `bun lint` and `bun fmt` get the flags before them that
-/// Bun doesn't know. `bun check` gets only its project from there (`-ptsconfig.json`,
-/// `--tsconfig-override`, as upstream parses those anywhere); Bun's other flags are Bun's.
+/// Bun doesn't know. `bun check` gets from there only the options that upstream's check command
+/// parses anywhere on the command line (`for_check`); Bun's other flags are Bun's.
 fn command(
     word: &str,
     after: &[String],
     unknown: Vec<String>,
-    project: Vec<String>,
+    for_check: Vec<String>,
     globals: ToolGlobals,
 ) -> (String, Vec<String>, ToolGlobals) {
-    let before = if word == "check" { project } else { unknown };
+    let before = if word == "check" { for_check } else { unknown };
     (
         word.to_owned(),
         before.into_iter().chain(after.iter().cloned()).collect(),
@@ -117,9 +117,31 @@ fn command(
     )
 }
 
+/// The options of upstream's `bun check` (`src/runtime/cli/check_command.rs`, `PARAMS`) that can
+/// stand before `check` as one argument. Their values can't be the next argument there, where it
+/// would be the command: `--project app check` runs `app`. `-b` and `--build` before `check` are
+/// `--bun`, as upstream.
+fn is_check_option(flag: &str) -> bool {
+    matches!(
+        flag,
+        "-h" | "--help" | "--no-pretty" | "--all" | "--timing" | "--no-script" | "--no-emit"
+    ) || flag.starts_with("--project=")
+        || flag.starts_with("--threads=")
+}
+
+/// `-bpapp` directly before `check`: Bun's `-b`, then the checker's `-p app`.
+fn check_project(chain: &str) -> String {
+    let value = chain.split_once('p').map_or("", |(_, value)| value);
+    match value.strip_prefix('=') {
+        Some(value) => format!("--project={value}"),
+        None if value.is_empty() => "-p".to_owned(),
+        None => format!("--project={value}"),
+    }
+}
+
 pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGlobals)> {
     let mut unknown = Vec::new();
-    let mut project = Vec::new();
+    let mut for_check = Vec::new();
     let mut globals = ToolGlobals::default();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
@@ -128,18 +150,20 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
         let is_of_check = next == Some("check") && matches!(short_with_value(arg), Some((b'p', _)));
         match arg.as_str() {
             word if is_tool(word) => {
-                return Some(command(word, &args[at + 1..], unknown, project, globals));
+                return Some(command(word, &args[at + 1..], unknown, for_check, globals));
             }
             // What follows `--` is the command or the file to run, even if it looks like a flag.
             "--" => {
                 let word = next.filter(|word| is_tool(word))?;
-                return Some(command(word, &args[at + 2..], unknown, project, globals));
+                return Some(command(word, &args[at + 2..], unknown, for_check, globals));
             }
+            // `bun -` runs standard input: `bun - check` passes it `check`.
+            "-" => return None,
             "--tsconfig-override" => {
-                project.extend(args.get(at..at + 2).unwrap_or_default().iter().cloned());
+                for_check.extend(args.get(at..at + 2).unwrap_or_default().iter().cloned());
                 at += 1;
             }
-            flag if flag.starts_with("--tsconfig-override=") => project.push(arg.clone()),
+            flag if flag.starts_with("--tsconfig-override=") => for_check.push(arg.clone()),
             "--cwd" => {
                 at += 1;
                 globals.cwd_before = Some(args.get(at)?.clone());
@@ -152,9 +176,13 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
             flag if flag.starts_with("--config=") || flag.starts_with("-c=") => {
                 globals.bunfig = Some(flag.split_once('=')?.1.to_owned());
             }
-            _ if is_of_check => project.push(arg.clone()),
+            _ if is_of_check => for_check.push(check_project(arg)),
             flag if evaluates(flag) => return None,
             flag if takes_next_argument(flag) => at += 1,
+            flag if is_check_option(flag) => {
+                for_check.push(arg.clone());
+                unknown.push(arg.clone());
+            }
             flag if flag.starts_with('-') => unknown.push(arg.clone()),
             _ => return None,
         }
@@ -219,11 +247,20 @@ mod tests {
     }
 
     #[test]
-    fn check_gets_only_its_project_from_before_it() {
+    fn check_gets_its_own_options_from_before_it() {
         for (args, expected) in [
             (
                 &["-papp", "check", "--no-pretty"][..],
-                &["-papp", "--no-pretty"][..],
+                &["--project=app", "--no-pretty"][..],
+            ),
+            (&["-bpapp", "check", "app"], &["--project=app", "app"]),
+            (&["-p=app", "check"], &["--project=app"]),
+            (&["--project=app", "check"], &["--project=app"]),
+            (&["--help", "check"], &["--help"]),
+            (&["-h", "check"], &["-h"]),
+            (
+                &["--no-pretty", "--timing", "check"],
+                &["--no-pretty", "--timing"],
             ),
             (
                 &["--tsconfig-override", "app/tsconfig.json", "check"],
@@ -243,6 +280,8 @@ mod tests {
         let (_, forwarded, _) =
             select(&["--no-warnings", "--tsconfig-override", "x", "lint"]).unwrap();
         assert_eq!(forwarded, ["--no-warnings"]);
+        assert!(select(&["-", "check"]).is_none());
+        assert!(select(&["--project", "app", "check"]).is_none());
     }
 }
 

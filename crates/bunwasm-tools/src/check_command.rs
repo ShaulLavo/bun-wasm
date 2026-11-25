@@ -120,9 +120,10 @@ fn long_or_short(
     Ok(at + 1)
 }
 
-/// An empty value, as in `--project=`, means the default project, as upstream.
+/// As upstream, a project given here, even an empty one (`--project=`, which the driver reads as
+/// the working directory), replaces one from a response file.
 fn set_project(flags: &mut Flags, value: &str) {
-    flags.project = Some(value.to_owned()).filter(|value| !value.is_empty());
+    flags.project = Some(value.to_owned());
 }
 
 fn take_value(flags: &mut Flags, name: &str, value: &str) -> Result<(), String> {

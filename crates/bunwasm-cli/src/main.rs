@@ -753,7 +753,8 @@ fn parse_command_with_flags(
     let mut exec_argv = exec_argv;
     let mut flags = flags;
     while let Some(arg) = rest.next() {
-        if run_file && (arg == "-" || !arg.starts_with('-')) {
+        // `bun -` runs standard input, like `bun run -`; `bun - check` passes it `check`.
+        if arg == "-" || run_file && !arg.starts_with('-') {
             return run_command(
                 Entry::File(arg),
                 rest.collect(),
