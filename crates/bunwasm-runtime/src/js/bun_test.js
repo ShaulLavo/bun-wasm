@@ -2,15 +2,32 @@
 //
 // The factory returns `{ exports, run }`: `exports` is the module object that
 // test files import, `run(args)` is the CLI runner (discovery, execution and
-// the report). The report mirrors native Bun 1.4.2 with colors off: per-file
-// sections, failures and the summary go to stderr, the version header to
-// stdout. Bun's sources for the formats live in vendor/bun/src/runtime/
+// the report). The report mirrors native Bun: per-file sections, failures and
+// the summary go to stderr, the version header to stdout. When stderr gets
+// colours (a terminal, or FORCE_COLOR) it prints Bun's symbols and colours, from
+// the same `<tag>` templates as Bun's sources: vendor/bun/src/runtime/
 // cli/test_command.rs and test_runner/ (expect/*.rs, diff/printDiff.rs).
 (function (internal) {
   "use strict";
 
   const native = internal.native;
   const INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
+
+  let prettyOutput = null;
+  function output() {
+    prettyOutput ??= internal.require("pretty_output");
+    return prettyOutput;
+  }
+
+  /** Whether the report and matcher messages are coloured (Bun's enable_ansi_colors_stderr). */
+  function colorsOn() {
+    return output().stderr;
+  }
+
+  /** Bun's `<tag>` markup on a template's literal parts: escapes with colours, nothing without. */
+  function pf(strings, ...values) {
+    return output().markup(colorsOn())(strings, ...values);
+  }
 
   function inspectModule() {
     return internal.require("inspect");
@@ -1716,11 +1733,11 @@
 
   function snapshotSummary() {
     if (snapshots.added === 0 && snapshots.failed === 0) return ` ${snapshots.total} snapshots, ${summary.expectations} expect() calls\n`;
-    const counts = [];
-    if (snapshots.passed) counts.push(`${snapshots.passed} passed`);
-    if (snapshots.added) counts.push(`${counts.length ? "" : "+"}${snapshots.added} added`);
-    if (snapshots.failed) counts.push(`${snapshots.failed} failed`);
-    return `snapshots: ${counts.join(", ")}\n`;
+    let out = pf`<d>snapshots:<r> `;
+    if (snapshots.passed) out += pf`<d>${snapshots.passed} passed<r>`;
+    if (snapshots.added) out += snapshots.passed ? pf`<b>, ${snapshots.added} added<r>` : pf`<b>+${snapshots.added} added<r>`;
+    if (snapshots.failed) out += snapshots.passed || snapshots.added ? pf`, <red>${snapshots.failed} failed<r>` : pf`<red>${snapshots.failed} failed<r>`;
+    return out + "\n";
   }
 
   let snapshotCI;
@@ -2622,13 +2639,13 @@
       return { status: "fail", assertion: assertionCountMessage(assertions.exact, record.expectCount) };
     }
     if (assertions && assertions.atLeastOne && record.expectCount === 0) {
-      return { status: "fail", assertion: "received 0 assertions, but expected at least one assertion to be called" };
+      return { status: "fail", assertion: pf`received <red>0 assertions<r>, but expected <green>at least one assertion<r> to be called` };
     }
     return { status: "pass" };
   }
 
   function assertionCountMessage(expected, actual) {
-    return `expected ${expected} assertion${expected === 1 ? "" : "s"}, but test ended with ${actual} assertion${actual === 1 ? "" : "s"}`;
+    return pf`expected <green>${expected} assertion${expected === 1 ? "" : "s"}<r>, but test ended with <red>${actual} assertion${actual === 1 ? "" : "s"}<r>`;
   }
 
   function failureFromResult(result, test) {
@@ -2645,15 +2662,19 @@
   function formatErrorText(error) {
     let text;
     try {
-      text = inspectModule().formatError(error);
+      text = inspectModule().formatError(error, { colors: colorsOn() });
     } catch {
       text = `error: ${String(error && error.message !== undefined ? error.message : error)}\n`;
     }
     return text.endsWith("\n") ? text : text + "\n";
   }
 
+  // output.rs ElapsedFormatter: dim, the number bold from 10ms and yellow from 8s.
   function formatElapsed(ms) {
-    return `[${ms.toFixed(2)}ms]`;
+    const time = ms.toFixed(2);
+    if (ms <= 10) return pf`<r><d>[${time}ms<r><d>]<r>`;
+    if (ms >= 8000) return pf`<r><d>[<r><yellow>${time}ms<r><d>]<r>`;
+    return pf`<r><d>[<b>${time}ms<r><d>]<r>`;
   }
 
   // Native Bun shows a test's duration when it exceeds 10µs: thrown errors
@@ -2677,15 +2698,32 @@
 
   function printFailure(result) {
     if (result.error !== undefined) writeErr(formatErrorText(result.error));
-    if (result.assertion) writeErr(`AssertionError: ${result.assertion}\n`);
+    if (result.assertion) writeErr(pf`<red>AssertionError<r><d>:<r> ` + result.assertion + "\n");
+  }
+
+  // test_command.rs fmt_status_text_line: symbols with colours, words without.
+  const STATUS_SYMBOLS = { pass: "<r><green>✓<r>", fail: "<r><red>✗<r>", skip: "<r><yellow>»<d>", todo: "<r><magenta>✎<r>" };
+  const STATUS_WORDS = { pass: "<r><green>(pass)<r>", fail: "<r><red>(fail)<r>", skip: "<r><yellow>(skip)<d>", todo: "<r><magenta>(todo)<r>" };
+
+  // test_command.rs print_test_line: skipped and todo tests are dim, the others bold.
+  function testLine(test, result, label) {
+    const colors = colorsOn();
+    const status = output().prettyFmt((colors ? STATUS_SYMBOLS : STATUS_WORDS)[result.status], colors);
+    const names = displayNames(test);
+    if (!colors) return status + names.map((name) => ` ${name} >`).join("") + ` ${test.name}${label}`;
+    const dim = result.status === "skip" || (result.status === "todo" && !options.runTodo);
+    const scope = dim ? "\u001b[0m\u001b[2m" : "\u001b[0m";
+    const scopes = names.map((name) => ` ${scope}${name}\u001b[2m >`).join("");
+    const extra = /^ \((attempt|run) (\d+)\)$/.exec(label);
+    const shownLabel = extra ? pf` <d>(${extra[1]} ${extra[2]})<r>` : label;
+    return status + scopes + (dim ? "\u001b[0m\u001b[2m " : "\u001b[0m\u001b[1m ") + test.name + "\u001b[0m" + shownLabel;
   }
 
   function printResult(test, result, elapsed, label) {
     printFileHeaderIfNeeded();
     printFailure(result);
-    const names = displayNames(test).map((name) => ` ${name} >`).join("");
     const time = showsElapsed(result, elapsed) ? ` ${formatElapsed(elapsed)}` : "";
-    const line = `(${result.status})${names} ${test.name}${label}${time}\n${resultNote(result)}`;
+    const line = `${testLine(test, result, label)}${time}\n${resultNote(result)}`;
     writeErr(line);
     if (result.status in repeated) repeated[result.status] += line;
   }
@@ -2695,32 +2733,33 @@
 
   function printRepeatedLines() {
     if (summary.pass <= 20 || options.agent) return;
-    if (summary.skip > 0) writeErr(`\n${summary.skip} tests skipped:\n${repeated.skip}`);
-    if (summary.todo > 0) writeErr(`${summary.skip > 0 ? "\n" : ""}\n${summary.todo} tests todo:\n${repeated.todo}`);
+    if (summary.skip > 0) writeErr(pf`\n<r><d>${summary.skip} tests skipped:<r>\n` + repeated.skip);
+    if (summary.todo > 0) writeErr((summary.skip > 0 ? "\n" : "") + pf`\n<r><d>${summary.todo} tests todo:<r>\n` + repeated.todo);
     if (summary.fail > 0) {
-      writeErr(`${summary.skip > 0 || summary.todo > 0 ? "\n" : ""}\n${summary.fail} tests failed:\n${repeated.fail}`);
+      writeErr((summary.skip > 0 || summary.todo > 0 ? "\n" : "") + pf`\n<r><d>${summary.fail} tests failed:<r>\n` + repeated.fail);
     }
   }
 
   function resultNote(result) {
     if (result.timeout !== undefined && result.done) {
-      return `  ^ this test timed out after ${result.timeout}ms, before its done callback was called. If a done callback was not intended, remove the last parameter from the test callback function\n`;
+      return pf`  <d>^<r> <red>this test timed out after ${result.timeout}ms, before its done callback was called.<r> <d>If a done callback was not intended, remove the last parameter from the test callback function<r>\n`;
     }
-    if (result.timeout !== undefined) return `  ^ this test timed out after ${result.timeout}ms.\n`;
+    if (result.timeout !== undefined) return pf`  <d>^<r> <red>this test timed out after ${result.timeout}ms.<r>\n`;
     if (result.note === "failingPassed") {
-      return "  ^ this test is marked as failing but it passed. Remove `.failing` if tested behavior now works\n";
+      return pf`  <d>^<r> <red>this test is marked as failing but it passed.<r> <d>Remove \`.failing\` if tested behavior now works<r>\n`;
     }
     if (result.note === "todoPassed") {
-      return "  ^ this test is marked as todo but passes. Remove `.todo` if tested behavior now works\n";
+      return pf`  <d>^<r> <red>this test is marked as todo but passes.<r> <d>Remove \`.todo\` if tested behavior now works<r>\n`;
     }
     return "";
   }
 
-  // The current file's `\n<path>:` header. Agents only see it before output.
+  // The current file's `\n<path>:` header (jest.rs: `<r>\n` then `path:`). Agents only see
+  // it before output.
   let pendingHeader = null;
 
   function startFileHeader(relPath) {
-    pendingHeader = `\n${relPath}:\n`;
+    pendingHeader = pf`<r>\n` + `${relPath}:\n`;
     if (!options.agent) printFileHeaderIfNeeded();
   }
 
@@ -2734,9 +2773,9 @@
     summary.errors++;
     globalThis.process.exitCode = 1;
     printFileHeaderIfNeeded();
-    writeErr("\n# Unhandled error between tests\n-------------------------------\n");
+    writeErr(pf`<r>\n<b><d>#<r> <red><b>Unhandled error<r><d> between tests<r>\n<d>-------------------------------<r>\n`);
     writeErr(formatErrorText(error));
-    writeErr("-------------------------------\n\n");
+    writeErr(pf`<r><d>-------------------------------<r>\n\n`);
   }
 
   let startTime = 0;
@@ -2749,7 +2788,7 @@
 
   function bailOut() {
     writeErr(ranLine());
-    writeErr(`\nBailed out after ${options.bail} failure${options.bail === 1 ? "" : "s"}\n`);
+    writeErr(pf`\nBailed out after ${options.bail} failure${options.bail === 1 ? "" : "s"}<r>\n`);
     globalThis.process.exit(1);
   }
 
@@ -2761,17 +2800,17 @@
       const files = summary.files;
       const pattern = options.namePatternSource;
       writeErr(
-        `error: regex ${JSON.stringify(pattern)} matched 0 tests. Searched ${files} file${files === 1 ? "" : "s"} ` +
+        pf`<red>error<r><d>:<r> regex <b>${JSON.stringify(pattern)}<r> matched 0 tests. Searched ${files} file${files === 1 ? "" : "s"} ` +
           `(skipping ${summary.filtered} test${summary.filtered === 1 ? "" : "s"}) ${formatElapsed(now() - startTime)}\n`,
       );
       return true;
     }
-    let out = ` ${summary.pass} pass\n`;
-    if (summary.skip > 0) out += ` ${summary.skip} skip\n`;
-    else if (summary.filtered > 0) out += ` ${summary.filtered} filtered out\n`;
-    if (summary.todo > 0) out += ` ${summary.todo} todo\n`;
-    out += ` ${summary.fail} fail\n`;
-    if (summary.errors > 0) out += ` ${summary.errors} error${summary.errors > 1 ? "s" : ""}\n`;
+    let out = (summary.pass > 0 ? pf`<r><green>` : "") + pf` ${summary.pass} pass<r>\n`;
+    if (summary.skip > 0) out += pf` <r><yellow>${summary.skip} skip<r>\n`;
+    else if (summary.filtered > 0) out += pf` <r><d>${summary.filtered} filtered out<r>\n`;
+    if (summary.todo > 0) out += pf` <r><magenta>${summary.todo} todo<r>\n`;
+    out += (summary.fail > 0 ? pf`<r><red>` : pf`<r><d>`) + pf` ${summary.fail} fail<r>\n`;
+    if (summary.errors > 0) out += pf` <r><red>${summary.errors} error${summary.errors > 1 ? "s" : ""}<r>\n`;
     if (snapshots.total > 0) out += snapshotSummary();
     if (summary.expectations > 0 && !(snapshots.total > 0 && snapshots.added === 0 && snapshots.failed === 0)) out += ` ${summary.expectations} expect() calls\n`;
     writeErr(out + ranLine() + "\n");
@@ -2897,22 +2936,22 @@
   }
 
   function printNoTestsFound(filters, state) {
-    const learnMore = "\nLearn more about bun test: https://bun.com/docs/cli/test\n";
-    const note = 'Tests need ".test", "_test_", ".spec" or "_spec_" in the filename (ex: "MyApp.test.ts")';
+    const learnMore = pf`\nLearn more about bun test: <magenta>https://bun.com/docs/cli/test<r>\n`;
+    const note = pf`Tests need ".test", "_test_", ".spec" or "_spec_" in the filename <d>(ex: "MyApp.test.ts")<r>`;
     if (filters.length === 0) {
-      writeErr(`No tests found!\n\n${note}\n${learnMore}`);
+      writeErr(pf`<yellow>No tests found!<r>\n\n` + `${note}\n${learnMore}`);
       return;
     }
     if (state.missing && state.missing.length === 1 && filters.length === 1) {
       writeErr(`Test filter ${JSON.stringify(filters[0])} had no matches\n`);
       return;
     }
-    let out = "The following filters did not match any test files:\n";
+    let out = pf`<yellow>The following filters did not match any test files:<r>\n`;
     out += filters.map((f) => ` ${f}`).join("");
     if (state.searched > 0) out += `\n${state.searched} files were searched ${formatElapsed(now() - startTime)}`;
-    out += `\n\nnote: ${note}\n`;
+    out += pf`\n\n<blue>note<r><d>:<r> ` + `${note}\n`;
     const fileLike = filters.find((f) => /\.(ts|tsx|js|jsx)$/.test(f));
-    if (fileLike !== undefined) out += `note: To treat the "${fileLike}" filter as a path, run "bun test ./${fileLike}"\n`;
+    if (fileLike !== undefined) out += pf`<blue>note<r><d>:<r> To treat the "${fileLike}" filter as a path, run "bun test ./${fileLike}"<r>\n`;
     writeErr(out + learnMore);
   }
 
@@ -3084,7 +3123,8 @@
     startTime = now();
     options.agent = isAgent();
     const bun = globalThis.Bun;
-    native.writeStdout(`bun test v${bun.version} (${String(bun.revision).slice(0, 9)})\n`);
+    const version = `${bun.version} (${String(bun.revision).slice(0, 9)})`;
+    native.writeStdout(output().markup(output().stdout)`<r><b>bun test <r><d>v${version}<r>\n`);
     const filters = parseArgs(Array.from(args || []));
     const cwd = native.cwd();
     const state = discover(cwd, filters);
