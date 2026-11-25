@@ -25,6 +25,23 @@ Run `bun install`. The bun-wasm Git dependency generates its Node entry points
 during `prepare`. The npm runtime ships its Node entry points. The guest
 downloads at run time.
 
+## Build and host the guest
+
+No guest is published for the current source, so the package has no default
+(`BUN_WASM_ASSET` is `null`). Build the browser guest from the same bun-wasm
+commit you pinned, then serve `dist/bun-browser.wasm` (or a gzip copy) from
+your own host:
+
+```sh
+source env.sh
+scripts/sync-bun.sh
+scripts/build-bun-browser.sh
+sha256sum dist/bun-browser.wasm && stat -c %s dist/bun-browser.wasm
+```
+
+The hash and byte count go into the `asset` descriptor below. They cover the
+uncompressed file.
+
 ## Bundle the worker
 
 The package exports `bun-wasm/worker`, a module-worker entry. Bundle it as a worker and never import it into the page. In Vite, set the worker format to ES modules:
@@ -47,7 +64,8 @@ import notificationWorkerUrl from "bun-wasm/notification-worker?worker&url";
 // Skip createRuntime if your page already created the Runtime.
 const runtime = createRuntime({ filesystem: { workerURL: "/fs-worker.js", mode: "memory" } });
 
-const installation = await installBunAdapters(runtime, { workerUrl: bunWorkerUrl, notificationWorkerUrl });
+const asset = { kind: "single", core: { url: "/bun-browser.wasm", sha256: "<sha256>", bytes: 0 /* uncompressed size */ } } as const;
+const installation = await installBunAdapters(runtime, { workerUrl: bunWorkerUrl, notificationWorkerUrl, asset });
 
 // Later, to unregister Bun. Running processes continue.
 installation.dispose();
@@ -55,7 +73,9 @@ installation.dispose();
 
 `installBunAdapters` never creates or disposes the `Runtime`. It registers the Bun launchers, registers the programs, and writes a small marker file at each executable path. `/bin/bun` and `/bin/node` are the default paths for the `browser` engine. Pass `executables: ["/opt/bun/browser"]` to use other absolute paths, or `executables: []` to register none.
 
-How you start a process depends on the Waffle host. A Waffle shell such as bash-web spawns `/bin/bun` like any other command. The playground starts runs itself with `startRun` in `web/src/runner.ts`. That function is not part of the package exports.
+The guest downloads on the first spawn, not during installation. Without `asset` or `module`, that spawn fails with `BunWasmAssetError: No matching Bun guest has been published; provide asset or module`.
+
+How you start a process depends on the Waffle host. A Waffle shell such as bash-web spawns `/bin/bun` like any other command. Waffle's `startCommand` from `waffle/command` does not run Bun yet: it admits only interruptible byte-backed guests, and Bun registers as a cooperative adapter program, so the spawn exits with `EACCES`. The playground starts runs itself with `startRun` in `web/src/runner.ts`. That function is not part of the package exports.
 
 ## Serve the page
 
@@ -75,7 +95,11 @@ await installBunAdapters(runtime, {
 	workerUrl: bunWorkerUrl,
 	notificationWorkerUrl,
 	engine: "quickjs",
-	asset: { url: "https://example.com/<sha256>/bun.wasm", sha256: "<sha256>", bytes: 0 /* decompressed size */ },
+	asset: {
+		kind: "quickjs",
+		core: { url: "/bun.wasm", sha256: "<sha256>", bytes: 0 /* uncompressed size */ },
+		side: { url: "/quickjs.wasm", sha256: "<sha256>", bytes: 0 },
+	},
 });
 ```
 
@@ -89,8 +113,8 @@ The QuickJS and JSC executables register under `/opt/bun/quickjs/bin` and `/opt/
 BunWasmAssetError: Guest SHA-256 mismatch: expected 0000…0000, received e63f4b4f…cb6d2f3
 ```
 
-- Omit every option to use `BUN_WASM_ASSET`, the published browser guest.
-- Pass `wasmUrl` to serve the same guest from your own host. The integrity values still apply.
+- Pass `asset` to download a guest you host. This is the normal path, because `BUN_WASM_ASSET` is `null` until a matching guest is published again.
+- Pass `wasmUrl` with `asset` to fetch the same bytes from another URL. The integrity values still apply.
 - Pass `module`, a compiled `WebAssembly.Module`, to skip the network. Use it for offline pages and tests.
 
 A guest must come from the same source revision as the host package. Do not substitute a mutable URL. [Guest artifact publishing](../guest-publishing.md) covers building and publishing your own.

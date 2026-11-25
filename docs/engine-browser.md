@@ -1,12 +1,13 @@
 # The browser engine (`bun-browser.wasm`)
 
-bun-wasm has three engines behind one runtime:
+bun-wasm has four engines behind one runtime:
 
 | engine | JS runs on | wasm |
 |---|---|---|
-| QuickJS | QuickJS-ng compiled into the wasm | `dist/bun.wasm` |
-| JSC | JavaScriptCore (no JIT) compiled into the wasm | `dist/bun-jsc.wasm` |
-| browser | the host's own engine: V8 in Chromium and Node, JavaScriptCore with JIT in Safari | `dist/bun-browser.wasm` |
+| QuickJS | QuickJS-ng compiled into the wasm | `dist/bun.wasm` with `quickjs.wasm` |
+| JSC | JavaScriptCore (no JIT) compiled into the wasm | `dist/bun-jsc.wasm` with `jsc-engine.wasm` |
+| SpiderMonkey (experimental) | SpiderMonkey compiled into the wasm | `bun-spidermonkey.wasm` with `spidermonkey-engine.wasm` |
+| browser | the host's own engine: V8 in Chromium and Node, SpiderMonkey in Firefox, JavaScriptCore with JIT in Safari | `dist/bun-browser.wasm` |
 
 The browser engine runs user code and the runtime's JS polyfills (`crates/bunwasm-runtime/src/js/*.js`) directly on the host JS engine, in the same Web Worker as the wasm. The wasm keeps the parts that are Bun proper and don't depend on a JS engine:
 

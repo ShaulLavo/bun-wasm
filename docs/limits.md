@@ -2,7 +2,7 @@
 
 Hard limits of the project at this revision: memory, stack, threads, processes, network, filesystem, browsers. Each entry names where the number or behavior comes from. For what runs and what fails on top of these limits, see [Compatibility](compatibility.md).
 
-bun-wasm is pre-1.0 and experimental. The package is version 0.0.58 and private. Treat everything below as the current state, not a promise.
+bun-wasm is pre-1.0 and experimental. The package is private and not on npm. Treat everything below as the current state, not a promise.
 
 ## Memory
 

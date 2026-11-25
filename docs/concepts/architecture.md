@@ -13,27 +13,26 @@ The dashed box is one wasm module. Everything below it is the host's job, and th
 
 Two kinds of code sit in the guest.
 
-Bun's own Rust crates (the transpiler, the bundler, the resolver, `bun_semver`, the data parsers, glob) compile to `wasm32-wasip1` from a pinned checkout of oven-sh/bun. The pin is the commit in `scripts/sync-bun.sh`, and `scripts/sync-bun.sh` rebuilds `vendor/bun` from it plus the 13 patches in `patches/bun/`. The patches add `target_os = "wasi"` arms and a few host hooks. They do not rewrite Bun. [Changes to Bun and other upstream source](../bun-patches.md) lists each patch, each copied file, and which changes are ports, host features or upstream bugs.
+Bun's own Rust crates (the transpiler, the bundler, the resolver, `bun_semver`, the data parsers, glob) compile to `wasm32-wasip1` from a pinned checkout of oven-sh/bun. The pin is the commit in `scripts/sync-bun.sh`, and `scripts/sync-bun.sh` rebuilds `vendor/bun` from it plus the patches in `patches/bun/` (27 at the v1.4.5 pin). The patches add `target_os = "wasi"` arms and a few host hooks. They do not rewrite Bun. [Changes to Bun and other upstream source](../bun-patches.md) lists each patch, each copied file, and which changes are ports, host features or upstream bugs.
 
 The runtime is ours. `crates/bunwasm-runtime` implements the module loader, the event loop, `Bun.*`, `process`, the `node:*` modules and the web APIs. It prefers Bun's own JavaScript where that code runs without JavaScriptCore: [Bun's generated builtins](../bun-builtins.md) supply many `node:*` modules. Rust natives and hand-written JavaScript fill the gaps. The runtime also holds an npm installer written in Rust and a bundled SQLite behind `bun:sqlite`.
 
 The split gives a rule of thumb for bugs. Syntax, bundling and resolution behave like Bun because they are Bun. Everything else behaves like Bun to the degree the runtime matches it, and [Compatibility](../compatibility.md) measures that degree.
 
-## One runtime, three engines
+## One runtime, four engines
 
-The runtime talks to a JavaScript engine through the `Engine` trait in `crates/bunwasm-runtime/src/engine.rs`. Three implementations exist, and each builds a separate guest.
+The runtime talks to a JavaScript engine through the `Engine` trait in `crates/bunwasm-runtime/src/engine.rs`. Four implementations exist, and each builds a separate guest. The three engines compiled into the wasm ship as a Bun core module plus an engine module that links into the core's memory at load time.
 
-- `quickjs` runs JS on QuickJS-ng compiled into the wasm. Guest: `bun.wasm`.
-- `jsc` runs JS on JavaScriptCore without JIT, compiled into the wasm. Guest: `bun-jsc.wasm`.
-- `browser` runs JS on the host's own engine. Guest: `bun-browser.wasm`.
+- `quickjs` runs JS on QuickJS-ng compiled into the wasm. Modules: `bun.wasm` and `quickjs.wasm`.
+- `jsc` runs JS on JavaScriptCore without JIT, compiled into the wasm. Modules: `bun-jsc.wasm` and `jsc-engine.wasm`.
+- `spidermonkey` runs JS on SpiderMonkey compiled into the wasm. Modules: `bun-spidermonkey.wasm` and `spidermonkey-engine.wasm`. It is experimental and opt-in: the package registers it only when asked, and the playground labels it experimental. [SpiderMonkey host integration](../spidermonkey-host-plumbing.md) describes selection and its limits.
+- `browser` runs JS on the host's own engine. Module: `bun-browser.wasm`.
 
-SpiderMonkey is an additional opt-in experiment, not a supported publication or default engine.
-Its interpreter and portable-baseline tiers share one split guest and companion.
-[SpiderMonkey host integration](../spidermonkey-host-plumbing.md) describes explicit selection and its limits.
+All four pass the 2026-11-23 framework matrix ([Compatibility](../compatibility.md#frameworks-in-the-browser)).
 
-Bun's engine is JavaScriptCore, so the obvious plan is to run Bun's real runtime on it. Two facts stand in the way. JavaScriptCore cannot JIT inside wasm, so it runs as an interpreter. And Bun's C++ bindings are tied to JavaScriptCore internals and assume a 64-bit machine. A spike found a single-threaded port of the real runtime feasible but large. The runtime started on QuickJS and kept it as the default engine, and JavaScriptCore stays an experiment that shows how far Bun's own engine gets. See [ADR 001](../adr/001-three-engines-behind-one-runtime.md).
+Bun's engine is JavaScriptCore, so the obvious plan is to run Bun's real runtime on it. Two facts stand in the way. JavaScriptCore cannot JIT inside wasm, so it runs as an interpreter. And Bun's C++ bindings are tied to JavaScriptCore internals and assume a 64-bit machine. A spike found a single-threaded port of the real runtime feasible but large. The runtime started on QuickJS instead. JavaScriptCore runs the same runtime through the `Engine` trait, as an interpreter, and does not use Bun's C++ bindings. See [ADR 001](../adr/001-three-engines-behind-one-runtime.md).
 
-The `browser` engine goes the other way. It leaves the engine out of the wasm and runs the runtime's JavaScript on the engine the page already has: V8 in Chromium, JavaScriptCore with JIT in Safari. The guest keeps argument parsing, resolution, the transpiler, the bundler, SQLite and the filesystem. The engine runs with JIT, and it is the least faithful of the three: promise state, `AsyncLocalStorage` and import cycles need workarounds. [The browser engine](../engine-browser.md) lists them.
+The `browser` engine goes the other way. It leaves the engine out of the wasm and runs the runtime's JavaScript on the engine the page already has: V8 in Chromium, SpiderMonkey in Firefox, JavaScriptCore with JIT in Safari. The guest keeps argument parsing, resolution, the transpiler, the bundler, SQLite and the filesystem. The engine runs with JIT, and it is the least faithful of the four: promise state, `AsyncLocalStorage` and import cycles need workarounds. [The browser engine](../engine-browser.md) lists them.
 
 ## The host interface
 
@@ -91,4 +90,4 @@ The package borrows the page's Waffle `Runtime` and never creates or disposes it
 - `sandbox/`: React and vanilla dev-server sandbox.
 - `site/`: deploys the sandbox and playground to bun.sprockt.dev.
 - `patches/bun/`: the patch series for oven-sh/bun.
-- `tests/`: end-to-end fixtures run on all three engines.
+- `tests/`: end-to-end fixtures, run on QuickJS, JSC and the browser engine.

@@ -17,9 +17,10 @@ Exports are explicit:
 ### Installation and ownership
 
 Registered programs launch ordinary Waffle processes through the generic `runtime_proc` bridge.
-Supply the bundler-produced worker URL. The default browser engine loads the published immutable
-guest through `BUN_WASM_ASSET`, verifying its decompressed size and SHA-256 before compilation.
-No module or asset override is needed for that default. QuickJS and JSC are explicit opt-ins and
+Supply the bundler-produced worker URL. `BUN_WASM_ASSET` is `null` at this revision because no
+guest matching the current source is published, so every engine needs a `module` or an `asset`
+descriptor; the loader verifies the descriptor's decompressed size and SHA-256 before compilation.
+QuickJS and JSC are explicit opt-ins and
 require their matching compiled module or verified asset descriptor; the browser descriptor must
 not be used for them. Guest bytes remain outside the package. No legacy Bun-specific process
 controller is used.
@@ -33,10 +34,9 @@ import notificationWorkerUrl from "bun-wasm/notification-worker?worker&url";
 const installation = await installBunAdapters(runtime, {
   workerUrl: bunWorkerUrl,
   notificationWorkerUrl, // one helper per Bun process; wakes fs.watch on filesystem commits
-  engine: "browser", // default; quickjs/jsc need their matching guest module or descriptor
-  // module: offlineCompiledModule,
+  engine: "browser", // default; quickjs/jsc need their matching paired guest
+  asset: { kind: "single", core: { url: "/bun-browser.wasm", sha256, bytes } }, // or module: compiledModule
   // wasmUrl: "https://your-immutable-store/<sha256>/bun.wasm.gz",
-  // asset: { url, sha256, bytes },
 });
 
 // Registers bun:quickjs, bun:jsc, bun:browser and the selected engine at its real bun/node paths.

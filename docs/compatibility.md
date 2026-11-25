@@ -1,11 +1,12 @@
 # Compatibility
 
-What runs, what fails, and how each number was measured. Everything here is a recorded measurement of a specific revision. Where a later commit may have changed a result, the page says so.
+What runs, what fails, and how each number was measured. Every number here comes from a recorded run, and each section gives its date and revision.
 
-Two yardsticks measure compatibility:
+Three yardsticks measure compatibility:
 
-- The app matrix runs 17 real projects (install, then start, build, test or lint). The records are in [`docs/app-matrix/`](app-matrix/README.md).
-- Bun's own test suite runs 2,305 upstream test files. The records are in [`docs/bun-test-suite/`](bun-test-suite/README.md).
+- The framework matrix runs 13 framework starters in four browsers on four engines, from `bun install` to a production build. Last run: 2026-11-23, all 208 combinations pass. iPhone Safari runs in the iOS simulator.
+- The app matrix runs 17 server, database and tool projects under the native launcher. Last run: 2026-10-17. The records are in [`docs/app-matrix/`](app-matrix/README.md).
+- Bun's own test suite runs upstream test files against each engine. Last full run: 2026-10-17. The records are in [`docs/bun-test-suite/`](bun-test-suite/README.md).
 
 ## Bun commands
 
@@ -27,17 +28,18 @@ Two yardsticks measure compatibility:
 
 ## Engines
 
-One runtime runs on three JavaScript engines. The three are built into separate guests. The sizes below are the playground's engine picker and the published browser guest.
+One runtime runs on four JavaScript engines behind the `Engine` trait. Each engine has its own guest build. QuickJS, JavaScriptCore and SpiderMonkey ship as a Bun core module plus an engine module that links into the core's memory at load time. Sizes are uncompressed, as the playground reported them in Chrome on 2026-11-23.
 
-| Engine | JS runs on | Guest | Size |
-| --- | --- | --- | --- |
-| `browser` (default in the browser) | The host's own engine: V8 in Chromium and Node, JavaScriptCore with JIT in Safari | `bun-browser.wasm` | 14.5 MB |
-| `quickjs` | QuickJS-ng compiled into the wasm | `bun.wasm` | 9 MB |
-| `jsc` | JavaScriptCore without JIT, compiled into the wasm | `bun-jsc.wasm` | 43 MB |
+| Engine | JS runs on | Modules | Size |
+| --- | --- | --- | ---: |
+| `browser` (default in the browser) | The host's own engine with JIT: V8 in Chrome, SpiderMonkey in Firefox, JavaScriptCore in Safari | `bun-browser.wasm` | 15.5 MiB |
+| `quickjs` | QuickJS-ng compiled into the wasm | `bun.wasm`, `quickjs.wasm` | 18.1 MiB |
+| `jsc` | JavaScriptCore compiled into the wasm, interpreter only | `bun-jsc.wasm`, `jsc-engine.wasm` | 49.1 MiB |
+| `spidermonkey` (experimental, opt-in) | SpiderMonkey compiled into the wasm, interpreter | `bun-spidermonkey.wasm`, `spidermonkey-engine.wasm` | 27.0 MiB |
 
-The native launcher runs `quickjs` and `jsc`. The `browser` engine needs a host with a JavaScript engine of its own.
+The native launcher runs the engines inside the wasm. The `browser` engine needs a host with a JavaScript engine of its own. The package registers SpiderMonkey only when you ask for it ([SpiderMonkey host integration](spidermonkey-host-plumbing.md)).
 
-The three engines differ in these ways, which follow from the `browser` engine running on a standard JS engine without engine hooks ([The browser engine](engine-browser.md#what-is-inherently-different)):
+The `browser` engine differs from the others in these ways, because it runs on a standard JS engine without engine hooks ([The browser engine](engine-browser.md#what-is-inherently-different)):
 
 | Behavior | `browser` engine |
 | --- | --- |
@@ -51,11 +53,58 @@ The three engines differ in these ways, which follow from the `browser` engine r
 
 Hermes remains withdrawn from normal publication. In the retained Hermes revision `c36356f416ee19bb0d54c2e7ecb3c5fb0538a065`, `Object.isSealed` and `Object.isFrozen` return false for sealed or frozen objects wrapped in an empty-handler Proxy. This known engine limitation has no workaround; it does not affect the supported Browser engines. See [Dormant Hermes source](hermes-engine.md#known-engine-limitation).
 
-## Real apps
+## Frameworks in the browser
 
-The matrix installs each project fresh from an offline copy of the npm registry, then runs its commands on QuickJS, JSC and the `browser` engine. A stage passes only on its declared assertion: an exit code and output, an HTTP response with the expected body, or rendered DOM text in headless Chromium. An install that succeeds does not count as the app working.
+The framework matrix opens the sandbox in a real browser, picks a starter and an engine, and drives it the way a person would. A combination passes only when all nine phases pass:
 
-Snapshot: 2026-10-17, checkout `ec213e8ee326336f31feea9ef5763e793b9e2d60`, 180 stage records excluding the native Bun controls. Every project gave the same result on all three engines. Overall the snapshot has 120 passing, 48 failing and 12 blocked stages.
+1. Startup: the guest loads and reports the selected engine.
+2. Install: `bun install` exits 0.
+3. Dev: the framework's dev server starts and gives a preview URL.
+4. Render: the preview shows the starter's text.
+5. Click: a trusted click changes the counter from 0 to 1.
+6. Hot reload: an edited source file shows up in the same document, with the counter state kept and no navigation.
+7. Build: the production build exits 0.
+8. Preview: the built app serves, renders, and its counter responds to a click.
+9. Cleanup: the dev process and the preview stop and the browser closes.
+
+Run: 2026-11-23, all 208 combinations re-run that day, 208 pass. 146 ran on main `587c2c69c`, 54 on main `3b84f36a3`, and 8 iPhone combinations on `587c2c69c` with PRs 1052 and 1056, which raise the iPhone memory caps and have since merged. The guests were Bun v1.4.4. Each phase has a 300-second hang cap, install and build have 600 seconds. The caps catch hangs and say nothing about speed.
+
+| Framework | Template |
+| --- | --- |
+| Next.js 15 | `template-next` |
+| Nuxt | `template-nuxt` |
+| SvelteKit | `template-sveltekit` |
+| Astro | `template-astro` |
+| React Router | `template-react-router` |
+| SolidStart | `template-solidstart` |
+| TanStack Start | `template-tanstack-start` |
+| Angular | `template-angular` |
+| Qwik | `template-qwik` |
+| Vite with React | `template` |
+| Vite with Vue | `template-vite-vue` |
+| Vite with Svelte | `template-vite-svelte` |
+| Hono server | `template-hono` |
+
+Templates are under `sandbox/`. Each framework passes on every cell of this grid:
+
+| Browser | Where it ran | `browser` | `quickjs` | `jsc` | `spidermonkey` |
+| --- | --- | --- | --- | --- | --- |
+| Chrome 157 | Linux PC, headless | 13 of 13 | 13 of 13 | 13 of 13 | 13 of 13 |
+| Firefox 157 | Linux PC, Playwright Firefox | 13 of 13 | 13 of 13 | 13 of 13 | 13 of 13 |
+| Safari 26.4 | Mac, native Safari through safaridriver | 13 of 13 | 13 of 13 | 13 of 13 | 13 of 13 |
+| iPhone Safari 26.5 | iOS 18.7 simulator on the Mac, native Safari driven through XCTest | 13 of 13 | 13 of 13 | 13 of 13 | 13 of 13 |
+
+One caveat: Next.js on desktop Safari with the `browser` engine passed, but Safari's per-tab memory limit still kills that combination intermittently on the 16 GiB Mac we test on. No workaround ships.
+
+The iPhone column runs in the simulator, which uses the Mac's CPU and memory. The page applies the iPhone memory caps there, but the simulator does not reproduce a real phone's memory pressure, and this run did not include a physical iPhone.
+
+[Run the framework matrix](goals-matrix.md) has the commands. They assume the maintainer's build queue and Mac, so expect to adapt paths.
+
+## Server and tool projects
+
+The app matrix installs each project fresh from an offline copy of the npm registry, then runs its commands on QuickJS, JSC and the `browser` engine under the native launcher and in headless Chromium. A stage passes only on its declared assertion: an exit code and output, an HTTP response with the expected body, or rendered DOM text. An install that succeeds does not count as the app working.
+
+Snapshot: 2026-10-17, checkout `ec213e8ee326336f31feea9ef5763e793b9e2d60`, 180 stage records excluding the native Bun controls. Every project gave the same result on all three engines it ran on. Overall the snapshot has 120 passing, 48 failing and 12 blocked stages. This matrix has not been rerun since. Most of its failures were Vite, SvelteKit, Astro and Next.js, which now pass in the framework matrix above, so read the failures below as history.
 
 Nine projects pass every stage:
 
@@ -127,6 +176,16 @@ QuickJS by directory, for the larger groups:
 | `js/sql`, `js/valkey`, `napi`, `v8`, `js/workerd` | 150 | 0 |
 
 The suite counts every missing feature as a failure. Native addon bindings are unavailable in the guest, which covers `napi` and `v8`. The suite page classifies the first blocker of each failing file in [`failures.tsv`](bun-test-suite/failures.tsv).
+
+The whole suite has not been rerun since 2026-10-17. Runtime work since then has tracked a fixed set of 87 upstream files: 25 under `js/bun`, 42 under `js/node`, 18 under `js/web` and 2 under `js/third_party`. The set covers `bun:test` itself, fs, path, Buffer, streams, crypto, fetch and body, timers, process, URL, encoding and inspection. It is not a random sample, so it says more about those APIs than about the suite as a whole. Its last count, on 2026-11-23 at main `3e121e6dc` against upstream suite revision `9510e7415`, with a 600-second file watchdog and 10-second test limit:
+
+| Engine | Files fully passing | Tests passing | Tests failing |
+| --- | ---: | ---: | ---: |
+| QuickJS | 67 of 87 | 5,679 | 109 |
+| JSC | 67 of 87 | 5,677 | 111 |
+| `browser` | 67 of 87 | 5,158 | 124 |
+
+On 2026-11-18 the same set had 40 fully passing files on each engine and 1,206 failing tests on QuickJS.
 
 ### Reproduce
 
