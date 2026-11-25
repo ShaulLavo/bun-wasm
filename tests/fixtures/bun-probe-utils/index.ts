@@ -138,6 +138,20 @@ await check("Bun.cookie", () => {
   map.set("c", "3");
   return [map.get("a"), map.size, new Bun.Cookie("name", "value", { path: "/", httpOnly: true }).serialize()];
 });
+await check("Bun.CSRF", () => {
+  const token = Bun.CSRF.generate("secret");
+  const session = Bun.CSRF.generate("secret", { sessionId: "user-1", encoding: "hex", algorithm: "SHA512" });
+  return [
+    Bun.CSRF.verify(token, { secret: "secret" }),
+    Bun.CSRF.verify(token, { secret: "wrong" }),
+    Bun.CSRF.verify(session, { secret: "secret", sessionId: "user-1", encoding: "hex", algorithm: "sha512" }),
+    Bun.CSRF.verify(session, { secret: "secret", sessionId: "user-2", encoding: "hex", algorithm: "sha512" }),
+    Bun.CSRF.verify(Bun.CSRF.generate()),
+    token.length,
+  ];
+});
+await check("Bun.markdown.html", () => Bun.markdown.html("# Title\n\n| a | b |\n|---|---|\n| 1 | ~~2~~ |\n\n- [x] done\n", { headings: true }));
+await check("Bun.markdown.ansi", () => Bun.markdown.ansi("# Hi\n\n*em* and `code`", { colors: false }));
 await check("structuredClone + Bun types", () => structuredClone({ d: new Date(0), m: new Map([[1, 2]]) }));
 await check("fetch data url", async () => await (await fetch("data:text/plain,hi%20bun")).text());
 await check("WebCrypto subtle digest", async () => Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("bun"))).toString("hex").slice(0, 16));

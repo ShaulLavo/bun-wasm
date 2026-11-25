@@ -626,6 +626,8 @@
     hash,
     CryptoHasher,
     get password() { return internal.require("bun_password").password; },
+    get markdown() { return internal.require("bun_markdown").markdown; },
+    get CSRF() { return internal.require("bun_csrf").CSRF; },
     // Bun.sha is SHA-512/256, as in Bun.
     sha: function sha(input) { return internal.require("bun_hash_classes").SHA512_256.hash(input, arguments[1]); },
     // Loaded on first use; the module is cached, so each class keeps one identity.

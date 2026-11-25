@@ -1413,6 +1413,7 @@ dependencies = [
  "bun_io",
  "bun_js_parser",
  "bun_js_printer",
+ "bun_md",
  "bun_options_types",
  "bun_paths",
  "bun_ptr",

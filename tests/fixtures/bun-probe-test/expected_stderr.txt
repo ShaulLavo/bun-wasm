@@ -7,6 +7,7 @@ probe.test.ts:
 (pass) math > each object b
 (pass) mocks > mock() records calls
 (pass) mocks > spyOn wraps and restores
+(pass) mocks > mock.module replaces later imports and requires
 (pass) snapshots > file snapshot
 (pass) snapshots > inline snapshot
 (pass) async and modifiers > awaits promises
@@ -16,9 +17,9 @@ probe.test.ts:
 (pass) async and modifiers > expect.assertions
 (pass) async and modifiers > asymmetric matchers
 
- 13 pass
+ 14 pass
  1 skip
  1 todo
  0 fail
- 2 snapshots, 31 expect() calls
-Ran 15 tests across 1 file. [TIME]
+ 2 snapshots, 34 expect() calls
+Ran 16 tests across 1 file. [TIME]

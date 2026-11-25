@@ -207,6 +207,25 @@ pub trait Transpiler {
     }
 
     fn dev_server_close(&self, _id: u32) {}
+
+    /// `Bun.markdown.html` and `.ansi`: Bun's markdown renderer, linked with the bundler.
+    fn markdown(&self, _request: &MarkdownRequest<'_>) -> Result<Vec<u8>, String> {
+        Err("Bun.markdown needs Bun's bundler, which this bun.wasm was built without".to_owned())
+    }
+}
+
+/// `Bun.markdown.html(text, options)` or `.ansi(text, theme)`, with the options already read.
+pub struct MarkdownRequest<'a> {
+    pub text: &'a [u8],
+    pub ansi: bool,
+    /// HTML: `(snake_case name, value)` for each bool option of Bun's `md::Options`.
+    pub flags: Vec<(String, bool)>,
+    /// ANSI theme fields; `None` keeps Bun's default.
+    pub colors: Option<bool>,
+    pub hyperlinks: Option<bool>,
+    pub kitty_graphics: Option<bool>,
+    pub light: Option<bool>,
+    pub columns: Option<u16>,
 }
 
 #[derive(Clone, Debug)]

@@ -784,9 +784,38 @@
 
   mock.restore = () => forEachMock("mockRestore");
   mock.clearAllMocks = () => forEachMock("mockClear");
-  mock.module = () => {
-    throw new Error("mock.module() is not supported in bun-wasm yet");
+  // mock.module(specifier, factory): later imports and requires of the module get the factory's
+  // exports (docs/bun-patches/bun-test-mock-module.md). A relative specifier resolves from the
+  // calling file; a specifier that names no file (or a builtin) is replaced by that exact name.
+  // Unlike Bun, a module that was already imported keeps its original exports.
+  mock.module = function module(specifier, factory) {
+    if (typeof specifier !== "string") throw new TypeError("mock.module(path, fn) expects a module path string");
+    if (typeof factory !== "function") throw new TypeError("mock.module(path, fn) expects a function");
+    const key = mockedModuleKey(specifier);
+    let exports;
+    internal.builtinFactories[key] = () => {
+      if (exports) return exports;
+      const result = factory();
+      if (isThenable(result)) throw new TypeError("mock.module() factories must return the exports object synchronously in bun-wasm");
+      if (result === null || typeof result !== "object") throw new TypeError("mock.module() factory must return an object");
+      exports = result;
+      return exports;
+    };
+    return undefined;
   };
+
+  function mockedModuleKey(specifier) {
+    const origin = internal.require("caller_origin")();
+    const from = origin && origin.startsWith("file:") ? internal.require("node_url").fileURLToPath(origin) : `${globalThis.process.cwd()}/`;
+    let resolved;
+    try {
+      resolved = native.resolve(specifier, from, true);
+    } catch {
+      resolved = undefined;
+    }
+    if (typeof resolved === "string" && resolved.startsWith("/")) return native.registerMockedFile(resolved);
+    return native.registerObjectModule(specifier);
+  }
 
   const jest = {
     ...internal.fakeTimers.api,

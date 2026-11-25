@@ -196,6 +196,8 @@ pub struct Resolver {
     custom_conditions: Rc<[String]>,
     experimental_stream_iter: bool,
     object_modules: RefCell<HashMap<String, String>>,
+    /// `mock.module()` replacements by resolved file path.
+    mocked_files: RefCell<HashMap<String, String>>,
     next_object_module: Cell<u64>,
     /// package.json contents by directory (`None` = no package.json there).
     package_json: RefCell<HashMap<String, Option<Rc<Json>>>>,
@@ -225,6 +227,7 @@ impl Resolver {
             custom_conditions: conditions.into(),
             experimental_stream_iter: false,
             object_modules: RefCell::new(HashMap::new()),
+            mocked_files: RefCell::new(HashMap::new()),
             next_object_module: Cell::new(0),
             package_json: RefCell::new(HashMap::new()),
             package_errors: RefCell::new(HashMap::new()),
@@ -246,14 +249,29 @@ impl Resolver {
     }
 
     pub fn register_object_module(&self, name: &str) -> String {
-        let mut modules = self.object_modules.borrow_mut();
-        let next = self.next_object_module.get();
-        self.next_object_module.set(next + 1);
-        let key = format!("bun:plugin:{next}");
-        modules.insert(name.to_owned(), key.clone());
+        let key = self.next_object_key();
+        self.object_modules
+            .borrow_mut()
+            .insert(name.to_owned(), key.clone());
         // An `imports` alias remembered before may now name this module.
         self.forget_required();
         key
+    }
+
+    /// `mock.module()` on a file: every later import or require that resolves to `path`
+    /// loads the returned module key instead, whatever specifier names it.
+    pub fn register_mocked_file(&self, path: &str) -> String {
+        let key = self.next_object_key();
+        self.mocked_files
+            .borrow_mut()
+            .insert(path.to_owned(), key.clone());
+        key
+    }
+
+    fn next_object_key(&self) -> String {
+        let next = self.next_object_module.get();
+        self.next_object_module.set(next + 1);
+        format!("bun:plugin:{next}")
     }
 
     pub fn clear_object_modules(&self) {
@@ -270,6 +288,17 @@ impl Resolver {
     /// Resolve `spec` imported from the file `from` (or a directory path ending
     /// in `/` for the entry point / eval code).
     pub fn resolve(&self, spec: &str, from: &str, kind: Kind) -> Result<Resolved, String> {
+        let resolved = self.resolve_unmocked(spec, from, kind)?;
+        let Resolved::File(path) = &resolved else {
+            return Ok(resolved);
+        };
+        match self.mocked_files.borrow().get(path) {
+            Some(key) => Ok(Resolved::Builtin(key.clone())),
+            None => Ok(resolved),
+        }
+    }
+
+    fn resolve_unmocked(&self, spec: &str, from: &str, kind: Kind) -> Result<Resolved, String> {
         self.notes.borrow_mut().clear();
         if let Some(key) = self.object_modules.borrow().get(spec) {
             return Ok(Resolved::Builtin(key.clone()));

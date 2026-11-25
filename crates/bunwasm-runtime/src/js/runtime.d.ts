@@ -79,6 +79,10 @@ declare namespace BunWasm {
     hostLookup?: (hostname: string, family: 0 | 4 | 6, hints: number) => Promise<Array<{ address: string; family: 4 | 6 }>>;
     hostClose(handle: number): number;
     registerObjectModule(name: string): string;
+    /** mock.module(): later imports and requires resolving to this file load the returned module key. */
+    registerMockedFile(path: string): string;
+    /** Bun.markdown (bunwasm-build markdown.rs): ("html" | "ansi", text, options JSON). */
+    markdown(mode: "html" | "ansi", text: Uint8Array, options: string): string;
     clearObjectModules(): void;
     readonly engine: "quickjs" | "jsc" | "host" | "hermes" | "spidermonkey";
     /** The running engine's `process.versions` entry; absent when the host reports none. */

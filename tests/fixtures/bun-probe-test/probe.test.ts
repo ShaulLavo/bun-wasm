@@ -58,6 +58,13 @@ describe("mocks", () => {
     spy.mockRestore();
     expect(obj.greet("x")).toBe("hi x");
   });
+
+  test("mock.module replaces later imports and requires", async () => {
+    mock.module("./dep.ts", () => ({ value: () => "mocked module" }));
+    expect((await import("./dep.ts")).value()).toBe("mocked module");
+    expect((await import("./dep")).value()).toBe("mocked module");
+    expect(require("./dep.ts").value()).toBe("mocked module");
+  });
 });
 
 describe("snapshots", () => {

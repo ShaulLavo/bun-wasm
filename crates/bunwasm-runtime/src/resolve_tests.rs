@@ -606,3 +606,32 @@ fn plugin_module_registration_overrides_a_remembered_imports_alias() {
     resolver.clear_object_modules();
     assert_eq!(resolver.resolve("#alias", &from, Kind::Require), file);
 }
+
+#[test]
+fn mocked_file_replaces_every_specifier_that_resolves_to_it() {
+    let fixture = Fixture::new();
+    fixture.file("lib/dep.ts");
+    fixture.file("other.ts");
+    let resolver = Resolver::new();
+    let from = fixture.path("index.ts");
+    // A remembered require() target is mocked too.
+    assert_eq!(
+        resolver.resolve("./lib/dep", &from, Kind::Require),
+        Ok(Resolved::File(fixture.path("lib/dep.ts")))
+    );
+    let key = resolver.register_mocked_file(&fixture.path("lib/dep.ts"));
+    for (spec, kind) in [
+        ("./lib/dep", Kind::Require),
+        ("./lib/dep.ts", Kind::Import),
+        ("./lib/dep", Kind::Import),
+    ] {
+        assert_eq!(
+            resolver.resolve(spec, &from, kind),
+            Ok(Resolved::Builtin(key.clone()))
+        );
+    }
+    assert_eq!(
+        resolver.resolve("./other", &from, Kind::Import),
+        Ok(Resolved::File(fixture.path("other.ts")))
+    );
+}
