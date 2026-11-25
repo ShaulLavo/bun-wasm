@@ -7,7 +7,7 @@ import { TerminalPane } from "./terminal-pane";
 import { templates } from "./template-catalog";
 
 /** The link to the playground's one-click Bun API demos (copy lives here so the sandbox page imports no playground module). */
-const DEMOS_LINK = { text: "Bun API demos", title: "Bun.serve, bun:sqlite, bun test, Bun.build and Bun.$ in one click" };
+const DEMOS_LINK = { text: "Bun API demos", title: "Run Bun.serve, bun:sqlite, bun test, Bun.build, Bun.$, and Bun.file in the playground" };
 
 type Props = { sandbox: Sandbox };
 

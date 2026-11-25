@@ -3,7 +3,7 @@
 export const HOME = "/home/user";
 
 export const examples: Record<string, string> = {
-  "index.ts": `// Hello from Bun, compiled to WebAssembly and running in your browser.
+  "index.ts": `// Bun compiles and runs this TypeScript in your browser tab.
 interface Greeting {
   name: string;
   excited?: boolean;
@@ -23,8 +23,8 @@ console.log("argv:", process.argv.slice(2));
 console.log("cwd:", process.cwd());
 `,
 
-  "files.ts": `// Bun.write and Bun.file against the in-memory filesystem.
-// Files you write here show up in the editor and in \`ls\`.
+  "files.ts": `// Bun.write and Bun.file on the browser filesystem.
+// Written files appear in the editor and in \`ls\`.
 const path = "notes/hello.txt";
 
 await Bun.write(path, "Written by Bun.write at " + new Date().toISOString() + "\\n");
@@ -89,7 +89,7 @@ console.log("slept with Bun.sleep, total", elapsed());
   "jsx.tsx": `/** @jsxRuntime classic */
 /** @jsx h */
 /** @jsxFrag Fragment */
-// JSX compiled by Bun's transpiler into calls to our own tiny h() that renders to a string.
+// Bun's transpiler compiles this JSX to h() calls that render HTML strings.
 type Child = string | number | boolean | null | undefined | Child[];
 type Props = Record<string, unknown> & { children?: Child[] };
 
@@ -133,7 +133,7 @@ const html = (
 console.log(html);
 `,
 
-  "math.ts": `// A tiny module for math.test.ts and for bun build (try: bun build math.ts --outdir out --minify).
+  "math.ts": `// Imported by math.test.ts and build.ts. Try: bun build math.ts --outdir out --minify
 export function fib(n: number): number {
   return n < 2 ? n : fib(n - 1) + fib(n - 2);
 }
@@ -143,7 +143,7 @@ export const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
 if (import.meta.main) console.log("fib(20) =", fib(20), "mean =", mean([1, 2, 3, 4]));
 `,
 
-  "math.test.ts": `// Bun's test runner, in wasm. Press Run, or type: bun test
+  "math.test.ts": `// Bun's test runner in WebAssembly. Press Run or run: bun test
 import { describe, expect, test, mock } from "bun:test";
 import { fib, mean } from "./math";
 
@@ -167,8 +167,8 @@ test("mocks and async", async () => {
 });
 `,
 
-  "serve.ts": `// Bun.serve: an HTTP server running inside this browser tab, with a bun:sqlite visit counter.
-// Its page opens in the preview. Edit the HTML or a route, then press Restart above the preview.
+  "serve.ts": `// HTTP server in this tab with routes and a bun:sqlite visit counter.
+// Edit the HTML or a route, then press Restart above the preview.
 import { Database } from "bun:sqlite";
 
 const db = new Database("visits.sqlite");
@@ -219,26 +219,26 @@ function page(visits: number): string {
 }
 `,
 
-  "shell.ts": `// Bun.$: Bun's shell. Globs, pipes and builtins run in this tab, on the same filesystem.
+  "shell.ts": `// Bun's shell runs globs, pipes, and builtins on this workspace's filesystem.
 import { $ } from "bun";
 
 console.log("glob:", (await $\`echo *.ts\`.text()).trim());
 
-// Interpolated values are escaped, so this is one argument, not a command.
+// Bun.$ escapes interpolated values, so this stays one argument.
 const risky = "hello; rm -rf /";
 console.log("escaped:", (await $\`echo \${risky}\`.text()).trim());
 
-// Pipes, and output parsed as JSON.
+// Pipe between commands, or parse stdout as JSON.
 console.log("words:", (await $\`echo Bun in WebAssembly | wc -w\`.text()).trim());
 const data = await $\`echo '{"runtime":"bun.wasm","files":3}'\`.json();
 console.log("json:", data);
 
-// Failing commands throw unless you ask for the exit code.
+// Failing commands throw unless you chain .nothrow().
 const { exitCode } = await $\`ls does-not-exist\`.nothrow().quiet();
 console.log("exit code of a failed ls:", exitCode);
 `,
 
-  "build.ts": `// Bun.build: Bun's bundler, compiled to WebAssembly. Bundles jsx.tsx and math.ts into dist/.
+  "build.ts": `// Bundle and minify jsx.tsx and math.ts into dist/ with linked sourcemaps.
 const result = await Bun.build({
   entrypoints: ["./jsx.tsx", "./math.ts"],
   outdir: "./dist",
@@ -259,7 +259,7 @@ const math = result.outputs.find((output) => output.path.endsWith("math.js"));
 if (math) console.log("\\nminified math.js:\\n" + (await math.text()).split("\\n")[0]);
 `,
 
-  "db.ts": `// bun:sqlite: real SQLite compiled to WebAssembly.
+  "db.ts": `// SQLite in WebAssembly. Writes persist in todos.sqlite across runs.
 import { Database } from "bun:sqlite";
 
 const db = new Database("todos.sqlite");

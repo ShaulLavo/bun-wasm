@@ -8,15 +8,15 @@ export const copy = {
   demoBarAria: "Bun API demos",
   /** Keyed by demo id (see demos.ts). Labels are API names; titles explain them on hover. */
   demos: {
-    serve: { label: "Bun.serve", title: "HTTP server with routes and a bun:sqlite counter, shown in a live preview" },
-    sqlite: { label: "bun:sqlite", title: "SQLite compiled to WebAssembly" },
-    test: { label: "bun test", title: "Bun's Jest-compatible test runner" },
-    build: { label: "Bun.build", title: "Bun's bundler, minifying TSX and TypeScript into dist/" },
-    shell: { label: "Bun.$", title: "Bun's shell: pipes, redirects and escaping" },
-    file: { label: "Bun.file", title: "Bun.write and Bun.file on the persistent browser filesystem" },
+    serve: { label: "Bun.serve", title: "Serve HTTP routes and a bun:sqlite visit counter in a live preview" },
+    sqlite: { label: "bun:sqlite", title: "Create a SQLite table, insert rows in a transaction, and query todos.sqlite" },
+    test: { label: "bun test", title: "Run bun:test with describe, test.each, mocks, and async assertions" },
+    build: { label: "Bun.build", title: "Bundle and minify TSX and TypeScript into dist/ with linked sourcemaps" },
+    shell: { label: "Bun.$", title: "Run shell globs, pipes, argument escaping, .json(), and exit codes" },
+    file: { label: "Bun.file", title: "Write and read text and JSON with Bun.write on the persistent browser filesystem" },
   },
   engineLabel: "Engine",
-  engineTitle: "JavaScript engine (reloads the page)",
+  engineTitle: "Choose the JavaScript engine. Switching reloads the page.",
   /** Option text in the engine picker. */
   engineOptions: {
     browser: "Browser (native)",
@@ -26,14 +26,14 @@ export const copy = {
   } satisfies Record<Engine, string>,
   /** One line under the demos naming what runs the code right now. */
   engineNotes: {
-    browser: "Running on this browser's own JavaScript engine, with Bun's runtime in Wasm.",
-    quickjs: "Running on QuickJS compiled to Wasm.",
-    jsc: "Running on JavaScriptCore, Bun's own engine, compiled to Wasm (no JIT).",
-    spidermonkey: "Running on SpiderMonkey compiled to Wasm.",
+    browser: "This page's own JavaScript engine runs Bun's runtime, with the toolchain in Wasm.",
+    quickjs: "QuickJS runs in Wasm.",
+    jsc: "JavaScriptCore, Bun's own engine, compiled to Wasm with no JIT.",
+    spidermonkey: "SpiderMonkey runs in Wasm.",
   } satisfies Record<Engine, string>,
   compat: {
-    text: "Framework matrix: 208 of 208 pass",
-    title: "13 frameworks, 4 browsers (Chrome, Firefox, desktop Safari, iPhone Safari on the iOS simulator) and 4 engines; every phase from install to cleanup. Measured 2026-11-23.",
+    text: "Framework matrix: 208 of 208 pass.",
+    title: "13 frameworks across 4 engines and 4 browsers: Chrome, Firefox, desktop Safari, and iPhone Safari on the iOS simulator. All 208 passed every phase from install to cleanup, measured 2026-11-23.",
     linkText: "Compatibility",
     href: "https://github.com/ShaulLavo/bun-wasm/blob/main/docs/compatibility.md",
   },
@@ -42,7 +42,7 @@ export const copy = {
   examplesOption: "Bun API examples",
   // The sandbox's link to these demos is DEMOS_LINK in sandbox/src/app.tsx.
   sandboxLink: "Sandbox",
-  sandboxTitle: "React sandbox with hot reload",
+  sandboxTitle: "Open the browser app sandbox with live preview",
   preview: {
     aria: "Server preview",
     frameTitle: "Server preview",
@@ -51,7 +51,7 @@ export const copy = {
     open: "Open",
     openTitle: "Open the preview in a new tab",
     close: "Close",
-    closeTitle: "Close the preview (the server keeps running)",
+    closeTitle: "Close the preview. The server keeps running.",
   },
 } as const;
 
