@@ -21,6 +21,12 @@ the visible authority also lets Bun's existing HMR origin check compare the
 document hostname with the requested hostname. The shared client, service-worker
 authorization, raw TCP requests and HMR foreign-Origin policy are unchanged.
 
+On a preview origin ([Preview origins](../preview-origins.md)) the same adapter is
+bundled into the injected page script. There the app owns `/`, so no prefix is
+removed, only same-origin URLs are tunneled, and the upgrade leaves as structured
+fields (URL, method, header pairs) without Host, Origin or Cookie: the IDE page
+supplies those and Waffle writes the handshake. Later bytes are unchanged.
+
 `web/tests/preview-websocket-client.test.ts` checks the emitted upgrade bytes,
 one Host and Origin, requested paths, negotiated protocol and separate tunnel
 routing for custom names, loopback addresses and different outer/guest ports.

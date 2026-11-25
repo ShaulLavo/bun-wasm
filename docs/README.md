@@ -30,7 +30,7 @@ Interfaces:
 - [Host ABI](host-abi.md): the `bun_wasm` network slots and the `runtime_proc` process imports.
 - [Browser package](browser-package.md): exports, ownership, integrity, acceptance gates.
 - [The browser engine](engine-browser.md): the host-engine guest and how it differs.
-- [Playground](playground.md), [Sandbox](sandbox.md), [Browser storage modes](storage-modes.md).
+- [Playground](playground.md), [Sandbox](sandbox.md), [Browser storage modes](storage-modes.md), [Preview origins](preview-origins.md).
 
 Runtime behavior:
 
