@@ -38,7 +38,10 @@ preview frame ── fetch ──> service worker of the preview origin ── M
    mounts one hidden relay frame at `/__bunwasm-preview/relay.html` on the preview origin.
 2. The relay frame registers the origin's service worker and tells its parent it is ready. The IDE
    answers with a `MessagePort`; the relay forwards it to the worker; the worker confirms on the
-   port. Only then is the preview shown.
+   port, and uses it once the IDE has answered there. Only then is the preview shown. A dev server
+   that restarts keeps its relay frame and gets a new port; the IDE closes the old one only after
+   the worker confirmed it (WebKit ends a page's process when a port is closed while its other end
+   is still in transit).
 3. The worker serializes each request (method, unchanged URL, header pairs, buffered body) to the
    port. The IDE hands it to Waffle with the port's one grant and streams the response back.
 4. Browsers stop idle service workers and drop their ports. A worker without a port asks the relay
@@ -141,4 +144,6 @@ itself; a cross-origin frame's own `load` event fires for error pages too.
   native runs that use it.
 
 Tests: `web/tests/preview-origin-*.test.ts` and `scripts/isolated-preview-origins-browser.test.ts`
-(Chromium, Firefox and WebKit; same-site, cross-site and a public-shaped hostname).
+(Chromium, Firefox and WebKit; same-site, cross-site and a public-shaped hostname). The browser
+test reads preview documents through a postMessage probe in the app, because Playwright does not
+see every preview frame in Firefox.

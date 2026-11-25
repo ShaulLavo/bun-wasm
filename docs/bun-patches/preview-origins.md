@@ -38,7 +38,11 @@ behavior.
   among later requests.
 - Sockets get their own port from the page to the IDE so that a hot-reload connection does not
   depend on the service worker staying alive.
-- The relay frame stays mounted across dev server restarts. Removing it while its service worker
-  was still installing left WebKit without a worker for the next listener.
+- The relay frame stays mounted across dev server restarts, and a port is closed only after the
+  worker answered on it. A dev server reports listening twice as it starts. WebKit (Playwright's
+  27.2 build) ended the IDE page's process in about one load in five when the first port was closed
+  a millisecond after it was sent.
+- The worker uses a port only after the IDE answered on it, so the port of a replaced listener is
+  never chosen, whichever of two ports arrives first.
 - `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` is Vite's own variable for hosted environments. It
   avoids a `server.allowedHosts` edit in every template.

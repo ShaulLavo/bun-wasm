@@ -305,22 +305,27 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
     }
   }
 
+  /** Resolves when the page confirmed cookie delivery `ack`, or after the hang cap. */
+  function cookiesAcknowledged(ack: number): Promise<void> {
+    return new Promise<void>(resolve => {
+      const done = () => {
+        clearTimeout(timer);
+        cookieAcks.delete(ack);
+        resolve();
+      };
+      const timer = setTimeout(done, cookieAckMs);
+      cookieAcks.set(ack, done);
+    });
+  }
+
   /** Hands changed cookies to the requesting page before its response resolves. */
   async function deliverCookies(requester: string): Promise<void> {
     const windows = (await options.clients.matchAll()).filter(client => !isRelay(client));
     const waits: Promise<void>[] = [];
     for (const client of windows) {
-      const wait = client.id === requester && shimClients.has(client.id);
-      const ack = wait ? nextId++ : undefined;
-      if (ack !== undefined) waits.push(new Promise<void>(resolve => {
-        const done = () => {
-          clearTimeout(timer);
-          cookieAcks.delete(ack);
-          resolve();
-        };
-        const timer = setTimeout(done, cookieAckMs);
-        cookieAcks.set(ack, done);
-      }));
+      // Only a page that runs the shim answers, so only the requester's answer is awaited.
+      const ack = client.id === requester && shimClients.has(client.id) ? nextId++ : undefined;
+      if (ack !== undefined) waits.push(cookiesAcknowledged(ack));
       try { client.postMessage({ type: SW_COOKIES, cookies, ack }); } catch {}
     }
     await Promise.all(waits);
