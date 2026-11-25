@@ -64,7 +64,7 @@ export const copy = {
     previewLive: "Server running",
   },
   /** Printed once in a second sandbox tab, whose dev server runs (and prints) in another tab. */
-  sandboxFollower: "The dev server runs in another tab of this sandbox; its output is in that tab's terminal.",
+  sandboxFollower: "This tab shows another tab's dev server. Its terminal output is in that tab.",
   /** The line the terminal prints when a server's preview is ready. */
   terminal: {
     previewLabel: "preview",
@@ -74,7 +74,7 @@ export const copy = {
     aria: "Server preview",
     frameTitle: "Server preview",
     waiting: "Waiting for the server",
-    failed: "The preview did not load. Press Restart or Open to try again.",
+    failed: "Preview failed to load. Try Open above, or Restart if shown.",
     restart: "Restart",
     restartTitle: "Save the file and restart the server",
     open: "Open",
