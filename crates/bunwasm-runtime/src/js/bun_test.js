@@ -839,6 +839,7 @@
     let evaluated = false;
     let running = false;
     let settled; // { value } once a thenable result has settled
+    let observed; // { state, value } once a promise result settles; the browser engine cannot peek
     // The factory runs once, on first use. A factory that loads its own target gets an empty
     // object, as in Bun, not a recursion.
     const evaluate = () => {
@@ -851,6 +852,9 @@
         running = false;
       }
       evaluated = true;
+      if (native.isPromise(result)) {
+        native.promiseThen(result, value => { observed = { state: "fulfilled", value }; }, error => { observed = { state: "rejected", value: error }; });
+      }
       return result;
     };
     // require() and module linking: a sync factory's value as it is (a thenable included); an
@@ -859,9 +863,9 @@
       const value = evaluate();
       if (settled) return settled.value;
       if (!native.isPromise(value)) return value;
-      const state = native.promiseState(value);
-      if (state === "fulfilled") return mockExports(native.promiseResult(value));
-      if (state === "rejected") throw native.promiseResult(value);
+      const known = observed ?? { state: native.promiseState(value), value: native.promiseResult(value) };
+      if (known.state === "fulfilled") return mockExports(known.value);
+      if (known.state === "rejected") throw known.value;
       throw new TypeError(`require() async module "${target}" is unsupported. use "await import()" instead.`);
     };
     const entry = {

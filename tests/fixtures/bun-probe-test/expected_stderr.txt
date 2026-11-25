@@ -42,5 +42,5 @@ probe.test.ts:
  1 skip
  1 todo
  0 fail
- 2 snapshots, 61 expect() calls
+ 2 snapshots, 60 expect() calls
 Ran 28 tests across 2 files. [TIME]

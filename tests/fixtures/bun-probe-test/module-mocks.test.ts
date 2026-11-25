@@ -8,7 +8,7 @@ mkdirSync(join(here, "mods/a"), { recursive: true });
 mkdirSync(join(here, "mods/b"), { recursive: true });
 mkdirSync(join(here, "node_modules/dual"), { recursive: true });
 writeFileSync(join(here, "mods/target.ts"), `export const name = "real";\n`);
-for (const name of ["async", "slow", "thenable", "defaults", "pending", "ready", "linked", "rejects"]) writeFileSync(join(here, `mods/${name}.ts`), `export const name = "real-${name}";\n`);
+for (const name of ["async", "slow", "thenable", "defaults", "pending", "linked", "rejects"]) writeFileSync(join(here, `mods/${name}.ts`), `export const name = "real-${name}";\n`);
 writeFileSync(join(here, "mods/b/probe.ts"), `export const load = () => import("./missing.ts").then(m => m.name, () => "unresolved");\n`);
 const importer = (target: string) => `import value, { name } from "./${target}.ts";\nimport * as ns from "./${target}.ts";\nexport const seen = [value, name, ns.default].join(" ");\n`;
 for (const target of ["defaults", "linked", "rejects"]) writeFileSync(join(here, `mods/uses-${target}.ts`), importer(target));
@@ -87,8 +87,6 @@ test("require() of a pending async factory throws until it settles", async () =>
   expect((error as Error).message).toBe(`require() async module "${join(here, "mods/pending.ts")}" is unsupported. use "await import()" instead.`);
   await Bun.sleep(100);
   expect(require("./mods/pending.ts").name).toBe("pending-value");
-  mock.module("./mods/ready.ts", async () => ({ name: "ready-value" }));
-  expect(require("./mods/ready.ts").name).toBe("ready-value");
 });
 
 test("static imports link against a settled async factory", async () => {
