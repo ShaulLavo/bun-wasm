@@ -532,7 +532,7 @@
       }
       if (number === 0 && target > 0) {
         if (target > 0x7fffffff) throw signalFailure(-71, "kill");
-        const result = native.procKill(target, 0);
+        const result = native.procProbeProcess(target);
         if (result < 0) throw signalFailure(result, "kill");
         return true;
       }

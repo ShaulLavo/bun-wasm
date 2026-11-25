@@ -33,11 +33,12 @@ test("shared public identity keeps zero, ignored, handled and fatal self signals
   expect(sibling.selected()).toBeUndefined();
 });
 
-function fixture(procKill: (pid: number, signal: number) => number = () => -71) {
+function fixture(procProbeProcess: (pid: number) => number = () => -71) {
   const dispositions = new Map<number, number>();
   const pending = new Set<number>();
   const changes: number[][] = [];
   const killCalls: number[][] = [];
+  const probeCalls: number[] = [];
   const ticks: (() => void)[] = [];
   const writes: unknown[][] = [];
   let writeError: Error | undefined;
@@ -55,7 +56,11 @@ function fixture(procKill: (pid: number, signal: number) => number = () => -71) 
       exit(code: number): never { throw new GuestExit(code); },
       procKill(pid: number, signal: number) {
         killCalls.push([pid, signal]);
-        return procKill(pid, signal);
+        return -52;
+      },
+      procProbeProcess(pid: number) {
+        probeCalls.push(pid);
+        return procProbeProcess(pid);
       },
       hostSignal(signal: number, mode: number) {
         // Mode 4 reads only the fatal outcome, as Waffle's runtime_proc.signal does.
@@ -107,7 +112,7 @@ function fixture(procKill: (pid: number, signal: number) => number = () => -71) 
   const process = runInContext(processSource, context)(internal);
   context.process = process;
   return {
-    process, events, internal, changes, killCalls, dispositions, pending, context, writes,
+    process, events, internal, changes, killCalls, probeCalls, dispositions, pending, context, writes,
     cancelIoWaitersCalls: () => cancelIoWaitersCalls,
     writeFails(error: Error) { writeError = error; },
     ticks() { while (ticks.length) ticks.shift()!(); },
@@ -534,9 +539,8 @@ test("stdio error listeners do not turn Node's ignored SIGPIPE into a fatal sign
   expect(f.selected()).toBeUndefined();
 });
 
-test("process.kill(pid, 0) maps runtime_proc.kill probe results to Node return and errno errors", () => {
-  const f = fixture((pid, signal) => {
-    expect(signal).toBe(0);
+test("process.kill(pid, 0) maps runtime_proc.probe_process results to Node return and errno errors", () => {
+  const f = fixture((pid) => {
     if (pid === 51) return 0;
     if (pid === 7) return -63;
     return -71;
@@ -544,7 +548,8 @@ test("process.kill(pid, 0) maps runtime_proc.kill probe results to Node return a
   expect(f.process.kill(f.process.pid, 0)).toBe(true);
   expect(f.process.kill(51, 0)).toBe(true);
   expect(f.process.kill("51", 0)).toBe(true);
-  expect(f.killCalls).toEqual([[51, 0], [51, 0]]);
+  expect(f.probeCalls).toEqual([51, 51]);
+  expect(f.killCalls).toEqual([]);
   expect(f.changes).toEqual([]);
 
   let permError: (Error & { code?: string; errno?: number; syscall?: string }) | undefined;

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Worker } from "node:worker_threads";
 
 function probeCode(pid: number): "ok" | string {
   try {
@@ -22,6 +23,78 @@ try {
   assert.equal(probeCode(process.pid), "ok");
   assert.equal(probeCode(sibling.pid), "ok");
   assert.equal(probeCode(999999), "ESRCH");
+
+  // Direct child of root must see EPERM (not ESRCH) when probing process.ppid (logical PID 1).
+  const direct = Bun.spawn([process.execPath, "-e", `
+    function probe(pid) {
+      try {
+        return process.kill(pid, 0) === true ? "ok" : "bad";
+      } catch (error) {
+        return error.code;
+      }
+    }
+    console.log(JSON.stringify({
+      self: probe(process.pid),
+      ppid: process.ppid,
+      parent: probe(process.ppid),
+      sibling: probe(${sibling.pid}),
+      missing: probe(999999),
+    }));
+  `], { stdout: "pipe", stderr: "pipe", timeout: 10000, killSignal: "SIGKILL" });
+  const directOut = await new Response(direct.stdout).text();
+  assert.equal(await direct.exited, 0);
+  const directResult = JSON.parse(directOut.trim()) as {
+    self: string;
+    ppid: number;
+    parent: string;
+    sibling: string;
+    missing: string;
+  };
+  assert.deepEqual(directResult, {
+    self: "ok",
+    ppid: process.pid,
+    parent: "EPERM",
+    sibling: "EPERM",
+    missing: "ESRCH",
+  });
+
+  // A worker_threads.Worker shares process.pid; its private execution handle must report ESRCH.
+  const worker = new Worker(`
+    const { parentPort } = require("node:worker_threads");
+    function probe(pid) {
+      try {
+        return process.kill(pid, 0) === true ? "ok" : "bad";
+      } catch (error) {
+        return error.code;
+      }
+    }
+    parentPort.postMessage({ pid: process.pid, self: probe(process.pid) });
+    parentPort.on("message", () => process.exit(0));
+  `, { eval: true });
+  try {
+    const workerInfo = await new Promise<{ pid: number; self: string }>((resolve, reject) => {
+      worker.once("message", resolve);
+      worker.once("error", reject);
+    });
+    assert.deepEqual(workerInfo, { pid: process.pid, self: "ok" });
+    const afterWorker = Bun.spawn([process.execPath, "-e", ""], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 10000,
+      killSignal: "SIGKILL",
+    });
+    assert.equal(await afterWorker.exited, 0);
+    // Between direct.pid and afterWorker.pid lies the live worker's private execution handle.
+    assert.ok(afterWorker.pid > direct.pid + 1);
+    for (let handle = direct.pid + 1; handle < afterWorker.pid; handle++) {
+      assert.equal(probeCode(handle), "ESRCH");
+    }
+    assert.equal(probeCode(process.pid), "ok");
+    worker.postMessage("stop");
+    await new Promise<void>((resolve) => worker.once("exit", () => resolve()));
+  } finally {
+    await worker.terminate();
+  }
 
   const mid = Bun.spawn([process.execPath, "-e", `
     const grand = Bun.spawn([process.execPath, "-e", \`

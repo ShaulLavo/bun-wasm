@@ -1069,7 +1069,9 @@ fn signal_zero_probes_without_waking_and_distinguishes_live_zombie_collected_and
     assert_eq!(child.kill(10, 0), PERM);
     assert_eq!(child.kill(11, 0), PERM);
     assert_eq!(root.kill(99999, 0), SRCH);
+    assert_eq!(root.kill_job(ROOT_JOB, 0), 0);
     assert_eq!(root.kill_job(77, 0), PERM);
+    assert_eq!(root.kill_job(99999, 0), SRCH);
     assert_eq!(root.notify.generation(), before);
 
     // Zombie (exited, not yet reaped): still exists until wait() collects it.
@@ -1094,6 +1096,125 @@ fn signal_zero_probes_without_waking_and_distinguishes_live_zombie_collected_and
     );
     assert_eq!(root.kill(11, 0), SRCH);
     assert_eq!(child.kill(11, 0), SRCH);
+    assert_eq!(root.notify.generation(), before);
+}
+
+#[test]
+fn probe_process_resolves_logical_pids_across_root_threads_and_collection() {
+    let root = processes();
+    let root_logical = root.process_identity().pair().0;
+    assert_eq!(root_logical, 1);
+    assert_eq!(root.pid, 0);
+
+    let thread_admission = root
+        .runtime
+        .admit_fixture(root.pid, ProcessKind::Thread, Arc::default())
+        .unwrap();
+    let thread_exec = thread_admission.execution_id().get();
+    let thread = Processes::new(
+        thread_admission,
+        Stdio {
+            fds: Descriptors::new(),
+            memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
+        },
+        root.notify.clone(),
+    );
+
+    let child_admission = root
+        .runtime
+        .admit_fixture(root.pid, ProcessKind::Process, Arc::default())
+        .unwrap();
+    let child_exec = child_admission.execution_id().get();
+    let child = Processes::new(
+        child_admission,
+        Stdio {
+            fds: Descriptors::new(),
+            memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
+        },
+        root.notify.clone(),
+    );
+    assert_eq!(child.process_identity().pair(), (child_exec, root_logical));
+
+    let child_thread_admission = root
+        .runtime
+        .admit_fixture(child_exec, ProcessKind::Thread, Arc::default())
+        .unwrap();
+    let child_thread_exec = child_thread_admission.execution_id().get();
+    let child_thread = Processes::new(
+        child_thread_admission,
+        Stdio {
+            fds: Descriptors::new(),
+            memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
+        },
+        root.notify.clone(),
+    );
+    assert_eq!(
+        child_thread.process_identity().pair(),
+        (child_exec, root_logical)
+    );
+
+    let sibling_admission = root
+        .runtime
+        .admit_fixture(root.pid, ProcessKind::Process, Arc::default())
+        .unwrap();
+    let sibling = Processes::new(
+        sibling_admission,
+        Stdio {
+            fds: Descriptors::new(),
+            memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
+        },
+        root.notify.clone(),
+    );
+
+    let before = root.notify.generation();
+    // Root's logical PID (1) differs from its execution handle (0): direct child sees EPERM,
+    // while root and root's thread both see 0.
+    assert_eq!(root.probe_process(root_logical), 0);
+    assert_eq!(thread.probe_process(root_logical), 0);
+    assert_eq!(child.probe_process(root_logical), PERM);
+
+    // Private thread execution handles are not logical PIDs -> ESRCH, while raw kill(exec, 0)
+    // keeps its execution-handle behavior.
+    assert_eq!(root.probe_process(thread_exec), SRCH);
+    assert_eq!(thread.probe_process(thread_exec), SRCH);
+    assert_eq!(root.probe_process(child_thread_exec), SRCH);
+    assert_eq!(root.kill(thread_exec, 0), 0);
+    assert_eq!(root.kill(child_thread_exec, 0), 0);
+
+    // Non-positive and unknown PIDs return ESRCH.
+    assert_eq!(root.probe_process(0), SRCH);
+    assert_eq!(root.probe_process(-1), SRCH);
+    assert_eq!(root.probe_process(99999), SRCH);
+
+    // Logical PID stays alive while its thread survives leader collection, then reports ESRCH.
+    assert_eq!(root.probe_process(child_exec), 0);
+    assert_eq!(sibling.probe_process(child_exec), PERM);
+    assert!(
+        root.runtime
+            .state
+            .lock()
+            .unwrap()
+            .processes
+            .remove(&child_exec)
+            .is_some()
+    );
+    assert_eq!(root.probe_process(child_exec), 0);
+    assert_eq!(sibling.probe_process(child_exec), PERM);
+    assert!(
+        root.runtime
+            .state
+            .lock()
+            .unwrap()
+            .processes
+            .remove(&child_thread_exec)
+            .is_some()
+    );
+    assert_eq!(root.probe_process(child_exec), SRCH);
+    assert_eq!(sibling.probe_process(child_exec), SRCH);
+
+    // Exited caller returns ESRCH.
+    sibling.cancel.select(FinalOutcome::Exit(0));
+    assert_eq!(sibling.probe_process(root_logical), SRCH);
     assert_eq!(root.notify.generation(), before);
 }
 
