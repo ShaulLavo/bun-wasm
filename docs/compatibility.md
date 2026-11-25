@@ -18,12 +18,12 @@ Two yardsticks measure compatibility:
 | `bun test` | Supported. See the [suite results](#bun-upstream-test-suite). |
 | `bun build`, `Bun.build` | Supported, through Bun's bundler. |
 | `bun install`, `bun i`, `bun ci`, `bun add`, `bun remove`, `bun update`, `bun x`, `bun pm` | Supported. Needs a network host. See [Installing npm packages](install.md). |
-| `bun lint`, `bun fmt` | Run in a separate guest, `bun-tools.wasm`. Without that file the playground build warns that lint and fmt are unavailable. |
+| `bun lint`, `bun fmt`, `bun check` | Run in a separate guest, `bun-tools.wasm`. Without that file the playground build warns that lint and fmt are unavailable. `bun check` runs on one thread and does not run a `check` script from `package.json` first. |
 | `bun exec <script>`, `Bun.$` | Supported. They run in the page's system shell, `/bin/sh` or `/bin/bash`, which bash-web's `installShellCommands` provides. |
 | `bun init` | Supported for the blank and minimal templates. There is no template picker, so it always takes Blank; `--react` is not supported. |
 | `bun create <template>` | Supported for npm `create-<template>` packages, for example `bun create vite`. GitHub and local templates are not. |
 | `bun repl` | Supported. Typed input from bash-web's terminal does not reach Bun yet, so today it reads piped input only. |
-| `bun upgrade`, `link`, `unlink`, `outdated`, `publish`, `patch`, `patch-commit`, `info`, `why`, `audit`, `completions`, `dedupe`, `prune`, `check`, `deploy`, `cloud`, `config`, `use`, `auth`, `login`, `logout` | Not supported. They print `error: bun <command> is not supported in bun-wasm` and exit 1. |
+| `bun upgrade`, `link`, `unlink`, `outdated`, `publish`, `patch`, `patch-commit`, `info`, `why`, `audit`, `completions`, `dedupe`, `prune`, `deploy`, `cloud`, `config`, `use`, `auth`, `login`, `logout` | Not supported. They print `error: bun <command> is not supported in bun-wasm` and exit 1. |
 
 ## Engines
 

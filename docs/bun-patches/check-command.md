@@ -38,22 +38,10 @@ browser and Node hosts.
 `src/runtime/cli/typescript_libs.rs` and its `typescript_libs.bin` are compiled once
 in `crates/bunwasm-tools/src/main.rs` and shared by the lint and check adapters.
 
-## ICU normalization
-
-Class **Port**. `crates/bunwasm-lint-native/src/lib.rs` defines `Bun__normalizeUTF16`,
-the C entry point of upstream `src/jsc/bindings/bun_icu_normalize.cpp`, on the
-`icu_normalizer` crate (ICU4X) instead of ICU4C's `unorm2_normalize`, which the
-tools guest doesn't link. It keeps the same contract: forms 0 to 3 are NFC, NFD,
-NFKC and NFKD, the return value is the normalized length, and the text is written
-only when it fits. Bun 1.4.5's JSON lint rule `no-unnormalized-keys` is its only
-caller in the tools guest. ICU4X maps unpaired surrogates to U+FFFD before
-normalizing, where ICU4C keeps them.
-
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Check command adapter](#check-command) | Port | Run Bun's type checker as `bun check` in the tools guest, single-threaded. |
-| [ICU normalization](#icu-normalization) | Port | `Bun__normalizeUTF16` on ICU4X for the tools guest. |
 
 [Ledger scope and pinned revisions](scope.md).
