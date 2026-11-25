@@ -120,6 +120,7 @@ ok Bun.CSRF options: [
   "TypeError ERR_INVALID_ARG_TYPE: token must be a string", "TypeError ERR_INVALID_ARG_TYPE: Token must be a non-empty string",
   "TypeError ERR_INVALID_ARG_TYPE: CSRFVerifyOptions.secret must be a string", "TypeError ERR_INVALID_ARG_TYPE: The \"CSRFVerifyOptions.maxAge\" property must be of type number. Received an instance of Object"
 ]
+ok Bun.CSRF callable options and signed hex: [ 128, "00", true, false, false ]
 ok Bun.CSRF decoding: [
   192, true, false, true, false, true, true, true, true, false, false, false
 ]

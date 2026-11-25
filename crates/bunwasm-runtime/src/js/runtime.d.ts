@@ -128,6 +128,10 @@ declare namespace BunWasm {
     require(name: "zone_ids"): Record<string, string>;
     readonly native: Native;
     readonly builtinFactories: Record<string, () => object>;
+    /** bun_test.js: settles an async mock.module() factory before import() loads `name`. */
+    mockImportReady?: (name: string) => Promise<void> | undefined;
+    /** Drops a cached builtin so its factory's settled value replaces it. */
+    forgetBuiltin(id: string): void;
     readonly realTimers: import("./immediate_queue-types").ImmediateTimers;
     require(name: "net_address"): {
       isIP(value: string): 0 | 4 | 6;

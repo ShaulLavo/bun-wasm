@@ -784,6 +784,17 @@
 
   mock.restore = () => forEachMock("mockRestore");
   mock.clearAllMocks = () => forEachMock("mockClear");
+  // Dynamic imports call this with the resolved module name before loading it.
+  const mockImports = new Map();
+  let mockImportsInstalled = false;
+  function installMockImports() {
+    if (mockImportsInstalled) return;
+    mockImportsInstalled = true;
+    const ready = (name) => mockImports.get(name)?.();
+    internal.mockImportReady = ready;
+    internal.defineGlobal("__bunwasm_mockImportReady", ready);
+  }
+
   // mock.module(specifier, factory): later imports and requires of the module get the factory's
   // exports (docs/bun-patches/bun-test-mock-module.md). The resolver maps the target, resolved
   // from the calling file, to a plugin module key, so every spelling of it is covered and a
@@ -799,11 +810,13 @@
     const origin = internal.require("caller_origin")();
     const from = origin && origin.startsWith("file:") ? fileURLToPath(origin) : `${globalThis.process.cwd()}/`;
     const key = native.mockModule(specifier.startsWith("file:") ? fileURLToPath(specifier) : specifier, from);
-    let exports;
+    let value;
+    let evaluated = false;
     let running = false;
-    internal.builtinFactories[key] = () => {
-      if (exports) return exports;
-      // A factory that loads its own target gets an empty object, as in Bun, not a recursion.
+    // The factory runs once, on first use. A factory that loads its own target gets an empty
+    // object, as in Bun, not a recursion.
+    const evaluate = () => {
+      if (evaluated) return value;
       if (running) return {};
       running = true;
       let result;
@@ -812,11 +825,24 @@
       } finally {
         running = false;
       }
-      // A thenable is a value like any other, as in Bun.
       if (result === null || (typeof result !== "object" && typeof result !== "function")) throw new TypeError("mock(module, fn) requires a function that returns an object");
-      exports = result;
-      return exports;
+      evaluated = true;
+      value = result;
+      return value;
     };
+    internal.builtinFactories[key] = evaluate;
+    // import() waits for a thenable result (an async factory's promise, or any thenable) and
+    // uses what it settles to, as Bun does; require() takes the value as it is until then.
+    mockImports.set(key, () => {
+      const result = evaluate();
+      if (!isThenable(result)) return undefined;
+      return Promise.resolve(result).then(settled => {
+        if (settled === null || typeof settled !== "object") throw new TypeError("mock(module, fn) requires a function that returns an object");
+        value = settled;
+        internal.forgetBuiltin(key);
+      });
+    });
+    installMockImports();
     return undefined;
   };
 

@@ -676,6 +676,11 @@ fn mocks_of_missing_files_and_builtins_use_their_normalized_names() {
             .resolve("./missing.ts", &in_b, Kind::Import)
             .is_err()
     );
+    let url = format!("file://{}", fixture.path("a/missing.ts"));
+    assert!(matches!(
+        resolver.resolve(&url, &in_b, Kind::Import),
+        Ok(Resolved::Builtin(_))
+    ));
     let fs = resolver.register_mock("fs/promises", &in_a);
     assert_eq!(
         resolver.resolve("node:fs/promises", &in_b, Kind::Import),

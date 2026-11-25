@@ -1157,6 +1157,9 @@
   const builtinFactories = Object.create(null);
   internal.builtinFactories = builtinFactories;
 
+  // A mock.module() whose async factory settled replaces the value require() saw before.
+  internal.forgetBuiltin = (id) => builtinCache.delete(id);
+
   internal.builtin = function builtin(id) {
     if (builtinCache.has(id)) return builtinCache.get(id);
     const factory = builtinFactories[id];

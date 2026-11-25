@@ -181,6 +181,18 @@ await check("Bun.CSRF options", () => {
     code(() => Bun.CSRF.verify("x", { secret: "s", maxAge: {} as unknown as number })),
   ];
 });
+await check("Bun.CSRF callable options and signed hex", () => {
+  const generateOptions = Object.assign(() => undefined, { encoding: "hex", sessionId: "user-1", expiresIn: 60_000 });
+  const verifyOptions = Object.assign(() => undefined, { secret: "s", encoding: "hex", sessionId: "user-1" });
+  const token = Bun.CSRF.generate("s", generateOptions as unknown as Bun.CSRFGenerateOptions);
+  const wrongSession = Object.assign(() => undefined, { secret: "s", encoding: "hex", sessionId: "user-2" });
+  // The timestamp's first byte is 00; "+0" decodes to it only with a sign-accepting parser.
+  const signed = `+0${token.slice(2)}`;
+  return [
+    token.length, token.slice(0, 2), Bun.CSRF.verify(token, verifyOptions as unknown as Bun.CSRFVerifyOptions),
+    Bun.CSRF.verify(token, wrongSession as unknown as Bun.CSRFVerifyOptions), Bun.CSRF.verify(signed, verifyOptions as unknown as Bun.CSRFVerifyOptions),
+  ];
+});
 await check("Bun.CSRF decoding", () => {
   const hex = Bun.CSRF.generate("s", { encoding: "hex", algorithm: "sha512" });
   const url = Bun.CSRF.generate("s");

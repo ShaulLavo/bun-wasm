@@ -8,6 +8,7 @@ mkdirSync(join(here, "mods/a"), { recursive: true });
 mkdirSync(join(here, "mods/b"), { recursive: true });
 mkdirSync(join(here, "node_modules/dual"), { recursive: true });
 writeFileSync(join(here, "mods/target.ts"), `export const name = "real";\n`);
+for (const name of ["async", "slow", "thenable"]) writeFileSync(join(here, `mods/${name}.ts`), `export const name = "real-${name}";\n`);
 writeFileSync(join(here, "mods/b/probe.ts"), `export const load = () => import("./missing.ts").then(m => m.name, () => "unresolved");\n`);
 writeFileSync(join(here, "node_modules/dual/package.json"), JSON.stringify({ name: "dual", exports: { import: "./esm.mjs", require: "./cjs.cjs" } }));
 writeFileSync(join(here, "node_modules/dual/esm.mjs"), `export const kind = "esm";\n`);
@@ -39,6 +40,28 @@ test("a builtin mock covers every import spelling but not require", async () => 
 test("a package mock replaces its import entry", async () => {
   mock.module("dual", () => ({ kind: "mocked" }));
   expect((await import("dual")).kind).toBe("mocked");
+});
+
+test("an async factory settles before import() sees it", async () => {
+  mock.module("./mods/async.ts", async () => ({ name: "async-value" }));
+  expect((await import("./mods/async.ts")).name).toBe("async-value");
+  mock.module("./mods/slow.ts", async () => {
+    await Bun.sleep(20);
+    return { name: "slow-value" };
+  });
+  expect((await import("./mods/slow.ts")).name).toBe("slow-value");
+  expect(require("./mods/slow.ts").name).toBe("slow-value");
+});
+
+test("a thenable is a value for require() and settles for import()", async () => {
+  mock.module("./mods/thenable.ts", () => ({ then(resolve: (value: object) => void) { resolve({ name: "from-then" }); }, name: "own" }));
+  expect(require("./mods/thenable.ts").name).toBe("own");
+  expect((await import("./mods/thenable.ts")).name).toBe("from-then");
+});
+
+test("a missing file is mocked through its file: URL", async () => {
+  mock.module("./mods/a/url-missing.ts", () => ({ name: "via-url" }));
+  expect((await import(Bun.pathToFileURL(join(here, "mods/a/url-missing.ts")).href)).name).toBe("via-url");
 });
 
 test("mock.module argument errors", () => {

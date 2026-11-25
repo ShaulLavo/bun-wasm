@@ -4,6 +4,9 @@ module-mocks.test.ts:
 (pass) a missing file is mocked relative to the caller only
 (pass) a builtin mock covers every import spelling but not require
 (pass) a package mock replaces its import entry
+(pass) an async factory settles before import() sees it
+(pass) a thenable is a value for require() and settles for import()
+(pass) a missing file is mocked through its file: URL
 (pass) mock.module argument errors
 
 probe.test.ts:
@@ -24,9 +27,16 @@ probe.test.ts:
 (pass) async and modifiers > expect.assertions
 (pass) async and modifiers > asymmetric matchers
 
- 19 pass
+1 tests skipped:
+(skip) async and modifiers > skipped
+
+
+1 tests todo:
+(todo) async and modifiers > todo later
+
+ 22 pass
  1 skip
  1 todo
  0 fail
- 2 snapshots, 47 expect() calls
-Ran 21 tests across 2 files. [TIME]
+ 2 snapshots, 53 expect() calls
+Ran 24 tests across 2 files. [TIME]

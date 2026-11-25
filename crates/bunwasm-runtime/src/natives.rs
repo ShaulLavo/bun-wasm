@@ -116,6 +116,17 @@ fn password_error(err: crate::password::Error, verb: &str) -> NativeError {
     NativeError::error(format!("Password {verb} failed with error \"{name}\"")).prop("code", code)
 }
 
+fn csrf_error(err: crate::csrf::CsrfError) -> NativeError {
+    match err {
+        crate::csrf::CsrfError::NoSecret => NativeError::error(
+            "Failed to create the default CSRF secret: no secure random source".to_string(),
+        ),
+        crate::csrf::CsrfError::TokenCreationFailed => {
+            NativeError::error("Failed to create CSRF token".to_string())
+        }
+    }
+}
+
 fn errno_info(err: &io::Error) -> (&'static str, i32, &'static str) {
     use io::ErrorKind as K;
     match err.raw_os_error() {
@@ -2135,19 +2146,21 @@ fn install_crypto(t: &mut Table) {
             format,
         )
         .map(Val::Str)
-        .ok_or_else(|| NativeError::error("Failed to create CSRF token".to_string()))
+        .map_err(csrf_error)
     });
     t.add("csrfVerify", |a| {
         let format = crate::csrf::TokenFormat::parse(a.str(2)?)
             .ok_or_else(|| NativeError::type_error("Invalid format".to_string()))?;
-        Ok(Val::Bool(crate::csrf::verify(
+        crate::csrf::verify(
             a.bytes(0)?,
             a.opt_bytes(4),
             a.opt_bytes(5).unwrap_or(&[]),
             a.num(3)? as u64,
             a.str(1)?,
             format,
-        )))
+        )
+        .map(Val::Bool)
+        .map_err(csrf_error)
     });
     // node:crypto pbkdf2: (canonical name, password, salt, iterations, keylen).
     t.add("nodePbkdf2", |a| {

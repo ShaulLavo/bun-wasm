@@ -13,6 +13,8 @@
   type Format = "base64" | "base64url" | "hex";
   type Options = Record<string, unknown>;
 
+  // JSC's is_object: a function with properties is an options object too.
+  const isObject = (value: unknown): value is Options => value !== null && (typeof value === "object" || typeof value === "function");
   const typeError = (message: string) => Object.assign(new TypeError(message), { code: "ERR_INVALID_ARG_TYPE" });
   // Node's "Received ..." description of an argument.
   function describe(value: unknown): string {
@@ -68,7 +70,7 @@
       if (!secretValue.length) throw typeError("Secret must be a non-empty string");
       secret = native.utf8Encode(secretValue);
     }
-    const options = optionsValue !== null && typeof optionsValue === "object" ? optionsValue as Options : {};
+    const options = isObject(optionsValue) ? optionsValue : {};
     const expiresIn = duration(options, "CSRFGenerateOptions.expiresIn") ?? DEFAULT_EXPIRATION_MS;
     const sessionId = text(options, "sessionId", "CSRFGenerateOptions", "sessionId must be a non-empty string");
     const encoding = format(options) ?? "base64url";
@@ -79,7 +81,7 @@
   function verify(token?: unknown, optionsValue?: unknown): boolean {
     if (typeof token !== "string") throw typeError("token must be a string");
     if (!token.length) throw typeError("Token must be a non-empty string");
-    const options = optionsValue !== null && typeof optionsValue === "object" ? optionsValue as Options : {};
+    const options = isObject(optionsValue) ? optionsValue : {};
     const secret = text(options, "secret", "CSRFVerifyOptions", "Secret must be a non-empty string");
     const sessionId = text(options, "sessionId", "CSRFVerifyOptions", "sessionId must be a non-empty string");
     const maxAge = duration(options, "CSRFVerifyOptions.maxAge") ?? DEFAULT_EXPIRATION_MS;

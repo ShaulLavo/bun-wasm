@@ -357,11 +357,15 @@ impl Resolver {
     pub fn resolve(&self, spec: &str, from: &str, kind: Kind) -> Result<Resolved, String> {
         let resolved = match self.resolve_unmocked(spec, from, kind) {
             Ok(resolved) => resolved,
-            // A mocked file need not exist.
+            // A mocked file need not exist, whether named by a path or a file: URL.
             Err(error)
-                if is_relative_or_absolute(spec) && !self.mocked_files.borrow().is_empty() =>
+                if !self.mocked_files.borrow().is_empty()
+                    && (is_relative_or_absolute(spec) || spec.starts_with("file:")) =>
             {
-                let path = normalize(&join(directory_of(from), spec));
+                let path = match file_url_to_path(spec) {
+                    Some(path) => normalize(&path),
+                    None => normalize(&join(directory_of(from), spec)),
+                };
                 return self
                     .active_mock(self.mocked_files.borrow().get(&path))
                     .map(Resolved::Builtin)
