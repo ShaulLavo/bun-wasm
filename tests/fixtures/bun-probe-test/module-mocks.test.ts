@@ -8,8 +8,10 @@ mkdirSync(join(here, "mods/a"), { recursive: true });
 mkdirSync(join(here, "mods/b"), { recursive: true });
 mkdirSync(join(here, "node_modules/dual"), { recursive: true });
 writeFileSync(join(here, "mods/target.ts"), `export const name = "real";\n`);
-for (const name of ["async", "slow", "thenable"]) writeFileSync(join(here, `mods/${name}.ts`), `export const name = "real-${name}";\n`);
+for (const name of ["async", "slow", "thenable", "defaults", "pending", "ready", "linked", "rejects"]) writeFileSync(join(here, `mods/${name}.ts`), `export const name = "real-${name}";\n`);
 writeFileSync(join(here, "mods/b/probe.ts"), `export const load = () => import("./missing.ts").then(m => m.name, () => "unresolved");\n`);
+const importer = (target: string) => `import value, { name } from "./${target}.ts";\nimport * as ns from "./${target}.ts";\nexport const seen = [value, name, ns.default].join(" ");\n`;
+for (const target of ["defaults", "linked", "rejects"]) writeFileSync(join(here, `mods/uses-${target}.ts`), importer(target));
 writeFileSync(join(here, "node_modules/dual/package.json"), JSON.stringify({ name: "dual", exports: { import: "./esm.mjs", require: "./cjs.cjs" } }));
 writeFileSync(join(here, "node_modules/dual/esm.mjs"), `export const kind = "esm";\n`);
 writeFileSync(join(here, "node_modules/dual/cjs.cjs"), `module.exports = { kind: "cjs" };\n`);
@@ -62,6 +64,47 @@ test("a thenable is a value for require() and settles for import()", async () =>
 test("a missing file is mocked through its file: URL", async () => {
   mock.module("./mods/a/url-missing.ts", () => ({ name: "via-url" }));
   expect((await import(Bun.pathToFileURL(join(here, "mods/a/url-missing.ts")).href)).name).toBe("via-url");
+});
+
+test("a mock's default key is its default export", async () => {
+  mock.module("./mods/defaults.ts", () => ({ default: "mock-default", name: "mock-named" }));
+  expect((await import("./mods/uses-defaults.ts")).seen).toBe("mock-default mock-named mock-default");
+  expect((await import("./mods/defaults.ts")).default).toBe("mock-default");
+});
+
+test("require() of a pending async factory throws until it settles", async () => {
+  mock.module("./mods/pending.ts", async () => {
+    await Bun.sleep(20);
+    return { name: "pending-value" };
+  });
+  let error: unknown;
+  try {
+    require("./mods/pending.ts");
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(TypeError);
+  expect((error as Error).message).toBe(`require() async module "${join(here, "mods/pending.ts")}" is unsupported. use "await import()" instead.`);
+  await Bun.sleep(100);
+  expect(require("./mods/pending.ts").name).toBe("pending-value");
+  mock.module("./mods/ready.ts", async () => ({ name: "ready-value" }));
+  expect(require("./mods/ready.ts").name).toBe("ready-value");
+});
+
+test("static imports link against a settled async factory", async () => {
+  mock.module("./mods/linked.ts", async () => {
+    await Bun.sleep(20);
+    return { default: "slow-default", name: "slow-mock" };
+  });
+  expect((await import("./mods/uses-linked.ts")).seen).toBe("slow-default slow-mock slow-default");
+});
+
+test("a rejected async factory fails the import that links it", async () => {
+  mock.module("./mods/rejects.ts", async () => {
+    await Bun.sleep(5);
+    throw new Error("factory boom");
+  });
+  await expect(import("./mods/uses-rejects.ts")).rejects.toThrow("factory boom");
 });
 
 test("mock.module argument errors", () => {

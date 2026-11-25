@@ -784,15 +784,39 @@
 
   mock.restore = () => forEachMock("mockRestore");
   mock.clearAllMocks = () => forEachMock("mockClear");
-  // Dynamic imports call this with the resolved module name before loading it.
-  const mockImports = new Map();
+  // Every registered mock, by plugin module key (see mock.module below).
+  const moduleMocks = new Map();
+  const AsyncFunctionPrototype = Object.getPrototypeOf(async function () {});
   let mockImportsInstalled = false;
+
+  // Before a module graph links (each test file, preload and dynamic import), settle async
+  // factories so static imports of them link with their values, as in Bun: every mock whose
+  // factory is an async function, plus `name` itself when it is a mock with a thenable result.
+  // A rejected factory is reported where its module loads, not here.
+  function mockImportReady(name) {
+    const waits = [];
+    for (const [key, entry] of moduleMocks) {
+      // Bun.plugin.clearAll() removed it.
+      if (native.mockTarget(key) == null) {
+        moduleMocks.delete(key);
+        continue;
+      }
+      const pending = key === name || entry.async ? entry.settle() : undefined;
+      if (pending) waits.push(pending);
+    }
+    return waits.length ? Promise.allSettled(waits).then(() => undefined) : undefined;
+  }
+
   function installMockImports() {
     if (mockImportsInstalled) return;
     mockImportsInstalled = true;
-    const ready = (name) => mockImports.get(name)?.();
-    internal.mockImportReady = ready;
-    internal.defineGlobal("__bunwasm_mockImportReady", ready);
+    internal.mockImportReady = mockImportReady;
+    internal.defineGlobal("__bunwasm_mockImportReady", mockImportReady);
+  }
+
+  function mockExports(value) {
+    if (value === null || (typeof value !== "object" && typeof value !== "function")) throw new TypeError("mock(module, fn) requires a function that returns an object");
+    return value;
   }
 
   // mock.module(specifier, factory): later imports and requires of the module get the factory's
@@ -810,38 +834,54 @@
     const origin = internal.require("caller_origin")();
     const from = origin && origin.startsWith("file:") ? fileURLToPath(origin) : `${globalThis.process.cwd()}/`;
     const key = native.mockModule(specifier.startsWith("file:") ? fileURLToPath(specifier) : specifier, from);
-    let value;
+    const target = native.mockTarget(key) ?? specifier;
+    let result;
     let evaluated = false;
     let running = false;
+    let settled; // { value } once a thenable result has settled
     // The factory runs once, on first use. A factory that loads its own target gets an empty
     // object, as in Bun, not a recursion.
     const evaluate = () => {
-      if (evaluated) return value;
+      if (evaluated) return result;
       if (running) return {};
       running = true;
-      let result;
       try {
-        result = factory();
+        result = mockExports(factory());
       } finally {
         running = false;
       }
-      if (result === null || (typeof result !== "object" && typeof result !== "function")) throw new TypeError("mock(module, fn) requires a function that returns an object");
       evaluated = true;
-      value = result;
-      return value;
+      return result;
     };
-    internal.builtinFactories[key] = evaluate;
-    // import() waits for a thenable result (an async factory's promise, or any thenable) and
-    // uses what it settles to, as Bun does; require() takes the value as it is until then.
-    mockImports.set(key, () => {
-      const result = evaluate();
-      if (!isThenable(result)) return undefined;
-      return Promise.resolve(result).then(settled => {
-        if (settled === null || typeof settled !== "object") throw new TypeError("mock(module, fn) requires a function that returns an object");
-        value = settled;
-        internal.forgetBuiltin(key);
-      });
-    });
+    // require() and module linking: a sync factory's value as it is (a thenable included); an
+    // async factory's settled value; a pending one is Bun's error, a rejected one its reason.
+    internal.builtinFactories[key] = () => {
+      const value = evaluate();
+      if (settled) return settled.value;
+      if (!native.isPromise(value)) return value;
+      const state = native.promiseState(value);
+      if (state === "fulfilled") return mockExports(native.promiseResult(value));
+      if (state === "rejected") throw native.promiseResult(value);
+      throw new TypeError(`require() async module "${target}" is unsupported. use "await import()" instead.`);
+    };
+    const entry = {
+      target,
+      async: Object.getPrototypeOf(factory) === AsyncFunctionPrototype,
+      // import() of a thenable result uses what it settles to.
+      settle() {
+        if (settled) return undefined;
+        const value = evaluate();
+        if (!isThenable(value)) return undefined;
+        return Promise.resolve(value).then(resolved => {
+          settled = { value: mockExports(resolved) };
+          internal.forgetBuiltin(key);
+        });
+      },
+    };
+    // A replaced mock's factory never runs.
+    for (const [other, { target: replaced }] of moduleMocks) if (replaced === target) moduleMocks.delete(other);
+    moduleMocks.set(key, entry);
+    internal.esmShapedBuiltins.add(key);
     installMockImports();
     return undefined;
   };

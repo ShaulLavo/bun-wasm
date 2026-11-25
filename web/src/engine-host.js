@@ -824,8 +824,8 @@ class EngineHost {
   /** A non-ES module's exports, run (or reused) through require's cache, and its default. */
   handoff(key, format) {
     if (format === "builtin") {
-      const value = this.internal.builtin(key);
-      return { value, default: value && typeof value === "object" && value.__esModule ? value.default : value };
+      const [value, def] = this.internal.builtinImport(key);
+      return { value, default: def };
     }
     const [value, def] = this.internal.importNonEsm(key, format);
     return { value, default: def };

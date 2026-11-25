@@ -1134,7 +1134,7 @@
     }
     const format = native.moduleFormat(path);
     if (format === "html") return internal.require("html_server").start(path);
-    if (format === "esm") return native.importModule(path);
+    if (format === "esm") return internal.importModule(path);
     mainModule = new Module(path, null);
     mainModule.id = ".";
     moduleCache[path] = mainModule;
@@ -1149,7 +1149,11 @@
     internal.exitReason = "test-complete";
     return internal.require("bun_test").run(args);
   };
-  internal.importModule = (path) => native.importModule(path);
+  // Pending async mock.module() factories settle before a module graph links.
+  internal.importModule = (path) => {
+    const ready = internal.mockImportReady?.(path);
+    return ready ? ready.then(() => native.importModule(path)) : native.importModule(path);
+  };
 
   // --- built-in modules -------------------------------------------------------
 
@@ -1167,6 +1171,19 @@
     const exports = factory();
     builtinCache.set(id, exports);
     return exports;
+  };
+
+  // Modules whose `default` key is their default export, as for an ES module,
+  // instead of the whole exports object: mock.module() results.
+  const esmShapedBuiltins = new Set();
+  internal.esmShapedBuiltins = esmShapedBuiltins;
+
+  // [exports, default] for importing a builtin. Builtins marked __esModule
+  // name their own default export.
+  internal.builtinImport = function builtinImport(id) {
+    const exports = internal.builtin(id);
+    const named = esmShapedBuiltins.has(id) || (exports !== null && typeof exports === "object" && exports.__esModule === true);
+    return [exports, named ? exports.default : exports];
   };
 
   // --- uncaught errors --------------------------------------------------------

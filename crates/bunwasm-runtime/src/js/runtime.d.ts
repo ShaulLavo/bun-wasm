@@ -128,10 +128,14 @@ declare namespace BunWasm {
     require(name: "zone_ids"): Record<string, string>;
     readonly native: Native;
     readonly builtinFactories: Record<string, () => object>;
-    /** bun_test.js: settles an async mock.module() factory before import() loads `name`. */
+    /** bun_test.js: settles async mock.module() factories before a module graph that loads `name` links. */
     mockImportReady?: (name: string) => Promise<void> | undefined;
     /** Drops a cached builtin so its factory's settled value replaces it. */
     forgetBuiltin(id: string): void;
+    /** Builtins whose `default` key is their default export: mock.module() results. */
+    readonly esmShapedBuiltins: Set<string>;
+    /** A builtin's exports and default export, for import. */
+    builtinImport(id: string): [unknown, unknown];
     readonly realTimers: import("./immediate_queue-types").ImmediateTimers;
     require(name: "net_address"): {
       isIP(value: string): 0 | 4 | 6;
