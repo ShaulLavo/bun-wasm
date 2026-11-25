@@ -1,0 +1,9 @@
+a missing listener is rejected
+one watcher per path: true 3
+missing at start: current size 0 file false mtimeMs 0; previous size 0 file false mtimeMs 0
+created: current size 5 file true mtimeMs set; previous size 0 file false mtimeMs 0
+changed: current size 11 file true mtimeMs set; previous size 5 file true mtimeMs set
+removed: current size 0 file false mtimeMs 0; previous size 11 file true mtimeMs set
+one listener removed: 1
+stopped: 0
+a non-persistent watcher lets the process exit

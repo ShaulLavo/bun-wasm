@@ -9,11 +9,16 @@
   nextTick(callback: () => void): void;
 }) {
   "use strict";
+  type StatsRecord = Record<string, unknown>;
   interface FileSystem {
-    statSync(path: string): unknown;
+    statSync(path: string, options?: { bigint: boolean; throwIfNoEntry: false }): unknown;
+    makeStats(raw: StatsRecord, bigint: boolean): StatsRecord;
     toPath(path: unknown): string;
     absolute(path: string): string;
   }
+  interface PollOptions { bigint: boolean; persistent: boolean; interval: number }
+  // The guest's setInterval returns Node's Timeout; the runtime types only know the web number.
+  interface Timer { ref(): unknown; unref(): unknown }
   type WatchRecord = { type: "change" | "rename"; name: Uint8Array | null } | { type: "overflow" };
   interface Options {
     persistent?: boolean;
@@ -92,6 +97,23 @@
       result.signal = value.signal;
     }
     return result;
+  }
+
+  // fs.watchFile polls stat (docs/bun-patches/fs-watch-file.md). Like libuv's uv_fs_poll, a
+  // poll reports a change of any compared field or of existence. A missing file reads as
+  // all-zero stats and, when missing at start, reports one change with both stats zero.
+  const DEFAULT_POLL_INTERVAL = 5007;
+  const POLL_COMPARED = ["dev", "ino", "mode", "uid", "gid", "size", "mtimeMs", "ctimeMs", "birthtimeMs"];
+  const ZERO_STAT_FIELDS = ["dev", "ino", "mode", "nlink", "uid", "gid", "rdev", "size", "blksize", "blocks"]
+    .concat(["atime", "mtime", "ctime", "birthtime"].flatMap(name => [`${name}Ms`, `${name}Ns`]));
+
+  function pollOptions(value: unknown): PollOptions {
+    if (value == null) return { bigint: false, persistent: true, interval: DEFAULT_POLL_INTERVAL };
+    if (typeof value !== "object") throw Object.assign(new TypeError('The "options" argument must be of type object'), { code: "ERR_INVALID_ARG_TYPE" });
+    const given = value as Partial<Record<keyof PollOptions, unknown>>;
+    const interval = given.interval === undefined ? DEFAULT_POLL_INTERVAL : given.interval;
+    if (typeof interval !== "number" || !Number.isFinite(interval)) throw Object.assign(new TypeError('The "interval" argument must be of type number'), { code: "ERR_INVALID_ARG_TYPE" });
+    return { bigint: Boolean(given.bigint), persistent: given.persistent !== false, interval };
   }
 
   return function createWatch(fs: FileSystem) {
@@ -190,6 +212,85 @@
       const settings = options(value);
       return new FSWatcher(fs.absolute(fs.toPath(path)), settings, listener);
     }
-    return { watch, FSWatcher };
+
+    const statWatchers = new Map<string, StatWatcher>();
+
+    class StatWatcher extends EventEmitter {
+      #timer: Timer | undefined;
+      #path = "";
+      #bigint: boolean;
+      #previous: StatsRecord = {};
+
+      constructor(bigint: boolean) {
+        super();
+        this.#bigint = bigint;
+      }
+
+      start(path: string, persistent: boolean, interval: number) {
+        this.#path = path;
+        const found = fs.statSync(path, { bigint: this.#bigint, throwIfNoEntry: false }) as StatsRecord | undefined;
+        this.#previous = found ?? this.#missing();
+        this.#timer = setInterval(() => this.#poll(), interval) as unknown as Timer;
+        if (!persistent) this.#timer.unref();
+        if (found) return;
+        const missing = this.#previous;
+        internal.nextTick(() => {
+          if (this.#timer !== undefined && this.#previous === missing) this.emit("change", missing, missing);
+        });
+      }
+
+      #missing(): StatsRecord {
+        return fs.makeStats(Object.fromEntries(ZERO_STAT_FIELDS.map(key => [key, 0])), this.#bigint);
+      }
+
+      #poll() {
+        const current = (fs.statSync(this.#path, { bigint: this.#bigint, throwIfNoEntry: false }) as StatsRecord | undefined) ?? this.#missing();
+        const previous = this.#previous;
+        if (POLL_COMPARED.every(key => previous[key] === current[key])) return;
+        this.#previous = current;
+        this.emit("change", current, previous);
+      }
+
+      stop() {
+        if (this.#timer === undefined) return;
+        clearInterval(this.#timer as unknown as number);
+        this.#timer = undefined;
+        internal.nextTick(() => this.emit("stop"));
+      }
+
+      ref() { this.#timer?.ref(); return this; }
+      unref() { this.#timer?.unref(); return this; }
+    }
+
+    function watchFile(filename: unknown, value?: unknown, listener?: unknown) {
+      if (typeof value === "function") {
+        listener = value;
+        value = undefined;
+      }
+      if (typeof listener !== "function") throw invalidListener();
+      const settings = pollOptions(value);
+      const path = fs.absolute(fs.toPath(filename));
+      let watcher = statWatchers.get(path);
+      if (watcher === undefined) {
+        watcher = new StatWatcher(settings.bigint);
+        watcher.start(path, settings.persistent, settings.interval);
+        statWatchers.set(path, watcher);
+      }
+      watcher.on("change", listener as Listener);
+      return watcher;
+    }
+
+    function unwatchFile(filename: unknown, listener?: unknown) {
+      const path = fs.absolute(fs.toPath(filename));
+      const watcher = statWatchers.get(path);
+      if (watcher === undefined) return;
+      if (typeof listener === "function") watcher.removeListener("change", listener as Listener);
+      else watcher.removeAllListeners("change");
+      if (watcher.listenerCount("change") > 0) return;
+      watcher.stop();
+      statWatchers.delete(path);
+    }
+
+    return { watch, FSWatcher, watchFile, unwatchFile };
   };
 })
