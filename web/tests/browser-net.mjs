@@ -11,6 +11,10 @@ import { tmpdir } from "node:os";
 import { stopForeground, navigatePreview } from "./foreground.ts";
 import { fixtureOutputPattern } from "./fixture-output.ts";
 
+/** The terminal shows `[preview] localhost:3000`; its link targets this per-tab routed URL. */
+const ROUTED_3000 = /^http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\/$/;
+const routedPreview = (page) => page.evaluate(() => globalThis.playground.previews.serves(3000) ? globalThis.playground.previews.url(3000) : "");
+
 const here = new URL(".", import.meta.url).pathname;
 const web = join(here, "..");
 const playwrightPath =
@@ -219,8 +223,9 @@ async function checkHtmlEntry(page, context, appUrl, name) {
   await page.evaluate(() => void globalThis.playground.shell.submit("bun ./index.html"));
   const output = await waitForSince(page, htmlBaseline, /Started development server:|error:|crashed/);
   check(`${name}: HTML CLI starts a server`, output.includes("Started development server:"), output.slice(-500));
-  const htmlServed = await waitForSince(page, htmlBaseline, /\[preview\] http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\/|error:|crashed/);
-  check(`${name}: HTML CLI routed preview link printed`, /\[preview\] http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\//.test(htmlServed), htmlServed.slice(-500));
+  const htmlServed = await waitForSince(page, htmlBaseline, /\[preview\] localhost:3000\b|error:|crashed/);
+  check(`${name}: HTML CLI preview link printed`, /\[preview\] localhost:3000\b/.test(htmlServed), htmlServed.slice(-500));
+  check(`${name}: HTML CLI preview is the tab's routed URL`, ROUTED_3000.test(await routedPreview(page)), await routedPreview(page));
   const preview = await context.newPage();
   const logs = [];
   const ownerLog = (message) => logs.push("owner: " + message.text());
@@ -333,8 +338,9 @@ async function runEngine(browserName, engine, type, options, appUrl, fixtureBase
   await page.evaluate((src) => globalThis.playground.fs.writeFile("/home/user/serve.ts", src), serveTest);
   const serveBaseline = (await terminalText(page)).length;
   await page.evaluate(() => void globalThis.playground.shell.submit("bun run serve.ts"));
-  const served = await waitForSince(page, serveBaseline, /\[preview\][^\n]*__preview\/r\/pg-[^\s/]+\/3000\/|error:|crashed/);
-  check(`${name}: preview link printed`, /\[preview\] http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\//.test(served), served.slice(-500));
+  const served = await waitForSince(page, serveBaseline, /\[preview\] localhost:3000\b|error:|crashed/);
+  check(`${name}: preview link printed`, /\[preview\] localhost:3000\b/.test(served), served.slice(-500));
+  check(`${name}: preview is the tab's routed URL`, ROUTED_3000.test(await routedPreview(page)), await routedPreview(page));
   const self = await waitForSince(page, serveBaseline, /self: .*|error:/);
   const websocket = await waitForSince(page, serveBaseline, /websocket: browser websocket|error:|crashed/);
   check(`${name}: guest WebSocket over virtual TCP`, websocket.includes("websocket: browser websocket"), websocket.slice(-500));

@@ -2,5 +2,11 @@
 // SHA-256 and bytes cover decompressed WASM. Do not edit by hand.
 import type { BunWasmAsset } from "./assets.js";
 
-// Source-only program conversion: a new default requires a qualified matched release.
-export const BUN_WASM_ASSET: BunWasmAsset | null = null;
+export const BUN_WASM_ASSET: BunWasmAsset | null = {
+  "kind": "single",
+  "core": {
+    "url": "https://bun-artifacts.shaulavo.dev/41c96d24d0c81f918571453b1d8b5abeb29288ea8d82beffb5a0cce0d89defad/bun.wasm.gz",
+    "sha256": "41c96d24d0c81f918571453b1d8b5abeb29288ea8d82beffb5a0cce0d89defad",
+    "bytes": 16376605
+  }
+};
