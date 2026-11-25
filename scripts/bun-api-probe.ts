@@ -184,10 +184,12 @@ async function runEngine(browser: Browser, url: string, engine: string, cases: P
     const page = await context.newPage();
     const started = Date.now();
     await navigateTestPage(page, `${url}${url.includes("?") ? "&" : "?"}engine=${engine}&prompt=off`);
-    const status = await ready(page, timeout);
+    // An engine that never boots is a result, not a reason to stop probing the others.
+    const status = await ready(page, timeout).catch(async (error: Error) => `not ready: ${(await page.textContent("#status").catch(() => null)) ?? error.message}`);
     const bootMs = Date.now() - started;
     const result: EngineResult = { engine, bootMs, status, helloMs: [], cases: [] };
-    if (!/ready/.test(status)) return result;
+    process.stderr.write(`${engine}: ${status} after ${bootMs} ms\n`);
+    if (!/ready/.test(status) || status.startsWith("not ready")) return result;
     await writeFile(page, "/home/user/probe/hello.ts", `console.log("hello world");\n`);
     for (let attempt = 0; attempt < 3; attempt++) result.helloMs.push(Math.round((await run(page, "bun /home/user/probe/hello.ts", timeout)).ms));
     for (const probe of cases) {
@@ -222,7 +224,8 @@ function table(results: EngineResult[]): string {
     `| --- | ---: | --- | ---: |`,
     ...results.map(result => {
       const checks = result.cases.flatMap(probe => probe.checks);
-      return `| ${result.engine} | ${result.bootMs} | ${result.helloMs.join(", ")} | ${checks.filter(check => check.verdict === "pass").length}/${checks.length} |`;
+      const passing = checks.length ? `${checks.filter(check => check.verdict === "pass").length}/${checks.length}` : result.status;
+      return `| ${result.engine} | ${result.bootMs} | ${result.helloMs.join(", ")} | ${passing} |`;
     }),
   ];
   const failures = results.flatMap(result => result.cases.flatMap(probe => probe.checks.filter(check => check.verdict !== "pass").map(check => `- ${result.engine} ${probe.name} ${check.name}: ${check.detail ?? ""}`.slice(0, 400))));
