@@ -16,7 +16,9 @@ const originals: Record<string, string> = {
   // Re-pinned for console.trace dropping the stack header (docs/bun-patches/error-stack-header.md).
   // Re-pinned for console._stdout and console._stderr built on first use (docs/bun-patches/process-heap-and-stdio.md).
   // Re-pinned for group indentation, the warn level and console.dir's depth rule (docs/bun-patches/bun-console-formatter.md).
-  console: "83b3c75341be46f256ce2cdf9003b540a2a0fc22f729211c97272bbdcc82b161",
+  // Re-pinned for per-stream colours, console.error's red line, table headers and console.assert
+  // printing only its arguments (docs/bun-patches/terminal-colors.md).
+  console: "984100c83a4bfd155e04169a6ad40877ab37c81e80c4ad8e82b10f67a9237093",
   console_constructor: "d70e5d7de10633d8dc36e2a623d3f6253c9bcc7f785db581152bcf345beebbbf",
 };
 
@@ -133,7 +135,7 @@ test("global console keeps formatter inputs, duration state and byte writes", ()
   instance.timeEnd("timer");
   instance.write("raw", new DataView(Uint8Array.of(1, 2, 3).buffer, 1, 1));
   // A group indents the first line of a message; the formatter indents the lines it breaks itself.
-  expect(writes.slice(0, 5)).toEqual(["outer\n", "  a\nb\n", "Assertion failed: reason 7\n", "[1.00s] timer extra\n", "[1.00s] timer\n"]);
+  expect(writes.slice(0, 5)).toEqual(["outer\n", "  a\nb\n", "reason 7\n", "[1.00s] timer extra\n", "[1.00s] timer\n"]);
   expect(formatted.at(-2)).toEqual(["[1.00s] timer", "extra"]);
   expect(writes[5]).toBe("raw");
   expect(Array.from(writes[6] instanceof Uint8Array ? writes[6] : [])).toEqual([2]);

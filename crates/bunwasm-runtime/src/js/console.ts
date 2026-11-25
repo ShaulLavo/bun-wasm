@@ -86,15 +86,8 @@
     },
     assert(condition: unknown, ...args: unknown[]) {
       if (condition) return;
-      if (args.length === 0) {
-        err(["Assertion failed"]);
-        return;
-      }
-      if (typeof args[0] === "string") {
-        err(([`Assertion failed: ${args[0]}`] as unknown[]).concat(args.slice(1)));
-        return;
-      }
-      err((["Assertion failed:"] as unknown[]).concat(args));
+      // Bun prints only the arguments; "Assertion failed" stands in when there are none.
+      err(args.length === 0 ? ["Assertion failed"] : args);
     },
     dir(value: unknown, options?: BunWasm.ConsoleInspectOptions) {
       const { depth, colors: enabled = colors().stdout } = dirOptions(options);

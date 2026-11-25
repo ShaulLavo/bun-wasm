@@ -42,7 +42,7 @@
 
   function decide() {
     if (decided) return decided;
-    const env = globalThis.process.env;
+    const env: Record<string, string | undefined> = globalThis.process.env ?? {};
     let both: boolean | null = null;
     if (forced(env.FORCE_COLOR)) both = true;
     else if (env.NO_COLOR !== undefined && truthy(env.NO_COLOR)) both = false;
