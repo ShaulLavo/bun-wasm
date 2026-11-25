@@ -9,7 +9,7 @@ const GRANT = Object.freeze({ owner: "owner-1", port: 5173, origin: ORIGIN, capa
 const bytes = (value: string) => new TextEncoder().encode(value);
 const text = (value: Uint8Array) => new TextDecoder().decode(value);
 
-function setup() {
+function setup(sockets?: Set<{ close(): void }>) {
   const dispatched: { open: PreviewHostOpen; exchange: PreviewHostExchange }[] = [];
   const jar = new CookieJar(new URL(ORIGIN).hostname, true);
   let cookieChanges = 0;
@@ -22,6 +22,7 @@ function setup() {
       dispatch: (open, exchange) => { dispatched.push({ open, exchange }); return new Promise(() => {}); },
     },
     jar,
+    sockets,
     cookiesChanged: () => { cookieChanges++; },
     attached: () => { attached++; },
   });
@@ -153,6 +154,35 @@ test("a socket opens with the preview origin as its Origin, the jar's cookies, a
   expect(f.counts().cookieChanges).toBe(1);
   f.session.close();
   socket.port1.close();
+});
+
+test("a listener's sockets outlive the service worker's port and end with the listener", async () => {
+  const sockets = new Set<{ close(): void }>();
+  const f = setup(sockets);
+  f.remote.postMessage({ t: "attached" });
+  const socket = new MessageChannel();
+  const page: string[] = [];
+  socket.port1.onmessage = (event: MessageEvent<PreviewHostOutput>) => { page.push(event.data.type); };
+  f.remote.postMessage({ t: "socket" }, [socket.port2]);
+  socket.port1.postMessage({ type: "open", url: `${ORIGIN}/hmr`, method: "GET", headers: [] });
+  await f.settle();
+  const received: string[] = [];
+  f.dispatched[0]!.exchange.onmessage = message => { received.push(message.type === "data" ? text(message.chunk) : message.type); };
+  f.dispatched[0]!.exchange.postMessage({ type: "accepted" });
+  // The worker restarted: its port is replaced, the page's socket is not touched.
+  f.session.close();
+  socket.port1.postMessage({ type: "data", chunk: bytes("still open") });
+  await f.settle();
+  expect(received).toEqual(["still open"]);
+  expect(sockets.size).toBe(1);
+  // The dev server stopped: its listener closes every socket.
+  for (const open of Array.from(sockets)) open.close();
+  await f.settle();
+  expect(received).toEqual(["still open", "end"]);
+  expect(sockets.size).toBe(0);
+  expect(page).toEqual(["accepted"]);
+  socket.port1.close();
+  f.remote.close();
 });
 
 test("a session closed before the service worker confirmed its port lets go of it only on confirmation", async () => {

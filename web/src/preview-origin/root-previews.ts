@@ -37,6 +37,8 @@ interface Listening {
   readonly token: symbol;
   readonly lifetime: AbortController;
   readonly ready: ReturnType<typeof Promise.withResolvers<PreviewState>>;
+  /** Open WebSockets of this listener. They outlive any one port to the service worker. */
+  readonly sockets: Set<{ close(): void }>;
   state: "starting" | "ready" | "failed";
   origin?: string;
   relay?: PreviewHostRelay;
@@ -227,6 +229,7 @@ export class RootPreviews extends Previews {
     entry.session = new PortSession(channel.port1, {
       relay: entry.relay,
       jar: entry.jar,
+      sockets: entry.sockets,
       cookiesChanged: () => this.saveJar(entry),
       attached: () => this.attached(entry),
     });
@@ -252,6 +255,7 @@ export class RootPreviews extends Previews {
     entry.state = "failed";
     entry.session?.close();
     entry.session = undefined;
+    for (const socket of Array.from(entry.sockets)) socket.close();
     entry.lifetime.abort();
   }
 
@@ -266,6 +270,7 @@ export class RootPreviews extends Previews {
       token: Symbol("root-preview"),
       lifetime: new AbortController(),
       ready: Promise.withResolvers<PreviewState>(),
+      sockets: new Set(),
       state: "starting",
     };
     this.registerRouter(port, server);

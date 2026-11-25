@@ -13,6 +13,12 @@ export interface SessionBinding {
   cookiesChanged?(): void;
   /** The service worker confirmed it holds the port. */
   attached?(): void;
+  /**
+   * The listener's open sockets. A socket's port runs from the page to this page directly, so it
+   * outlives the service worker's port: the owner of this set closes them when the listener ends.
+   * Without it a session owns its sockets and closes them with itself.
+   */
+  sockets?: Set<{ close(): void }>;
 }
 
 const MAX_SOCKETS = 64;
@@ -124,23 +130,24 @@ class SocketChannel {
 
 export class PortSession {
   private readonly exchanges = new Map<number, PreviewHostExchange>();
-  private readonly sockets = new Set<SocketChannel>();
+  private readonly sockets: Set<{ close(): void }>;
   private sentCookies = -1;
   private closed = false;
   /** The service worker holds the other end. Until then it is still travelling there. */
   private confirmed = false;
 
   constructor(private readonly port: MessagePort, private readonly binding: SessionBinding) {
+    this.sockets = binding.sockets ?? new Set();
     port.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data, event.ports);
   }
 
-  /** Revokes the port with everything in flight on it. */
+  /** Revokes the port with every request in flight on it. */
   close(): void {
     if (this.closed) return;
     for (const exchange of Array.from(this.exchanges.values())) {
       try { exchange.onmessage?.({ type: "end" }); } catch {}
     }
-    for (const socket of Array.from(this.sockets)) socket.close();
+    if (!this.binding.sockets) for (const socket of Array.from(this.sockets)) socket.close();
     this.closed = true;
     this.exchanges.clear();
     // WebKit terminates the page's process when a port is closed while its other end is still in
