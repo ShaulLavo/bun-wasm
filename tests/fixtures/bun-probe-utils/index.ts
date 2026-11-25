@@ -233,11 +233,14 @@ await check("Bun.color array lengths", () => {
   return [Bun.color(Object.assign(new ArrayBuffer(3), { 0: 1, 1: 2, 2: 3 }), "[rgba]"), Bun.color(grows, "[rgba]"), grows.length, Bun.color(typed, "[rgba]")];
 });
 await check("Bun.color is assignable", () => {
+  const before = Object.getOwnPropertyDescriptor(Bun, "color");
+  const flags = [typeof before?.value, before?.get, before?.writable, before?.enumerable, before?.configurable, Bun.color.length, Bun.color.name];
+  const deleted = Reflect.deleteProperty(Bun, "color");
   const original = Bun.color;
   Bun.color = (() => "replaced") as unknown as typeof Bun.color;
   const seen = Bun.color("red");
   Bun.color = original;
-  return [seen, Bun.color("red", "hex"), Object.getOwnPropertyDescriptor(Bun, "color")?.writable];
+  return [flags, deleted, seen, Bun.color("red", "hex"), Object.getOwnPropertyDescriptor(Bun, "color")?.configurable];
 });
 await check("Bun.inspect escapes outside Latin-1", () => Bun.inspect(["\u20ac\x1b", "\xe9\x1b", "\u0100\x7f\x1f", "\u{1F600}\x01"]));
 await check("structuredClone + Bun types", () => structuredClone({ d: new Date(0), m: new Map([[1, 2]]) }));

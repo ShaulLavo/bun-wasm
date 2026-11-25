@@ -628,9 +628,8 @@
     get password() { return internal.require("bun_password").password; },
     get markdown() { return internal.require("bun_markdown").markdown; },
     get CSRF() { return internal.require("bun_csrf").CSRF; },
-    get color() { return internal.require("bun_color"); },
-    // Assignable, as Bun's own property is.
-    set color(value) { Object.defineProperty(Bun, "color", { value, writable: true, enumerable: true, configurable: true }); },
+    // Loads its implementation on first call.
+    color: function color(input, format) { return internal.require("bun_color")(input, format); },
     // Bun.sha is SHA-512/256, as in Bun.
     sha: function sha(input) { return internal.require("bun_hash_classes").SHA512_256.hash(input, arguments[1]); },
     // Loaded on first use; the module is cached, so each class keeps one identity.
@@ -703,5 +702,7 @@
   };
   internal.BunFile = BunFile;
   Object.defineProperty(Bun, Symbol.toStringTag, { value: "Bun", configurable: true });
+  // Writable but not configurable, as in Bun.
+  Object.defineProperty(Bun, "color", { configurable: false });
   return Bun;
 })

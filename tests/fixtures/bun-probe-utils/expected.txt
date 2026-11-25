@@ -171,7 +171,10 @@ ok Bun.color inputs: [
 ok Bun.color array lengths: [
   [ 1, 2, 3, 255 ], [ 10, 2, 3, 255 ], 4, [ 5, 6, 7, 255 ]
 ]
-ok Bun.color is assignable: [ "replaced", "#ff0000", true ]
+ok Bun.color is assignable: [
+  [ "function", undefined, true, true, false, 2, "color" ], false, "replaced", "#ff0000",
+  false
+]
 ok Bun.inspect escapes outside Latin-1: [ "€\u001b", "é\u001B", "Ā\u001f", "😀\u0001" ]
 ok structuredClone + Bun types: {
   d: 1970-01-01T00:00:00.000Z,
