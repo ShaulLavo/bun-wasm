@@ -8,7 +8,7 @@ export class BunWasmExecutableConflictError extends Error {
   }
 }
 
-const executableMarker = new TextEncoder().encode("bun-wasm registered executable\n");
+export const executableMarker = new TextEncoder().encode("bun-wasm registered executable\n");
 export const matchesMarker = (bytes: Uint8Array | undefined): boolean => bytes !== undefined
   && bytes.length === executableMarker.length && bytes.every((byte, index) => byte === executableMarker[index]);
 
@@ -27,12 +27,15 @@ export async function createExecutable(filesystem: FilesystemClient, name: strin
 }
 
 export async function rollbackExecutables(filesystem: FilesystemClient, created: string[]): Promise<void> {
-  for (const name of created.reverse()) {
-    try {
-      if (!matchesMarker(await filesystem.asyncCall("readFile", [name]))) continue;
-      await filesystem.asyncCall("remove", [name]);
-    } catch {
-      // A failed operation owns its own result; continue without touching page errors.
-    }
+  const results = await Promise.allSettled(
+    Array.from(created).reverse().map((name) =>
+      filesystem.asyncCall("remove", [name, true], new Uint8Array(executableMarker)),
+    ),
+  );
+  const errors = results
+    .filter((r): r is PromiseRejectedResult => r.status === "rejected")
+    .map((r) => r.reason);
+  if (errors.length > 0) {
+    throw errors.length === 1 ? errors[0] : new AggregateError(errors, "Executable marker rollback failed");
   }
 }

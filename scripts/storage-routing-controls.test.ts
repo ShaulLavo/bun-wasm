@@ -168,7 +168,7 @@ test("source identity guard rejects changed inputs and exact consumer binding pa
 });
 
 test("runtime binding retains only a scalar identity", () => {
-  const source = "function bind(runtime) {\n    const sharedObjects = installBunSharedObjects(runtime);\n}";
+  const source = "function bind(runtime) {\n      let sharedObjects;\n      sharedObjects = installBunSharedObjects(runtime);\n}";
   const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(instrumentSandbox(source));
   const bind = new Function("installBunSharedObjects", compiled + "\nreturn bind;")(() => undefined);
   const previews = {}, runtime = { stopped: true };

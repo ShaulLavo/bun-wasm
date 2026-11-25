@@ -2,6 +2,13 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { dispatchPreviewHTTP } from "../preview-origin-host";
 
+export class PreviewAliasLimitError extends Error {
+  constructor(message = "Preview socket alias limit") {
+    super(message);
+    this.name = "PreviewAliasLimitError";
+  }
+}
+
 export interface SocketAliasOwner {
   ownsOrigin(origin: string): boolean;
   fetchPort(port: number, request: Request): Promise<Response>;
@@ -12,10 +19,18 @@ interface Alias {
   port: number;
   server: Server;
   owners: Map<SocketAliasOwner, Set<string>>;
+  closingOwners: Set<SocketAliasOwner>;
+  closingHosts: Map<SocketAliasOwner, Set<string>>;
   ready: Promise<void>;
   sockets: Map<Duplex, SocketLease>;
   lifetime: AbortController;
   closing?: Promise<void>;
+}
+
+const MAX_HOST_PORTS = 512;
+
+function isValidAliasHostname(hostname: string): boolean {
+  return hostname === "127.0.0.1" || /^bw-[a-f0-9-]+\.localhost$/.test(hostname);
 }
 
 /** Hostname leases share literal loopback listeners, never another owner's grant. */
@@ -25,11 +40,11 @@ export class PreviewPortSockets {
   private sockets = 0;
 
   async reserve(port: number, owner: SocketAliasOwner, hostname = "127.0.0.1"): Promise<void> {
-    if (hostname !== "127.0.0.1" && !/^bw-[a-f0-9-]+\.localhost$/.test(hostname)) throw new Error("Preview aliases require an allocated loopback hostname");
+    if (!isValidAliasHostname(hostname)) throw new Error("Preview aliases require an allocated loopback hostname");
     let alias = this.ports.get(port);
     if (alias?.closing) { await alias.closing; return this.reserve(port, owner, hostname); }
     const existing = alias && hasHostname(alias, hostname);
-    if (!existing && this.hostPorts >= 512) throw new Error("Preview socket alias limit");
+    if (!existing && this.hostPorts >= MAX_HOST_PORTS) throw new PreviewAliasLimitError();
     if (!alias) { alias = this.listen(port); this.ports.set(port, alias); }
     if (!existing) this.hostPorts++;
     const hosts = alias.owners.get(owner) ?? new Set<string>();
@@ -37,35 +52,84 @@ export class PreviewPortSockets {
     alias.owners.set(owner, hosts);
     try { await alias.ready; }
     catch (error) {
-      if (this.ports.get(port) === alias) { this.hostPorts -= new Set(Array.from(alias.owners.values()).flatMap(hosts => Array.from(hosts))).size; this.ports.delete(port); }
+      if (this.ports.get(port) === alias) {
+        this.hostPorts -= new Set(Array.from(alias.owners.values()).flatMap(h => Array.from(h))).size;
+        this.ports.delete(port);
+      }
       throw error;
     }
   }
+
+  reserveHostBatch(
+    entries: ReadonlyArray<{ port: number; owner: SocketAliasOwner; hostname: string }>,
+  ): { ok: true } | { ok: false; reason: "limit" | "missing-owner" } {
+    const newPortHostKeys = new Set<string>();
+    for (const entry of entries) {
+      if (!isValidAliasHostname(entry.hostname)) throw new Error("Preview aliases require an allocated loopback hostname");
+      const alias = this.ports.get(entry.port);
+      if (!alias || alias.closing || !alias.owners.has(entry.owner)) return { ok: false, reason: "missing-owner" };
+      if (!hasHostname(alias, entry.hostname)) newPortHostKeys.add(`${entry.port}\0${entry.hostname}`);
+    }
+    if (this.hostPorts + newPortHostKeys.size > MAX_HOST_PORTS) return { ok: false, reason: "limit" };
+    for (const entry of entries) {
+      const alias = this.ports.get(entry.port)!;
+      const wasPresent = hasHostname(alias, entry.hostname);
+      alias.owners.get(entry.owner)!.add(entry.hostname);
+      if (!wasPresent) this.hostPorts++;
+    }
+    return { ok: true };
+  }
+
   async release(port: number, owner: SocketAliasOwner): Promise<void> {
     const alias = this.ports.get(port);
     if (alias) await this.releaseAlias(alias, owner);
+  }
+  async releaseHostOnPort(port: number, hostname: string, owner: SocketAliasOwner): Promise<void> {
+    const alias = this.ports.get(port);
+    if (alias) await this.releaseAlias(alias, owner, hostname);
   }
   async releaseHost(hostname: string, owner: SocketAliasOwner): Promise<void> {
     await Promise.all(Array.from(this.ports.values(), alias => this.releaseAlias(alias, owner, hostname)));
   }
   private async releaseAlias(alias: Alias, owner: SocketAliasOwner, hostname?: string): Promise<void> {
     const hosts = alias.owners.get(owner);
-    if (!hosts || hostname !== undefined && !hosts.has(hostname)) { await alias.closing; return; }
+    if (!hosts || (hostname !== undefined && !hosts.has(hostname))) {
+      const participated = hostname === undefined
+        ? alias.closingOwners.has(owner)
+        : Boolean(alias.closingHosts.get(owner)?.has(hostname));
+      if (participated && alias.closing) await alias.closing;
+      return;
+    }
     const removed = hostname === undefined ? Array.from(hosts) : [hostname];
     for (const host of removed) hosts.delete(host);
     if (!hosts.size) alias.owners.delete(owner);
     for (const host of removed) if (!hasHostname(alias, host)) this.hostPorts--;
-    for (const [socket, lease] of alias.sockets) if (lease.owner === owner && (hostname === undefined || lease.hostname === hostname)) socket.destroy();
+    for (const [socket, lease] of alias.sockets) {
+      if (lease.owner === owner && (hostname === undefined || lease.hostname === hostname)) socket.destroy();
+    }
     if (alias.owners.size) return;
+    alias.closingOwners.add(owner);
+    let closedForOwner = alias.closingHosts.get(owner);
+    if (!closedForOwner) {
+      closedForOwner = new Set<string>();
+      alias.closingHosts.set(owner, closedForOwner);
+    }
+    for (const host of removed) closedForOwner.add(host);
     alias.closing ??= this.closeAlias(alias);
     await alias.closing;
   }
   private async closeAlias(alias: Alias): Promise<void> {
-    await alias.ready;
+    try { await alias.ready; } catch { /* Listener never started; still remove from ports map below. */ }
     alias.lifetime.abort();
     for (const socket of alias.sockets.keys()) socket.destroy();
-    await new Promise<void>((resolve, reject) => alias.server.close(error => error ? reject(error) : resolve()));
-    if (this.ports.get(alias.port) === alias) this.ports.delete(alias.port);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        if (!alias.server.listening) { resolve(); return; }
+        alias.server.close(error => error ? reject(error) : resolve());
+      });
+    } finally {
+      if (this.ports.get(alias.port) === alias) this.ports.delete(alias.port);
+    }
   }
   async closeOwner(owner: SocketAliasOwner): Promise<void> {
     await Promise.all(Array.from(this.ports.values(), alias => this.releaseAlias(alias, owner)));
@@ -77,14 +141,25 @@ export class PreviewPortSockets {
       const owner = aliasOwner(alias, hostname, request.headers.origin);
       if (!hostname || !owner) { response.writeHead(403); response.end(); return; }
       if (!claimSocket(alias, request.socket, owner, hostname)) { response.writeHead(421); response.end(); return; }
-      void dispatchPreviewHTTP(request, response, `http://${request.headers.host}`, { fetch: request => owner.fetchPort(port, request) }, alias.lifetime.signal, source => owner.ownsOrigin(source));
+      void dispatchPreviewHTTP(request, response, `http://${request.headers.host}`, { fetch: req => owner.fetchPort(port, req) }, alias.lifetime.signal, source => owner.ownsOrigin(source));
     });
-    const alias: Alias = { port, server, owners: new Map(), sockets: new Map(), lifetime: new AbortController(), ready: new Promise<void>((resolve, reject) => {
-      server.once("error", reject); server.listen(port, "127.0.0.1", resolve);
-    }) };
+    const alias: Alias = {
+      port,
+      server,
+      owners: new Map(),
+      closingOwners: new Set(),
+      closingHosts: new Map(),
+      sockets: new Map(),
+      lifetime: new AbortController(),
+      ready: new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(port, "127.0.0.1", resolve);
+      }),
+    };
     server.on("connection", socket => {
       if (this.sockets >= 256 || alias.sockets.size >= 64) { socket.destroy(); return; }
-      this.sockets++; alias.sockets.set(socket, { owner: null });
+      this.sockets++;
+      alias.sockets.set(socket, { owner: null });
       socket.on("error", () => socket.destroy());
       socket.once("close", () => { if (alias.sockets.delete(socket)) this.sockets--; });
     });
@@ -100,7 +175,7 @@ function hasHostname(alias: Alias, hostname: string): boolean {
 
 function aliasHostname(port: number, authority: string | undefined): string | undefined {
   const hostname = authority?.split(":")[0];
-  if (hostname && (authority === `${hostname}:${port}` || port === 80 && authority === hostname)) return hostname;
+  if (hostname && (authority === `${hostname}:${port}` || (port === 80 && authority === hostname))) return hostname;
 }
 
 function aliasOwner(alias: Alias, hostname: string | undefined, origin: string | undefined): SocketAliasOwner | undefined {
@@ -120,11 +195,13 @@ async function upgradeAlias(alias: Alias, request: IncomingMessage, socket: Dupl
   const hostname = aliasHostname(alias.port, request.headers.host);
   const path = request.url ?? "/";
   if (!hostname || !hasHostname(alias, hostname === "localhost" ? "127.0.0.1" : hostname) || !path.startsWith("/") || path.startsWith("//")) {
-    socket.end("HTTP/1.1 421 Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); return;
+    socket.end("HTTP/1.1 421 Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    return;
   }
   const owner = aliasOwner(alias, hostname, request.headers.origin);
   if (!owner || !claimSocket(alias, socket, owner, hostname)) {
-    socket.end("HTTP/1.1 403 Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); return;
+    socket.end("HTTP/1.1 403 Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    return;
   }
   try { if (!await owner.upgradePort(alias.port, request, socket, head)) socket.destroy(); } catch { socket.destroy(); }
 }

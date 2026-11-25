@@ -1,26 +1,83 @@
 import type { Runtime } from "waffle";
+import { FilesystemClient } from "waffle/fs/client";
 import type { WorkspaceIndexStore } from "./workspace-index";
 import { APP, RESTORE_MARKER, SEED_MARKER, type SourceSnapshot } from "./workspace-source";
+import { raceAbort } from "../../web/src/workspace-claims";
 
-type Filesystem = Pick<Runtime["filesystem"], "lookup" | "remove" | "mkdirp" | "writeFile" | "readFile" | "flush">;
+type Filesystem = Pick<Runtime["filesystem"], "lookup" | "remove" | "mkdirp" | "writeFile" | "readFile" | "flush"> & {
+  fork?: Runtime["filesystem"]["fork"];
+};
 
-/** Caller serializes restore and explicit reset with the origin sandbox operation. */
-export async function restoreSource(fs: Filesystem, index: WorkspaceIndexStore, template: string): Promise<void> {
-  const snapshot = await index.source(template);
+export interface RestoreSourceOptions {
+  signal?: AbortSignal;
+  beforeFirstMutation?: () => void;
+}
+
+async function abortableLookup(fs: Filesystem, path: string, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  if (!signal || !fs.fork) return fs.lookup(path);
+  const client = new FilesystemClient(fs.fork());
+  const onAbort = () => { try { client.dispose(); } catch {} };
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    signal.throwIfAborted();
+    const res = await client.asyncCall("lookup", [path]);
+    signal.throwIfAborted();
+    return res;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    try { client.dispose(); } catch {}
+  }
+}
+
+async function abortableReadFile(fs: Filesystem, path: string, signal?: AbortSignal): Promise<Uint8Array | undefined> {
+  signal?.throwIfAborted();
+  if (!signal || !fs.fork) return fs.readFile(path);
+  const client = new FilesystemClient(fs.fork());
+  const onAbort = () => { try { client.dispose(); } catch {} };
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    signal.throwIfAborted();
+    const res = await client.asyncCall("readFile", [path]);
+    signal.throwIfAborted();
+    return res;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    try { client.dispose(); } catch {}
+  }
+}
+
+/** Caller serializes restore and explicit reset with the template / reset gate locks. */
+export async function restoreSource(
+  fs: Filesystem,
+  index: WorkspaceIndexStore,
+  template: string,
+  options: RestoreSourceOptions = {},
+): Promise<void> {
+  const { signal, beforeFirstMutation } = options;
+  signal?.throwIfAborted();
+  const snapshot = await raceAbort(index.source(template), signal);
   if (!snapshot) return;
-  if (await fs.lookup(SEED_MARKER)) {
-    const restoredId = await fs.readFile(RESTORE_MARKER);
-    if (restoredId && new TextDecoder().decode(restoredId) === snapshot.id) await acknowledge(fs, index, snapshot);
+  signal?.throwIfAborted();
+  if (await abortableLookup(fs, SEED_MARKER, signal)) {
+    const restoredId = await abortableReadFile(fs, RESTORE_MARKER, signal);
+    if (restoredId && new TextDecoder().decode(restoredId) === snapshot.id) {
+      beforeFirstMutation?.();
+      await acknowledge(fs, index, snapshot);
+    }
     return;
   }
-  await replaceTree(fs, snapshot);
+  const root = await abortableLookup(fs, "/", signal);
+  if (root?.kind !== "dir") throw new Error("Cannot restore source without a filesystem root");
+  const rootNames = Array.from(root.children.keys(), String);
+  signal?.throwIfAborted();
+  beforeFirstMutation?.();
+  await replaceTree(fs, snapshot, rootNames);
   await acknowledge(fs, index, snapshot);
 }
 
-async function replaceTree(fs: Filesystem, snapshot: SourceSnapshot): Promise<void> {
-  const root = await fs.lookup("/");
-  if (root?.kind !== "dir") throw new Error("Cannot restore source without a filesystem root");
-  for (const name of root.children.keys()) await fs.remove(`/${name}`);
+async function replaceTree(fs: Filesystem, snapshot: SourceSnapshot, rootNames: readonly string[]): Promise<void> {
+  for (const name of rootNames) await fs.remove(`/${name}`);
   const entries = snapshot.entries.toSorted((a, b) => a.path.split("/").length - b.path.split("/").length);
   for (const entry of entries) {
     if (entry.kind === "dir") await fs.mkdirp(entry.path);

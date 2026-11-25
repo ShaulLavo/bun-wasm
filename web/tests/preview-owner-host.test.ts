@@ -222,7 +222,7 @@ for (const kind of ["pending", "stream"] as const) test(`real dispatcher propaga
   expect(client).toBeDefined();
 });
 
-test("private bootstrap and owner route allocations are bounded and torn down on rejection", async () => {
+test("private bootstrap and owner route allocations are bounded without tearing down healthy siblings on busy", async () => {
   const first = hosting();
   for (let index = 0; index < 128; index++) expect((await bootstrap(first.origin)).status).toBe(200);
   expect((await bootstrap(first.origin)).status).toBe(503);
@@ -230,8 +230,13 @@ test("private bootstrap and owner route allocations are bounded and torn down on
   const connection = await socket(second.origin, await ticket(second.origin));
   const origins: string[] = [];
   for (let port = 4000; port < 4016; port++) origins.push((await reserve(connection, port)).origin);
+  const busyId = crypto.randomUUID();
+  const busyReply = next(connection);
+  connection.send(encode({ type: "register", id: busyId, port: 4016 }));
+  expect(await busyReply).toEqual({ type: "busy", id: busyId, port: 4016 });
+  // Live routes remain intact after route-scoped busy rejection; a duplicate port still closes and tears down all routes.
   const closed = new Promise<void>(resolve => { connection.onclose = () => resolve(); });
-  connection.send(encode({ type: "register", id: crypto.randomUUID(), port: 4016 }));
+  connection.send(encode({ type: "register", id: crypto.randomUUID(), port: 4000 }));
   await closed;
   for (const origin of origins) await expect(fetch(origin)).rejects.toThrow();
 });

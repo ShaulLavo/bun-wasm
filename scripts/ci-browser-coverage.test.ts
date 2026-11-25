@@ -79,10 +79,42 @@ test("selected batches keep existing Storage/default cells and narrower engines"
     }
     return outputs.join("\n");
   };
-  verify([], ["10-storage", "default"], 4);
-  expect(verify([{ owner: "installer-links", engines: ["quickjs"] }], ["10-storage", "20-installer-links", "default"], 4)).toContain("needed=true\njsc=false");
+  verify([], ["10-storage", "11-multitab", "default"], 4);
+  expect(verify([{ owner: "installer-links", engines: ["quickjs"] }], ["10-storage", "11-multitab", "20-installer-links", "default"], 4)).toContain("needed=true\njsc=false");
   expect(browserCoverageOutputs([{ owner: "installer-links", engines: ["jsc"] }])).toContain("jsc=true");
-  verify(fullBrowserGuestSelection, ["10-storage", "20-installer-links", "21-subprocess-aliases", "22-preview-websocket-headers", "23-engine-interruption", "24-worker-modules", "25-terminal-stdin", "26-tools-integrity", "default"], 4);
+  verify(fullBrowserGuestSelection, ["10-storage", "11-multitab", "20-installer-links", "21-subprocess-aliases", "22-preview-websocket-headers", "23-engine-interruption", "24-worker-modules", "25-terminal-stdin", "26-tools-integrity", "default"], 4);
+});
+
+test("11-multitab dispatches chromium and firefox in parallel and propagates firefox failure nonzero", () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-multitab-shard-"));
+  cleanup.add(directory);
+  mkdirSync(join(directory, "web"));
+  writeFileSync(join(directory, "bun"), `#!/bin/bash
+    printf '%s %s %s\\n' "$BUN_WASM_TEST_BROWSERS" "$BUN_WASM_STORAGE_EXACT_BROWSERS" "$7" >> ../commands
+    if [[ "$BUN_WASM_TEST_BROWSERS" == firefox ]]; then exit 1; fi
+  `, { mode: 0o755 });
+  const reports = join(directory, "reports");
+  const summary = join(directory, "summary");
+  const started = String(Math.floor(Date.now() / 1000) - 10);
+  const result = spawnSync(process.execPath, [new URL("./ci-browser-guest-run.ts", import.meta.url).pathname], {
+    cwd: join(directory, "web"), encoding: "utf8", env: {
+      ...process.env,
+      PATH: `${directory}:${process.env.PATH}`, GITHUB_WORKSPACE: directory, GITHUB_STEP_SUMMARY: summary,
+      BUN_WASM_BROWSER_REPORT_DIR: reports, BUN_WASM_TEST_BROWSERS: "chromium", BROWSER_GUEST_SETUP_STARTED: started,
+      BROWSER_GUEST_BATCHES: JSON.stringify([{ name: "11-multitab", group: "storage", jobSeconds: 600, commandSeconds: 900 }]),
+    },
+  });
+  expect(result.status, result.stderr).toBe(1);
+  const lines = readFileSync(join(directory, "commands"), "utf8").trim().split("\n").toSorted();
+  expect(lines).toEqual(["chromium 1 11-multitab", "firefox 1 11-multitab"]);
+  expect(readFileSync(summary, "utf8")).toContain("chromium:11-multitab | 0\n");
+  expect(readFileSync(summary, "utf8")).toContain("firefox:11-multitab | 1\n");
+});
+
+test("changing only sandbox/src/dev-server-coordinator.ts selects browser-guest via 11-multitab inputs", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../checks/browser-guest-multitab.json", import.meta.url), "utf8")) as { inputs?: string[] };
+  expect(manifest.inputs).toContain("sandbox/src/dev-server-coordinator.ts");
+  expect(needsRust(["sandbox/src/dev-server-coordinator.ts"])).toBe(true);
 });
 
 test.each([0, 1, 124])("the actual CI batch runner keeps independent results when the first command exits %s", firstStatus => {

@@ -64,7 +64,7 @@ async function runBatch(batch: BatchEntry, browser: string, exact: boolean, setu
 async function runGroup(batches: readonly BatchEntry[], browser: string, setupSeconds: number, reportRoot: string, cwd: string): Promise<RunResult[]> {
   const results: RunResult[] = [];
   for (const batch of batches) {
-    if (batch.name === "10-storage" && browser === "chromium") {
+    if ((batch.name === "10-storage" || batch.name === "11-multitab") && browser === "chromium") {
       const parallel = await Promise.all([
         runBatch(batch, "chromium", true, setupSeconds, reportRoot, cwd),
         runBatch(batch, "firefox", true, setupSeconds, reportRoot, cwd),

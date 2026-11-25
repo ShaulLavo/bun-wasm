@@ -44,10 +44,13 @@ for (const [name, type, ctx] of [["desktop-chromium", chromium, { viewport: { wi
   await waitFor(page, /open todo/);
   await run(page, "bun build math.ts --outdir out --minify && cat out/math.js");
   await waitFor(page, /export\{n as fib/);
+  const beforeServe = await term(page);
   await run(page, `bun -e 'const s = Bun.serve({ port: 3000, routes: { "/hi/:name": (req) => Response.json({ hello: req.params.name, from: "bun.wasm" }) } }); const r = await fetch(s.url + "hi/phone"); console.log("self-fetch", await r.text())'`);
   await waitFor(page, /self-fetch \{"hello":"phone"/);
   const preview = await page.context().newPage();
-  const res = await preview.goto(new URL("__preview/3000/hi/browser", url).href);
+  const previewHref = await page.evaluate(() => globalThis.playground.previews.url(3000, "/hi/browser"));
+  const res = await preview.goto(previewHref || new URL("__preview/3000/hi/browser", url).href);
+  void beforeServe;
   const body = await preview.textContent("body");
   console.log(name, "preview", res.status(), body);
   await preview.close();

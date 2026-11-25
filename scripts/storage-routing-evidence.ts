@@ -192,7 +192,7 @@ function progress(rows: RoutingRow[], key: string): number {
 }
 function path(value: unknown): string | undefined {
   if (typeof value !== "string") return;
-  try { const url = new URL(value); return url.pathname.replace(/^.*\/__preview\/\d+/, ""); }
+  try { const url = new URL(value); return url.pathname.replace(/^.*\/__preview\/(?:r\/[^/]+\/)?\d+/, ""); }
   catch { return; }
 }
 

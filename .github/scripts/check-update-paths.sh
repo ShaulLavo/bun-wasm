@@ -24,7 +24,7 @@ check_record_type() {
 
 while IFS= read -r -d '' path; do
   case "$path" in
-    package.json|bun.lock|web/package.json|web/bun.lock|sandbox/package.json|sandbox/bun.lock|scripts/waffle-release-inputs.json|scripts/build-bash-web-shell.sh) ;;
+    package.json|bun.lock|web/package.json|web/bun.lock|sandbox/package.json|sandbox/bun.lock|scripts/waffle-release-inputs.json|scripts/bash-web-release-inputs.json|scripts/build-bash-web-shell.sh) ;;
     *) echo "::error::Dependency updater changed a forbidden path: $path" >&2; exit 1 ;;
   esac
   if ! git cat-file -e "HEAD:$path"; then

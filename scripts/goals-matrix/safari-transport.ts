@@ -41,7 +41,7 @@ function presentFrame(input: { url: string; token: string }, present: typeof pre
 // terminal state replaces the `[role="status"]` text with this message.
 export const previewLoadingFailure = "The preview request failed. Reload to try again.";
 export function previewLoadingPattern(url: string): string | null {
-  const scope = /^(.*?\/__preview\/)\d{1,5}(?:\/|$)/.exec(new URL(url).pathname)?.[1];
+  const scope = /^(.*?\/__preview\/)(?:r\/[^/]+\/)?\d{1,5}(?:\/|$)/.exec(new URL(url).pathname)?.[1];
   if (scope === undefined) return null;
   const escaped = scope.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return `^${escaped}\\.loading/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`;

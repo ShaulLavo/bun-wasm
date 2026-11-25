@@ -106,6 +106,7 @@ async function filesystemOperation(fs: Runtime["filesystem"], operation: string,
   switch (operation) {
     case "mkdirp": return fs.mkdirp(path);
     case "lookup": return fs.lookup(path);
+    case "resolvePath": return fs.resolvePath(path);
     case "readFile": return fs.readFile(path);
     case "remove": return fs.remove(path);
     case "writeFile":
@@ -160,19 +161,54 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     openStorage: async () => {}, prepareStorage: async () => {},
     WorkspaceStorage: class {
       readonly recovery = new StorageRecovery(async () => { storageEvents.push("recover"); });
+      readonly index = {
+        async source() { return null; },
+        async restored() {},
+        async readResetState() { return { resetGeneration: 0, resetInProgress: false }; },
+        async beginResetTransaction() { return 1; },
+        async completeResetTransaction() {},
+      };
       static async open() { storageEvents.push("open"); await boundary.openStorage(); return new this(); }
       prepare() { storageEvents.push("prepare"); return boundary.prepareStorage(); }
       async initialize(_fs: unknown, seed: () => Promise<void>) { storageEvents.push("initialize"); await seed(); storageEvents.push("initialized"); }
       reset(replace: () => Promise<void>) { storageEvents.push("reset"); return replace(); }
+      async readResetState() { return { resetGeneration: 0, resetInProgress: false }; }
+      async beginResetTransaction() { return 1; }
+      async completeResetTransaction() {}
       close() { storageEvents.push("close"); }
     },
     BrowserPrograms: class { preload() {} ready() { return boundary.programsReady(); } dispose() { return Promise.resolve(); } },
+    ProvisionAbortedError: class extends Error { constructor(message = "Aborted") { super(message); this.name = "ProvisionAbortedError"; } },
+    ProvisionRollbackError: class extends Error { constructor(message = "Rollback failed") { super(message); this.name = "ProvisionRollbackError"; } },
     programsReady: (): Promise<{ path: string }> => Promise.resolve({ path: "/bin" }),
     registerModuleScope: async () => true,
     loadWasm: async (url: string, progress?: (text: string) => void) => { loads.push(url); return engine ? engine(progress) : fixtureWasm(url); },
     loadEngineProgram: (engine: engineLoader.Engine, profile: Parameters<typeof engineLoader.loadEngineProgram>[1], progress: (text: string) => void, override?: string): ReturnType<typeof engineLoader.loadEngineProgram> => boundary.loadWasm(override ?? profileAsset(engineLoader.ENGINES[engine].wasm, profile), progress),
-    Previews: class { ready = Promise.resolve("ready"); register() {} unregister() {} url() { return "https://preview.test/"; } },
-    HostedPreviews: class {},
+    Previews: class {
+      ready = Promise.resolve("ready" as const);
+      routePrefix = "/__preview/";
+      private readonly active = new Map<number, symbol>();
+      register() {}
+      unregister() {}
+      registerListener(port: number) { const token = Symbol(); this.active.set(port, token); return token; }
+      unregisterListener(port: number, token: symbol) { if (this.active.get(port) === token) this.active.delete(port); }
+      hasListener(port: number, token: symbol) { return this.active.get(port) === token; }
+      isListenerReady(port: number, token: symbol) { return this.active.get(port) === token; }
+      async waitUntilRegistered(port: number, token: symbol) {
+        const state = await this.ready;
+        return this.active.get(port) === token ? state : "failed";
+      }
+      onWorkerRecovered() { return () => {}; }
+      serves(port: number) { return this.active.has(port); }
+      url() { return "https://preview.test/"; }
+      dispose() { this.active.clear(); }
+    },
+    HostedPreviews: class {
+      ready = Promise.resolve("ready" as const);
+      revoke() {}
+      hasActiveConsumer() { return false; }
+      async dispose() {}
+    },
     linkLocalUrls() {}, installPreviewLinks() { return () => {}; }, openTerminal() {},
     createPrompt: (options: PromptOptions) => {
       promptCreates.push(options);
@@ -199,7 +235,8 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
   const replacements: Record<string, string[]> = {
     "@codemirror/state": Object.keys(stateModule), "@codemirror/view": Object.keys(viewModule),
     "@xterm/addon-fit": ["FitAddon"], "@xterm/xterm": ["Terminal"],
-    waffle: ["createRuntime", "declareModuleMemory", "pages", "storedWorkspaces", "openIdleWorkspace", "deleteWorkspace"], "browser-programs": ["BrowserPrograms"],
+    waffle: ["createRuntime", "declareModuleMemory", "pages", "storedWorkspaces", "openIdleWorkspace", "deleteWorkspace"],
+    "browser-programs": ["BrowserPrograms", "ProvisionAbortedError", "ProvisionRollbackError"],
     "workspace-storage": ["WorkspaceStorage"],
     "engine-loader": ["ENGINES", "WasmMissing", "createToolsLoader", "engineBuildHint", "engineUnavailable", "isEngine", "loadEngineProgram", "loadWasm", "mb", "registerModuleScope"],
     "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],

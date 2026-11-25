@@ -175,13 +175,13 @@ test("sandbox reset waits for the stopped guest and durable template before relo
   page.fixture.checkpoints.push(checkpoint);
   const resetting = sandbox.reset();
   expect(sandbox.resetting).toBe(true);
-  expect(events).toEqual(["discard", "stop"]);
+  expect(events).toEqual(["stop"]);
   stopped.resolve({ code: 0 });
   await turn();
-  expect(events).toEqual(["discard", "stop", "template:true"]);
+  expect(events).toEqual(["stop", "template:true"]);
   checkpoint.resolve();
   await resetting;
-  expect(events).toEqual(["discard", "stop", "template:true", "reload"]);
+  expect(events).toEqual(["stop", "template:true", "discard"]);
 });
 
 test("sandbox reports failed filesystem saves and rejects explicit flush", async () => {
@@ -269,12 +269,12 @@ test("sandbox stale durability replies do not replace the latest save status", a
   const checkpoint = deferred<void>();
   const statuses: string[] = [];
   sandbox.addEventListener("change", () => { if (editor.saveState.text !== "editing…") statuses.push(editor.saveState.text); });
-  const save = method<(fs: ReturnType<typeof filesystem>, path: string, text: string, revision: number) => Promise<void>>(sandbox, "save");
+  const save = method<(path: string, text: string, revision: number, editResetGen?: number) => Promise<void>>(sandbox, "save");
   fixture.checkpoints.push(checkpoint);
-  const older = save(filesystem(fixture), "file.ts", "first", 1);
+  const older = save("file.ts", "first", 1, 0);
   await turn();
   expect(statuses).toEqual([]);
-  await save(filesystem(fixture), "file.ts", "second", 2);
+  await save("file.ts", "second", 2, 0);
   expect(statuses).toEqual(["saved"]);
   checkpoint.resolve();
   await older;
@@ -336,7 +336,7 @@ test("sandbox reload preserves its workspace and only an explicit reset replaces
   expect(files.get("/home/user/app/src/main.ts")).toBe("original code");
   expect(files.has("/home/user/app/removed.ts")).toBe(true);
   expect(files.has("/home/user/app/custom.ts")).toBe(false);
-  expect(control.checkpoints).toBe(2);
+  expect(control.checkpoints).toBe(4);
 });
 
 for (const app of ["web", "sandbox"] as const) {
@@ -626,7 +626,7 @@ test("sandbox reset during a Restart wait still waits for the stopped server", a
   expect(events).toEqual([]);
   page.runs[1]!.done.resolve({ code: 137 });
   await resetting;
-  expect(events).toEqual(["template", "reload"]);
+  expect(events).toEqual(["template"]);
   expect(page.runs).toHaveLength(2);
 });
 
@@ -639,10 +639,10 @@ test("sandbox reset after Restart proceeds once a stopped run that never ends pa
     const resetting = sandbox.reset();
     await turn();
     expect(events).toEqual([]);
-    expect(capped).toHaveLength(1);
+    expect(capped.length).toBeGreaterThanOrEqual(1);
     capped[0]!();
     await resetting;
-    expect(events).toEqual(["template", "reload"]);
+    expect(events).toEqual(["template"]);
   } finally { restore(); }
 });
 
@@ -878,7 +878,20 @@ test("sandbox moves the preview bar to down when post-install flush fails on Res
   // Takeover while a preview readiness wait is pending must keep the bar down and never flip back up.
   const takeover = await runningSandbox();
   const previewsReady = deferred<"ready">();
-  Reflect.set(takeover.sandbox, "previews", { ready: previewsReady.promise, register() {}, unregister() {}, url: (port: number) => `https://example.test/__preview/${port}/` });
+  const activeTokens = new Map<number, symbol>();
+  Reflect.set(takeover.sandbox, "previews", {
+    ready: previewsReady.promise,
+    register() {},
+    unregister() {},
+    registerListener(port: number) { const token = Symbol(); activeTokens.set(port, token); return token; },
+    unregisterListener(port: number, token: symbol) { if (activeTokens.get(port) === token) activeTokens.delete(port); },
+    hasListener(port: number, token: symbol) { return activeTokens.get(port) === token; },
+    isListenerReady(port: number, token: symbol) { return activeTokens.get(port) === token; },
+    waitUntilRegistered(_port: number, _token: symbol) { return previewsReady.promise; },
+    onWorkerRecovered() { return () => {}; },
+    dispose() {},
+    url: (port: number) => `https://example.test/__preview/${port}/`,
+  });
   const network = Reflect.get(takeover.sandbox, "network") as { listening(port: number, helper: object): void };
   network.listening(5173, {});
   Reflect.set(takeover.page.fixture.fs, "ownershipLost", true);

@@ -105,7 +105,7 @@ test("native WebSocket upgrades and binary frames work; owner close terminates s
   } finally { socket.close(); }
 });
 
-test("late close cannot remove replacement route; teardown and lifetime allocations are bounded", async () => {
+test("late close cannot remove replacement route; concurrent allocations are bounded while hostnames stay unique", async () => {
   const registry = host(2);
   const owner = {};
   let closes = 0;
@@ -121,8 +121,17 @@ test("late close cannot remove replacement route; teardown and lifetime allocati
   expect(new URL(replacement.origin).hostname).not.toBe(new URL(old.origin).hostname);
   expect(registry.originForPort(owner, 3137)).toBe(replacement.origin);
   expect(await (await fetch(replacement.origin)).text()).toBe("new:/:");
-  await expect(registry.bind({}, 3138, fixture("overflow"))).rejects.toThrow("allocation limit");
-  await registry.close();
+  // Freed slot allows a second concurrent binding with a unique hostname, then the 3rd concurrent bind hits the limit.
+  const failingEndpoint = fixture("failing-close");
+  failingEndpoint.close = () => Promise.reject(new Error("endpoint close boom"));
+  const second = await registry.bind({}, 3138, failingEndpoint);
+  expect(new URL(second.origin).hostname).not.toBe(new URL(replacement.origin).hostname);
+  await expect(registry.bind({}, 3139, fixture("overflow"))).rejects.toThrow("allocation limit");
+  await expect(second.close()).rejects.toThrow("endpoint close boom");
+  // Rejected endpoint close still frees the concurrent slot for a new unique bind while retaining the error for shutdown.
+  const third = await registry.bind({}, 3139, fixture("reused-slot"));
+  expect(new URL(third.origin).hostname).not.toBe(new URL(second.origin).hostname);
+  await expect(registry.close()).rejects.toThrow("endpoint close boom");
   await expect(registry.bind(owner, 3137, fixture("late"))).rejects.toThrow("closed");
 });
 

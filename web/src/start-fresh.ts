@@ -1,4 +1,5 @@
 import { deleteWorkspace, openIdleWorkspace } from "waffle";
+import { acquireLockHandle, presenceLockName } from "./workspace-claims";
 
 /** Shown when another tab still holds the workspace; Waffle then deletes nothing. */
 export const START_FRESH_BUSY = "This workspace is open in another tab. Close the other tabs, then press Start fresh again.";
@@ -28,22 +29,51 @@ function codes(error: unknown): string[] {
 
 const waffle = { open: openIdleWorkspace, remove: deleteWorkspace };
 
+export interface StartFreshOptions {
+  /** Optional custom Web Locks manager for deterministic tests. */
+  locks?: Pick<LockManager, "request">;
+  /** Set false to bypass presenceLock (only for non-WebLocks legacy tests). Default true when navigator.locks exists. */
+  usePresenceLock?: boolean;
+}
+
 /**
  * Deletes the named fast-mode workspace, but only while it still cannot be opened, so the page
- * can open it fresh. The failed runtime is disposed first, so it holds neither store when Waffle
- * claims them. Another tab may have recovered the workspace since this page failed: a workspace
- * that now opens, or no longer exists, is kept ("readable", "missing"). "busy" means another tab
- * or handle holds it and nothing was deleted.
+ * can open it fresh. Disposes the failed runtime first (releasing its own shared presenceLock),
+ * then acquires `presenceLock` exclusively (`ifAvailable: true`) continuously across BOTH
+ * `openIdleWorkspace` (`INVALID_VFS_FORMAT`) AND `deleteWorkspace` to prevent TOCTOU races.
  */
-export async function startFresh(dispose: (() => Promise<unknown>) | undefined, name: string, storage = waffle): Promise<"deleted" | "missing" | "busy" | "readable"> {
+export async function startFresh(
+  dispose: (() => Promise<unknown>) | undefined,
+  name: string,
+  storage = waffle,
+  options: StartFreshOptions = {},
+): Promise<"deleted" | "missing" | "busy" | "readable"> {
   try { await dispose?.(); } catch (error) { console.warn("Start fresh: the failed runtime did not dispose cleanly", error); }
-  const selection = { mode: "fast", name } as const;
-  let opened: Awaited<ReturnType<typeof openIdleWorkspace>>;
-  try { opened = await storage.open(selection); } catch (error) {
-    if (!codes(error).includes("INVALID_VFS_FORMAT")) throw error;
-    return storage.remove(selection);
+
+  const locks = options.locks ?? (typeof navigator !== "undefined" ? navigator.locks : undefined);
+  const usePresence = (options.usePresenceLock ?? true) && locks !== undefined;
+
+  let presenceHandle: { release(): void } | null = null;
+  if (usePresence) {
+    presenceHandle = await acquireLockHandle(presenceLockName(name), {
+      mode: "exclusive",
+      ifAvailable: true,
+      locks,
+    });
+    if (!presenceHandle) return "busy";
   }
-  if (typeof opened === "string") return opened;
-  await opened.close();
-  return "readable";
+
+  try {
+    const selection = { mode: "fast", name } as const;
+    let opened: Awaited<ReturnType<typeof openIdleWorkspace>>;
+    try { opened = await storage.open(selection); } catch (error) {
+      if (!codes(error).includes("INVALID_VFS_FORMAT")) throw error;
+      return await storage.remove(selection);
+    }
+    if (typeof opened === "string") return opened;
+    await opened.close();
+    return "readable";
+  } finally {
+    presenceHandle?.release();
+  }
 }

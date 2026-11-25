@@ -1,7 +1,7 @@
 interface NavigationOptions {
   scope: string;
   clients: { get(id: string): Promise<{ readonly url: string } | undefined> };
-  fetch(request: Request, clientId: string): Promise<Response>;
+  fetch(request: Request, clientId: string, signal?: AbortSignal): Promise<Response>;
   /** Retry transient 502 preview-SW responses up to this many ms while the loading client stays open. */
   transientRetryMs?: number;
   /** Backoff steps (ms) between transient retries. */
@@ -9,14 +9,14 @@ interface NavigationOptions {
 }
 
 type Reply = { kind: "waiting"; request: Request; clientId: string } | { kind: "pending" } | { kind: "ready"; response: Response } | { kind: "failed"; error: unknown };
-interface Navigation { url: string; loadingURL: string; clientId: string; document: number; reply: Reply; abortWait?: () => void }
+interface Navigation { url: string; loadingURL: string; clientId: string; document: number; reply: Reply; controller: AbortController; abortWait?: () => void }
 
 /** A loading document keeps a slow guest request outside WebKit's fetch-head watchdog. */
 export function previewNavigations(options: NavigationOptions) {
   const scope = new URL(options.scope);
   const loading = new URL(".loading/", scope);
   const pending = new Map<string, Navigation>();
-  const guest = new RegExp(`^${scope.pathname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\d{1,5}(?:/|$)`);
+  const guest = new RegExp(`^${scope.pathname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:r/(?:ws|mem|pg)-[a-zA-Z0-9._-]+/)?\\d{1,5}(?:/|$)`);
   const headers = {
     "cache-control": "no-store",
     "cross-origin-embedder-policy": "require-corp",
@@ -34,6 +34,7 @@ export function previewNavigations(options: NavigationOptions) {
 
   function cancel(id: string, navigation: Navigation): void {
     pending.delete(id);
+    navigation.controller.abort();
     navigation.abortWait?.();
     navigation.abortWait = undefined;
     if (navigation.reply.kind === "ready") cancelBody(navigation.reply.response);
@@ -87,12 +88,12 @@ export function previewNavigations(options: NavigationOptions) {
     void (async () => {
       let attempt = 0;
       while (true) {
-        const response = await options.fetch(request, clientId);
+        const response = await options.fetch(request, clientId, navigation.controller.signal);
         let live: boolean;
         try { live = await hasLoadingClient(navigation); }
         catch (error) { cancelBody(response); throw error; }
         if (pending.get(id) !== navigation) { cancelBody(response); return; }
-        if (!live) { pending.delete(id); cancelBody(response); return; }
+        if (!live) { cancel(id, navigation); cancelBody(response); return; }
         const remaining = deadline - Date.now();
         if (budget > 0 && remaining > 0 && isTransient(response)) {
           const delay = Math.min(remaining, delays[Math.min(attempt, delays.length - 1)] ?? 250);
@@ -103,7 +104,7 @@ export function previewNavigations(options: NavigationOptions) {
           try { stillLive = await hasLoadingClient(navigation); }
           catch (error) { cancelBody(response); throw error; }
           if (pending.get(id) !== navigation) { cancelBody(response); return; }
-          if (!stillLive) { pending.delete(id); cancelBody(response); return; }
+          if (!stillLive) { cancel(id, navigation); cancelBody(response); return; }
           if (Date.now() >= deadline) {
             navigation.reply = { kind: "ready", response };
             return;
@@ -141,7 +142,7 @@ export function previewNavigations(options: NavigationOptions) {
 
   function begin(request: Request, clientId: string, url: string): Response {
     const id = crypto.randomUUID();
-    const navigation: Navigation = { url, loadingURL: new URL(id, loading).href, clientId: "", document: 0, reply: { kind: "waiting", request, clientId } };
+    const navigation: Navigation = { url, loadingURL: new URL(id, loading).href, clientId: "", document: 0, reply: { kind: "waiting", request, clientId }, controller: new AbortController() };
     pending.set(id, navigation);
     return redirect(navigation.loadingURL);
   }
