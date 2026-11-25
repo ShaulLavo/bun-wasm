@@ -2,20 +2,27 @@
 
 Class **Port** for the source selection in `crates/bunwasm-semver/src/lib.rs`.
 The upstream implementation is oven-sh/bun `src/semver_jsc/SemverObject.rs`
-at pinned upstream revision `9510e74152073d850a18758ca41114d8f214ffa6`.
-The vendored patched tree is `4ceda2c2868d3a7703c7737ddd9de7244ec384df`.
+at pinned upstream revision `a7733435cf40429e3b35c36072769df2052b80f1` (Bun 1.4.5).
+The vendored patched tree is `13db39ec6c7f348f48a660c0b8b7d9a6a0051cc0`.
 This file is unchanged between those revisions. The adapter compiles it directly with
 `#[path]`, so no copy or generated rewrite can drift from the pinned source.
 Its `order`, `satisfies`, and `intersects_for_testing` bodies all compile.
+
+Bun 1.4.5 moved `order` and `satisfies` to its bindgen: they take UTF-8 bytes
+(`order` also a `JsHeap` for its error) and return `bindgen::Result`, and
+`SemverObject.bind.ts` generates the JavaScript entry points. The file no longer
+has a `create` function table. The glue in `crates/bunwasm-semver/src/lib.rs`
+does what the generated entry points do for these two functions.
 
 Class **Host feature** for the original adapters in `crates/bunwasm-bun-jsc/`,
 `crates/bunwasm-bun-jsc-macros/`, `crates/bunwasm-semver/src/lib.rs`, and
 `crates/bunwasm-runtime/src/semver.rs`, `crates/bunwasm-runtime/src/js/bun.js`, and
 the GC hook in `web/src/engine-host.js`. These implementations are ours.
-They provide the source-compatible names and free-host-function macro needed by this
+They provide the source-compatible names, the `bindgen::JsHeap` and `bindgen::Result`
+stand-ins, and the free-host-function macro needed by this
 one module. They use call-scoped string slots, immediate boolean and int32 results,
 and explicit errors instead of JSC's tagged values and C++ call ABI.
-The runtime adapter maps the actual upstream function table to its native names.
+The runtime adapter maps the three functions `bunwasm_semver::functions` lists to their native names.
 `crates/bunwasm-runtime/src/js/builtins.js` exposes the upstream intersection function
 through the existing internal test module. JavaScript still owns argument coercion.
 The public semver wrapper rejects Symbol primitives with Bun's canonical error

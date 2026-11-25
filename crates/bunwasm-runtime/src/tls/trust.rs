@@ -8,7 +8,7 @@ use std::io::{Read, Result as IoResult};
 use std::rc::Rc;
 
 pub const BUNDLE: &[u8] = include_bytes!("../../data/tls-roots.der");
-pub const ROOT_COUNT: usize = 121;
+pub const ROOT_COUNT: usize = 118;
 pub const MAX_MATERIAL: usize = 1024 * 1024;
 pub const MAX_CERTIFICATES: usize = 1024;
 

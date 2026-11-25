@@ -10,11 +10,11 @@ capability, not Nuxt acceptance or shared-memory support in the Wasmi interprete
 
 | Source | Class | Local change |
 | --- | --- | --- |
-| Bun `src/js/node/wasi.ts` | Patch and port | Include the generated factory as module 188; add reactor initialization, a shared one-time startup guard, and refresh cached views when the memory buffer changes. |
+| Bun `src/js/node/wasi.ts` | Patch and port | Include the generated factory as module 192; add reactor initialization, a shared one-time startup guard, and refresh cached views when the memory buffer changes. |
 | Builtin registration, constants hook, and selection policy | Original adapter | Route `node:wasi` to the factory, supply existing filesystem constants lazily, and retain existing adapters for unselected public dependencies. |
 
 The source comes from pinned Bun revision
-`9510e74152073d850a18758ca41114d8f214ffa6`, with the checked-in Bun patch series.
+`a7733435cf40429e3b35c36072769df2052b80f1`, with the checked-in Bun patch series.
 `0015-node-wasi-initialize-reactor-instances-with-exported.patch` adds
 `WASI.initialize(instance)`. It binds exported memory before calling an optional
 `_initialize`, rejects command modules exporting `_start`, and shares a one-time
@@ -46,7 +46,7 @@ public dependencies stop before traversal. This matches the loader's existing
 fallback for `bun`, `node:*`, and `bun:*`. Unknown module, native module, and
 architecture checks remain unchanged.
 
-Only generated module 188 and its catalog row change for reactor support.
+Only the generated `node:wasi` module (192 at this pin) and its catalog row change for reactor support.
 Existing modules 22, 167, 168, registry and bindings remain byte-identical.
 The constants hook
 adds 84 compact bytes to the loader, from 3,376 to 3,460, within its unchanged
@@ -61,7 +61,7 @@ environment, random, file-open, file-write, file-read, and file-close operations
 It checks exact UTF-8 bytes, native file contents, descriptor closure, and EBADF.
 The control closes its descriptors and removes its scratch directory on failure
 or success. It also verifies that the constants hook remains lazy and only
-generated module 188 loads. A real reactor calls a WASI import from `_initialize`,
+generated `node:wasi` module loads. A real reactor calls a WASI import from `_initialize`,
 proving memory was bound before initialization. Additional controls cover the
 optional initializer, invalid exports, initializer exceptions, and repeated or
 mixed `start`/`initialize` calls.

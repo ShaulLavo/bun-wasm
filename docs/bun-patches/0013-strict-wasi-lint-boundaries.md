@@ -1,7 +1,7 @@
 ## 0013 strict WASI lint boundaries
 
 Class **Port**. Upstream remains Bun
-`9510e74152073d850a18758ca41114d8f214ffa6`; this patch changes only the WASI port.
+`a7733435cf40429e3b35c36072769df2052b80f1`; this patch changes only the WASI port.
 
 - `src/bun_core/util.rs` restores Unix-only reload/spawn blocks. WASI keeps its
   explicit unsupported-reload arm and the existing unsupported-spawn result,

@@ -36,6 +36,7 @@ pub(super) fn finalize(
     let mut trace = GraphTraceState {
         client_bits: DynamicBitSet::default(),
         server_bits: DynamicBitSet::default(),
+        failures: Vec::new(),
     };
     let mut ctx = HotUpdateContext {
         sources,

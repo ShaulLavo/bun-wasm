@@ -5,7 +5,7 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 source "$root/env.sh"
-BUN_COMMIT=9510e74152073d850a18758ca41114d8f214ffa6
+BUN_COMMIT=a7733435cf40429e3b35c36072769df2052b80f1
 bun_dir=$root/vendor/bun
 source_only=0
 check_only=0
@@ -110,7 +110,10 @@ argon2=$(grep -oP 'RUST_ARGON2_COMMIT = "\K[0-9a-f]+' "$bun_dir/scripts/build/de
 fetch lolhtml oven-sh/lol-html "$lolhtml"
 if [ ! -f "$bun_dir/vendor/rust-argon2/Cargo.toml" ]; then
   fetch rust-argon2 sru-systems/rust-argon2 "$argon2"
-  patch -d "$bun_dir/vendor/rust-argon2" -p1 < "$bun_dir/patches/rust-argon2/legacy-low-memory.patch"
+  # The patches Bun lists for the dependency, in its order.
+  while IFS= read -r argon2_patch; do
+    patch -d "$bun_dir/vendor/rust-argon2" -p1 < "$bun_dir/$argon2_patch"
+  done < <(grep -oP '"\Kpatches/rust-argon2/[^"]+\.patch' "$bun_dir/scripts/build/deps/rust-argon2.ts")
 fi
 
 # Rust's build options and byte-class tables need only Bun's compiler-free codegen

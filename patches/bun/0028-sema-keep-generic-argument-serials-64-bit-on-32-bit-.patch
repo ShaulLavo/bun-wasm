@@ -1,0 +1,37 @@
+From 13db39ec6c7f348f48a660c0b8b7d9a6a0051cc0 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Wed, 25 Nov 2026 12:00:00 +0200
+Subject: [PATCH 28/28] sema: keep generic argument serials 64-bit on 32-bit
+ targets
+
+---
+ src/sema/check/call.rs | 2 +-
+ src/sema/check/expr.rs | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/sema/check/call.rs b/src/sema/check/call.rs
+index 493d7d11..bac33fad 100644
+--- a/src/sema/check/call.rs
++++ b/src/sema/check/call.rs
+@@ -3048,7 +3048,7 @@ impl<'p, 's> Checker<'p, 's> {
+         &self,
+         inferred: &[TypeId],
+         own: &[TypeId],
+-        serial: usize,
++        serial: u64,
+     ) -> Option<Vec<TypeId>> {
+         let mut names: Vec<Atom> = inferred
+             .iter()
+diff --git a/src/sema/check/expr.rs b/src/sema/check/expr.rs
+index 03c614af..bea3e8bc 100644
+--- a/src/sema/check/expr.rs
++++ b/src/sema/check/expr.rs
+@@ -210,7 +210,7 @@ impl<'p, 's> Checker<'p, 's> {
+                 && let Some(unique) = c.unique_type_params(
+                     &n.inferred_type_params,
+                     &type_params,
+-                    ((file.0 as usize) << 32) | e.0 as usize,
++                    (u64::from(file.0) << 32) | u64::from(e.0),
+                 )
+             {
+                 let instantiated = if unique[..] == type_params[..] {

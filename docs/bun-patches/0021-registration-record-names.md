@@ -1,6 +1,6 @@
 ## 0021 registration record names
 
-File `0021-wasm-print-registration-names-the-record-allocates.patch`. Class **Host feature**. Upstream source is Bun at `9510e74152073d850a18758ca41114d8f214ffa6`, `src/js_printer/lib.rs`, after patches 0001 to 0020. It changes the registration printing that [0017](0017-module-registration-printing.md) added.
+File `0021-wasm-print-registration-names-the-record-allocates.patch`. Class **Host feature**. Upstream source is Bun at `a7733435cf40429e3b35c36072769df2052b80f1`, `src/js_printer/lib.rs`, after patches 0001 to 0020. It changes the registration printing that [0017](0017-module-registration-printing.md) added.
 
 A registration record body refers to the loader's API object (`import.meta`, `import()`) and, for a top-level `for await`, to an iterator and a step result. 0017 printed them as the fixed identifiers `__bunwasm_m`, `__bunwasm_i` and `__bunwasm_r`, which a module could declare or reference itself: a module declaring `const __bunwasm_m` failed to parse, and one reading a global of that name read the loader instead. `with_bunwasm_register` now takes a `BunwasmRegisterNames` with the three identifiers, and the registration printer prints those. bunwasm-transpiler's `register::Names` allocates them, with the record's other added identifiers, so they differ from every name the module declares or references and from any text in its source. Ordinary printing is unchanged, and so is the record printing when no module name collides.
 

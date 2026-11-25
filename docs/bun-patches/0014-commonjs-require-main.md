@@ -1,7 +1,7 @@
 ## 0014 CommonJS require.main printing
 
 Class **Port**. The upstream path is `src/bundler/transpiler.rs` at pinned Bun
-revision `9510e74152073d850a18758ca41114d8f214ffa6`.
+revision `a7733435cf40429e3b35c36072769df2052b80f1`.
 
 The ESM print path now forwards the AST's existing `exports_kind` to its cold
 printer arm and selects the CommonJS module type for a CommonJS AST, matching

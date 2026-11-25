@@ -1,7 +1,7 @@
-From 8e97fb9ca74bdec381085421bb49058612bdbfeb Mon Sep 17 00:00:00 2001
+From 62d7d8fa38597e573d6b27a57abaf802c5659e1c Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Wed, 28 Oct 2026 03:36:30 +0200
-Subject: [PATCH 16/16] wasm: cap source-sized symbol pre-reservations on
+Subject: [PATCH 16/28] wasm: cap source-sized symbol pre-reservations on
  wasm32
 
 The parser reserved one symbol per 16 source bytes for the module scope's
@@ -17,10 +17,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  1 file changed, 11 insertions(+)
 
 diff --git a/src/js_parser/p.rs b/src/js_parser/p.rs
-index f9800763..34889e62 100644
+index d981eb71..b9b71f2a 100644
 --- a/src/js_parser/p.rs
 +++ b/src/js_parser/p.rs
-@@ -9707,6 +9707,13 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -9578,6 +9578,13 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
          // `source.len() / 16` hint (≈ one symbol per 16 source bytes) covers
          // the vast majority of real files in a single allocation.
          let estimated_symbol_count = source.contents.len() / 16;
@@ -34,7 +34,7 @@ index f9800763..34889e62 100644
  
          // ~one scope per 64 source bytes covers most files without regrowth.
          let mut scope_order =
-@@ -10460,3 +10467,7 @@ fn record_destructured_aliases(
+@@ -10333,3 +10340,7 @@ fn record_destructured_aliases(
      }
      Some(rest_ref)
  }

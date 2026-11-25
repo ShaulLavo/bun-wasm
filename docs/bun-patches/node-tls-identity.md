@@ -2,7 +2,7 @@
 
 ## Port and license
 
-`crates/bunwasm-runtime/src/js/tls_identity.ts` ports the pure server-identity helpers from Bun `src/js/node/tls.ts` at commit `9510e74152073d850a18758ca41114d8f214ffa6`. The helpers run inside the existing typed runtime factory, without Node imports or engine intrinsics. Bun and the Node-derived implementation are MIT licensed. The retained notice is in [`scripts/fixtures/tls-identity/LICENSE.txt`](../../scripts/fixtures/tls-identity/LICENSE.txt).
+`crates/bunwasm-runtime/src/js/tls_identity.ts` ports the pure server-identity helpers from Bun `src/js/node/tls.ts` at commit `a7733435cf40429e3b35c36072769df2052b80f1`. The helpers run inside the existing typed runtime factory, without Node imports or engine intrinsics. Bun and the Node-derived implementation are MIT licensed. The retained notice is in [`scripts/fixtures/tls-identity/LICENSE.txt`](../../scripts/fixtures/tls-identity/LICENSE.txt).
 
 [`scripts/fixtures/tls-identity/upstream.json`](../../scripts/fixtures/tls-identity/upstream.json) records the exact Git blob, SHA-256, byte count, and classification for every inspected upstream file. `verify-upstream.ts` reads those objects at the pin, not the vendor checkout's mutable HEAD, and reproduces the pure-case fixture.
 

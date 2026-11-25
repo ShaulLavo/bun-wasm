@@ -1,7 +1,7 @@
-From e50a48b87a9ea51b635550e93d3d3977415baffa Mon Sep 17 00:00:00 2001
+From ddbf967e18dd453e86312a855783389f729b7a69 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sun, 18 Oct 2026 16:16:51 +0300
-Subject: [PATCH 13/14] Limit native-only declarations in the WASI port
+Subject: [PATCH 13/28] Limit native-only declarations in the WASI port
 
 ---
  src/bun_core/Global.rs      |  4 +++-
@@ -20,7 +20,7 @@ Subject: [PATCH 13/14] Limit native-only declarations in the WASI port
  13 files changed, 45 insertions(+), 15 deletions(-)
 
 diff --git a/src/bun_core/Global.rs b/src/bun_core/Global.rs
-index 49279df1..145498f5 100644
+index 175d6261..423d24b4 100644
 --- a/src/bun_core/Global.rs
 +++ b/src/bun_core/Global.rs
 @@ -579,6 +579,8 @@ pub const arch_name: &str = if cfg!(target_arch = "x86_64") {
@@ -32,10 +32,10 @@ index 49279df1..145498f5 100644
      // Android needs the same path as Linux, but Rust's `target_os = "linux"`
      // excludes it — include android explicitly.
      #[cfg(any(target_os = "linux", target_os = "android"))]
-@@ -684,7 +686,7 @@ unsafe extern "C" {
-     #[cfg(any(unix, target_os = "wasi"))]
-     #[link_name = "exit"]
+@@ -687,7 +689,7 @@ unsafe extern "C" {
      safe fn libc_exit(code: c_int) -> !;
+     #[cfg(not(any(windows, target_os = "wasi")))]
+     safe fn _exit(code: c_int) -> !;
 -    #[cfg(all(any(unix, target_os = "wasi"), not(target_os = "macos")))]
 +    #[cfg(all(unix, not(target_os = "macos")))]
      safe fn quick_exit(code: c_int) -> !;
@@ -54,10 +54,10 @@ index 5838a8e2..1e211b78 100644
  
  /// Capture the current thread's call stack.
 diff --git a/src/bun_core/util.rs b/src/bun_core/util.rs
-index 6d8a9057..86d34e77 100644
+index a288ce50..3c3f0686 100644
 --- a/src/bun_core/util.rs
 +++ b/src/bun_core/util.rs
-@@ -4365,7 +4365,7 @@ pub fn reload_process(clear_terminal: bool, may_return: bool) {
+@@ -4380,7 +4380,7 @@ pub fn reload_process(clear_terminal: bool, may_return: bool) {
          }
      }
  
@@ -66,7 +66,7 @@ index 6d8a9057..86d34e77 100644
      // SAFETY: FFI calls receive only locally-built NUL-terminated argv/envp arrays; on success
      // `execve` never returns, on failure errno is read. No borrowed Rust state observed after.
      unsafe {
-@@ -4601,7 +4601,7 @@ fn spawn_sync_inherit_impl(
+@@ -4623,7 +4623,7 @@ fn spawn_sync_inherit_impl(
      if argv.is_empty() {
          return Err(crate::CrateError::FileNotFound);
      }
@@ -75,7 +75,7 @@ index 6d8a9057..86d34e77 100644
      // SAFETY: argv strings are owned `ZBox`es (NUL-terminated) kept alive in
      // `cargs` for the duration of the spawn; `ptrs`/`environ` are null-
      // terminated `*const c_char` arrays as required by `posix_spawn_bun` /
-@@ -4822,7 +4822,7 @@ fn spawn_sync_inherit_impl(
+@@ -4844,7 +4844,7 @@ fn spawn_sync_inherit_impl(
          let code = status.code().unwrap_or(-1);
          Ok(SpawnStatus { code })
      }
@@ -85,7 +85,7 @@ index 6d8a9057..86d34e77 100644
          let _ = (argv, stdin);
          Err(crate::CrateError::Unexpected)
 diff --git a/src/crash_handler/lib.rs b/src/crash_handler/lib.rs
-index 53a97a12..a60d5e2d 100644
+index be74f5c4..9d1401fb 100644
 --- a/src/crash_handler/lib.rs
 +++ b/src/crash_handler/lib.rs
 @@ -459,7 +459,7 @@ mod draft {
@@ -119,7 +119,7 @@ index 5c144e36..4becfdc8 100644
  // wasi-libc wrappers return -1 and set the thread-local errno.
  impl_get_errno_libc!(i32, u32, isize, i64, usize);
 diff --git a/src/io/lib.rs b/src/io/lib.rs
-index 68ed490b..893c2a78 100644
+index 7d3d466b..819f7597 100644
 --- a/src/io/lib.rs
 +++ b/src/io/lib.rs
 @@ -671,7 +671,7 @@ pub use open_for_writing_mod::{open_for_writing, open_for_writing_impl};
@@ -147,7 +147,7 @@ index 68ed490b..893c2a78 100644
      use core::ffi::c_int;
      unsafe extern "C" {
          #[cfg(any(target_os = "macos", target_os = "freebsd"))]
-@@ -1087,6 +1089,7 @@ impl IoRequestLoop {
+@@ -1137,6 +1139,7 @@ impl IoRequestLoop {
      // these so any Windows call site fails at compile time rather than
      // compiling cleanly and only panicking at runtime.
      #[cfg(not(windows))]
@@ -155,7 +155,7 @@ index 68ed490b..893c2a78 100644
      pub(crate) fn pollfd(&self) -> Fd {
          #[cfg(any(target_os = "linux", target_os = "android"))]
          {
-@@ -1383,16 +1386,20 @@ pub enum PollableTag {
+@@ -1433,16 +1436,20 @@ pub enum PollableTag {
  /// packed addr:49 + tag:15 layout locally.
  #[cfg(not(windows))]
  #[derive(Clone, Copy)]
@@ -176,7 +176,7 @@ index 68ed490b..893c2a78 100644
  impl Pollable {
      fn init(t: PollableTag, p: *mut Poll) -> Pollable {
          let addr = p as usize as u64;
-@@ -1984,6 +1991,7 @@ pub mod waker {
+@@ -2034,6 +2041,7 @@ pub mod waker {
          }
  
          #[inline]
@@ -267,10 +267,10 @@ index 1bc5b8cf..df4127c4 100644
  #[cfg(not(windows))]
  use bun_core::vec::UninitBuf;
 diff --git a/src/sys/lib.rs b/src/sys/lib.rs
-index 3874ec68..9b64d23f 100644
+index d3d9321d..0864b9e4 100644
 --- a/src/sys/lib.rs
 +++ b/src/sys/lib.rs
-@@ -294,7 +294,7 @@ pub mod dir_iterator {
+@@ -321,7 +321,7 @@ pub mod dir_iterator {
      }
  
      /// `posix.DT.* → Entry.Kind` (Linux/Darwin/FreeBSD share the BSD `DT_*` values).
@@ -279,7 +279,7 @@ index 3874ec68..9b64d23f 100644
      #[inline]
      fn kind_from_dt(dt: u8) -> EntryKind {
          match dt {
-@@ -1020,7 +1020,7 @@ pub use tmp::Tmpfile;
+@@ -1003,7 +1003,7 @@ pub use tmp::Tmpfile;
  // `#[cfg(windows)]` arms in dependents.
  pub mod windows;
  
@@ -288,7 +288,7 @@ index 3874ec68..9b64d23f 100644
  use core::ffi::c_int;
  use core::ffi::{c_char, c_void};
  
-@@ -1490,9 +1490,9 @@ impl Tag {
+@@ -1473,9 +1473,9 @@ impl Tag {
      pub const clone3: Tag = Tag(107);
      pub const uv_os_setpriority: Tag = Tag(108);
      pub const flock: Tag = Tag(109);
@@ -298,9 +298,9 @@ index 3874ec68..9b64d23f 100644
 -    #[cfg(not(windows))]
 +    #[cfg(all(not(windows), not(target_os = "wasi")))]
      pub(crate) const fgetxattr: Tag = Tag(111);
-     // `inotify_init1`/`inotify_add_watch` fold under the generic `.watch`
-     // tag; `INotifyWatcher.rs` spells it `.inotify`. Alias to `.watch`
-@@ -2749,6 +2749,7 @@ mod posix_impl {
+     pub const epoll_create1: Tag = Tag(112);
+     pub const pthread_create: Tag = Tag(113);
+@@ -2736,6 +2736,7 @@ mod posix_impl {
          Ok(())
      }
      /// What `call` writes. It is given a buffer and its length, or null and 0: then it returns how long one has to be.
@@ -334,10 +334,10 @@ index 3727be64..ec98a9df 100644
          // Try to notify a thread
          let is_waking = false;
 diff --git a/src/watcher/Watcher.rs b/src/watcher/Watcher.rs
-index 89bce27b..9090959f 100644
+index 3c9103f8..cb4e1b70 100644
 --- a/src/watcher/Watcher.rs
 +++ b/src/watcher/Watcher.rs
-@@ -99,7 +99,9 @@ pub type ChangedFilePath = Option<&'static ZStr>;
+@@ -103,7 +103,9 @@ pub type ChangedFilePath = Option<&'static ZStr>;
  pub struct Watcher {
      // This will always be [MAX_COUNT]WatchEvent,
      // We avoid statically allocating because it increases the binary size.
@@ -347,7 +347,7 @@ index 89bce27b..9090959f 100644
      pub(crate) changed_filepaths: [ChangedFilePath; MAX_COUNT],
  
      /// The platform-specific implementation of the watcher
-@@ -130,9 +132,11 @@ pub struct Watcher {
+@@ -134,9 +136,11 @@ pub struct Watcher {
      /// Scratch snapshot of `watchlist.eventlist_index` used by
      /// `watch_loop_cycle`; owned by the watcher thread.
      #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
@@ -359,7 +359,7 @@ index 89bce27b..9090959f 100644
      pub(crate) on_file_update: fn(*mut (), &mut [WatchEvent], &[ChangedFilePath], &WatchList),
      pub(crate) on_error: fn(*mut (), sys::Error),
  
-@@ -223,6 +227,7 @@ impl Watcher {
+@@ -227,6 +231,7 @@ impl Watcher {
      /// The platform `watch_loop_cycle` fills `self.watch_events[..event_count]`
      /// and `self.changed_filepaths[..changed_count]` and calls this instead of
      /// open-coding the lock/trace/callback sequence.
@@ -367,7 +367,7 @@ index 89bce27b..9090959f 100644
      pub(crate) fn dispatch_file_updates(&mut self, event_count: usize, changed_count: usize) {
          let _guard = self.mutex.lock_guard();
          if !self.running.load() {
-@@ -986,10 +991,12 @@ impl WatchEvent {
+@@ -1000,10 +1005,12 @@ impl WatchEvent {
      }
  
      #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi", windows))]
@@ -380,7 +380,7 @@ index 89bce27b..9090959f 100644
      pub(crate) fn merge(&mut self, other: WatchEvent) {
          self.name_len += other.name_len;
          self.op = Op::merge(self.op, other.op);
-@@ -1010,6 +1017,7 @@ bitflags::bitflags! {
+@@ -1024,6 +1031,7 @@ bitflags::bitflags! {
  }
  
  impl Op {

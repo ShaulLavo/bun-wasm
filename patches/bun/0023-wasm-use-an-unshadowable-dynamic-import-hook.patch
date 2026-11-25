@@ -1,17 +1,17 @@
-From 059a877565d365d725358cb37aeab6474e9179b2 Mon Sep 17 00:00:00 2001
+From b5527199612ac2724b5e31b494a1de2ba7be5b0e Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sun, 8 Nov 2026 11:22:43 +0200
-Subject: [PATCH] wasm: use an unshadowable dynamic import hook
+Subject: [PATCH 23/28] wasm: use an unshadowable dynamic import hook
 
 ---
  src/js_printer/lib.rs | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
-index 68fbb9e5..f45ff703 100644
+index f8b9872e..0ec617ce 100644
 --- a/src/js_printer/lib.rs
 +++ b/src/js_printer/lib.rs
-@@ -6797,7 +6797,7 @@ pub(crate) mod __gated_printer {
+@@ -6843,7 +6843,7 @@ pub(crate) mod __gated_printer {
              }
              super::BUNWASM_IMPORT_REFERRER.with_borrow(|from| {
                  if let Some(from) = from {

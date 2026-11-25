@@ -3,10 +3,10 @@
 Classification: copied upstream data and adapted bundle-format reader.
 
 The binary `crates/bunwasm-runtime/data/tls-roots.der` is copied unchanged from
-`oven-sh/bun` commit `9510e74152073d850a18758ca41114d8f214ffa6`, path
-`packages/bun-usockets/root_certs.der`. It contains 121 roots in 129,635 bytes.
+`oven-sh/bun` commit `a7733435cf40429e3b35c36072769df2052b80f1`, path
+`packages/bun-usockets/root_certs.der`. It contains 118 roots in 127,583 bytes.
 Its SHA-256 is
-`9c211f519356eff61365ff890856135b1b8ee298775b144ce6089782ae603f90`.
+`8f6217fc19d21cbc22c06064283f59a2a1004408813e919d2ceac8987d404ea3`.
 The import reads the exact Git object, not the mutable vendor working tree.
 
 `tls-roots.source.json` records the pin, digest, source-file digests, import
