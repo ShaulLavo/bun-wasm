@@ -46,6 +46,7 @@
     "src/engine-kind.ts",
     "src/program-memory.ts",
     "src/bun-adapter.ts",
+    "src/run-bun.ts",
     "src/executable-marker.ts",
     "src/package-continuation.ts",
     "src/package-continuation-binding.ts",

@@ -10,7 +10,7 @@ source. The guest `.wasm` file downloads at run time.
 
 Exports are explicit:
 
-- `bun-wasm`: adapter installation, engine types, verified guest loader, and asset metadata.
+- `bun-wasm`: adapter installation, `runBun` and `startBun` for running commands, engine types, verified guest loader, and asset metadata.
 - `bun-wasm/worker`: module-worker entry; bundle it as a worker, never import it into the page.
 - `bun-wasm/asset`: guest metadata and the verified loader without any worker or demo code.
 
