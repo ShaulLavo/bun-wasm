@@ -1,11 +1,11 @@
 # bun-wasm
 
-Bun v1.4.5's Rust toolchain compiled to `wasm32-wasip1`, with a Bun-compatible runtime around it, so `bun install`, `bun run`, `bun test`, `bun build` and `Bun.serve` run inside a browser tab with no server behind them.
+Bun v1.4.5's Rust toolchain compiled to `wasm32-wasip1`, paired with a Bun-compatible runtime so `bun install`, `bun run`, `bun test`, `bun build` and `Bun.serve` run inside a browser tab with no server behind them.
 
 ## Try it
 
-- [Sandbox](https://bun.sprockt.dev/): pick a framework (Next.js, Nuxt, SvelteKit, Astro, Vite and more), install it, run its dev server and edit it live.
-- [Playground](https://bun.sprockt.dev/playground/): an editor and a terminal. Press **Run**.
+- [Sandbox](https://bun.sprockt.dev/) runs Next.js, Nuxt, SvelteKit, Astro, Vite and eight more starters in your tab. Pick one, install it and edit live.
+- [Playground](https://bun.sprockt.dev/playground/) opens a TypeScript editor beside a terminal. Press Run.
 
 ```console
 user@bun:~$ bun -e 'console.log(2 ** 10)'
@@ -16,15 +16,15 @@ Hello, Bun!
 Hello, WebAssembly.
 ```
 
-All 13 frameworks in the test matrix start, render, hot-reload and build on Chrome, Firefox, desktop Safari and iPhone Safari, on four JavaScript engines ([Compatibility](docs/compatibility.md)).
+In the 2026-11-23 [compatibility matrix](docs/compatibility.md) on Bun 1.4.4 guests, all 13 frameworks install, start, update on edit and build across Chrome, Firefox, desktop Safari and iPhone Safari in the iOS simulator, on four JavaScript engines.
 
 ## Embed it
 
-bun-wasm registers `bun` and `node` on a [Waffle](https://github.com/ShaulLavo/waffle) runtime that your page owns. [Embed bun-wasm in a page](docs/guides/embed-in-a-page.md) has the setup.
+bun-wasm registers `bun`, `node` and `nodejs` on a [Waffle](https://github.com/ShaulLavo/waffle) runtime that your page owns. No default guest is published yet, so you build and host the Wasm module yourself. See [Embed bun-wasm in a page](docs/guides/embed-in-a-page.md).
 
 ## Links
 
-- [Project overview](docs/project-overview.md): architecture, status, performance
+- [Project overview](docs/project-overview.md) covers architecture, engines, performance and status.
 - [Getting started](docs/getting-started.md)
 - [All documentation](docs/README.md)
 - [Development](docs/development.md)

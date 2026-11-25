@@ -19,12 +19,14 @@ The browser engine runs user code and the runtime's JS polyfills (`crates/bunwas
 
 Isolation isn't a goal: user code shares the worker's global object with the host glue.
 
-Build it with `scripts/build-bun-browser.sh`, which compiles `bunwasm-cli` with `--no-default-features --features engine-host,bun-transpiler,bun-build` and then runs wasm-opt `-O2`. The output is 8.2 MB raw and 2.9 MB gzipped. The other engines are larger:
+Build it with `scripts/build-bun-browser.sh`, which compiles `bunwasm-cli` with `--no-default-features --features engine-host,bun-transpiler,bun-build` and then runs wasm-opt `-O2`. Earlier single-module builds, before the split core-and-engine layout and later runtime additions, measured 8.2 MB raw and 2.9 MB gzipped for `bun-browser.wasm`:
 
-| wasm | raw | gzipped |
+| earlier single-module build | raw | gzipped |
 |---|---|---|
 | `bun.wasm` (QuickJS) | 8.9 MB | 3.2 MB |
 | `bun-jsc.wasm` | 42.8 MB | 11.5 MB |
+
+For current split-profile and shared-group sizes measured on 2026-11-23, see [Compatibility](compatibility.md#engines).
 
 The host side is one plain-JS ES module, `web/src/engine-host.js`, used both by the playground worker (`web/src/worker.ts`) and by the headless runner (`web/scripts/node-host.mjs`).
 

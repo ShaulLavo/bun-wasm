@@ -46,7 +46,8 @@ The host never starts a native executable. `Bun.spawn` and `node:child_process` 
 | Servers | A guest server is reachable through the service worker's `/__preview/<port>/` route, or from inside the same worker. | same |
 | Raw outbound TCP in a browser | Fails with `ENOTSUP`. Browsers have no raw TCP API. | [TCP on the host ABI](tcp.md) |
 | Loopback pipes in a browser | Queue up to 1 MiB per direction. | same |
-| TLS sockets, Unix sockets | Not implemented. An HTTPS upgrade without a caller-supplied TLS connection fails with `ERR_TLS_NOT_SUPPORTED`. | [TCP](tcp.md), [HTTP compatibility](http-compatibility.md) |
+| Unix sockets | Waffle-backed Unix stream sockets work in the browser through `node:net` and `node:http`. The native Wasmtime launcher leaves those slots unimplemented. | [Unix socket adapter](bun-patches/unix-socket-adapter.md) |
+| TLS sockets | Client TLS works over a bun-wasm TCP socket when the host provides TCP. TLS servers, TLS over Unix sockets, arbitrary `Duplex` wrapping and `tls.rootCertificates` are not supported, and an HTTPS upgrade without a caller-supplied TLS connection fails with `ERR_TLS_NOT_SUPPORTED`. | [Node TLS client adapter](bun-patches/node-tls-client.md), [HTTP compatibility](http-compatibility.md) |
 | WebSocket | Payloads up to 16 MiB by default. No `permessage-deflate`. | `crates/bunwasm-runtime/src/js/websocket.js` |
 
 ## Filesystem
