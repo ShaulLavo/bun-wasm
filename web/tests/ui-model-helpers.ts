@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { EditorState } from "@codemirror/state";
 import * as stateModule from "@codemirror/state";
 import * as viewModule from "@codemirror/view";
-import { declareModuleMemory, pages, type Runtime } from "waffle";
+import { declareModuleMemory, pages, type Runtime, type RuntimeOptions } from "waffle";
 import { MemoryBackend } from "waffle/fs/backend";
 import { FilesystemService } from "waffle/fs/service";
 import { createFilesystemConnection, FilesystemError } from "waffle/fs/protocol";
@@ -152,8 +152,8 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     ...stateModule, ...viewModule, EditorView: View, EditorState,
     ...engineLoader, declareModuleMemory, pages,
     FitAddon: class { fit() {} }, Terminal: TerminalFixture,
-    createRuntime: (options?: unknown) => boundary.onCreateRuntime(options),
-    onCreateRuntime: (_options?: unknown) => { storageEvents.push("runtime"); return runtime = { ...runtime }; },
+    createRuntime: (options?: RuntimeOptions) => boundary.onCreateRuntime(options),
+    onCreateRuntime: (_options?: RuntimeOptions) => { storageEvents.push("runtime"); return runtime = { ...runtime }; },
     storedWorkspaces: async () => [],
     openIdleWorkspace: (selection: { name: string }) => { storageEvents.push(`open ${selection.name}`); return boundary.openIdle(); },
     openIdle: async (): Promise<"missing" | "busy" | { close(): Promise<void> }> => "missing",

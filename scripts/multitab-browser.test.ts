@@ -1,5 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
-import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
+import { chromium, firefox, webkit, type Browser, type BrowserContext, type Page } from "playwright";
 import { join, resolve } from "node:path";
 import { verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
@@ -193,6 +193,35 @@ async function runPlaygroundServer(page: Page, marker: string): Promise<string> 
   return url;
 }
 
+async function verifyMemoryModePreviewIsolation(context: BrowserContext, origin: string): Promise<void> {
+  // Verify true response-body isolation: two mode=memory tabs on the same port 5173 serve distinct bodies!
+  const mem1 = await context.newPage();
+  const mem2 = await context.newPage();
+  await Promise.all([
+    navigateTestPage(mem1, `${origin}/sandbox/?template=vanilla&mode=memory`),
+    navigateTestPage(mem2, `${origin}/sandbox/?template=vanilla&mode=memory`),
+  ]);
+  await Promise.all([waitForSandboxReady(mem1), waitForSandboxReady(mem2)]);
+  const memSrc1 = await mem1.locator("#preview").getAttribute("src");
+  const memSrc2 = await mem2.locator("#preview").getAttribute("src");
+  expect(memSrc1).toContain("/__preview/r/mem-");
+  expect(memSrc2).toContain("/__preview/r/mem-");
+  expect(memSrc1).not.toBe(memSrc2);
+
+  const memMarker1 = `mem-one-${Date.now()}`;
+  const memMarker2 = `mem-two-${Date.now()}`;
+  await Promise.all([editSandboxFile(mem1, memMarker1), editSandboxFile(mem2, memMarker2)]);
+  await Promise.all([waitForPreviewText(mem1, memMarker1), waitForPreviewText(mem2, memMarker2)]);
+  const [body1, body2] = await Promise.all([
+    mem1.evaluate(() => document.querySelector<HTMLIFrameElement>("#preview")?.contentDocument?.body?.textContent ?? ""),
+    mem2.evaluate(() => document.querySelector<HTMLIFrameElement>("#preview")?.contentDocument?.body?.textContent ?? ""),
+  ]);
+  expect(body1).toContain(memMarker1);
+  expect(body1).not.toContain(memMarker2);
+  expect(body2).toContain(memMarker2);
+  expect(body2).not.toContain(memMarker1);
+}
+
 for (const browserName of browsers) {
   test(`${browserName}: two persistent Sandbox tabs attach, live-HMR both frames, fail over on owner reload/close, and isolate memory routes`, async () => {
     await withSite(browserName, async (browser, origin) => {
@@ -301,32 +330,7 @@ for (const browserName of browsers) {
       await editSandboxFile(tab1, marker2);
       await waitForPreviewText(tab1, marker2);
 
-      // Verify true response-body isolation: two mode=memory tabs on the same port 5173 serve distinct bodies!
-      const mem1 = await context.newPage();
-      const mem2 = await context.newPage();
-      await Promise.all([
-        navigateTestPage(mem1, `${origin}/sandbox/?template=vanilla&mode=memory`),
-        navigateTestPage(mem2, `${origin}/sandbox/?template=vanilla&mode=memory`),
-      ]);
-      await Promise.all([waitForSandboxReady(mem1), waitForSandboxReady(mem2)]);
-      const memSrc1 = await mem1.locator("#preview").getAttribute("src");
-      const memSrc2 = await mem2.locator("#preview").getAttribute("src");
-      expect(memSrc1).toContain("/__preview/r/mem-");
-      expect(memSrc2).toContain("/__preview/r/mem-");
-      expect(memSrc1).not.toBe(memSrc2);
-
-      const memMarker1 = `mem-one-${Date.now()}`;
-      const memMarker2 = `mem-two-${Date.now()}`;
-      await Promise.all([editSandboxFile(mem1, memMarker1), editSandboxFile(mem2, memMarker2)]);
-      await Promise.all([waitForPreviewText(mem1, memMarker1), waitForPreviewText(mem2, memMarker2)]);
-      const [body1, body2] = await Promise.all([
-        mem1.evaluate(() => document.querySelector<HTMLIFrameElement>("#preview")?.contentDocument?.body?.textContent ?? ""),
-        mem2.evaluate(() => document.querySelector<HTMLIFrameElement>("#preview")?.contentDocument?.body?.textContent ?? ""),
-      ]);
-      expect(body1).toContain(memMarker1);
-      expect(body1).not.toContain(memMarker2);
-      expect(body2).toContain(memMarker2);
-      expect(body2).not.toContain(memMarker1);
+      await verifyMemoryModePreviewIsolation(context, origin);
 
       expect(errors).toEqual([]);
     });

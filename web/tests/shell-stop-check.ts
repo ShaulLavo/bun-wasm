@@ -7,9 +7,12 @@ import { stopShell } from "./stop-shell";
 export async function checkDelayedStop(page: Page, base: string, browser: string, engine: string): Promise<boolean> {
   await navigateTestPage(page, `${base}?engine=${engine}&prompt=off`);
   assert.match(await ready(page), /ready/);
-  await page.evaluate(async () => {
-    await Reflect.get(globalThis, "playground").fs.remove("/home/user/stop-release").catch(() => {});
+  const markerPresent = await page.evaluate(async () => {
+    const fs = Reflect.get(globalThis, "playground").fs;
+    if (await fs.lookup("/home/user/stop-release")) await fs.remove("/home/user/stop-release");
+    return Boolean(await fs.lookup("/home/user/stop-release"));
   });
+  assert.equal(markerPresent, false, "persistent stop-release marker must be absent before starting guest");
   await writeFile(page, "/home/user/forever.ts", 'const fs = require("node:fs"); process.on("SIGINT", () => { console.log("STOP_DELAYED"); setInterval(() => { if (fs.existsSync("/home/user/stop-release")) process.exit(130); }, 10); }); setInterval(() => {}, 1000); console.log("STOP_READY");');
   const done = page.evaluate(() => {
     const shell = Reflect.get(globalThis, "playground").shell;

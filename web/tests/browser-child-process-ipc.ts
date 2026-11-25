@@ -88,7 +88,15 @@ try {
         const buffer = term.buffer.active;
         return Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? "").join("\n").includes("ipc-preview-ready");
       }, undefined, { timeout: 90_000 });
-      const preview = `http://127.0.0.1:${port}/__preview/${guestPort}/`;
+      await page.waitForFunction(
+        (targetPort: number) => Boolean(Reflect.get(globalThis, "playground").previews.serves(targetPort)),
+        guestPort,
+        { timeout: 15_000 },
+      );
+      const preview = await page.evaluate(
+        (targetPort: number) => Reflect.get(globalThis, "playground").previews.url(targetPort) as string,
+        guestPort,
+      );
       const previewPage = await page.context().newPage();
       const response = await previewPage.goto(preview);
       assert.ok(response, "preview navigation response");
@@ -108,7 +116,7 @@ try {
       await page.waitForFunction(initial => Reflect.get(globalThis, "ipcWorkerCounts")().active === initial + 1, workersBefore.active, { timeout: 15_000 });
       console.log(JSON.stringify({ childrenReapedWhileParentLive: await page.evaluate(() => Reflect.get(globalThis, "ipcWorkerCounts")()) }));
       assert.deepEqual(errors, []);
-      await previewPage.evaluate(url => fetch(url + "stop").then(response => response.text()), preview);
+      await previewPage.evaluate(url => fetch(new URL("stop", url).href).then(response => response.text()), preview);
       await previewPage.close();
       assert.equal((await execution).code, 0);
     } catch (error) {

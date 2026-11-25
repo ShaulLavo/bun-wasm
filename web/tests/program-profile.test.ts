@@ -1,8 +1,17 @@
 import { expect, spyOn, test } from "bun:test";
+import type { RuntimeOptions } from "waffle";
 import { appendCustomSection, BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind";
 import { engineUnavailable, loadEngineProgram } from "../src/engine-loader";
 import { parseMemoryProfile, profileAsset, requireProfileEngine, verifyMemoryProfile } from "../src/program-profile";
 import { models, turn } from "./ui-model-helpers";
+
+async function startProfiles(Page: new (search: string) => { start(): void | Promise<void> }): Promise<void> {
+  for (const profile of ["split", "shared-group"]) {
+    const instance = new Page(`?engine=quickjs&profile=${profile}`);
+    await instance.start();
+    await turn();
+  }
+}
 
 test("memory profile is explicit and independent of engine selection", async () => {
   expect(parseMemoryProfile(null)).toBe("split");
@@ -28,10 +37,10 @@ test("profile paths and module admission cannot alias split and shared programs"
 
 test("both production pages validate selection before creating one runtime with Bun's policy", async () => {
   const page = await models();
-  const requests: Record<string, unknown>[] = [];
+  const requests: RuntimeOptions[] = [];
   const stop = new Error("runtime boundary reached");
-  page.boundary.onCreateRuntime = (options?: unknown) => {
-    requests.push(options as Record<string, unknown>);
+  page.boundary.onCreateRuntime = (options?: RuntimeOptions) => {
+    if (options) requests.push(options);
     throw stop;
   };
   const errors = spyOn(console, "error").mockImplementation((error: unknown) => {
@@ -39,11 +48,7 @@ test("both production pages validate selection before creating one runtime with 
   });
   try {
     for (const Page of [page.Playground, page.Sandbox]) {
-      for (const profile of ["split", "shared-group"]) {
-        const instance = new Page(`?engine=quickjs&profile=${profile}`);
-        await instance.start();
-        await turn();
-      }
+      await startProfiles(Page);
       expect(() => new Page("?profile=shared")).toThrow(
         Page === page.Playground ? /Unknown Bun program profile/ : /Unknown Bun program memory profile/,
       );
