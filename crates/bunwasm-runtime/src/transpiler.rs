@@ -208,10 +208,30 @@ pub trait Transpiler {
 
     fn dev_server_close(&self, _id: u32) {}
 
+    /// `Bun.color`: Bun's CSS color parser, linked with the bundler.
+    fn color(&self, _input: ColorInput<'_>, _format: &str) -> Result<ColorValue, String> {
+        Err("Bun.color needs Bun's bundler, which this bun.wasm was built without".to_owned())
+    }
+
     /// `Bun.markdown.html` and `.ansi`: Bun's markdown renderer, linked with the bundler.
     fn markdown(&self, _request: &MarkdownRequest<'_>) -> Result<Vec<u8>, String> {
         Err("Bun.markdown needs Bun's bundler, which this bun.wasm was built without".to_owned())
     }
+}
+
+/// `Bun.color` input: CSS text, or the RGBA the runtime read from a number, array or object.
+pub enum ColorInput<'a> {
+    Css(&'a [u8]),
+    Rgba([u8; 4]),
+}
+
+/// `Bun.color` result; `Null` when the input is not a color.
+pub enum ColorValue {
+    Null,
+    Text(String),
+    Number(f64),
+    Array(Vec<f64>),
+    Object(Vec<(&'static str, f64)>),
 }
 
 /// `Bun.markdown.html(text, options)` or `.ansi(text, theme)`, with the options already read.

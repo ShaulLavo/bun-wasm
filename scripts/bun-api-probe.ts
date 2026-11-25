@@ -167,10 +167,9 @@ console.log("ok plugin: " + (await result.outputs[0].text()).includes("plugin"))
   },
   {
     name: "gap-small-apis",
-    command: `bun -e 'const t = (n, f) => { try { console.log("ok " + n + ": " + f()); } catch (e) { console.log("FAIL " + n + ": " + e.message); } }; t("Bun.markdown.render", () => Bun.markdown.render("# hi", { heading: (c) => "H:" + c })); t("Bun.color", () => Bun.color("red", "hex"));'`,
+    command: `bun -e 'const t = (n, f) => { try { console.log("ok " + n + ": " + f()); } catch (e) { console.log("FAIL " + n + ": " + e.message); } }; t("Bun.markdown.render", () => Bun.markdown.render("# hi", { heading: (c) => "H:" + c }));'`,
     expected: output => [
       { name: "Bun.markdown.render", ...verdictFor(/ok Bun\.markdown\.render: H:hi/.test(output), output) },
-      { name: "Bun.color", ...verdictFor(/ok Bun\.color: #ff0000/.test(output), output) },
     ],
   },
 ];

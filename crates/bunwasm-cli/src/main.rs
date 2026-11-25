@@ -374,6 +374,27 @@ mod bun_transpiler {
         }
 
         #[cfg(feature = "bun-build")]
+        fn color(
+            &self,
+            input: bunwasm_runtime::ColorInput<'_>,
+            format: &str,
+        ) -> Result<bunwasm_runtime::ColorValue, String> {
+            use bunwasm_build::color::{ColorInput, ColorOutput, color};
+            use bunwasm_runtime::ColorValue;
+            let input = match input {
+                bunwasm_runtime::ColorInput::Css(text) => ColorInput::Css(text),
+                bunwasm_runtime::ColorInput::Rgba(rgba) => ColorInput::Rgba(rgba),
+            };
+            Ok(match color(input, format)? {
+                ColorOutput::Null => ColorValue::Null,
+                ColorOutput::Text(text) => ColorValue::Text(text),
+                ColorOutput::Number(number) => ColorValue::Number(number),
+                ColorOutput::Array(items) => ColorValue::Array(items),
+                ColorOutput::Object(fields) => ColorValue::Object(fields),
+            })
+        }
+
+        #[cfg(feature = "bun-build")]
         fn markdown(
             &self,
             request: &bunwasm_runtime::MarkdownRequest<'_>,

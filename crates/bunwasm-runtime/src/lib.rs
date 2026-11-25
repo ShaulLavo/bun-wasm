@@ -89,8 +89,9 @@ compile_error!("bunwasm-runtime needs an engine: feature engine-split or engine-
 
 pub use data::{NativeError, Val};
 pub use transpiler::{
-    BuildArtifact, BuildRequest, BuildResult, DevServerFile, DevServerResult, Loader,
-    MarkdownRequest, PassthroughTranspiler, RecordError, Transpiled, Transpiler,
+    BuildArtifact, BuildRequest, BuildResult, ColorInput, ColorValue, DevServerFile,
+    DevServerResult, Loader, MarkdownRequest, PassthroughTranspiler, RecordError, Transpiled,
+    Transpiler,
 };
 
 /// Bun version this runtime reports (from vendor/bun/package.json).

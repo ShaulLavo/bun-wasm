@@ -28,6 +28,7 @@ await check("Bun.nanoseconds", () => {
   return typeof a === "number" && b >= a;
 });
 await check("Bun.inspect", () => Bun.inspect({ a: 1, nested: { list: [1, "two"], map: new Map([["k", 1]]) } }));
+await check("Bun.inspect escapes", () => Bun.inspect(["\x1b[0m", "tab\there", "\\u00ab", "\ud800"]));
 await check("Bun.inspect.custom", () => Bun.inspect({ [Bun.inspect.custom]: () => "custom!" }));
 await check("Bun.inspect.table", () => Bun.inspect.table([{ a: 1, b: 2 }, { a: 3, b: 4 }]));
 await check("Bun.deepEquals", () => [Bun.deepEquals({ a: [1] }, { a: [1] }), Bun.deepEquals({ a: 1 }, { a: 2 })]);
@@ -206,6 +207,11 @@ await check("Bun.CSRF decoding", () => {
 });
 await check("Bun.markdown.html", () => Bun.markdown.html("# Title\n\n| a | b |\n|---|---|\n| 1 | ~~2~~ |\n\n- [x] done\n", { headings: true }));
 await check("Bun.markdown.ansi", () => Bun.markdown.ansi("# Hi\n\n*em* and `code`", { colors: false }));
+await check("Bun.color", () => [
+  Bun.color("red", "hex"), Bun.color([255, 0, 0], "css"), Bun.color("#00ff00", "[rgb]"), Bun.color(0x80ff0000, "{rgba}"),
+  Bun.color({ r: 300, g: -5, b: 1, a: 0.5 }, "rgba"), Bun.color("hsl(120 100% 50%)", "lab"), Bun.color("rebeccapurple", "HEX"),
+  Bun.color("not a color", "hex"), Bun.color("blue", "ansi-256"), Bun.color("lime", "ansi-16m"), Bun.color("teal", "number"),
+]);
 await check("structuredClone + Bun types", () => structuredClone({ d: new Date(0), m: new Map([[1, 2]]) }));
 await check("fetch data url", async () => await (await fetch("data:text/plain,hi%20bun")).text());
 await check("WebCrypto subtle digest", async () => Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("bun"))).toString("hex").slice(0, 16));

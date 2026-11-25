@@ -85,6 +85,8 @@ declare namespace BunWasm {
     mockTarget(key: string): string | undefined;
     /** Bun.markdown (bunwasm-build markdown.rs): ("html" | "ansi", text, options JSON). */
     markdown(mode: "html" | "ansi", text: Uint8Array, options: string): string;
+    /** Bun.color (bunwasm-build color.rs): (format, CSS text) or (format, undefined, r, g, b, a). */
+    color(format: string, css?: Uint8Array, red?: number, green?: number, blue?: number, alpha?: number): unknown;
     clearObjectModules(): void;
     readonly engine: "quickjs" | "jsc" | "host" | "hermes" | "spidermonkey";
     /** The running engine's `process.versions` entry; absent when the host reports none. */
