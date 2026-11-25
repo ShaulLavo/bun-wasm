@@ -13,7 +13,7 @@ const shortWithValue = "deFlpru";
 const shortWithoutValue = "bhv";
 
 /** `node` and `nodejs` run files and have no subcommands. */
-export function isNodeExecutable(executable: string): boolean {
+function isNodeExecutable(executable: string): boolean {
   const name = (executable.split("/").pop() ?? executable).replace(/\.wasm$/, "");
   return name === "node" || name === "nodejs";
 }
