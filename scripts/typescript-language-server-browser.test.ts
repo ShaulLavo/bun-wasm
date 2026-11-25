@@ -2,7 +2,7 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { chromium } from "playwright";
+import { chromium, webkit } from "playwright";
 import { buildSite, verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
 import { typescriptLanguageServerScenario, type LanguageServerRun } from "../web/tests/browser-typescript-language-server.ts";
@@ -19,22 +19,28 @@ function expectTypeScriptAnswers(run: LanguageServerRun) {
   expect(run.answers.packageDefinition).toMatch(/^file:\/\/\/home\/user\/lsp-typescript\/node_modules\/tiny-invariant\/.*\.d\.ts$/);
 }
 
-test("chromium: typescript-language-server answers over stdio in the guest, before and after a reload", async () => {
+for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium").split(",")) {
+  test(`${name}: typescript-language-server answers over stdio in the guest, before and after a reload`, () => scenario(name), 1_200_000);
+}
+
+async function scenario(name: string) {
+  if (name !== "chromium" && name !== "webkit") throw new Error(`Unsupported browser ${name}`);
   const provided = process.env.BUN_WASM_BROWSER_SITE;
   if (process.env.CI && !provided) throw new Error("CI must provide the existing browser-guest site");
   const scratch = provided ? undefined : mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-lsp-site-"));
   const directory = provided ? resolve(provided) : scratch!;
   const previousRoot = process.env.ROOT;
   const task = session("bun-wasm-lsp-browser-");
-  const marker = `--bun-wasm-lsp-probe=${process.pid}`;
+  // Chromium carries a marker switch so the memory sampler can find its process tree.
+  const marker = name === "chromium" ? `--bun-wasm-lsp-probe=${process.pid}` : undefined;
   try {
     const before = provided ? verifySite(directory) : buildSite(directory);
     process.env.ROOT = join(directory, "site");
     const url = await task.serve();
-    const browser = await chromium.launch({ args: [marker] });
+    const browser = await (name === "chromium" ? chromium : webkit).launch({ args: marker ? [marker] : [] });
     try {
       const report = await typescriptLanguageServerScenario(browser, url, marker);
-      console.log(`typescript-language-server report ${JSON.stringify(report)}`);
+      console.log(`${name} typescript-language-server report ${JSON.stringify(report)}`);
       expectTypeScriptAnswers(report.cold);
       expectTypeScriptAnswers(report.afterReload);
     } finally {
@@ -47,4 +53,4 @@ test("chromium: typescript-language-server answers over stdio in the guest, befo
     await task.cleanup();
     if (scratch) rmSync(scratch, { recursive: true, force: true });
   }
-}, 1_200_000);
+}

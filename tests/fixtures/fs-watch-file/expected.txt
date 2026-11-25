@@ -6,4 +6,8 @@ changed: current size 11 file true mtimeMs set; previous size 5 file true mtimeM
 removed: current size 0 file false mtimeMs 0; previous size 11 file true mtimeMs set
 one listener removed: 1
 stopped: 0
+nested file appeared: current size 5 file true mtimeMs set; previous size 0 file false mtimeMs 0
+parent replaced by a file: current size 0 file false mtimeMs 0; previous size 5 file true mtimeMs set
+watching below a file starts missing: current size 0 file false mtimeMs 0; previous size 0 file false mtimeMs 0
+an interval above 2^31 - 1 ms has not polled: true
 a non-persistent watcher lets the process exit

@@ -103,6 +103,7 @@
   // poll reports a change of any compared field or of existence. A missing file reads as
   // all-zero stats and, when missing at start, reports one change with both stats zero.
   const DEFAULT_POLL_INTERVAL = 5007;
+  const MAX_TIMER_WAIT = 2 ** 31 - 1;
   const POLL_COMPARED = ["dev", "ino", "mode", "uid", "gid", "size", "mtimeMs", "ctimeMs", "birthtimeMs"];
   const ZERO_STAT_FIELDS = ["dev", "ino", "mode", "nlink", "uid", "gid", "rdev", "size", "blksize", "blocks"]
     .concat(["atime", "mtime", "ctime", "birthtime"].flatMap(name => [`${name}Ms`, `${name}Ns`]));
@@ -112,8 +113,9 @@
     if (typeof value !== "object") throw Object.assign(new TypeError('The "options" argument must be of type object'), { code: "ERR_INVALID_ARG_TYPE" });
     const given = value as Partial<Record<keyof PollOptions, unknown>>;
     const interval = given.interval === undefined ? DEFAULT_POLL_INTERVAL : given.interval;
-    if (typeof interval !== "number" || !Number.isFinite(interval)) throw Object.assign(new TypeError('The "interval" argument must be of type number'), { code: "ERR_INVALID_ARG_TYPE" });
-    return { bigint: Boolean(given.bigint), persistent: given.persistent !== false, interval };
+    if (typeof interval !== "number") throw Object.assign(new TypeError('The "interval" argument must be of type number'), { code: "ERR_INVALID_ARG_TYPE" });
+    // Bun accepts any number; a negative or NaN interval polls without waiting.
+    return { bigint: Boolean(given.bigint), persistent: given.persistent !== false, interval: Math.max(0, interval) || 0 };
   }
 
   return function createWatch(fs: FileSystem) {
@@ -217,7 +219,10 @@
 
     class StatWatcher extends EventEmitter {
       #timer: Timer | undefined;
+      #active = false;
+      #refed = true;
       #path = "";
+      #interval = 0;
       #bigint: boolean;
       #previous: StatsRecord = {};
 
@@ -228,23 +233,48 @@
 
       start(path: string, persistent: boolean, interval: number) {
         this.#path = path;
-        const found = fs.statSync(path, { bigint: this.#bigint, throwIfNoEntry: false }) as StatsRecord | undefined;
+        this.#interval = interval;
+        this.#refed = persistent;
+        this.#active = true;
+        const found = this.#read();
         this.#previous = found ?? this.#missing();
-        this.#timer = setInterval(() => this.#poll(), interval) as unknown as Timer;
-        if (!persistent) this.#timer.unref();
+        this.#wait(interval);
         if (found) return;
         const missing = this.#previous;
         internal.nextTick(() => {
-          if (this.#timer !== undefined && this.#previous === missing) this.emit("change", missing, missing);
+          if (this.#active && this.#previous === missing) this.emit("change", missing, missing);
         });
+      }
+
+      // Any failed stat (ENOENT, or ENOTDIR when a parent became a file) reads as missing, as in libuv.
+      #read(): StatsRecord | undefined {
+        try {
+          return fs.statSync(this.#path, { bigint: this.#bigint, throwIfNoEntry: false }) as StatsRecord | undefined;
+        } catch {
+          return undefined;
+        }
       }
 
       #missing(): StatsRecord {
         return fs.makeStats(Object.fromEntries(ZERO_STAT_FIELDS.map(key => [key, 0])), this.#bigint);
       }
 
+      // JavaScript timers turn waits above 2^31 - 1 ms into 1 ms, so a long interval waits in steps.
+      #wait(remaining: number) {
+        const step = Math.min(remaining, MAX_TIMER_WAIT);
+        this.#timer = setTimeout(() => this.#elapsed(remaining - step), step) as unknown as Timer;
+        if (!this.#refed) this.#timer.unref();
+      }
+
+      #elapsed(remaining: number) {
+        if (!this.#active) return;
+        if (remaining > 0) return this.#wait(remaining);
+        this.#poll();
+        if (this.#active) this.#wait(this.#interval);
+      }
+
       #poll() {
-        const current = (fs.statSync(this.#path, { bigint: this.#bigint, throwIfNoEntry: false }) as StatsRecord | undefined) ?? this.#missing();
+        const current = this.#read() ?? this.#missing();
         const previous = this.#previous;
         if (POLL_COMPARED.every(key => previous[key] === current[key])) return;
         this.#previous = current;
@@ -252,14 +282,15 @@
       }
 
       stop() {
-        if (this.#timer === undefined) return;
-        clearInterval(this.#timer as unknown as number);
+        if (!this.#active) return;
+        this.#active = false;
+        clearTimeout(this.#timer as unknown as number);
         this.#timer = undefined;
         internal.nextTick(() => this.emit("stop"));
       }
 
-      ref() { this.#timer?.ref(); return this; }
-      unref() { this.#timer?.unref(); return this; }
+      ref() { this.#refed = true; this.#timer?.ref(); return this; }
+      unref() { this.#refed = false; this.#timer?.unref(); return this; }
     }
 
     function watchFile(filename: unknown, value?: unknown, listener?: unknown) {

@@ -13,13 +13,25 @@ output is native Bun 1.4.4, and Node 26.12.1 prints the same events.
 notifications: a timer stats the path every `interval` milliseconds (default
 5007) and emits `change(current, previous)` when the device, inode, mode, owner,
 size, or modification, change or birth time differs, or when the file appears or
-disappears. A missing file reads as all-zero `Stats` (or `BigIntStats` with
-`bigint: true`). A file missing at start reports one change with both stats zero,
-as libuv's first failed stat does in Bun and Node. All listeners of one resolved
+disappears. Any failed stat reads as missing, all-zero `Stats` (or `BigIntStats`
+with `bigint: true`): `ENOENT`, and `ENOTDIR` when a parent directory was replaced
+by a file. A file missing at start reports one change with both stats zero, as
+libuv's first failed stat does in Bun and Node. All listeners of one resolved
 path share one watcher, which `watchFile` returns. `unwatchFile(path, listener)`
 removes one listener and `unwatchFile(path)` removes all; the watcher stops and
 emits `stop` when none remain. `persistent: false` unrefs the timer, and the
 watcher's `ref()`/`unref()` reach it too.
+
+The interval follows Bun: any number is accepted and a non-number throws
+`ERR_INVALID_ARG_TYPE`. Node instead requires an integer from 0 to 4294967295.
+A negative or `NaN` interval polls without waiting. JavaScript timers turn waits
+above 2^31 - 1 ms into 1 ms, so the watcher waits for a long interval in steps of
+at most 2^31 - 1 ms and keeps its ref state on every step.
+
+Where Bun and Node differ, the adapter follows Bun, the runtime it stands in for.
+After a file is deleted and recreated, the `previous` stats of the reappearance
+are zero (Node keeps the last successful stat). A single `unref()` on a watcher
+shared by two registrations lets the process exit (Node stays alive).
 
 TypeScript's `tsserver` watches missing files (absent `tsconfig.json` ancestors,
 `node_modules/@types`, unresolved modules) with `fs.watchFile`. Before this adapter

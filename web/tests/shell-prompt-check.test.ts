@@ -119,6 +119,7 @@ const transcriptCallers = [
   "web/tests/browser-tools.ts", "web/tests/browser-worker-modules.ts", "web/tests/next-framework-browser.ts",
   "web/tests/browser-playground-stdin.ts", "web/tests/browser-vite-react.ts", "web/tests/browser-next-dev.ts", "web/tests/browser-next-production.ts",
   "web/tests/shell-stop-check.ts", "scripts/deploy-upgrade-browser.test.ts",
+  "web/tests/browser-typescript-language-server.ts",
 ];
 const nonTranscriptCallers = [
   // The coverage selector declares input paths; it never reads a playground transcript.
@@ -133,6 +134,8 @@ const nonTranscriptCallers = [
   "web/tests/playground-navigation.ts", "scripts/navigation-server-browser.test.ts",
   // Storage and multi-tab checks use lifecycle, public state, and server helpers, never playground.mjs transcripts.
   "scripts/sandbox-storage-browser.test.ts", "scripts/sandbox-fs-observation-browser.test.ts", "scripts/multitab-browser.test.ts",
+  // Starts the server session only; its scenario module reads the transcript.
+  "scripts/typescript-language-server-browser.test.ts",
 ];
 const inheritedTranscriptCallers = ["web/tests/browser-quickjs-stack.ts", "web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts", "scripts/bench-engines.test.ts", "scripts/engine-chromium-bench.ts"];
 

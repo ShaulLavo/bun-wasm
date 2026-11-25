@@ -42,5 +42,28 @@ await stopped;
 console.log("stopped:", watcher.listenerCount("change"));
 fs.unwatchFile("never-watched.txt");
 
+fs.writeFileSync("long.txt", "before");
+let longPolled = false;
+fs.watchFile("long.txt", { interval: 2 ** 31 }, () => { longPolled = true; });
+fs.writeFileSync("long.txt", "after, longer");
+
+const nested = fs.watchFile("parent/child.txt", options, () => {});
+await nextChange(nested);
+const appeared = nextChange(nested);
+fs.mkdirSync("parent");
+fs.writeFileSync("parent/child.txt", "hello");
+console.log("nested file appeared:", describe(await appeared));
+const replaced = nextChange(nested);
+fs.rmSync("parent", { recursive: true });
+fs.writeFileSync("parent", "now a file");
+console.log("parent replaced by a file:", describe(await replaced));
+fs.unwatchFile("parent/child.txt");
+const underFile = nextChange(fs.watchFile("parent/child.txt", options, () => {}));
+console.log("watching below a file starts missing:", describe(await underFile));
+fs.unwatchFile("parent/child.txt");
+
+console.log("an interval above 2^31 - 1 ms has not polled:", !longPolled);
+fs.unwatchFile("long.txt");
+
 fs.watchFile("idle.txt", { persistent: false, interval: 20 }, () => {});
 console.log("a non-persistent watcher lets the process exit");
