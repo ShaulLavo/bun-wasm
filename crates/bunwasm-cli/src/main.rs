@@ -952,6 +952,11 @@ fn parse_command_with_flags(
             // Like native Bun, other runtime flags (Node's --enable-source-maps, --no-warnings, ...)
             // are accepted and kept in process.execArgv, so forked children receive them too.
             // `bun run --silent` reaches package scripts this way and hides their `$ command` lines.
+            // A value in the next argument stays with its flag: `bun --title check x.ts` runs x.ts.
+            flag if tool_args::takes_next_argument(flag) => {
+                exec_argv.push(arg);
+                exec_argv.extend(rest.next());
+            }
             flag if flag.starts_with('-') => exec_argv.push(flag.to_owned()),
             file => {
                 return run_command(

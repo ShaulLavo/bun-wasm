@@ -90,7 +90,8 @@ fn evaluates(flag: &str) -> bool {
     matches!(name, "--eval" | "--print") || matches!(short_with_value(flag), Some((b'e' | b'p', _)))
 }
 
-fn takes_next_argument(flag: &str) -> bool {
+/// Whether `flag` is one of Bun's whose value is the next argument.
+pub fn takes_next_argument(flag: &str) -> bool {
     LONG_WITH_VALUE.contains(&flag) || short_with_value(flag).is_some_and(|(_, next)| next)
 }
 
