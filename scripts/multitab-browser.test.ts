@@ -88,8 +88,68 @@ async function waitForPreviewText(page: Page, expected: string, timeout = 60_000
   );
 }
 
+async function editSandboxFile(page: Page, marker: string): Promise<void> {
+  await page.evaluate(async (text) => {
+    const api = Reflect.get(globalThis, "sandbox");
+    const current = api.editor.view.state.doc.toString();
+    const updated = current.includes("Vite")
+      ? current.replace("Vite", text)
+      : `${current}\n// ${text}\nconst el = document.querySelector("#app") ?? document.body; el.textContent = ${JSON.stringify(text)};\n`;
+    api.editor.setText(updated);
+    await api.editor.flush(api.editor.path);
+  }, marker);
+}
+
+async function playgroundTerminalText(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const pg = Reflect.get(globalThis, "playground") as {
+      term?: { buffer?: { active?: { length: number; getLine(i: number): { translateToString(trim: boolean): string } | undefined } } };
+    } | undefined;
+    const buf = pg?.term?.buffer?.active;
+    if (!buf) return "";
+    let text = "";
+    for (let i = 0; i < buf.length; i++) text += (buf.getLine(i)?.translateToString(true) ?? "") + "\n";
+    return text;
+  });
+}
+
+async function runPlaygroundServer(page: Page, marker: string): Promise<string> {
+  await page.evaluate(async (bodyText) => {
+    const pg = Reflect.get(globalThis, "playground") as unknown as {
+      fs: { writeFile(path: string, data: string): Promise<void>; flush(): Promise<void> };
+    };
+    await pg.fs.writeFile(
+      `/home/user/srv-${bodyText}.ts`,
+      `Bun.serve({ port: 3000, fetch: () => new Response(${JSON.stringify(bodyText)}) });\n`,
+    );
+    await pg.fs.flush();
+  }, marker);
+  const baseline = (await playgroundTerminalText(page)).length;
+  await page.locator(".xterm-helper-textarea").focus();
+  await page.keyboard.type(`bun run /home/user/srv-${marker}.ts`);
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(
+    (start) => {
+      const pg = Reflect.get(globalThis, "playground") as {
+        term?: { buffer?: { active?: { length: number; getLine(i: number): { translateToString(trim: boolean): string } | undefined } } };
+      } | undefined;
+      const buf = pg?.term?.buffer?.active;
+      if (!buf) return false;
+      let text = "";
+      for (let i = 0; i < buf.length; i++) text += (buf.getLine(i)?.translateToString(true) ?? "") + "\n";
+      return /\[preview\] http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\//.test(text.slice(start));
+    },
+    baseline,
+    { timeout: 60_000 },
+  );
+  const terminal = (await playgroundTerminalText(page)).slice(baseline);
+  const match = /\[preview\] (http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\/)/.exec(terminal);
+  expect(match?.[1]).toBeTruthy();
+  return match![1]!;
+}
+
 for (const browserName of browsers) {
-  test(`${browserName}: two persistent Sandbox tabs attach, sync edits live, share preview, and fail over on owner close`, async () => {
+  test(`${browserName}: two persistent Sandbox tabs attach, live-HMR both frames, fail over on owner reload/close, and isolate memory routes`, async () => {
     await withSite(browserName, async (browser, origin) => {
       const context = await browser.newContext();
       cleanups.push(() => context.close());
@@ -108,12 +168,14 @@ for (const browserName of browsers) {
           mode: api.fs.vfs.mode,
           persistent: api.fs.vfs.persistent,
           ownershipLost: api.fs.ownershipLost,
+          role: api.role(),
           src,
         };
       });
       expect(tab1Info.mode).toBe("fast");
       expect(tab1Info.persistent).toBe(true);
       expect(tab1Info.ownershipLost).toBe(false);
+      expect(tab1Info.role).toBe("owner");
       expect(tab1Info.src).toContain("/__preview/r/ws-");
 
       // Open Tab 2 on the same persistent workspace: must attach (NO takeover!) and mirror preview.
@@ -124,69 +186,95 @@ for (const browserName of browsers) {
 
       expect(await tab1.evaluate(() => Reflect.get(globalThis, "sandbox").fs.ownershipLost)).toBe(false);
       expect(await tab2.evaluate(() => Reflect.get(globalThis, "sandbox").fs.ownershipLost)).toBe(false);
+      expect(await tab2.evaluate(() => Reflect.get(globalThis, "sandbox").role())).toBe("follower");
 
-      // Edit in Tab 1 -> synced live to Tab 2's clean editor buffer AND both previews via HMR!
-      const marker = `multitab-${browserName}-${Date.now()}`;
-      await tab1.evaluate(async (text) => {
-        const api = Reflect.get(globalThis, "sandbox");
-        const current = api.editor.view.state.doc.toString();
-        const updated = current.includes("Vite")
-          ? current.replace("Vite", text)
-          : `${current}\n// ${text}\ndocument.body.dataset.multitab = ${JSON.stringify(text)};\n`;
-        api.editor.setText(updated);
-        await api.editor.flush(api.editor.path);
-      }, marker);
-
+      // Edit in Tab 1 -> synced live to Tab 2's clean editor buffer AND BOTH live frames via HMR BEFORE takeover!
+      const marker1 = `multitab-hmr-${browserName}-${Date.now()}`;
+      await editSandboxFile(tab1, marker1);
       await tab2.waitForFunction(
         (needle) => Reflect.get(globalThis, "sandbox")?.editor?.view?.state?.doc?.toString().includes(needle),
-        marker,
+        marker1,
         { timeout: 30_000 },
       );
+      await Promise.all([waitForPreviewText(tab1, marker1), waitForPreviewText(tab2, marker1)]);
 
-      // Close Tab 1 (Owner) -> Tab 2 must automatically elect itself Owner and keep preview alive!
-      await tab1.close();
-      await tab2.waitForFunction(
+      // Reload Tab 1 (Owner reload failover): Tab 2 takes over cleanly, Tab 1 reattaches as follower without ownershipLost.
+      await tab1.reload();
+      await waitForSandboxReady(tab1);
+      await waitForSandboxReady(tab2);
+      expect(await tab1.evaluate(() => Reflect.get(globalThis, "sandbox").fs.ownershipLost)).toBe(false);
+      expect(await tab2.evaluate(() => Reflect.get(globalThis, "sandbox").fs.ownershipLost)).toBe(false);
+      await Promise.all([waitForPreviewText(tab1, marker1), waitForPreviewText(tab2, marker1)]);
+
+      // Determine current owner and close it -> survivor must become owner and serve a fresh edit!
+      const tab1IsOwner = await tab1.evaluate(() => Reflect.get(globalThis, "sandbox").role() === "owner");
+      const currentOwner = tab1IsOwner ? tab1 : tab2;
+      const survivor = tab1IsOwner ? tab2 : tab1;
+      await currentOwner.close();
+      await survivor.waitForFunction(
         () => {
-          const status = document.querySelector("#status")?.textContent ?? "";
-          return status.includes("dev server ready") && document.querySelector("#server-dot")?.getAttribute("data-state") === "up";
+          const api = Reflect.get(globalThis, "sandbox");
+          return api?.role?.() === "owner" && document.querySelector("#server-dot")?.getAttribute("data-state") === "up";
         },
         null,
         { timeout: 120_000 },
       );
-      await waitForPreviewText(tab2, marker);
+      await waitForPreviewText(survivor, marker1);
+      const marker2 = `post-failover-${browserName}-${Date.now()}`;
+      await editSandboxFile(survivor, marker2);
+      await waitForPreviewText(survivor, marker2);
 
-      // Verify clean isolation: two mode=memory tabs do NOT share writes or preview routes.
+      // Verify true response-body isolation: two mode=memory tabs on the same port 5173 serve distinct bodies!
       const mem1 = await context.newPage();
       const mem2 = await context.newPage();
-      await navigateTestPage(mem1, `${origin}/sandbox/?template=vanilla&mode=memory`);
-      await navigateTestPage(mem2, `${origin}/sandbox/?template=vanilla&mode=memory`);
-      await waitForSandboxReady(mem1);
-      await waitForSandboxReady(mem2);
+      await Promise.all([
+        navigateTestPage(mem1, `${origin}/sandbox/?template=vanilla&mode=memory`),
+        navigateTestPage(mem2, `${origin}/sandbox/?template=vanilla&mode=memory`),
+      ]);
+      await Promise.all([waitForSandboxReady(mem1), waitForSandboxReady(mem2)]);
       const memSrc1 = await mem1.locator("#preview").getAttribute("src");
       const memSrc2 = await mem2.locator("#preview").getAttribute("src");
       expect(memSrc1).toContain("/__preview/r/mem-");
       expect(memSrc2).toContain("/__preview/r/mem-");
       expect(memSrc1).not.toBe(memSrc2);
 
+      const memMarker1 = `mem-one-${Date.now()}`;
+      const memMarker2 = `mem-two-${Date.now()}`;
+      await Promise.all([editSandboxFile(mem1, memMarker1), editSandboxFile(mem2, memMarker2)]);
+      await Promise.all([waitForPreviewText(mem1, memMarker1), waitForPreviewText(mem2, memMarker2)]);
+      const [body1, body2] = await Promise.all([
+        mem1.evaluate(() => document.querySelector<HTMLIFrameElement>("#preview")?.contentDocument?.body?.textContent ?? ""),
+        mem2.evaluate(() => document.querySelector<HTMLIFrameElement>("#preview")?.contentDocument?.body?.textContent ?? ""),
+      ]);
+      expect(body1).toContain(memMarker1);
+      expect(body1).not.toContain(memMarker2);
+      expect(body2).toContain(memMarker2);
+      expect(body2).not.toContain(memMarker1);
+
       expect(errors).toEqual([]);
     });
   }, 360_000);
 
-  test(`${browserName}: two persistent Playground tabs attach and sync editor saves without takeover`, async () => {
+  test(`${browserName}: two persistent Playground tabs boot concurrently, sync edits, and isolate same-port preview bodies`, async () => {
     await withSite(browserName, async (browser, origin) => {
       const context = await browser.newContext();
       cleanups.push(() => context.close());
 
       const errors: string[] = [];
       const tab1 = await context.newPage();
-      tab1.on("pageerror", (e) => errors.push(`pg1: ${e.message}`));
-      await navigateTestPage(tab1, `${origin}/playground/`);
-      await tab1.waitForFunction(() => (Reflect.get(globalThis, "playground") as any)?.editor?.path === "/home/user/index.ts", null, { timeout: 60_000 });
-
       const tab2 = await context.newPage();
+      tab1.on("pageerror", (e) => errors.push(`pg1: ${e.message}`));
       tab2.on("pageerror", (e) => errors.push(`pg2: ${e.message}`));
-      await navigateTestPage(tab2, `${origin}/playground/`);
-      await tab2.waitForFunction(() => (Reflect.get(globalThis, "playground") as any)?.editor?.path === "/home/user/index.ts", null, { timeout: 60_000 });
+
+      // Concurrent startup of both persistent Playground tabs.
+      await Promise.all([
+        navigateTestPage(tab1, `${origin}/playground/`),
+        navigateTestPage(tab2, `${origin}/playground/`),
+      ]);
+      await Promise.all([
+        tab1.waitForFunction(() => (Reflect.get(globalThis, "playground") as any)?.editor?.path === "/home/user/index.ts", null, { timeout: 60_000 }),
+        tab2.waitForFunction(() => (Reflect.get(globalThis, "playground") as any)?.editor?.path === "/home/user/index.ts", null, { timeout: 60_000 }),
+      ]);
 
       expect(await tab1.evaluate(() => (Reflect.get(globalThis, "playground") as any).fs.ownershipLost)).toBe(false);
       expect(await tab2.evaluate(() => (Reflect.get(globalThis, "playground") as any).fs.ownershipLost)).toBe(false);
@@ -197,12 +285,23 @@ for (const browserName of browsers) {
         editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: text } });
         await editor.save();
       }, content);
-
       await tab2.waitForFunction(
         (expected) => (Reflect.get(globalThis, "playground") as any)?.editor?.view?.state?.doc?.toString() === expected,
         content,
         { timeout: 30_000 },
       );
+
+      // Start two same-port (3000) servers with distinct response bodies and verify routed body isolation.
+      const [url1, url2] = await Promise.all([
+        runPlaygroundServer(tab1, `pg-tab1-${browserName}`),
+        runPlaygroundServer(tab2, `pg-tab2-${browserName}`),
+      ]);
+      expect(url1).not.toBe(url2);
+      const previewPage1 = await context.newPage();
+      const previewPage2 = await context.newPage();
+      await Promise.all([navigateTestPage(previewPage1, url1), navigateTestPage(previewPage2, url2)]);
+      expect(await previewPage1.locator("body").innerText()).toContain(`pg-tab1-${browserName}`);
+      expect(await previewPage2.locator("body").innerText()).toContain(`pg-tab2-${browserName}`);
       expect(errors).toEqual([]);
     });
   }, 240_000);

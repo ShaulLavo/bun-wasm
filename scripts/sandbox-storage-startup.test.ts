@@ -32,7 +32,7 @@ test("a workspace that cannot be opened offers Start fresh, which deletes only i
     expect(html).not.toContain(">Reset template</button>");
     await sandbox.startFresh();
     const name = `bun-wasm-sandbox-${sandbox.template}`;
-    expect(page.storageEvents.slice(page.storageEvents.indexOf("dispose"))).toEqual(["dispose", `open ${name}`, `delete ${name}`]);
+    expect(page.storageEvents.slice(page.storageEvents.indexOf("dispose"))).toEqual(["dispose", "close", `open ${name}`, `delete ${name}`]);
     expect(page.boundary.location.reloads).toBe(1);
   } finally { await page.cleanup(); }
 });

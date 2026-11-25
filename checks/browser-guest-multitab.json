@@ -17,6 +17,7 @@
     "sandbox/bun.lock",
     "web/src/fs-worker.ts",
     "web/src/fs-worker-observer.ts",
+    "web/src/web-locks.ts",
     "web/src/workspace-claims.ts",
     "web/src/workspace-provision.ts",
     "web/src/workspace-watch.ts",

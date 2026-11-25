@@ -15,22 +15,27 @@ interface Listening {
 
 export interface HostedPreviewsOptions {
   managePageHide?: boolean;
+  deferBind?: boolean;
 }
 
 /** Local serving adapter. Grants and the owner channel remain private to this page. */
 export class HostedPreviews extends Previews {
   private readonly listening = new Map<number, Listening>();
   private readonly relayOps = new Map<number, Promise<void>>();
-  private readonly lifetime = new AbortController();
-  private readonly client: Promise<PreviewOwnerClient>;
+  private readonly origins = new Map<number, string>();
+  private readonly baseURL: string;
   private readonly managePageHide: boolean;
   private readonly deferredLateRelays = new Set<PreviewHostRelay>();
   private readonly physicalCleanupErrors: unknown[] = [];
 
+  private lifetime = new AbortController();
+  private client: Promise<PreviewOwnerClient>;
+  private pendingClientDeferred: ReturnType<typeof Promise.withResolvers<PreviewOwnerClient>> | null = null;
   private runtimeOwner: Runtime | undefined;
   private release: (() => void) | undefined;
   private closing: Promise<void> | undefined;
   private hostedDisposed = false;
+  private permanentlyDisposed = false;
   private relayFailed = false;
   private physicalStopStarted = false;
 
@@ -49,110 +54,161 @@ export class HostedPreviews extends Previews {
         return origin;
       },
     });
+    this.origins = origins;
+    this.baseURL = baseURL;
     this.managePageHide = options.managePageHide ?? true;
 
-    this.client = Promise.resolve().then(() => {
-      if (this.hostedDisposed || this.lifetime.signal.aborted) {
-        throw new Error("Hosted previews revoked");
-      }
-      const owner = runtime();
-      this.runtimeOwner = owner;
-      const identity = owner.filesystem.createIdentity();
-      const release = owner.retainConsumer({
-        filesystem: identity,
-        revoke: () => this.revoke(),
-        stop: () => this.closePhysical(),
+    if (options.deferBind) {
+      this.pendingClientDeferred = Promise.withResolvers<PreviewOwnerClient>();
+      this.client = this.pendingClientDeferred.promise;
+      void this.client.catch(() => {});
+    } else {
+      this.client = Promise.resolve().then(() => {
+        if (this.hostedDisposed || this.lifetime.signal.aborted) {
+          throw new Error("Hosted previews revoked");
+        }
+        return this.connectClientForRuntime(runtime());
       });
-      this.release = () => {
-        if (!owner.disposed) owner.filesystem.reap(identity);
-        release();
-      };
-      return PreviewOwnerClient.connect({
-        baseURL,
-        signal: this.lifetime.signal,
-        onClose: () => this.failRelayConnection(),
-        shouldDeferBindingCleanup: () => this.isFenceDeferring(),
-        bind: async ({ origin, port, signal }) => {
-          if (this.hostedDisposed || this.relayFailed || this.lifetime.signal.aborted || signal.aborted) {
-            return null;
-          }
-          origins.set(port, origin);
-          const settleUnusedRelay = (relay: PreviewHostRelay) => {
-            if (this.isFenceDeferring()) {
-              this.deferredLateRelays.add(relay);
-            } else {
-              try {
-                relay.close();
-              } catch (err) {
-                this.physicalCleanupErrors.push(err);
-              }
-            }
-          };
-          const relay = await new Promise<PreviewHostRelay | null>((resolve, reject) => {
-            let done = false;
-            const onAbort = () => {
-              if (done) return;
-              done = true;
-              resolve(null);
-            };
-            signal.addEventListener("abort", onAbort, { once: true });
-            this.bindHost({ port, signal }).then(
-              (bound) => {
-                signal.removeEventListener("abort", onAbort);
-                if (done || signal.aborted || this.hostedDisposed || this.relayFailed || this.lifetime.signal.aborted) {
-                  settleUnusedRelay(bound);
-                  if (!done) {
-                    done = true;
-                    resolve(null);
-                  }
-                  return;
-                }
-                done = true;
-                resolve(bound);
-              },
-              (err) => {
-                signal.removeEventListener("abort", onAbort);
-                if (done) return;
-                done = true;
-                if (signal.aborted || this.hostedDisposed || this.relayFailed || this.lifetime.signal.aborted) {
-                  resolve(null);
-                } else {
-                  reject(err);
-                }
-              },
-            );
-          });
-          if (!relay) return null;
-          if (signal.aborted || this.hostedDisposed || this.relayFailed || this.lifetime.signal.aborted) {
-            settleUnusedRelay(relay);
-            return null;
-          }
-          const dispatcher: PreviewHostDispatcher = {
-            dispatch: async (open, exchange) => {
-              if (this.hostedDisposed || this.relayFailed) {
-                exchange.postMessage({ type: "error", message: "Preview server revoked" });
-                exchange.close();
-                return;
-              }
-              await relay.dispatch(open, exchange);
-            },
-          };
-          return {
-            authorization: relay.authorization,
-            dispatcher,
-            close: () => relay.close(),
-          };
-        },
+      void this.client.catch((err) => {
+        if (err instanceof PreviewCleanupError) this.physicalCleanupErrors.push(err);
+        this.failRelayConnection();
       });
-    });
-
-    void this.client.catch((err) => {
-      if (err instanceof PreviewCleanupError) this.physicalCleanupErrors.push(err);
-      this.failRelayConnection();
-    });
+    }
     if (this.managePageHide && typeof window !== "undefined") {
       window.addEventListener("pagehide", this.onPageHide);
     }
+  }
+
+  /**
+   * Bind (or re-bind after runtime recycling) this hosted preview adapter to a live Runtime.
+   * Safe to call on persistent startup once the workspace runtime is constructed, and again
+   * after a recycled runtime is adopted.
+   */
+  attachRuntime(owner: Runtime): void {
+    if (this.permanentlyDisposed) return;
+    if (this.runtimeOwner === owner && !this.hostedDisposed && !this.relayFailed) return;
+    this.hostedDisposed = false;
+    this.relayFailed = false;
+    this.physicalStopStarted = false;
+    this.closing = undefined;
+    this.physicalCleanupErrors.length = 0;
+    this.origins.clear();
+    this.lifetime = new AbortController();
+
+    const connected = Promise.resolve().then(() => {
+      if (this.hostedDisposed || this.permanentlyDisposed || this.lifetime.signal.aborted) {
+        throw new Error("Hosted previews revoked");
+      }
+      return this.connectClientForRuntime(owner);
+    });
+    this.client = connected;
+    if (this.pendingClientDeferred) {
+      const pending = this.pendingClientDeferred;
+      this.pendingClientDeferred = null;
+      connected.then(pending.resolve, pending.reject);
+    }
+    void connected.catch((err) => {
+      if (this.client !== connected) return;
+      if (err instanceof PreviewCleanupError) this.physicalCleanupErrors.push(err);
+      this.failRelayConnection();
+    });
+  }
+
+  private connectClientForRuntime(owner: Runtime): Promise<PreviewOwnerClient> {
+    this.runtimeOwner = owner;
+    const lifetime = this.lifetime;
+    const origins = this.origins;
+    const identity = owner.filesystem.createIdentity();
+    const release = owner.retainConsumer({
+      filesystem: identity,
+      revoke: () => {
+        if (this.runtimeOwner === owner) this.revoke();
+      },
+      stop: () => (this.runtimeOwner === owner ? this.closePhysical() : Promise.resolve()),
+    });
+    this.release = () => {
+      if (!owner.disposed) owner.filesystem.reap(identity);
+      release();
+    };
+    return PreviewOwnerClient.connect({
+      baseURL: this.baseURL,
+      signal: lifetime.signal,
+      onClose: () => {
+        if (this.runtimeOwner === owner) this.failRelayConnection();
+      },
+      shouldDeferBindingCleanup: () => this.isFenceDeferring(),
+      bind: async ({ origin, port, signal }) => {
+        if (this.hostedDisposed || this.relayFailed || lifetime.signal.aborted || signal.aborted) {
+          return null;
+        }
+        origins.set(port, origin);
+        const settleUnusedRelay = (relay: PreviewHostRelay) => {
+          if (this.isFenceDeferring()) {
+            this.deferredLateRelays.add(relay);
+          } else {
+            try {
+              relay.close();
+            } catch (err) {
+              this.physicalCleanupErrors.push(err);
+            }
+          }
+        };
+        const relay = await new Promise<PreviewHostRelay | null>((resolve, reject) => {
+          let done = false;
+          const onAbort = () => {
+            if (done) return;
+            done = true;
+            resolve(null);
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          this.bindHost({ port, signal }).then(
+            (bound) => {
+              signal.removeEventListener("abort", onAbort);
+              if (done || signal.aborted || this.hostedDisposed || this.relayFailed || lifetime.signal.aborted) {
+                settleUnusedRelay(bound);
+                if (!done) {
+                  done = true;
+                  resolve(null);
+                }
+                return;
+              }
+              done = true;
+              resolve(bound);
+            },
+            (err) => {
+              signal.removeEventListener("abort", onAbort);
+              if (done) return;
+              done = true;
+              if (signal.aborted || this.hostedDisposed || this.relayFailed || lifetime.signal.aborted) {
+                resolve(null);
+              } else {
+                reject(err);
+              }
+            },
+          );
+        });
+        if (!relay) return null;
+        if (signal.aborted || this.hostedDisposed || this.relayFailed || lifetime.signal.aborted) {
+          settleUnusedRelay(relay);
+          return null;
+        }
+        const dispatcher: PreviewHostDispatcher = {
+          dispatch: async (open, exchange) => {
+            if (this.hostedDisposed || this.relayFailed) {
+              exchange.postMessage({ type: "error", message: "Preview server revoked" });
+              exchange.close();
+              return;
+            }
+            await relay.dispatch(open, exchange);
+          },
+        };
+        return {
+          authorization: relay.authorization,
+          dispatcher,
+          close: () => relay.close(),
+        };
+      },
+    });
   }
 
   hasActiveConsumer(): boolean {
@@ -416,7 +472,13 @@ export class HostedPreviews extends Previews {
   }
 
   override dispose(): Promise<void> {
+    this.permanentlyDisposed = true;
     this.revoke();
+    if (this.pendingClientDeferred) {
+      const pending = this.pendingClientDeferred;
+      this.pendingClientDeferred = null;
+      pending.reject(new Error("Hosted previews disposed"));
+    }
     if (this.hasActiveConsumer() && this.runtimeOwner !== undefined) {
       return this.runtimeOwner.dispose();
     }

@@ -1,7 +1,7 @@
 import type { WorkspaceIndexStore } from "./workspace-index";
 import { evictionOrder, isStorageFull, workspaceName } from "./workspace-policy";
 import { excludedRoots, readSource, type SourceReader, type SourceSnapshot } from "./workspace-source";
-import { acquireLockHandle, presenceLockName } from "../../web/src/workspace-claims";
+import { acquireLockHandle, presenceLockName } from "../../web/src/web-locks";
 
 interface IdleSource extends SourceReader {
   delete(): Promise<void>;

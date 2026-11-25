@@ -138,6 +138,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private disposed = false;
   private teardownRequested = false;
   private ownershipLostFlag = false;
+  private editorMounted = false;
   private localResetting = false;
   private attachEnabled = false;
   private runtimeRetiredCleanly = false;
@@ -244,7 +245,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       ? new HostedPreviews(() => {
         if (!this.workspace) throw new Error("Sandbox runtime unavailable");
         return this.workspace.runtime;
-      }, location.href, { managePageHide: false })
+      }, location.href, { managePageHide: false, deferBind: true })
       : new Previews({ baseURL: location.href, prefix: "__preview", route: previewRoute });
 
     this.disposePreviewRecovery = this.previews.onWorkerRecovered(() => {
@@ -260,7 +261,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   }
 
   get term(): Terminal | undefined { return this.termInstance; }
-  get editor(): Editor | undefined { return this.workspace || this.ownershipLostFlag ? this.editorInstance : undefined; }
+  get editor(): Editor | undefined { return this.editorMounted || this.workspace || this.ownershipLostFlag ? this.editorInstance : undefined; }
 
   get status(): Status {
     if (this.ownershipLostFlag || this.workspace?.fs.ownershipLost) return { text: `${WORKSPACE_TAKEN_OVER} ${UNSAVED_CHANGES_LOST}`, kind: "error" };
@@ -337,7 +338,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       runtime: { get: () => this.workspace?.runtime, enumerable: true },
       sharedObjects: { get: () => this.workspace?.sharedObjects, enumerable: true },
       fs: { get: () => this.workspace?.fs, enumerable: true },
-      editor: { get: () => this.workspace || this.ownershipLostFlag ? this.editorInstance : undefined, enumerable: true },
+      editor: { get: () => this.editorMounted || this.workspace || this.ownershipLostFlag ? this.editorInstance : undefined, enumerable: true },
       term: { get: () => this.termInstance, enumerable: true },
       previews: { get: () => this.previews, enumerable: true },
     });
@@ -709,6 +710,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private startWorkspace(): void {
     try {
       this.workspace = this.createWorkspaceRuntime();
+      this.editorMounted = true;
+      if (this.previews instanceof HostedPreviews) this.previews.attachRuntime(this.workspace.runtime);
       this.publishGlobalSandbox();
     } catch (error) {
       console.error(error);
@@ -824,7 +827,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       fetchTemplateSources: (sig) => fetchTemplateSources(this.project.file, { signal: sig }),
       recoverInterruptedResetMutation: async (ws, sig, beforeFirstMutation) => {
         if (this.storage) {
-          await restoreSource(ws.fs, this.storage.index, this.template, { signal: sig, beforeFirstMutation });
+          await restoreSource(ws.fs, this.storage.index, this.template, {
+            signal: sig,
+            beforeFirstMutation,
+            createClient: (f) => new FilesystemClient(f.fork()),
+          });
         }
         const files = await fetchTemplateSources(this.project.file, { signal: sig });
         await writeTemplateSources(ws.fs, APP, files, true, { beforeFirstMutation });
@@ -839,8 +846,24 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       },
       trackDurableWrite: (fn) => this.trackDurableWrite(fn),
       ensureTmpDir: (ws, lease, sig) => this.ensureTmpDir(ws as WorkspaceRuntime, lease, sig),
-      onWatchRebind: (opts) => this.watch ? this.watch.rebind(opts) : Promise.resolve(),
-      onWatchAbort: () => { this.watch?.stop(); },
+      onWatchRebind: async (opts) => {
+        if (this.disposed || this.teardownRequested) return;
+        if (this.watch) {
+          await this.watch.rebind(opts);
+          return;
+        }
+        const ws = this.workspace;
+        if (!ws || ws.runtime.disposed || ws.fs.ownershipLost) return;
+        const fresh = this.startWorkspaceWatcher(ws);
+        await raceAbort(fresh.ready, opts?.signal);
+        if (opts?.reconcile && !opts.signal?.aborted && !this.disposed && !this.teardownRequested) {
+          await this.handleWatchReconcile("rebound");
+        }
+      },
+      onWatchAbort: () => {
+        this.watch?.stop();
+        this.watch = null;
+      },
       onRefreshAndSync: async (lease, sig) => {
         await this.refreshFiles(lease, sig);
         await this.editorInstance?.syncFromFs(lease, sig);
@@ -895,6 +918,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
     if (!this.workspace) {
       this.workspace = this.createWorkspaceRuntime();
+      this.editorMounted = true;
+      if (this.previews instanceof HostedPreviews) this.previews.attachRuntime(this.workspace.runtime);
       this.publishGlobalSandbox();
     }
     this.changed();
@@ -933,6 +958,9 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   /** Flushes debounced edits before leaving; a failed save keeps this page open. */
   async navigate(param: "engine" | "template", value: string): Promise<void> {
     await this.editorInstance?.flushAll();
+    if (this.editorInstance?.hasUnsavedChanges()) {
+      throw new Error("Save or resolve unsaved editor changes before switching engine or template.");
+    }
     await this.teardown();
     const next = new URL(location.href);
     const fallback = param === "engine" ? DEFAULT_ENGINE : defaultTemplate.id;
@@ -1290,7 +1318,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
           throw new ResetInProgressError();
         }
 
-        this.releaseLiveWriters = provLiveWriters ? () => provLiveWriters!.release() : null;
+        const liveWriters = provLiveWriters;
+        this.releaseLiveWriters = liveWriters ? () => liveWriters.release() : null;
         provLiveWriters = null;
         provWatch = null;
         this.storageError = "";
@@ -1302,6 +1331,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       } catch (error) {
         provWatch?.stop();
         provLiveWriters?.release();
+        bootLease?.release();
+        bootLease = null;
         if (!(error instanceof ResetInProgressError) || signal.aborted || this.disposed || this.teardownRequested) {
           throw error;
         }
@@ -1547,8 +1578,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     }
 
     this.workspace = provisional;
+    this.editorMounted = true;
     this.provisionalReopen = null;
     this.runtimeRetiredCleanly = false;
+    if (this.previews instanceof HostedPreviews) this.previews.attachRuntime(provisional.runtime);
     if (this.attachEnabled) this.startWorkspaceWatcher(provisional);
     return { ok: true };
   }
@@ -1575,8 +1608,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const deadline = performance.now() + options.timeoutMs;
     if (options.mode === "teardown") this.teardownRequested = true;
 
-    const previous = this.lifecycleTransition;
-    if (previous) {
+    while (this.lifecycleTransition) {
+      const previous = this.lifecycleTransition;
       const reopenSig = options.mode === "reopen" ? options.signal : undefined;
       const waited = await this.awaitBoundWithSignal(previous.catch(() => {}), deadline, reopenSig);
       if (reopenSig?.aborted) return { ok: false, reason: "other" };
@@ -1612,6 +1645,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         this.activeLaunchReservation = null;
         if (this.watch) {
           this.watch.stop();
+          this.watch = null;
           watchAborted = true;
         }
         for (const phase of this.localStartupPhases) phase.controller.abort();
@@ -1972,18 +2006,12 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private async showPreview(target: Server, visibleStart: number): Promise<void> {
     if (!target.token) return;
-    let probeDelayDone = false;
     while (true) {
       const state = await this.previews.waitUntilRegistered(target.port, target.token);
       if (!this.isLivePreviewTarget(target)) return;
       if (state !== "ready") {
         this.publishPreviewDown(target, state);
         return;
-      }
-      if (!probeDelayDone) {
-        probeDelayDone = true;
-        await new Promise<void>((resolve) => setTimeout(resolve, 25));
-        if (!this.isLivePreviewTarget(target)) return;
       }
       if (!this.previews.isListenerReady(target.port, target.token)) continue;
       this.publishPreviewUp(target, visibleStart);

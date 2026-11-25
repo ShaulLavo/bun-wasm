@@ -1,22 +1,33 @@
 import type { Runtime } from "waffle";
-import { FilesystemClient } from "waffle/fs/client";
 import type { WorkspaceIndexStore } from "./workspace-index";
 import { APP, RESTORE_MARKER, SEED_MARKER, type SourceSnapshot } from "./workspace-source";
-import { raceAbort } from "../../web/src/workspace-claims";
+import { raceAbort } from "../../web/src/web-locks";
 
 type Filesystem = Pick<Runtime["filesystem"], "lookup" | "remove" | "mkdirp" | "writeFile" | "readFile" | "flush"> & {
   fork?: Runtime["filesystem"]["fork"];
 };
 
+interface RestoreClientLike {
+  asyncCall(method: "lookup", args: [string]): Promise<Awaited<ReturnType<Filesystem["lookup"]>>>;
+  asyncCall(method: "readFile", args: [string]): Promise<Uint8Array | undefined>;
+  dispose(): void;
+}
+
 export interface RestoreSourceOptions {
   signal?: AbortSignal;
   beforeFirstMutation?: () => void;
+  createClient?: (fs: Pick<Runtime["filesystem"], "fork">) => RestoreClientLike;
 }
 
-async function abortableLookup(fs: Filesystem, path: string, signal?: AbortSignal) {
+async function abortableLookup(
+  fs: Filesystem,
+  path: string,
+  signal?: AbortSignal,
+  createClient?: RestoreSourceOptions["createClient"],
+) {
   signal?.throwIfAborted();
-  if (!signal || !fs.fork) return fs.lookup(path);
-  const client = new FilesystemClient(fs.fork());
+  if (!signal || !fs.fork || !createClient) return raceAbort(fs.lookup(path), signal);
+  const client = createClient({ fork: fs.fork.bind(fs) });
   const onAbort = () => { try { client.dispose(); } catch {} };
   signal.addEventListener("abort", onAbort, { once: true });
   try {
@@ -30,10 +41,15 @@ async function abortableLookup(fs: Filesystem, path: string, signal?: AbortSigna
   }
 }
 
-async function abortableReadFile(fs: Filesystem, path: string, signal?: AbortSignal): Promise<Uint8Array | undefined> {
+async function abortableReadFile(
+  fs: Filesystem,
+  path: string,
+  signal?: AbortSignal,
+  createClient?: RestoreSourceOptions["createClient"],
+): Promise<Uint8Array | undefined> {
   signal?.throwIfAborted();
-  if (!signal || !fs.fork) return fs.readFile(path);
-  const client = new FilesystemClient(fs.fork());
+  if (!signal || !fs.fork || !createClient) return raceAbort(fs.readFile(path), signal);
+  const client = createClient({ fork: fs.fork.bind(fs) });
   const onAbort = () => { try { client.dispose(); } catch {} };
   signal.addEventListener("abort", onAbort, { once: true });
   try {
@@ -54,20 +70,20 @@ export async function restoreSource(
   template: string,
   options: RestoreSourceOptions = {},
 ): Promise<void> {
-  const { signal, beforeFirstMutation } = options;
+  const { signal, beforeFirstMutation, createClient } = options;
   signal?.throwIfAborted();
   const snapshot = await raceAbort(index.source(template), signal);
   if (!snapshot) return;
   signal?.throwIfAborted();
-  if (await abortableLookup(fs, SEED_MARKER, signal)) {
-    const restoredId = await abortableReadFile(fs, RESTORE_MARKER, signal);
+  if (await abortableLookup(fs, SEED_MARKER, signal, createClient)) {
+    const restoredId = await abortableReadFile(fs, RESTORE_MARKER, signal, createClient);
     if (restoredId && new TextDecoder().decode(restoredId) === snapshot.id) {
       beforeFirstMutation?.();
       await acknowledge(fs, index, snapshot);
     }
     return;
   }
-  const root = await abortableLookup(fs, "/", signal);
+  const root = await abortableLookup(fs, "/", signal, createClient);
   if (root?.kind !== "dir") throw new Error("Cannot restore source without a filesystem root");
   const rootNames = Array.from(root.children.keys(), String);
   signal?.throwIfAborted();

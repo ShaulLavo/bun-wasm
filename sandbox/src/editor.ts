@@ -114,6 +114,15 @@ export class Editor {
     return savedText !== undefined && state.doc.toString() !== savedText;
   }
 
+  hasUnsavedChanges(): boolean {
+    if (this.pending.size > 0 || this.conflicted.size > 0) return true;
+    if (this.path && this.isDirty(this.path)) return true;
+    for (const p of this.states.keys()) {
+      if (this.isDirty(p)) return true;
+    }
+    return false;
+  }
+
   get hasPending(): boolean {
     return this.pending.size !== 0;
   }

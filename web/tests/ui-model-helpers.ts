@@ -205,6 +205,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     },
     HostedPreviews: class {
       ready = Promise.resolve("ready" as const);
+      attachRuntime() {}
       revoke() {}
       hasActiveConsumer() { return false; }
       async dispose() {}
