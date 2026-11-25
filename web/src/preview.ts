@@ -4,7 +4,7 @@ import type { PreviewConnection } from "waffle/browser/net/helper";
 import { PreviewRouter, type PreviewOptions, type PreviewServer } from "waffle/browser/preview";
 import type { PreviewMessage, PreviewReply } from "waffle/browser/preview-protocol";
 import { swScriptUrl } from "./entry-assets.js";
-import { PREVIEW_DIR } from "./preview-protocol";
+import { PREVIEW_DIR } from "./preview-protocol.js";
 
 export { activated } from "waffle/browser/service-worker";
 export type PreviewState = "ready" | "unsupported" | "failed";

@@ -24,6 +24,7 @@
     "src/assets.ts",
     "src/bun-adapter.ts",
     "src/shared-objects.ts",
+    "src/preview-origins.ts",
     "build.ts",
     "prepare.ts",
     "tests/package/**/*.ts",

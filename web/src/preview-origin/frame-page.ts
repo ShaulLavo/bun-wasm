@@ -1,7 +1,7 @@
 // The IDE-origin page behind "open the preview in a new tab". A top-level tab on the preview
 // origin cannot reach the IDE tab's relay in every browser, but a frame inside an IDE-origin tab
 // shares the preview origin's service worker with the IDE tab, so the link opens this page.
-import { frameMessage, isPreviewOrigin, resolvePreviewOriginConfig } from "./protocol";
+import { frameMessage, isPreviewOrigin, type PreviewOriginConfig } from "./protocol.js";
 
 const RETRIES = 4;
 
@@ -12,8 +12,7 @@ function fail(message: string): void {
   document.body.replaceChildren(status);
 }
 
-function targetUrl(): URL | null {
-  const config = resolvePreviewOriginConfig(location, Reflect.get(globalThis, "__bunwasmPreviewOrigin"));
+function targetUrl(config: PreviewOriginConfig | null): URL | null {
   const requested = new URLSearchParams(location.search).get("url");
   if (!config || !requested) return null;
   let url: URL;
@@ -21,8 +20,12 @@ function targetUrl(): URL | null {
   return isPreviewOrigin(url.origin, config) ? url : null;
 }
 
-function start(): void {
-  const target = targetUrl();
+/**
+ * Fills this page with the preview its `url` parameter names. Only a preview origin of `config`
+ * is ever framed, so the page cannot be made to frame anything else.
+ */
+export function showPreviewFrame(config: PreviewOriginConfig | null): void {
+  const target = targetUrl(config);
   if (!target) { fail("This link does not name a preview of this IDE."); return; }
   const frame = document.createElement("iframe");
   frame.title = "App preview";
@@ -43,11 +46,10 @@ function start(): void {
     let current: URL;
     try { current = new URL(message.href); } catch { return; }
     if (current.origin !== target.origin) return;
+    // Reloading this tab returns to where the preview is now.
     const here = new URL(location.href);
     here.searchParams.set("url", current.href);
     history.replaceState(null, "", here);
   });
   document.body.replaceChildren(frame);
 }
-
-start();

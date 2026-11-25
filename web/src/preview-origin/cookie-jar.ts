@@ -1,7 +1,7 @@
 // The cookie jar of one preview origin, after RFC 6265 section 5. Browsers drop Set-Cookie from
 // service-worker responses and hide Cookie from service-worker requests, so the IDE page keeps the
 // jar of record for each preview origin and the page shim keeps a script-visible mirror of it.
-import type { ScriptCookie } from "./protocol";
+import type { ScriptCookie } from "./protocol.js";
 
 export interface Cookie extends ScriptCookie {
   httpOnly: boolean;

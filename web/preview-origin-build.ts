@@ -58,7 +58,7 @@ export async function previewOriginAssets(): Promise<Record<PreviewOriginAsset, 
 
 /** Writes the preview host's files and the IDE's wrapper page into a built app. */
 export async function writePreviewOriginAssets(out: string, env: Record<string, string | undefined> = process.env): Promise<void> {
-  const [assets, frame] = await Promise.all([previewOriginAssets(), bundle("frame-page.ts")]);
+  const [assets, frame] = await Promise.all([previewOriginAssets(), bundle("frame-entry.ts")]);
   await mkdir(join(out, "__preview-origin"), { recursive: true });
   const startup = previewOriginStartup(env);
   await Promise.all(Object.entries(assets).map(([name, text]) => Bun.write(join(out, "__preview-origin", name), text)).concat(

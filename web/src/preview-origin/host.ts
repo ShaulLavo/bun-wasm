@@ -1,7 +1,7 @@
 // The static host of preview origins, for a Cloudflare Worker, Bun.serve or any fetch handler.
 // It serves four fixed files and nothing else: once an origin's service worker is installed, no
 // request of the app reaches this host again.
-import { parsePreviewHost, RELAY_PATH, SW_PATH } from "./protocol";
+import { parsePreviewHost, RELAY_PATH, SW_PATH } from "./protocol.js";
 
 export type PreviewOriginAsset = "sw.js" | "relay.html" | "bootstrap.html" | "top.html";
 

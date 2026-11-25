@@ -2,8 +2,8 @@
 // holds exactly one Waffle grant and supplies it itself, so nothing the other end sends can
 // select another server, port or owner. Malformed messages are dropped before they reach Waffle.
 import type { PreviewHostExchange, PreviewHostOutput, PreviewHostRelay } from "waffle/browser/preview-host";
-import type { CookieJar } from "./cookie-jar";
-import { MAX_EXCHANGES, sessionRequest, socketRequest, type SessionReply, type SessionRequest } from "./protocol";
+import type { CookieJar } from "./cookie-jar.js";
+import { MAX_EXCHANGES, sessionRequest, socketRequest, type SessionReply, type SessionRequest } from "./protocol.js";
 
 export interface SessionBinding {
   /** The one grant this port reaches. */

@@ -4,13 +4,13 @@
 // service worker carries every request of the app over it (docs/preview-origins.md).
 import type { PreviewServer } from "waffle/browser/preview";
 import type { PreviewHostRelay } from "waffle/browser/preview-host";
-import { Previews, type PreviewState } from "../preview";
-import { CookieJar } from "./cookie-jar";
-import { PortSession } from "./port-session";
+import { Previews, type PreviewState } from "../preview.js";
+import { CookieJar } from "./cookie-jar.js";
+import { PortSession } from "./port-session.js";
 import {
   frameMessage, isPreviewOrigin, loopbackHost, previewFrameLink, previewOrigin, previewOriginId, RELAY_MESSAGE, RELAY_PATH, relayMessage,
   type FrameMessage, type PreviewOriginConfig,
-} from "./protocol";
+} from "./protocol.js";
 
 export interface RootPreviewsOptions {
   config: PreviewOriginConfig;
@@ -23,8 +23,10 @@ export interface RootPreviewsOptions {
   persistCookies?: boolean;
   /** Defaults to this page. */
   ideOrigin?: string;
-  /** Where the new-tab wrapper page lives. Defaults to this page's directory. */
+  /** Where the built new-tab wrapper page (`preview-frame.html`) lives. Defaults to this page's directory. */
   frameBase?: string;
+  /** An IDE with its own wrapper page (it calls `showPreviewFrame`) returns that page's URL for a preview URL. */
+  frameLink?(url: string): string;
   /** A hang cap for the relay frame and its service worker, never a speed limit. */
   relayTimeoutMs?: number;
 }
@@ -84,6 +86,7 @@ export class RootPreviews extends Previews {
   private readonly identity: RootPreviewsOptions["identity"];
   private readonly ideOrigin: string;
   private readonly frameBase: string;
+  private readonly frameLink: RootPreviewsOptions["frameLink"];
   private readonly relayTimeoutMs: number;
   private readonly cookieStore: Storage | null;
   private originId: Promise<string> | undefined;
@@ -115,6 +118,7 @@ export class RootPreviews extends Previews {
     this.identity = options.identity;
     this.ideOrigin = options.ideOrigin ?? location.origin;
     this.frameBase = options.frameBase ?? location.href;
+    this.frameLink = options.frameLink;
     this.relayTimeoutMs = options.relayTimeoutMs ?? 60_000;
     this.cookieStore = options.persistCookies ? storage() : null;
     if (this.cookieStore) sweepCookies(this.cookieStore, Date.now());
@@ -126,7 +130,8 @@ export class RootPreviews extends Previews {
    * It also serves a preview URL that another tab of this workspace published.
    */
   override linkFor(url: string): string {
-    return isPreviewOrigin(new URL(url).origin, this.config) ? previewFrameLink(url, this.frameBase, this.config) : url;
+    if (!isPreviewOrigin(new URL(url).origin, this.config)) return url;
+    return this.frameLink?.(url) ?? previewFrameLink(url, this.frameBase, this.config);
   }
 
   /**
