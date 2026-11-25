@@ -8,7 +8,7 @@ This project is for playgrounds, tutorials, online editors and browser sandboxes
 
 ## What runs
 
-On 2026-11-23, we ran 13 framework starters across four browsers and four JavaScript engines. All 208 combinations passed. Each combination runs `bun install`, starts the dev server, renders the starter page, clicks a counter, edits a source file and waits for the automatic update, runs the production build, serves the built output, and cleans up. Ten frameworks pass the edit step through same-document hot reload with counter state preserved. Astro, Angular and Qwik pass through automatic document replacement with no manual reload.
+On 2026-11-23, we ran 13 framework starters across four browsers and four JavaScript engines. All 208 combinations passed. Each combination runs `bun install`, starts the dev server, renders the starter page, clicks a counter, edits a source file and waits for the automatic update, runs the production build, serves the built output, and cleans up. Across the 208 cells, the edit step passed with 160 same-document updates across ten frameworks and 48 automatic document replacements across Astro, Angular and Qwik, with no manual reload. The test runner checks document identity and updated text rather than re-reading the counter after the edit.
 
 - Frameworks: Next.js, Nuxt, SvelteKit, Astro, React Router, SolidStart, TanStack Start, Angular, Qwik, Vite with React, Vite with Vue, Vite with Svelte, and Hono.
 - Browsers: Chrome and Firefox on Linux, native Safari on macOS, and native iPhone Safari in the iOS 26.5 simulator on macOS. Safari runs use real Safari, not Playwright WebKit.
@@ -91,7 +91,7 @@ This benchmark measured total job time only. Native Next loaded its native SWC a
 Pre-1.0. The package is `bun-wasm`, marked private, installed as a Git dependency, and not published on npm. bun-wasm has no tagged releases.
 
 - Each guest caps linear memory at 1 GiB. Shared-group guests share a 2 GiB address space with a 1 GiB cumulative member allowance.
-- Each guest is single-threaded. Workers run as separate guests with separate linear memory.
+- Each guest is single-threaded. Under the split profile, workers run as separate guests with separate linear memory. Under the shared-group profile, `worker_threads` workers join the parent's Wasm memory group; see [Memory ceiling](memory-ceiling.md).
 - In a browser, `fetch` calls the page's `fetch` so CORS applies, and guest servers answer through preview URLs. Outbound raw TCP fails with `ENOTSUP` because browsers expose no raw TCP API. Waffle-backed Unix stream sockets work in the browser through `node:net` and `node:http`, though not in the native Wasmtime launcher. Client TLS works over an available bun-wasm TCP socket, while TLS servers, TLS over Unix sockets, arbitrary `Duplex` wrapping and `tls.rootCertificates` are not supported.
 - Native addons do not load, nothing starts a native executable in the browser, and `bun install` skips lifecycle scripts.
 - No engine is a security boundary. The `browser` engine runs user code in the host worker's global scope.

@@ -6,7 +6,7 @@ Three test sets measure compatibility:
 
 - The framework matrix runs 13 framework starters in four browsers on four engines, from `bun install` through a production build and preview. On 2026-11-23, all 208 combinations passed, with iPhone Safari running in the iOS 26.5 simulator.
 - The server and tool app matrix runs 17 real projects under the native launcher, headless Node host, and headless Chromium. It was last run on 2026-10-17, and its raw records live in [`docs/app-matrix/`](app-matrix/README.md).
-- Bun's own upstream test suite runs 2,305 upstream test files against each engine. The last full run was on 2026-10-17, and its raw records live in [`docs/bun-test-suite/`](bun-test-suite/README.md).
+- Bun's own upstream test suite ran 2,305 upstream test files against QuickJS, JSC and the `browser` engine on 2026-10-17, and its raw records live in [`docs/bun-test-suite/`](bun-test-suite/README.md).
 
 ## Bun commands
 
@@ -66,7 +66,7 @@ The framework matrix opens the sandbox in a real browser, picks a starter and an
 3. Dev: the framework's dev server starts and exposes a preview URL.
 4. Render: the preview shows the starter's expected text.
 5. Click: a trusted click moves the counter from 0 to 1.
-6. File update: saving an edited source file updates the preview automatically with no manual navigation. Ten frameworks update the existing document in place with counter state preserved. Astro, Angular and Qwik pass through automatic document replacement across all 48 of their cells.
+6. File update: saving an edited source file updates the preview automatically with no manual navigation. The runner checks document identity and the updated text, recording 160 same-document updates across ten frameworks and 48 automatic document replacements across Astro, Angular and Qwik.
 7. Build: the production build exits 0.
 8. Preview: the built app serves, renders, and increments its counter on a click.
 9. Cleanup: the dev process and preview stop and the browser closes.
@@ -162,7 +162,7 @@ Each project row comes from `results[]` in [`docs/app-matrix/measurements/2026-1
 
 ## Bun upstream test suite
 
-The suite runner executes every test file under Bun's `test/` directory against each engine with a 15-second file deadline and a 2,000 ms test deadline. A file counts as fully passing when it exits 0, finishes its report, records at least one passing test, and reports no failures or unhandled errors.
+The suite runner executes every test file under Bun's `test/` directory against QuickJS, JSC and the `browser` engine with a 15-second file deadline and a 2,000 ms test deadline. A file counts as fully passing when it exits 0, finishes its report, records at least one passing test, and reports no failures or unhandled errors.
 
 Run date: 2026-10-17, runtime commit `6e93c80c6f9bccc879990bedb999c3efdcd3166f`, upstream suite revision `cd95fa7a13b3f13be73e512b38ec111c1c228084`, 2,305 files.
 

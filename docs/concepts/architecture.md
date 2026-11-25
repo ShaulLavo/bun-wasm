@@ -2,12 +2,46 @@
 
 This page explains how a browser tab becomes a Bun host and why the project has the shape it has. For exact signatures, read the reference pages it links to.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/architecture.dark.svg">
-  <img alt="Layers of bun-wasm from top to bottom: your code, then the bun.wasm guest containing Bun's Rust transpiler and bundler, the Bun-compatible runtime and a JavaScript engine, then the host interface of WASI, bun_wasm slots and runtime_proc, implemented by either a browser host or a native Wasmtime launcher" src="../assets/architecture.light.svg">
-</picture>
+```mermaid
+flowchart TB
+  subgraph tab["Browser tab"]
+    page["Your page: editor, terminal, preview iframe"]
+    sw["Service worker: routes preview URLs to a guest's Bun.serve"]
+    subgraph waffle["Waffle"]
+      procs["Processes, pipes, signals: one Web Worker per process"]
+      fs["Shared filesystem: in memory, saved to IndexedDB"]
+      net["Loopback network and fetch bridge"]
+    end
+    subgraph worker["Process Web Worker"]
+      exec["Bun executor: host slots via WASI sock_send by default"]
+      hostjs["browser engine: V8, SpiderMonkey or JSC with JIT, outside Wasm"]
+      subgraph guest["bun guest, wasm32-wasip1"]
+        cli["bunwasm-cli: CLI dispatch for run, test, build, install"]
+        bunrs["Bun's Rust crates: transpiler, bundler, resolver, semver, parsers"]
+        rt["bunwasm-runtime: module loader, event loop, Bun APIs, node modules, web APIs"]
+        trait["Engine trait"]
+        qjs["QuickJS-ng side module"]
+        jsc["JavaScriptCore side module, interpreter only"]
+        sm["SpiderMonkey side module, experimental"]
+      end
+    end
+  end
+  native["Native host: bun-wasm launcher on Wasmtime"]
+  page --> waffle
+  sw --> net
+  cli --> bunrs
+  cli --> rt
+  rt --> trait
+  trait --> qjs & jsc & sm
+  rt -.->|"browser-engine build"| hostjs
+  guest -->|"WASI preview1: files, clocks, stdio"| fs
+  guest -->|"runtime_proc imports: spawn, wait, kill"| procs
+  guest -->|"bun_wasm slots"| exec
+  exec --> net
+  native -.->|"runs in-Wasm guests only"| guest
+```
 
-The dashed box is the guest: one Wasm module for the `browser` engine, or a core module paired with an engine side module for the in-Wasm engines. Everything below it is the host's job.
+The guest box is either one Wasm module for the `browser` engine, or a core module paired with an engine side module for the in-Wasm engines. Everything outside it is the host's job.
 
 ## What is Bun's and what is ours
 
