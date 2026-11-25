@@ -1,6 +1,8 @@
 import { browserType } from "./browser-type.ts";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import { join, resolve } from "node:path";
 import { session, ready, writeFile, run, web } from "./playground.mjs";
 import { ToolsLifecycle } from "./tools-lifecycle.ts";
@@ -31,6 +33,7 @@ await progress.run(async () => {
   for (const name of browsers.length ? browsers : ["chromium", "webkit"]) {
     for (const engine of engines) {
       await checkTools(name, engine, url);
+      if (engine === "browser") await checkPackageTools(name);
     }
   }
 }, async () => { clearTimeout(deadline); await s.cleanup(); });
@@ -104,6 +107,27 @@ async function checkTools(name: string, engine: string, url: string): Promise<vo
   assert.equal(downloads.length, 2, "reload compiles tools from persistent cache");
   await progress.step("context-close", () => context.close());
   console.log(JSON.stringify({ coverage: "tools-integrity", phase: "complete", browser: name, engine }));
+}
+
+/** `bun check` through the package's installBunAdapters({ loadTools }), with this site's guests:
+ * the `tools-check` scenario of bun-runtime-proc-browser.ts. */
+async function checkPackageTools(name: string): Promise<void> {
+  progress.select(name, "browser");
+  const artifact = join(s.scratch, "package-bun-browser.wasm");
+  await progress.step("package-guest", async () => writeFileSync(artifact, gunzipSync(readFileSync(join(root, "bun-browser.wasm.gz")))));
+  const env = { ...process.env, BUN_WASM_RUNTIME_PROC_ARTIFACT: artifact, BUN_WASM_RUNTIME_PROC_ENGINE: "browser",
+    BUN_WASM_RUNTIME_PROC_SCENARIO: "tools-check", BUN_WASM_RUNTIME_PROC_TOOLS: join(root, "bun-tools.wasm.gz"), BUN_WASM_RUNTIME_PROC_PORT: "0" };
+  const result = await progress.step("package-check", () => new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+    const child = spawn("bun", [join(web, "tests/bun-runtime-proc-browser.ts"), name], { cwd: web, env, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", chunk => { output += chunk; });
+    child.stderr.on("data", chunk => { output += chunk; });
+    child.on("error", reject);
+    child.on("close", code => resolve({ code, output }));
+  }));
+  assert.equal(result.code, 0, result.output);
+  assert.ok(result.output.includes('"executedScenarios":1'), result.output);
+  console.log(JSON.stringify({ packageTools: "complete", browser: name }));
 }
 
 async function toolsCached(): Promise<boolean> {

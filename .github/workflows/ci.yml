@@ -1251,9 +1251,6 @@ jobs:
           browsers=(${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }})
           for b in "${browsers[@]}"; do
             bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts "$b"
-            # bun check through installBunAdapters({ loadTools }), the public package path.
-            BUN_WASM_RUNTIME_PROC_SCENARIO=tools-check BUN_WASM_RUNTIME_PROC_TOOLS="$RUNNER_TEMP/browser-guest-site/site/bun-tools.wasm.gz" \
-              bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts "$b"
             bun ../scripts/run-with-timeout.mts 120 bun tests/browser-wasm-transfer.ts "$b"
           done
       - name: Retain Browser guest diagnostics

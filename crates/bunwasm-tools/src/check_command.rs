@@ -109,21 +109,26 @@ fn long_or_short(
     }
     flags.build |= shorts[..end].contains('b');
     flags.help |= shorts[..end].contains('h');
+    // `-papp` and `-p=app` carry the value; `-p=` carries an empty one, which is the default project.
     let attached = &shorts[end + 1..];
-    let attached = attached.strip_prefix('=').unwrap_or(attached);
     if !attached.is_empty() {
-        flags.project = Some(attached.to_owned());
+        set_project(flags, attached.strip_prefix('=').unwrap_or(attached));
         return Ok(at);
     }
     let value = args.get(at).ok_or("-p needs a value")?;
-    flags.project = Some(value.clone());
+    set_project(flags, value);
     Ok(at + 1)
+}
+
+/// An empty value, as in `--project=`, means the default project, as upstream.
+fn set_project(flags: &mut Flags, value: &str) {
+    flags.project = Some(value.to_owned()).filter(|value| !value.is_empty());
 }
 
 fn take_value(flags: &mut Flags, name: &str, value: &str) -> Result<(), String> {
     match name {
         "cwd" => flags.cwd = Some(value.to_owned()),
-        "project" | "tsconfig-override" => flags.project = Some(value.to_owned()),
+        "project" | "tsconfig-override" => set_project(flags, value),
         // WASI preview 1 has one thread, so the count only has to be valid.
         _ => match value.parse::<usize>() {
             Ok(n) if n > 0 => {}

@@ -95,8 +95,31 @@ pub fn takes_next_argument(flag: &str) -> bool {
     LONG_WITH_VALUE.contains(&flag) || short_with_value(flag).is_some_and(|(_, next)| next)
 }
 
+fn is_tool(word: &str) -> bool {
+    matches!(word, "lint" | "fmt" | "check")
+}
+
+/// What `bun <args>` passes to the tool. `bun lint` and `bun fmt` get the flags before them that
+/// Bun doesn't know. `bun check` gets only its project from there (`-ptsconfig.json`,
+/// `--tsconfig-override`, as upstream parses those anywhere); Bun's other flags are Bun's.
+fn command(
+    word: &str,
+    after: &[String],
+    unknown: Vec<String>,
+    project: Vec<String>,
+    globals: ToolGlobals,
+) -> (String, Vec<String>, ToolGlobals) {
+    let before = if word == "check" { project } else { unknown };
+    (
+        word.to_owned(),
+        before.into_iter().chain(after.iter().cloned()).collect(),
+        globals,
+    )
+}
+
 pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGlobals)> {
-    let mut forwarded = Vec::new();
+    let mut unknown = Vec::new();
+    let mut project = Vec::new();
     let mut globals = ToolGlobals::default();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
@@ -104,10 +127,19 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
         // `bun -ptsconfig.json check`: before `check`, `-p` is its `--project`, as upstream.
         let is_of_check = next == Some("check") && matches!(short_with_value(arg), Some((b'p', _)));
         match arg.as_str() {
-            "lint" | "fmt" | "check" => {
-                forwarded.extend_from_slice(&args[at + 1..]);
-                return Some((arg.clone(), forwarded, globals));
+            word if is_tool(word) => {
+                return Some(command(word, &args[at + 1..], unknown, project, globals));
             }
+            // What follows `--` is the command or the file to run, even if it looks like a flag.
+            "--" => {
+                let word = next.filter(|word| is_tool(word))?;
+                return Some(command(word, &args[at + 2..], unknown, project, globals));
+            }
+            "--tsconfig-override" => {
+                project.extend(args.get(at..at + 2).unwrap_or_default().iter().cloned());
+                at += 1;
+            }
+            flag if flag.starts_with("--tsconfig-override=") => project.push(arg.clone()),
             "--cwd" => {
                 at += 1;
                 globals.cwd_before = Some(args.get(at)?.clone());
@@ -120,10 +152,10 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
             flag if flag.starts_with("--config=") || flag.starts_with("-c=") => {
                 globals.bunfig = Some(flag.split_once('=')?.1.to_owned());
             }
-            _ if is_of_check => forwarded.push(arg.clone()),
+            _ if is_of_check => project.push(arg.clone()),
             flag if evaluates(flag) => return None,
             flag if takes_next_argument(flag) => at += 1,
-            flag if flag.starts_with('-') => forwarded.push(arg.clone()),
+            flag if flag.starts_with('-') => unknown.push(arg.clone()),
             _ => return None,
         }
         at += 1;
@@ -156,6 +188,7 @@ mod tests {
             &["--conditions", "dev", "check"],
             &["-b", "check"],
             &["-ptsconfig.json", "check"],
+            &["--", "check"],
         ] {
             assert!(select(args).is_some(), "{args:?}");
         }
@@ -170,6 +203,7 @@ mod tests {
             &["-r", "check", "entry.ts"],
             &["-brcheck", "entry.ts"],
             &["--print", "1", "check"],
+            &["--", "--entry.ts", "check"],
         ] {
             assert!(select(args).is_none(), "{args:?}");
         }
@@ -185,10 +219,30 @@ mod tests {
     }
 
     #[test]
-    fn project_before_check_is_forwarded() {
-        let (command, forwarded, _) = select(&["-papp", "check", "--no-pretty"]).unwrap();
-        assert_eq!(command, "check");
-        assert_eq!(forwarded, ["-papp", "--no-pretty"]);
+    fn check_gets_only_its_project_from_before_it() {
+        for (args, expected) in [
+            (
+                &["-papp", "check", "--no-pretty"][..],
+                &["-papp", "--no-pretty"][..],
+            ),
+            (
+                &["--tsconfig-override", "app/tsconfig.json", "check"],
+                &["--tsconfig-override", "app/tsconfig.json"],
+            ),
+            (
+                &["--tsconfig-override=app", "check"],
+                &["--tsconfig-override=app"],
+            ),
+            (&["--title=check", "check", "--no-pretty"], &["--no-pretty"]),
+            (&["--no-warnings", "--title", "x", "check"], &[]),
+        ] {
+            let (command, forwarded, _) = select(args).unwrap();
+            assert_eq!(command, "check");
+            assert_eq!(forwarded, expected, "{args:?}");
+        }
+        let (_, forwarded, _) =
+            select(&["--no-warnings", "--tsconfig-override", "x", "lint"]).unwrap();
+        assert_eq!(forwarded, ["--no-warnings"]);
     }
 }
 

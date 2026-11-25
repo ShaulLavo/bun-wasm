@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 
 function check(args: string[], cwd = process.cwd()) {
-  const result = Bun.spawnSync([process.execPath, "check"].concat(args), {
+  return bun(["check"].concat(args), cwd);
+}
+
+function bun(args: string[], cwd = process.cwd()) {
+  const result = Bun.spawnSync([process.execPath].concat(args), {
     cwd,
     env: { ...process.env, AGENT: "0", CLAUDECODE: "", FORCE_COLOR: "0" },
     stdout: "pipe",
@@ -56,6 +60,17 @@ assert.equal(aliasLast.code, 1);
 assert.ok(aliasLast.stdout.includes("TS5058"), aliasLast.stdout);
 console.log("-papp, and the last of --project and --tsconfig-override wins");
 
+const globalOverride = bun(["--tsconfig-override", "app/tsconfig.json", "check", "--no-pretty"]);
+assert.equal(globalOverride.stdout, fromAbove.stdout);
+mkdirSync("fresh/src", { recursive: true });
+writeFileSync("fresh/tsconfig.json", tsconfig);
+writeFileSync("fresh/src/index.ts", "export const ready: boolean = true;\n");
+for (const args of [["check", "-p=", "--no-pretty"], ["check", "--project=", "--no-pretty"], ["--title=check", "check", "--no-pretty"], ["--no-warnings", "check", "--no-pretty"]]) {
+  const result = bun(args, "fresh");
+  assert.equal(result.code, 0, `${args.join(" ")}: ${result.stdout}${result.stderr}`);
+}
+console.log("Bun's own flags before check, and an empty project");
+
 mkdirSync("loose", { recursive: true });
 writeFileSync("loose/implicit.ts", "export function twice(value) {\n  return value * 2;\n}\n");
 const strict = check(["--no-pretty", "implicit.ts"], "loose");
@@ -78,7 +93,11 @@ writeFileSync("check", 'console.log("node ran the check file");\n');
 const node = Bun.spawnSync(["node", "check"], { stdout: "pipe", stderr: "pipe" });
 assert.equal(node.exitCode, 0, node.stderr.toString());
 assert.equal(node.stdout.toString(), "node ran the check file\n");
-console.log("a flag value or a node script named check is not the command");
+writeFileSync("--entry.ts", 'console.log("dash file ran", process.argv.slice(2).join(","));\n');
+const dashed = bun(["--", "--entry.ts", "check"]);
+assert.equal(dashed.code, 0, dashed.stderr);
+assert.equal(dashed.stdout, "dash file ran check\n");
+console.log("a flag value, a file after --, or a node script named check is not the command");
 
 const help = check(["--help"]);
 assert.equal(help.code, 0);

@@ -54,7 +54,7 @@ const site = requestedSite ? await realpath(requestedSite) : undefined;
 if (site) for (const path of ["index.html", "playground/index.html"]) assert.ok(await Bun.file(join(site, path)).exists(), `production site build is missing ${path}`);
 const selected = process.env.BUN_WASM_RUNTIME_PROC_SCENARIO;
 const requestedPort = Number(process.env.BUN_WASM_RUNTIME_PROC_PORT ?? "4187");
-assert.ok(Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort <= 65535, "explicit valid loopback port required");
+assert.ok(Number.isInteger(requestedPort) && requestedPort >= 0 && requestedPort <= 65535, "explicit valid loopback port required (0 picks a free one)");
 // BUN_WASM_RUNTIME_PROC_TOOLS: the explicit absolute bun-tools.wasm (or .wasm.gz) that the tools-check scenario loads.
 const requestedTools = process.env.BUN_WASM_RUNTIME_PROC_TOOLS;
 if (requestedTools) assert.ok(isAbsolute(requestedTools) && await Bun.file(requestedTools).exists(), `explicit tools artifact does not exist: ${requestedTools}`);

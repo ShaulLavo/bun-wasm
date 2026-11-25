@@ -3,7 +3,8 @@ type errors print tsc diagnostics and exit 1
 --pretty shows the source line
 --project and --cwd select the project
 -papp, and the last of --project and --tsconfig-override wins
+Bun's own flags before check, and an empty project
 files without a tsconfig and command-line compiler options
 --cwd applies before response files are read
-a flag value or a node script named check is not the command
+a flag value, a file after --, or a node script named check is not the command
 help and unknown flags
