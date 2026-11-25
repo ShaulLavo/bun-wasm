@@ -3,11 +3,14 @@ import { EditorPane } from "./editor-pane";
 import type { Playground } from "./playground";
 import { TerminalPane } from "./terminal-pane";
 import { projectTemplates } from "./project-templates";
+import { DemoBar } from "./demo-bar";
+import { PreviewDock } from "./preview-dock";
+import { copy } from "./showcase-copy";
 import { engineUnavailable, type Engine } from "../engine-loader";
 
 type Props = { playground: Playground };
 
-const ENGINE_OPTIONS = [["browser", "Browser (native)"], ["quickjs", "QuickJS (9 MB)"], ["jsc", "JSC (43 MB)"], ["spidermonkey", "SpiderMonkey (experimental)"]] as const;
+const ENGINE_OPTIONS = Object.entries(copy.engineOptions) as [Engine, string][];
 const RUN_TITLE = "Save and run (Ctrl/Cmd-Enter)";
 const RELOAD_TITLES = { startup: "Retry playground startup", ownership: "Open the latest saved workspace", shell: RUN_TITLE };
 
@@ -24,12 +27,25 @@ export function App(handle: Handle<Props>) {
   return () => (
     <>
       <Header playground={playground} />
+      {playground.template ? null : <DemoBar playground={playground} />}
       <main>
         <EditorPane playground={playground} />
-        <TerminalPane playground={playground} />
+        <div class="output-column" data-preview={playground.dockedPreview ? "open" : undefined}>
+          {playground.dockedPreview ? <PreviewDock key={playground.dockedPreview.key} playground={playground} /> : null}
+          <TerminalPane playground={playground} />
+        </div>
       </main>
     </>
   );
+}
+
+/** Opens a template workspace, keeping the chosen engine. */
+function chooseProject(value: string): void {
+  const next = new URL(location.href);
+  next.searchParams.delete("demo");
+  if (value) next.searchParams.set("template", value);
+  else next.searchParams.delete("template");
+  location.assign(next);
 }
 
 function Header(handle: Handle<Props>) {
@@ -41,24 +57,32 @@ function Header(handle: Handle<Props>) {
         <h1><span class="logo" aria-hidden="true">🥟</span> bun<span class="dim">.wasm</span></h1>
         <span id="status" role="status" aria-live="polite" data-kind={status.kind}>{status.text}</span>
         <nav class="workspace-nav" aria-label="Projects">
-          {playground.template ? <a class="nav" href="./">Examples</a> : null}
-          {projectTemplates.filter(template => template.id !== playground.template?.id).map(template => (
-            <a class="nav" href={`?template=${template.id}`}>{template.label}</a>
-          ))}
-          <a class="nav" href="../" title="React sandbox with hot reload">Sandbox</a>
+          <a class="nav" href="../" title={copy.sandboxTitle}>{copy.sandboxLink}</a>
         </nav>
-        <select
-          id="engine" aria-label="JavaScript engine" title="JavaScript engine (reloads the page)"
-          disabled={playground.locked}
-          mix={on("change", (event) => playground.chooseEngine(event.currentTarget.value))}
-        >
-          {ENGINE_OPTIONS.map(([value, label]) => {
-            const option = engineOption(value, label, playground);
-            return <option value={value} selected={value === playground.engine}
-              disabled={option.unavailable !== null} title={option.unavailable ?? undefined}
-            >{option.label}</option>;
-          })}
-        </select>
+        <label class="field">
+          <span class="label">{copy.projectLabel}</span>
+          <select id="template" aria-label={copy.projectLabel} title={copy.projectTitle} disabled={playground.locked}
+            mix={on("change", (event) => chooseProject(event.currentTarget.value))}
+          >
+            <option value="" selected={!playground.template}>{copy.examplesOption}</option>
+            {projectTemplates.map(template => <option value={template.id} selected={template.id === playground.template?.id}>{template.label}</option>)}
+          </select>
+        </label>
+        <label class="field">
+          <span class="label">{copy.engineLabel}</span>
+          <select
+            id="engine" aria-label="JavaScript engine" title={copy.engineTitle}
+            disabled={playground.locked}
+            mix={on("change", (event) => playground.chooseEngine(event.currentTarget.value))}
+          >
+            {ENGINE_OPTIONS.map(([value, label]) => {
+              const option = engineOption(value, label, playground);
+              return <option value={value} selected={value === playground.engine}
+                disabled={option.unavailable !== null} title={option.unavailable ?? undefined}
+              >{option.label}</option>;
+            })}
+          </select>
+        </label>
         {playground.unreadable ? <StartFreshButton playground={playground} /> : null}
         <RunButton playground={playground} />
       </header>

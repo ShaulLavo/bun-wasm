@@ -32,45 +32,40 @@ async function setSource(page: Page, text: string): Promise<void> {
   }, text);
 }
 
-async function projectLinkBoxes(page: Page) {
-  return page.getByRole("navigation", { name: "Projects" }).getByRole("link").evaluateAll(links => links.map(link => {
-    const { left, right, top, bottom } = link.getBoundingClientRect();
-    return { left, right, top, bottom };
-  }));
-}
-
 async function headerControlBoxes(page: Page) {
-  return page.locator("header h1, header #engine, header #run").evaluateAll(controls => controls.map(control => {
+  return page.locator("header h1, header a.nav, header #template, header #engine, header #run").evaluateAll(controls => controls.map(control => {
     const { left, right, top, bottom } = control.getBoundingClientRect();
     return { left, right, top, bottom, width: control.clientWidth, contentWidth: control.scrollWidth };
   }));
 }
 
-function assertSeparateLinks(boxes: Awaited<ReturnType<typeof projectLinkBoxes>>): void {
+function assertSeparate(boxes: Awaited<ReturnType<typeof headerControlBoxes>>): void {
   for (let index = 0; index < boxes.length; index++) {
     for (let other = index + 1; other < boxes.length; other++) {
       const a = boxes[index], b = boxes[other];
       assert.ok(a && b);
-      assert.ok(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top, "Project links must not overlap");
+      assert.ok(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top, "Header controls must not overlap");
     }
   }
 }
 
-async function projectLinks(page: Page): Promise<void> {
-  const links = page.getByRole("navigation", { name: "Projects" }).getByRole("link");
-  const others = projectTemplates.filter(project => project.id !== template.id);
-  assert.deepEqual(await links.allTextContents(), ["Examples"].concat(others.map(project => project.label), ["Sandbox"]));
-  assert.deepEqual(await links.evaluateAll(links => links.map(link => link.getAttribute("href"))), ["./"].concat(others.map(project => `?template=${project.id}`), ["../"]));
+/** The project picker lists the examples and every template, and the header fits a phone. */
+async function projectPicker(page: Page): Promise<void> {
+  const picker = page.locator("#template");
+  assert.equal(await picker.inputValue(), template.id);
+  const options = await picker.locator("option").evaluateAll(options => options.map(option => [option.getAttribute("value"), option.textContent]));
+  assert.deepEqual(options.slice(1).map(([value]) => value), projectTemplates.map(project => project.id));
+  assert.equal(options[0]?.[0], "");
+  assert.deepEqual(await page.getByRole("navigation", { name: "Projects" }).getByRole("link").evaluateAll(links => links.map(link => link.getAttribute("href"))), ["../"]);
+  assert.equal(await page.locator(".demo-bar").count(), 0, "Template workspaces have no demo bar");
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 844 });
-    const boxes = await projectLinkBoxes(page);
-    assert.equal(boxes.length, projectTemplates.length + 1);
-    if (reports) await page.screenshot({ path: join(reports, `next-playground-links-${width}.png`) });
-    assert.ok(boxes.every(box => box.left >= 0 && box.right <= width), JSON.stringify({ width, boxes }));
+    if (reports) await page.screenshot({ path: join(reports, `next-playground-header-${width}.png`) });
     const controls = await headerControlBoxes(page);
-    assert.equal(controls.length, 3);
+    assert.equal(controls.length, 5);
+    assert.ok(controls.every(control => control.left >= 0 && control.right <= width), JSON.stringify({ width, controls }));
     assert.ok(controls.every(control => control.width > 0 && control.contentWidth <= control.width), JSON.stringify({ width, controls }));
-    assertSeparateLinks(boxes.concat(controls));
+    assertSeparate(controls);
   }
   await page.setViewportSize({ width: 1280, height: 800 });
 }
@@ -118,7 +113,7 @@ try {
   await page.goto(url.href);
   assert.match(await ready(page), /ready · Browser/);
   assert.equal(await page.evaluate(() => playground.editor.path), `/home/user/${template.editorFile}`);
-  await projectLinks(page);
+  await projectPicker(page);
   const installed = await run(page, "bun install", 180_000);
   assert.equal(installed.code, 0, installed.output);
   console.log("PASS Next dependencies installed in the guest");

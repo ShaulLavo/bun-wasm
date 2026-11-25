@@ -489,6 +489,40 @@ a.nav:hover {
   text-decoration: underline;
 }
 
+/* The way from the React sandbox to the playground's one-click Bun API demos. */
+a.nav.showcase-link {
+  padding: 5px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--accent);
+  font-weight: 600;
+  transition: transform 140ms cubic-bezier(0.23, 1, 0.32, 1), background-color 140ms ease;
+}
+
+a.nav.showcase-link:hover {
+  text-decoration: none;
+}
+
+a.nav.showcase-link:active {
+  transform: scale(0.97);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  a.nav.showcase-link:hover {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  a.nav.showcase-link {
+    transition: none;
+  }
+
+  a.nav.showcase-link:active {
+    transform: none;
+  }
+}
+
 #copy-terminal {
   flex: none;
   margin-left: auto;

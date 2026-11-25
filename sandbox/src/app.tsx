@@ -6,6 +6,9 @@ import type { Sandbox } from "./sandbox";
 import { TerminalPane } from "./terminal-pane";
 import { templates } from "./template-catalog";
 
+/** The link to the playground's one-click Bun API demos (copy lives here so the sandbox page imports no playground module). */
+const DEMOS_LINK = { text: "Bun API demos", title: "Bun.serve, bun:sqlite, bun test, Bun.build and Bun.$ in one click" };
+
 type Props = { sandbox: Sandbox };
 
 const ENGINE_OPTIONS = [["browser", "Browser (native)"], ["quickjs", "QuickJS"], ["jsc", "JSC"]] as const;
@@ -49,7 +52,7 @@ function Header(handle: Handle<Props>) {
       <header>
         <h1><span class="logo" aria-hidden="true">🥟</span> bun<span class="dim">.wasm</span> <span class="product">sandbox</span></h1>
         <span id="status" role="status" aria-live="polite" data-kind={status.kind}>{status.text}</span>
-        <a class="nav" href="./playground/" title="Terminal playground: bun test, bun build, bun:sqlite">Playground</a>
+        <a class="nav showcase-link" href="./playground/?demo=serve" title={DEMOS_LINK.title}>{DEMOS_LINK.text}</a>
         <label class="engine template-choice">
           <span class="label">Template</span>
           <select id="template" aria-label="App template" title="App template" disabled={locked} mix={choose("template")}>

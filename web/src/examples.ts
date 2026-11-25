@@ -167,6 +167,98 @@ test("mocks and async", async () => {
 });
 `,
 
+  "serve.ts": `// Bun.serve: an HTTP server running inside this browser tab, with a bun:sqlite visit counter.
+// Its page opens in the preview. Edit the HTML or a route, then press Restart above the preview.
+import { Database } from "bun:sqlite";
+
+const db = new Database("visits.sqlite");
+db.run("CREATE TABLE IF NOT EXISTS visits (at TEXT NOT NULL)");
+
+const server = Bun.serve({
+  port: 3000,
+  routes: {
+    "/": () => {
+      db.run("INSERT INTO visits (at) VALUES (?)", [new Date().toISOString()]);
+      const { visits } = db.query("SELECT count(*) AS visits FROM visits").get() as { visits: number };
+      return new Response(page(visits), { headers: { "content-type": "text/html; charset=utf-8" } });
+    },
+    "/api/hello/:name": (request) => Response.json({ hello: request.params.name, bun: Bun.version, at: new Date().toISOString() }),
+  },
+  fetch: () => new Response("Not found", { status: 404 }),
+});
+
+console.log(\`Bun.serve is listening on \${server.url}\`);
+const response = await fetch(new URL("/api/hello/terminal", server.url));
+console.log("GET /api/hello/terminal ->", response.status, await response.json());
+
+function page(visits: number): string {
+  return \`<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bun.serve in WebAssembly</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #14151a; color: #e6e6e6; font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 32rem; padding: 2rem; text-align: center; }
+  h1 { color: #fbf0df; margin: 0 0 .5rem; }
+  b { color: #f472b6; }
+  button { font: inherit; border: 0; border-radius: 999px; padding: .6rem 1.2rem; background: #fbf0df; color: #14151a; cursor: pointer; }
+  pre { text-align: left; background: #1b1d24; border: 1px solid #2a2d38; border-radius: 8px; padding: 1rem; white-space: pre-wrap; }
+</style>
+<main>
+  <h1>Hello from Bun.serve</h1>
+  <p>Bun \${Bun.version}, compiled to WebAssembly, served this page from inside your browser tab.</p>
+  <p>bun:sqlite has counted <b>\${visits}</b> visit\${visits === 1 ? "" : "s"}. Reload to add one.</p>
+  <button id="hello">GET /api/hello/browser</button>
+  <pre id="out">Click the button to call a route.</pre>
+</main>
+<script>
+  document.getElementById("hello").onclick = async () => {
+    const response = await fetch("api/hello/browser");
+    document.getElementById("out").textContent = JSON.stringify(await response.json(), null, 2);
+  };
+</script>\`;
+}
+`,
+
+  "shell.ts": `// Bun.$: Bun's shell. Globs, pipes and builtins run in this tab, on the same filesystem.
+import { $ } from "bun";
+
+console.log("glob:", (await $\`echo *.ts\`.text()).trim());
+
+// Interpolated values are escaped, so this is one argument, not a command.
+const risky = "hello; rm -rf /";
+console.log("escaped:", (await $\`echo \${risky}\`.text()).trim());
+
+// Pipes, and output parsed as JSON.
+console.log("words:", (await $\`echo Bun in WebAssembly | wc -w\`.text()).trim());
+const data = await $\`echo '{"runtime":"bun.wasm","files":3}'\`.json();
+console.log("json:", data);
+
+// Failing commands throw unless you ask for the exit code.
+const { exitCode } = await $\`ls does-not-exist\`.nothrow().quiet();
+console.log("exit code of a failed ls:", exitCode);
+`,
+
+  "build.ts": `// Bun.build: Bun's bundler, compiled to WebAssembly. Bundles jsx.tsx and math.ts into dist/.
+const result = await Bun.build({
+  entrypoints: ["./jsx.tsx", "./math.ts"],
+  outdir: "./dist",
+  minify: true,
+  sourcemap: "linked",
+});
+
+if (!result.success) {
+  for (const log of result.logs) console.error(log);
+  process.exit(1);
+}
+
+for (const output of result.outputs) {
+  console.log(\`\${output.kind.padEnd(10)} \${output.path.slice(process.cwd().length + 1).padEnd(18)} \${output.size} bytes\`);
+}
+
+const math = result.outputs.find((output) => output.path.endsWith("math.js"));
+if (math) console.log("\\nminified math.js:\\n" + (await math.text()).split("\\n")[0]);
+`,
+
   "db.ts": `// bun:sqlite: real SQLite compiled to WebAssembly.
 import { Database } from "bun:sqlite";
 

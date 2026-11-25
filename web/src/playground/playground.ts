@@ -25,6 +25,7 @@ import { openTerminal } from "../terminal-mount";
 import { installPreviewLinks } from "./preview-links";
 import { Editor } from "./editor";
 import { projectTemplate, type ProjectTemplate } from "./project-templates";
+import { demo as findDemo, type Demo } from "./demos";
 import {
   acquireLockHandle,
   acquireWriterClaim,
@@ -60,6 +61,9 @@ export type Failure = "startup" | "ownership" | "shell";
 const DEFAULT_ENGINE: Engine = "browser";
 const HOST_VERSIONS = {};
 const STOP_WAIT_MS = 30_000;
+/** A demo click stops the running command first; a second interrupt after this long sends SIGKILL. */
+const DEMO_INTERRUPT_MS = 3_000;
+const DEMO_IDLE_MS = 15_000;
 
 /** The playground page: one Waffle runtime, the ~ workspace, bun.wasm, and an interactive bash-web shell. */
 export class Playground extends TypedEventTarget<{ change: Event }> {
@@ -68,6 +72,10 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   readonly profile: PlaygroundProfile;
   private readonly requestedProfile: PlaygroundProfile | undefined;
   readonly template: ProjectTemplate | undefined;
+  /** The demo the visitor last started; `?demo=<id>` starts one when the page is ready. */
+  activeDemo: Demo | undefined;
+  /** A server started in the examples workspace, shown docked next to the terminal. */
+  dockedPreview: { url: string; port: number; key: number } | undefined;
   term?: Terminal;
   editor?: Editor;
   failure?: Failure;
@@ -91,6 +99,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   private shell?: BrowserSession;
   private shellState: SessionState = "starting";
   private runPending = false;
+  private demoPending = false;
+  private previewKey = 0;
   private message: Status = { text: "", kind: "" };
   private disposePreviewLinks?: () => void;
   private disposePreviewRecovery?: () => void;
@@ -144,6 +154,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     super();
     this.params = new URLSearchParams(search);
     this.template = projectTemplate(this.params.get("template"));
+    this.activeDemo = this.template ? undefined : findDemo(this.params.get("demo"));
     const requested = this.params.get("engine");
     if (requested !== null && !isEngine(requested)) throw new TypeError(`Unknown Bun engine: ${requested}`);
     this.engine = requested ?? DEFAULT_ENGINE;
@@ -309,6 +320,67 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       this.runPending = false;
       this.changed();
     }
+  }
+
+  /** Demos can start while a command runs: the running command (often a server) is stopped first. */
+  get canStartDemo(): boolean {
+    const shellUp = this.shellState === "ready" || this.shellState === "running";
+    return this.ready && shellUp && !this.demoPending && this.failure === undefined;
+  }
+
+  /** Restores the demo's files if they were deleted, opens its file and runs it. Edits are kept. */
+  async runDemo(demo: Demo): Promise<void> {
+    const { editor, shell, fs } = this;
+    if (!this.canStartDemo || !editor || !shell || !fs) return;
+    this.demoPending = true;
+    this.activeDemo = demo;
+    this.syncDemoParam(demo);
+    this.changed();
+    try {
+      await this.stopForeground(shell);
+      for (const name of demo.files) {
+        const path = `${HOME}/${name}`;
+        if (await fs.lookup(path)) continue;
+        await this.withPlaygroundPageWrite(async (liveFs) => {
+          await liveFs.writeFile(path, examples[name]!);
+          await liveFs.flush(path);
+        });
+      }
+      await editor.open(`${HOME}/${demo.file}`);
+      // run() resolves when the command ends, which for a server is when it is stopped.
+      void this.run().catch(this.report);
+    } finally {
+      this.demoPending = false;
+      this.changed();
+    }
+  }
+
+  /** Interrupts the foreground command, then kills it if it ignores the interrupt. */
+  private async stopForeground(shell: BrowserSession): Promise<void> {
+    const idle = () => !shell.running && !this.runPending;
+    if (idle()) return;
+    shell.interrupt();
+    if (await waitUntil(idle, DEMO_INTERRUPT_MS)) return;
+    shell.interrupt();
+    if (!await waitUntil(idle, DEMO_IDLE_MS)) throw new Error("The running command did not stop. Press Ctrl-C in the terminal, then try again.");
+  }
+
+  /** Keeps `?demo=` in the address so a copied link opens the same demo. */
+  private syncDemoParam(demo: Demo): void {
+    const next = new URL(location.href);
+    next.searchParams.set("demo", demo.id);
+    history.replaceState(history.state, "", next);
+  }
+
+  /** Each announcement gets a fresh frame, so a restarted server is loaded again. */
+  private dockPreview(url: string, port: number): void {
+    this.dockedPreview = { url, port, key: ++this.previewKey };
+    this.changed();
+  }
+
+  closePreview(): void {
+    this.dockedPreview = undefined;
+    this.changed();
   }
 
   async newFile(name: string): Promise<void> {
@@ -725,6 +797,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     term.loadAddon(this.fit);
     const previewPorts = new Set<number>();
     const activePreviewTokens = new Map<number, { helper: RuntimeNetworkHelper; token: symbol; printed: boolean }>();
+    const announcedPorts = new Set<number>();
     this.disposePreviewLinks = installPreviewLinks(term, previews, previewPorts, () => this.editor?.focus());
 
     const announcePort = async (port: number, token: symbol) => {
@@ -735,7 +808,11 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
         if (!rec || rec.token !== token) return;
         if (state === "ready" && !previews.isListenerReady(port, token)) continue;
         rec.printed = state === "ready";
+        // One server can register its port more than once (one per listener); announce it once.
+        if (state === "ready" && announcedPorts.has(port)) return;
+        if (state === "ready") announcedPorts.add(port);
         term.write(previewLine(previews, port, state));
+        if (state === "ready" && !this.template) this.dockPreview(previews.url(port), port);
         return;
       }
     };
@@ -764,7 +841,10 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
         } else {
           previews.unregister(port, helper);
         }
-        if (!previews.serves(port)) previewPorts.delete(port);
+        if (previews.serves(port)) return;
+        previewPorts.delete(port);
+        announcedPorts.delete(port);
+        if (this.dockedPreview?.port === port) this.closePreview();
       },
     };
 
@@ -846,8 +926,15 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews, sharedObjects, engine, profile: registration.profile, dispose: () => this.teardown() } });
     this.abandonHooks.clear();
     this.ready = !fs.ownershipLost && !this.disposed;
-    this.setStatus(`bun.wasm ready · ${ENGINES[engine].name} · ${mb(size)}`, "ok");
-    if (this.ready) whenIdle(warmFirstCommand);
+    const seconds = (performance.now() / 1000).toFixed(1);
+    this.setStatus(`bun.wasm ready · ${ENGINES[engine].name} · ${mb(size)} · started in ${seconds} s`, "ok");
+    if (this.ready) this.afterReady();
+  }
+
+  /** A `?demo=` link starts its demo; otherwise the first command's code loads while idle. */
+  private afterReady(): void {
+    if (this.activeDemo) void this.runDemo(this.activeDemo).catch(this.report);
+    else whenIdle(warmFirstCommand);
   }
 
   private printWelcomeBanner(term: Terminal, fs: Filesystem): void {
@@ -1006,6 +1093,16 @@ export class InputGate {
     this.consumer = undefined;
     this.queued.length = 0;
   }
+}
+
+/** Resolves true once `done()` holds, or false after `ms`. */
+async function waitUntil(done: () => boolean, ms: number): Promise<boolean> {
+  const deadline = performance.now() + ms;
+  while (!done()) {
+    if (performance.now() > deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  return true;
 }
 
 /** Boot waterfall marks on the navigation clock, read by sandbox/tests/page-load-profile.ts. */

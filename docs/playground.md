@@ -17,6 +17,17 @@ The build compresses each engine's wasm from `../dist` into `dist/<name>.wasm.br
 without that negotiation the page decompresses the `.gz` twin itself. If one is missing the build still succeeds and that engine says it is missing. `?wasm=<url>`
 loads a different module at runtime; `?trace` logs every WASI call to the worker's console.
 
+## One-click Bun demos
+
+The examples workspace shows a demo bar: Bun.serve, bun:sqlite, bun test, Bun.build, Bun.$ and
+Bun.file. A click stops any running command, restores the demo's files if they were deleted (edits
+are kept), opens the file and runs it. A server started there opens in a preview above the
+terminal; its Restart button saves and reruns the demo. `?demo=<id>` (for example
+`/playground/?demo=serve`) starts a demo once the page is ready, and the address follows the last
+demo clicked. The sandbox at `/` links to `?demo=serve`. Visible strings live in
+`web/src/playground/showcase-copy.ts`; the demo programs are in `web/src/examples.ts`.
+`scripts/playground-demos-browser.test.ts` checks every demo, Restart, file restore and reload.
+
 ## Run Vite with React
 
 Open `/playground/?template=vite-react` on the deployed site, or choose **Vite + React**
