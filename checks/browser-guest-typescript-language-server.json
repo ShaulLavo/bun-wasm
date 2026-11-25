@@ -1,0 +1,13 @@
+{
+  "owner": "browser-guest",
+  "path": "scripts/typescript-language-server-browser.test.ts",
+  "inputs": [
+    "crates/bunwasm-runtime/src/js/fs_watch.ts",
+    "tests/language-server/typescript/lsp-client.ts",
+    "tests/language-server/typescript/project/package.json",
+    "tests/language-server/typescript/project/tsconfig.json",
+    "tests/language-server/typescript/project/src/geometry.ts",
+    "tests/language-server/typescript/project/src/main.ts",
+    "web/tests/browser-typescript-language-server.ts"
+  ]
+}
