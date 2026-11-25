@@ -7,16 +7,37 @@
     "ansi_16m", "ansi-16m", "ansi-24bit", "ansi-truecolor", "ansi", "ansi256", "css", "hex", "HEX", "hsl", "lab", "number", "rgb", "rgba"];
   const typeError = (message: string) => Object.assign(new TypeError(message), { code: "ERR_INVALID_ARG_TYPE" });
 
-  // color_int_from_js: a number, truncated to an integer and clamped to 0..255.
+  // Rust's saturating `f64 as` casts, which JSC's coerce::<i32> and to_int64 behave like here:
+  // NaN is 0, and values past the range stick to its ends.
+  function saturate(value: number, min: number, max: number): number {
+    if (Number.isNaN(value)) return 0;
+    return Math.min(max, Math.max(min, Math.trunc(value)));
+  }
+
+  // color_int_from_js: a number, cast to i32, then clamped to 0..255.
   function channel(value: unknown, property: string): number {
     if (typeof value !== "number") throw typeError(`Expected ${property} to be a integer for 'color'.`);
-    return Math.min(255, Math.max(0, Math.trunc(value) | 0));
+    return Math.min(255, Math.max(0, saturate(value, -(2 ** 31), 2 ** 31 - 1)));
   }
 
   function fromNumber(value: number): number[] {
-    // The low 32 bits; a 24-bit 0xRRGGBB number is opaque, wider values carry alpha on top.
-    const int = Number(BigInt.asUintN(32, BigInt(Math.trunc(value) || 0)));
-    return [(int >> 16) & 0xff, (int >> 8) & 0xff, int & 0xff, int > 0xffffff ? (int >>> 24) & 0xff : 255];
+    // to_int64, then the low 32 bits; a 24-bit 0xRRGGBB number is opaque, wider values carry
+    // alpha on top.
+    const wide = Number.isNaN(value) ? 0n : value >= 2 ** 63 ? 2n ** 63n - 1n : value < -(2 ** 63) ? -(2n ** 63n) : BigInt(Math.trunc(value));
+    const int = Number(BigInt.asUintN(32, wide));
+    return [(int >>> 16) & 0xff, (int >>> 8) & 0xff, int & 0xff, int > 0xffffff ? (int >>> 24) & 0xff : 255];
+  }
+
+  // JSC's is_array_like: arrays (not proxies around them), typed arrays and array buffers, whose
+  // length is their byte length and whose elements read as undefined.
+  function arrayLike(value: object): ArrayLike<unknown> | undefined {
+    if (value instanceof ArrayBuffer || (typeof SharedArrayBuffer === "function" && value instanceof SharedArrayBuffer)) {
+      return { length: value.byteLength };
+    }
+    if (ArrayBuffer.isView(value)) return value instanceof DataView ? undefined : value as unknown as ArrayLike<unknown>;
+    // The browser engine cannot tell a proxy from JavaScript (its isProxy is always false).
+    if (Array.isArray(value) && !native.isProxy?.(value)) return value;
+    return undefined;
   }
 
   function fromArray(value: ArrayLike<unknown>): number[] {
@@ -25,17 +46,19 @@
     return value.length === 3 ? out.concat([255]) : out;
   }
 
+  // Alpha is a 0..1 number (get_truthy keeps 0 and NaN); anything else, or none, is opaque.
   function fromObject(value: Record<string, unknown>): number[] {
     const out = [channel(value.r, "r"), channel(value.g, "g"), channel(value.b, "b")];
     const alpha = value.a;
-    return out.concat([alpha && typeof alpha === "number" ? Math.min(255, Math.max(0, Math.trunc(alpha * 255))) : 255]);
+    return out.concat([typeof alpha === "number" ? Math.min(255, Math.max(0, saturate(alpha * 255, -(2 ** 63), 2 ** 63))) : 255]);
   }
 
+  // js_function_color's dispatch: numbers, array-likes, then any object (functions too).
   function rgba(input: unknown): number[] | undefined {
     if (typeof input === "number") return fromNumber(input);
-    if (Array.isArray(input) || ArrayBuffer.isView(input)) return fromArray(input as ArrayLike<unknown>);
-    if (input !== null && typeof input === "object") return fromObject(input as Record<string, unknown>);
-    return undefined;
+    if (input === null || (typeof input !== "object" && typeof input !== "function")) return undefined;
+    const array = arrayLike(input);
+    return array ? fromArray(array) : fromObject(input as Record<string, unknown>);
   }
 
   return function color(input: unknown, format?: unknown) {
@@ -50,6 +73,7 @@
     }
     const channels = rgba(input);
     if (channels) return native.color(selected, undefined, channels[0], channels[1], channels[2], channels[3]);
+    if (typeof input === "symbol") throw new TypeError("Cannot convert a symbol to a string");
     return native.color(selected, native.utf8Encode(String(input)));
   };
 })

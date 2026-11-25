@@ -10,7 +10,7 @@ An aggregate with no Error members prints its own message and mapped stack. Empt
 
 #### Control-character escapes
 
-Bun writes the escapes of control characters in quoted strings with uppercase hex (`"\u001B[0m"`), while `JSON.stringify`, which `quoteJSON` uses, writes lowercase. `quoteJSON` now uppercases `\u00XX` escapes that are not themselves escaped backslashes; lone surrogates stay lowercase, as in native Bun 1.4.4. The `Bun.inspect escapes` check of `tests/fixtures/bun-probe-utils` compares it with native Bun on every engine.
+Bun writes the escapes of control characters in quoted strings with uppercase hex (`"\u001B[0m"`), while `JSON.stringify`, which `quoteJSON` uses, writes lowercase. As in `ConsoleObject.rs`, only a Latin-1 string goes through Bun's own escaper; any other string uses the JSON formatter. `quoteJSON` therefore uppercases `\u00XX` escapes (that are not themselves escaped backslashes) only when every character is in Latin-1, and lone surrogates stay lowercase, as in native Bun 1.4.4. The `Bun.inspect escapes` check of `tests/fixtures/bun-probe-utils` compares it with native Bun on every engine.
 
 ## Classification
 

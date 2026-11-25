@@ -212,6 +212,21 @@ await check("Bun.color", () => [
   Bun.color({ r: 300, g: -5, b: 1, a: 0.5 }, "rgba"), Bun.color("hsl(120 100% 50%)", "lab"), Bun.color("rebeccapurple", "HEX"),
   Bun.color("not a color", "hex"), Bun.color("blue", "ansi-256"), Bun.color("lime", "ansi-16m"), Bun.color("teal", "number"),
 ]);
+await check("Bun.color inputs", () => {
+  const attempt = (run: () => unknown) => { try { return run(); } catch (error) { return `${(error as Error).name}: ${(error as Error).message}`; } };
+  const rgba = (input: unknown) => attempt(() => Bun.color(input as string, "[rgba]"));
+  return [
+    rgba({ r: 3, g: 4, b: 5, a: 0 }), rgba({ r: 3, g: 4, b: 5, a: NaN }), rgba({ r: 3, g: 4, b: 5, a: 0.5 }), rgba({ r: 3, g: 4, b: 5, a: "0.5" }),
+    rgba({ r: 3, g: 4, b: 5, a: -1 }), rgba({ r: 3, g: 4, b: 5, a: null }),
+    rgba([2 ** 31, Infinity, -(2 ** 31) - 1]), rgba([NaN, 1.9, -0.5]), rgba([300, -5, 2 ** 32 + 3]), rgba({ r: 2 ** 31, g: Infinity, b: -(2 ** 31) - 1 }),
+    rgba(Infinity), rgba(-Infinity), rgba(2 ** 64), rgba(2 ** 63), rgba(-1), rgba(2 ** 32 + 5), rgba(NaN), rgba(0xff0000 + 0.7), rgba(-(2 ** 70)),
+    attempt(() => Bun.color(Symbol("x") as unknown as string, "hex")), rgba(Object.assign(() => 1, { r: 1, g: 2, b: 3 })),
+    rgba(new ArrayBuffer(3)), rgba(new ArrayBuffer(5)), rgba(new DataView(new ArrayBuffer(3))), rgba(new Uint8Array([1, 2, 3])),
+    rgba(new Float64Array([1.5, 300, -1])), rgba({ length: 3, 0: 1, 1: 2, 2: 3 }), rgba(["1", 2, 3]), rgba({ r: 1, g: 2 }),
+    attempt(() => Bun.color(true as unknown as string, "hex")), attempt(() => Bun.color(5n as unknown as string, "hex")),
+  ];
+});
+await check("Bun.inspect escapes outside Latin-1", () => Bun.inspect(["\u20ac\x1b", "\xe9\x1b", "\u0100\x7f\x1f", "\u{1F600}\x01"]));
 await check("structuredClone + Bun types", () => structuredClone({ d: new Date(0), m: new Map([[1, 2]]) }));
 await check("fetch data url", async () => await (await fetch("data:text/plain,hi%20bun")).text());
 await check("WebCrypto subtle digest", async () => Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("bun"))).toString("hex").slice(0, 16));

@@ -242,12 +242,15 @@
 
   // ───────────────────────────── string helpers ─────────────────────────────
 
-  // Bun writes control-character escapes with uppercase hex ("\u001B"); JSON.stringify writes
-  // lowercase. Lone surrogates stay lowercase in Bun too.
+  // ConsoleObject.rs prints a Latin-1 string with its own escaper, which writes control
+  // characters in uppercase hex ("\u001B"), and any other string with the JSON formatter, which
+  // writes them in lowercase as JSON.stringify does. Lone surrogates stay lowercase either way.
   const LOWER_ESCAPE = /(?<!\\)((?:\\\\)*)\\u(00[0-9a-f]{2})/g;
+  const BEYOND_LATIN1 = /[\u0100-\uffff]/;
   function quoteJSON(str) {
     const json = JSON.stringify(str);
-    return json.includes("\\u") ? json.replace(LOWER_ESCAPE, (_, slashes, hex) => `${slashes}\\u${hex.toUpperCase()}`) : json;
+    if (!json.includes("\\u") || BEYOND_LATIN1.test(str)) return json;
+    return json.replace(LOWER_ESCAPE, (_, slashes, hex) => `${slashes}\\u${hex.toUpperCase()}`);
   }
 
   const IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
