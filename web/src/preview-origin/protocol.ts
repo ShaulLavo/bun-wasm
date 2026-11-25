@@ -3,7 +3,7 @@
 import type { PreviewHostInput, PreviewHostOutput } from "waffle/browser/preview-host";
 
 /** Everything the preview origin serves for itself lives under this directory. */
-export const PREVIEW_ORIGIN_DIR = "/__bunwasm-preview";
+const PREVIEW_ORIGIN_DIR = "/__bunwasm-preview";
 export const SW_PATH = `${PREVIEW_ORIGIN_DIR}/sw.js`;
 export const RELAY_PATH = `${PREVIEW_ORIGIN_DIR}/relay.html`;
 export const SHIM_PATH = `${PREVIEW_ORIGIN_DIR}/ws.js`;
@@ -11,7 +11,7 @@ export const COOKIE_PATH = `${PREVIEW_ORIGIN_DIR}/cookie`;
 /** The IDE-origin page that frames a preview for a new tab. */
 export const FRAME_PAGE = "preview-frame.html";
 
-export const MAX_BODY = 64 * 1024 * 1024;
+const MAX_BODY = 64 * 1024 * 1024;
 export const MAX_EXCHANGES = 256;
 const MAX_TEXT = 16 * 1024;
 const MAX_HEADERS = 1024;
@@ -51,7 +51,7 @@ function domainHostname(domain: string): string {
   return new URL(`http://${domain}`).hostname;
 }
 
-export function previewScheme(config: PreviewOriginConfig): "https" | "http" {
+function previewScheme(config: PreviewOriginConfig): "https" | "http" {
   return config.scheme ?? (loopbackHost(domainHostname(config.domain)) ? "http" : "https");
 }
 

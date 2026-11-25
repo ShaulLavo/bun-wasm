@@ -31,6 +31,7 @@
     "web/src/preview-websocket-client.ts",
     "web/src/sw.ts",
     "web/src/sw-routing.ts",
+    "web/src/preview-html.ts",
     "web/src/playground/playground.ts",
     "web/src/playground/editor.ts",
     "web/src/playground/program-profile.ts",

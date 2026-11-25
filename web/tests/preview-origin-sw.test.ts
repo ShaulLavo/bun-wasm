@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { COOKIE_PATH, RELAY_PATH, SHIM_PATH, SW_ATTACH, SW_COOKIES, SW_COOKIES_ACK, SW_NEED_PORT, SW_PATH, SW_SHIM, SW_SOCKET, type SessionReply, type SessionRequest } from "../src/preview-origin/protocol";
-import { createPreviewOriginServiceWorker, injectShim, withoutFrameAncestors, type OriginClient } from "../src/preview-origin/sw-core";
+import { insertAfterDoctype } from "../src/preview-html";
+import { createPreviewOriginServiceWorker, withoutFrameAncestors, type OriginClient } from "../src/preview-origin/sw-core";
 
 const ORIGIN = `https://${"a".repeat(52)}-5173-pv.sprockt.dev`;
 const IDE = "https://bun.sprockt.dev";
@@ -290,7 +291,7 @@ test("frame-ancestors is removed from every policy and nothing else", () => {
 test("the shim goes after the doctype even when the first chunk is one byte", async () => {
   const chunks = ["<", "!doctype html", ">", "<html></html>"].map(bytes);
   const source = new ReadableStream<Uint8Array>({ pull(controller) { const next = chunks.shift(); if (next) controller.enqueue(next); else controller.close(); } });
-  expect(await new Response(injectShim(source, "<script></script>")).text()).toBe("<!doctype html><script></script><html></html>");
+  expect(await new Response(insertAfterDoctype(source, "<script></script>")).text()).toBe("<!doctype html><script></script><html></html>");
   const bare = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes("<p>no doctype</p>")); controller.close(); } });
-  expect(await new Response(injectShim(bare, "<script></script>")).text()).toBe("<script></script><p>no doctype</p>");
+  expect(await new Response(insertAfterDoctype(bare, "<script></script>")).text()).toBe("<script></script><p>no doctype</p>");
 });

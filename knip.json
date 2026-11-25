@@ -126,6 +126,8 @@
         "src/notification-worker.ts",
         "src/sw.ts",
         "src/preview-websocket-client.ts",
+        "src/preview-origin/{sw,relay,bootstrap,page-shim,frame-entry}.ts",
+        "preview-origin-build.ts",
         "tests/bench-*.{ts,mjs}",
         "tests/compare-memory.mjs",
         "tests/node-root-signals.ts",
@@ -176,7 +178,9 @@
       ]
     },
     "site": {
-      "entry": [],
+      "entry": [
+        "preview-worker.ts"
+      ],
       "project": [
         "*.ts"
       ]
@@ -190,6 +194,7 @@
     "ss",
     "build.mjs",
     "^c\\+\\+$",
+    "openssl",
     "podman"
   ],
   "ignoreUnresolved": [

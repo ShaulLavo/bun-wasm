@@ -223,6 +223,15 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     return trackUnsettledPromise(promise, this.unsettledDisposals, this.terminalDisposalFailures);
   }
 
+  /** Preview origins when configured, else previews mounted under this page's `/__preview/`. */
+  private createPreviews(route: string, runtime: () => Runtime): Previews {
+    if (this.params.has("root-previews")) return new HostedPreviews(runtime, location.href, { managePageHide: false });
+    this.previewOrigins = resolvePreviewOriginConfig(location, Reflect.get(globalThis, "__bunwasmPreviewOrigin"));
+    if (!this.previewOrigins) return new Previews({ baseURL: location.href, prefix: "__preview", route });
+    // Servers belong to this tab, so their origins do too.
+    return new RootPreviews({ config: this.previewOrigins, identity: route });
+  }
+
   private admitProvision<T>(runtime: Runtime, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
     if (this.runtime !== runtime || runtime.disposed || this.disposed || this.teardownRequested) {
       return Promise.reject(new ProvisionAbortedError());
@@ -719,14 +728,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     programsReady.catch(() => {});
     stage("workspace-ready");
 
-    const previewRoute = `pg-${this.tabId}`;
-    this.previewOrigins = resolvePreviewOriginConfig(location, Reflect.get(globalThis, "__bunwasmPreviewOrigin"));
-    const previews = this.previews = this.params.has("root-previews")
-      ? new HostedPreviews(() => runtime!, location.href, { managePageHide: false })
-      : this.previewOrigins
-        // Servers belong to this tab, so their origins do too.
-        ? new RootPreviews({ config: this.previewOrigins, identity: previewRoute })
-        : new Previews({ baseURL: location.href, prefix: "__preview", route: previewRoute });
+    const previews = this.previews = this.createPreviews(`pg-${this.tabId}`, () => runtime!);
 
     const term = this.term = createTerminal();
     term.loadAddon(this.fit);

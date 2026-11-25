@@ -7,6 +7,7 @@ import {
   COOKIE_PATH, FRAME_MESSAGE, RELAY_PATH, SHIM_PATH, SW_ATTACH, SW_COOKIES, SW_COOKIES_ACK, SW_NEED_PORT, SW_PATH, SW_SHIM, SW_SOCKET,
   type ScriptCookie, type SessionReply, type SessionRequest,
 } from "./protocol";
+import { insertAfterDoctype } from "../preview-html";
 import { HttpExchange, type ResponseHead } from "./sw-exchange";
 
 export interface OriginClient {
@@ -76,37 +77,6 @@ export function withoutFrameAncestors(value: string): string {
     .map(policy => policy.split(";").filter(directive => !/^\s*frame-ancestors(\s|$)/i.test(directive)).join(";").trim())
     .filter(policy => policy !== "")
     .join(", ");
-}
-
-/** Inserts the shim right after the doctype, before any application script can run. */
-export function injectShim(stream: ReadableStream<Uint8Array>, tag: string): ReadableStream<Uint8Array> {
-  const reader = stream.getReader();
-  const encoder = new TextEncoder();
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const chunks: Uint8Array[] = [];
-      let length = 0;
-      while (length < 1024) {
-        const { value, done } = await reader.read();
-        if (value) { chunks.push(value); length += value.length; }
-        if (done || value?.includes(62)) break;
-      }
-      const initial = new Uint8Array(length);
-      let at = 0;
-      for (const chunk of chunks) { initial.set(chunk, at); at += chunk.length; }
-      const doctype = /^\s*<!doctype[^>]*>/i.exec(new TextDecoder().decode(initial))?.[0] ?? "";
-      const offset = encoder.encode(doctype).length;
-      controller.enqueue(initial.subarray(0, offset));
-      controller.enqueue(encoder.encode(tag));
-      controller.enqueue(initial.subarray(offset));
-    },
-    async pull(controller) {
-      const { value, done } = await reader.read();
-      if (done) controller.close();
-      else controller.enqueue(value);
-    },
-    cancel(reason) { return reader.cancel(reason); },
-  });
 }
 
 export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
@@ -294,7 +264,7 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
     const bodyless = context.method === "HEAD" || NULL_BODY.has(head.status);
     const html = context.navigation && !bodyless
       && (headers.get("content-type")?.toLowerCase().includes("text/html") ?? false) && !headers.get("content-encoding");
-    const body = bodyless ? null : html ? injectShim(stream, shimTag()) : stream;
+    const body = bodyless ? null : html ? insertAfterDoctype(stream, shimTag()) : stream;
     try {
       return new Response(body, { status: head.status, statusText: head.statusText, headers });
     } catch (error) {
