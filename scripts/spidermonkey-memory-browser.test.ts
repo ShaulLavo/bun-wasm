@@ -79,7 +79,7 @@ async function scenario(browser: Browser, url: string): Promise<void> {
   try {
     const host = await context.newPage();
     await withScoped(pageTransport(host), async page => {
-      await page.navigate(`${url}?engine=spidermonkey&profile=split&prompt=off&mode=memory`);
+      await page.navigate(`${url}?engine=spidermonkey&profile=split&prompt=off`);
       await ready(page, "spidermonkey", 120000, "split");
       await command(page, "bun -e 0", 120000);
       const boundary = memoryControlBoundary(await readEngineMemory(page), crypto.randomUUID());

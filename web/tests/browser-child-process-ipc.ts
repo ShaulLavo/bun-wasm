@@ -66,7 +66,7 @@ try {
   });
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
-  await page.goto(`http://127.0.0.1:${port}/?engine=browser&mode=memory&wasm=/bun-browser.wasm.gz`);
+  await page.goto(`http://127.0.0.1:${port}/?engine=browser&wasm=/bun-browser.wasm.gz`);
   await ready(page);
   const workersBefore = await page.evaluate(() => Reflect.get(globalThis, "ipcWorkerCounts")());
   const token = crypto.randomUUID();

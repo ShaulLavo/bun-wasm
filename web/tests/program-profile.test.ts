@@ -1,7 +1,8 @@
-import { expect, test } from "bun:test";
-import { appendCustomSection } from "../../src/engine-kind";
+import { expect, spyOn, test } from "bun:test";
+import { appendCustomSection, BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind";
 import { engineUnavailable, loadEngineProgram } from "../src/engine-loader";
 import { parseMemoryProfile, profileAsset, requireProfileEngine, verifyMemoryProfile } from "../src/program-profile";
+import { models, turn } from "./ui-model-helpers";
 
 test("memory profile is explicit and independent of engine selection", async () => {
   expect(parseMemoryProfile(null)).toBe("split");
@@ -26,32 +27,34 @@ test("profile paths and module admission cannot alias split and shared programs"
 });
 
 test("both production pages validate selection before creating one runtime with Bun's policy", async () => {
-  const probe = `
-    import { mock } from "bun:test";
-    import assert from "node:assert/strict";
-    import { BUN_MEMORY_GROUP_POLICY } from "./src/engine-kind.ts";
-    const waffle = await import("waffle");
-    Object.defineProperty(globalThis, "location", { value: new URL("https://example.test/") });
-    const requests = [];
-    const stop = new Error("runtime boundary reached");
-    for (const scope of ["web", "sandbox"]) mock.module(Bun.resolveSync("waffle", process.cwd() + "/" + scope), () => ({ ...waffle, createRuntime(options) { requests.push(options); throw stop; } }));
-    const { Playground } = await import("./web/src/playground/playground.ts");
-    const { Sandbox } = await import("./sandbox/src/sandbox.ts");
-    console.error = error => assert.equal(error, stop);
-    for (const Page of [Playground, Sandbox]) {
+  const page = await models();
+  const requests: Record<string, unknown>[] = [];
+  const stop = new Error("runtime boundary reached");
+  page.boundary.onCreateRuntime = (options?: unknown) => {
+    requests.push(options as Record<string, unknown>);
+    throw stop;
+  };
+  const errors = spyOn(console, "error").mockImplementation((error: unknown) => {
+    expect(error).toBe(stop);
+  });
+  try {
+    for (const Page of [page.Playground, page.Sandbox]) {
       for (const profile of ["split", "shared-group"]) {
-        await new Page("?engine=quickjs&mode=memory&profile=" + profile).start();
+        const instance = new Page(`?engine=quickjs&profile=${profile}`);
+        await instance.start();
+        await turn();
       }
-      assert.throws(() => new Page("?profile=shared"), Page === Playground ? /Unknown Bun program profile/ : /Unknown Bun program memory profile/);
-      assert.throws(() => new Page("?engine=browser&profile=shared-group"), /does not support/);
+      expect(() => new Page("?profile=shared")).toThrow(
+        Page === page.Playground ? /Unknown Bun program profile/ : /Unknown Bun program memory profile/,
+      );
+      expect(() => new Page("?engine=browser&profile=shared-group")).toThrow(/does not support/);
     }
-    assert.equal(requests.length, 4);
-    for (const request of requests) assert.deepEqual(request.memoryGroups, BUN_MEMORY_GROUP_POLICY);
-    process.exit(0);
-  `;
-  const child = Bun.spawn([process.execPath, "-e", probe], { cwd: new URL("../..", import.meta.url).pathname, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
-  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  expect({ code, stdout, stderr }).toEqual({ code: 0, stdout: "", stderr: "" });
+    expect(requests).toHaveLength(4);
+    for (const request of requests) expect(request.memoryGroups).toEqual(BUN_MEMORY_GROUP_POLICY);
+  } finally {
+    errors.mockRestore();
+    await page.cleanup();
+  }
 });
 
 for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) test(`${engine} missing shared assets fail before a fetch or split substitution`, async () => {
