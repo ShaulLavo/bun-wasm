@@ -219,26 +219,22 @@
 
     class StatWatcher extends EventEmitter {
       #timer: Timer | undefined;
-      #active = false;
-      #refed = true;
-      #path = "";
-      #interval = 0;
+      #active = true;
+      #refed: boolean;
+      #path: string;
+      #interval: number;
       #bigint: boolean;
       #previous: StatsRecord = {};
 
-      constructor(bigint: boolean) {
+      constructor(path: string, settings: PollOptions) {
         super();
-        this.#bigint = bigint;
-      }
-
-      start(path: string, persistent: boolean, interval: number) {
         this.#path = path;
-        this.#interval = interval;
-        this.#refed = persistent;
-        this.#active = true;
+        this.#interval = settings.interval;
+        this.#refed = settings.persistent;
+        this.#bigint = settings.bigint;
         const found = this.#read();
         this.#previous = found ?? this.#missing();
-        this.#wait(interval);
+        this.#wait(this.#interval);
         if (found) return;
         const missing = this.#previous;
         internal.nextTick(() => {
@@ -267,13 +263,14 @@
       }
 
       #elapsed(remaining: number) {
+        this.#timer = undefined;
         if (!this.#active) return;
         if (remaining > 0) return this.#wait(remaining);
         // A listener may throw to an uncaughtException handler; the next change still arrives.
         try {
           this.#poll();
         } finally {
-          if (this.#active) this.#wait(this.#interval);
+          if (this.#active && this.#timer === undefined) this.#wait(this.#interval);
         }
       }
 
@@ -293,6 +290,8 @@
         internal.nextTick(() => this.emit("stop"));
       }
 
+      // Public start() does nothing in Bun and Node; a stopped watcher stays stopped.
+      start() {}
       ref() { this.#refed = true; this.#timer?.ref(); return this; }
       unref() { this.#refed = false; this.#timer?.unref(); return this; }
     }
@@ -307,8 +306,7 @@
       const path = fs.absolute(fs.toPath(filename));
       let watcher = statWatchers.get(path);
       if (watcher === undefined) {
-        watcher = new StatWatcher(settings.bigint);
-        watcher.start(path, settings.persistent, settings.interval);
+        watcher = new StatWatcher(path, settings);
         statWatchers.set(path, watcher);
       }
       watcher.on("change", listener as Listener);

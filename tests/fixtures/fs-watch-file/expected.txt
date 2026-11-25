@@ -11,4 +11,5 @@ parent replaced by a file: current size 0 file false mtimeMs 0; previous size 5 
 watching below a file starts missing: current size 0 file false mtimeMs 0; previous size 0 file false mtimeMs 0
 an interval above 2^31 - 1 ms has not polled: true
 a listener that threw does not stop polling: current size 3 file true mtimeMs set; previous size 2 file true mtimeMs set
+listener calls after stop(), start() and a throw: 0
 a non-persistent watcher lets the process exit

@@ -78,5 +78,32 @@ fs.writeFileSync("throws.txt", "abc");
 console.log("a listener that threw does not stop polling:", describe(await afterThrow));
 fs.unwatchFile("throws.txt");
 
+let restartedOnce = false;
+let callsAfterRestart = 0;
+const restartCaught = new Promise<void>(resolve => process.once("uncaughtException", () => resolve()));
+const restarted: fs.StatWatcher = fs.watchFile("restart.txt", options, (current: fs.Stats) => {
+  if (restartedOnce) {
+    callsAfterRestart++;
+    return;
+  }
+  if (current.size === 0) return;
+  restartedOnce = true;
+  restarted.stop();
+  restarted.start();
+  throw new Error("listener failed after stop and start");
+});
+await nextChange(restarted);
+fs.writeFileSync("restart.txt", "a");
+await restartCaught;
+fs.writeFileSync("restart.txt", "abc");
+const pacer = fs.watchFile("pacer.txt", options, () => {});
+await nextChange(pacer);
+const paced = nextChange(pacer);
+fs.writeFileSync("pacer.txt", "x");
+await paced;
+fs.unwatchFile("pacer.txt");
+fs.unwatchFile("restart.txt");
+console.log("listener calls after stop(), start() and a throw:", callsAfterRestart);
+
 fs.watchFile("idle.txt", { persistent: false, interval: 20 }, () => {});
 console.log("a non-persistent watcher lets the process exit");
