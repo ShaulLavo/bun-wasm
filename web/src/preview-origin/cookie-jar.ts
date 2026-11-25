@@ -126,7 +126,7 @@ export class CookieJar {
     const key = `${cookie.name}\n${cookie.path}`;
     const previous = this.cookies.get(key);
     if (fromScript && previous?.httpOnly) return false;
-    if (!previous?.httpOnly || !cookie.httpOnly) this.scriptVersion++;
+    if ((previous && !previous.httpOnly) || !cookie.httpOnly) this.scriptVersion++;
     if (cookie.expires !== null && cookie.expires <= now) return this.cookies.delete(key);
     this.cookies.set(key, previous ? { ...cookie, created: previous.created } : cookie);
     this.evict();
