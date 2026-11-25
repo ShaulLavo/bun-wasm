@@ -101,7 +101,7 @@ const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".c
   ".github/actions/setup-tools/", ".github/actions/release-downloads/", ".github/actions/spidermonkey-", "scripts/ci-spidermonkey-"];
 export function needsSharedNative(paths: readonly string[], inputs: readonly string[] = sharedNativeCheckInputs): boolean {
   if (inputs.length === 0) return false;
-  return paths.some(path => !excludedNativeInput(path) && (nativePreparationFiles.has(path) || sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
+  return paths.some(path => !excludedNativeInput(path) && (nativePreparationFiles.has(path) || sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs)));
 }
 
 const nativeChecks = discoverChecks();

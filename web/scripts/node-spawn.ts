@@ -364,7 +364,7 @@ export class NodeProcessBroker {
   }
 }
 
-export async function nodeModule(options: { args: readonly string[]; baseModule: WebAssembly.Module; wasmPath: string }): Promise<WebAssembly.Module> {
-  if (!isToolCommand(options.args)) return options.baseModule;
+export async function nodeModule(options: { args: readonly string[]; executable?: string; baseModule: WebAssembly.Module; wasmPath: string }): Promise<WebAssembly.Module> {
+  if (!isToolCommand(options.args, options.executable)) return options.baseModule;
   return WebAssembly.compile(readFileSync(join(dirname(options.wasmPath), "bun-tools.wasm")));
 }

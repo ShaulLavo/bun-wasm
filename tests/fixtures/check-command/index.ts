@@ -47,6 +47,15 @@ const fromCwd = check(["--cwd", "app", "--no-pretty"]);
 assert.equal(fromCwd.stdout, broken.stdout);
 console.log("--project and --cwd select the project");
 
+const attached = check(["--no-pretty", "-papp"]);
+assert.equal(attached.stdout, fromAbove.stdout);
+const aliasFirst = check(["--no-pretty", "--tsconfig-override", "absent", "--project", "app"]);
+assert.equal(aliasFirst.stdout, fromAbove.stdout);
+const aliasLast = check(["--no-pretty", "--project", "app", "--tsconfig-override", "absent"]);
+assert.equal(aliasLast.code, 1);
+assert.ok(aliasLast.stdout.includes("TS5058"), aliasLast.stdout);
+console.log("-papp, and the last of --project and --tsconfig-override wins");
+
 mkdirSync("loose", { recursive: true });
 writeFileSync("loose/implicit.ts", "export function twice(value) {\n  return value * 2;\n}\n");
 const strict = check(["--no-pretty", "implicit.ts"], "loose");
@@ -55,6 +64,21 @@ assert.equal(strict.stdout, "implicit.ts(1,23): error TS7006: Parameter 'value' 
 const lenient = check(["--no-pretty", "--noImplicitAny", "false", "implicit.ts"], "loose");
 assert.equal(lenient.code, 0, lenient.stdout + lenient.stderr);
 console.log("files without a tsconfig and command-line compiler options");
+
+writeFileSync("loose/check.rsp", "--noImplicitAny\nfalse\nimplicit.ts\n");
+const response = check(["--cwd", "loose", "@check.rsp", "--no-pretty"]);
+assert.equal(response.code, 0, response.stdout + response.stderr);
+console.log("--cwd applies before response files are read");
+
+writeFileSync("entry.ts", 'console.log("entry ran");\n');
+const titled = Bun.spawnSync([process.execPath, "--title", "check", "./entry.ts"], { stdout: "pipe", stderr: "pipe" });
+assert.equal(titled.exitCode, 0, titled.stderr.toString());
+assert.equal(titled.stdout.toString(), "entry ran\n");
+writeFileSync("check", 'console.log("node ran the check file");\n');
+const node = Bun.spawnSync(["node", "check"], { stdout: "pipe", stderr: "pipe" });
+assert.equal(node.exitCode, 0, node.stderr.toString());
+assert.equal(node.stdout.toString(), "node ran the check file\n");
+console.log("a flag value or a node script named check is not the command");
 
 const help = check(["--help"]);
 assert.equal(help.code, 0);

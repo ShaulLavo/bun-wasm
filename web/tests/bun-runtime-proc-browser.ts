@@ -10,7 +10,7 @@ import { mkdtemp, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { Browser, Page } from "playwright";
-import { bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
+import { bunRuntimeProcScenarios, bunRuntimeProcToolsScenario } from "./bun-runtime-proc-fixtures";
 import { bunRuntimeProcSmoke } from "./bun-runtime-proc-smoke";
 import { assertBunRuntimeProcDiagnostics } from "./bun-runtime-proc-diagnostics";
 import { BUN_WASM_ASSET } from "../../src/guest-asset.generated.js";
@@ -55,7 +55,13 @@ if (site) for (const path of ["index.html", "playground/index.html"]) assert.ok(
 const selected = process.env.BUN_WASM_RUNTIME_PROC_SCENARIO;
 const requestedPort = Number(process.env.BUN_WASM_RUNTIME_PROC_PORT ?? "4187");
 assert.ok(Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort <= 65535, "explicit valid loopback port required");
-const availableScenarios = bunRuntimeProcScenarios.filter(scenario => scenario.name !== "source-cache" || engine === "browser");
+// BUN_WASM_RUNTIME_PROC_TOOLS: the explicit absolute bun-tools.wasm (or .wasm.gz) that the tools-check scenario loads.
+const requestedTools = process.env.BUN_WASM_RUNTIME_PROC_TOOLS;
+if (requestedTools) assert.ok(isAbsolute(requestedTools) && await Bun.file(requestedTools).exists(), `explicit tools artifact does not exist: ${requestedTools}`);
+const toolsFile = requestedTools ? new Uint8Array(await Bun.file(requestedTools).arrayBuffer()) : undefined;
+const toolsBytes = toolsFile && toolsFile[0] === 0x1f && toolsFile[1] === 0x8b ? Bun.gunzipSync(toolsFile) : toolsFile;
+const availableScenarios = bunRuntimeProcScenarios.filter(scenario => scenario.name !== "source-cache" || engine === "browser")
+  .concat(toolsBytes ? [bunRuntimeProcToolsScenario] : []);
 const scenarios = selected ? [selected] : ["generic-control"].concat(availableScenarios.map(scenario => scenario.name));
 assert.ok(scenarios.every(name => name === "generic-control" || availableScenarios.some(scenario => scenario.name === name)), "known matching-engine Bun runtime_proc scenario required");
 const originalTmpdir = process.env.TMPDIR;
@@ -152,6 +158,7 @@ try {
     if (url.pathname === "/favicon.ico") return new Response(null, { status: 204, headers });
     if (url.pathname === "/source-cache-fixture.ts") return new Response(sourceCacheBytes, { headers });
     if (url.pathname === "/bun-guest.wasm") return new Response(Bun.file(artifact), { headers: { ...headers, "Content-Type": "application/wasm" } });
+    if (url.pathname === "/bun-tools.wasm" && toolsBytes) return new Response(toolsBytes, { headers: { ...headers, "Content-Type": "application/wasm" } });
     if (url.pathname === "/bun-browser.wasm.gz" && site) return new Response(Bun.gzipSync(bytes), { headers });
     if (url.pathname.startsWith("/site/") && site) {
       const suffix = url.pathname.slice("/site".length);

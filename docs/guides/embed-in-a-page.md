@@ -55,6 +55,8 @@ installation.dispose();
 
 `installBunAdapters` never creates or disposes the `Runtime`. It registers the Bun launchers, registers the programs, and writes a small marker file at each executable path. `/bin/bun` and `/bin/node` are the default paths for the `browser` engine. Pass `executables: ["/opt/bun/browser"]` to use other absolute paths, or `executables: []` to register none.
 
+`bun lint`, `bun fmt` and `bun check` run in a separate module, `bun-tools.wasm`. Pass `loadTools: () => WebAssembly.compileStreaming(fetch(toolsUrl))` to enable them; it is called once, on the first such command. Without it those commands exit 1.
+
 How you start a process depends on the Waffle host. A Waffle shell such as bash-web spawns `/bin/bun` like any other command. The playground starts runs itself with `startRun` in `web/src/runner.ts`. That function is not part of the package exports.
 
 ## Serve the page

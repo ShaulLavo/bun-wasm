@@ -1,6 +1,6 @@
-//! `bun check` and `bun typecheck`: Bun's TypeScript type checker (`bun_sema_driver`) on WASI.
+//! `bun check`: Bun's TypeScript type checker (`bun_sema_driver`) on WASI.
 //!
-//! Adapted from upstream `src/cli/check_command.rs`; `docs/bun-patches/tools-check-command.md`
+//! Adapted from upstream `src/runtime/cli/check_command.rs`; `docs/bun-patches/check-command.md`
 //! records what changed. Argument parsing is by hand instead of `bun_clap`'s tables, the check runs
 //! on this one thread, and a `check` script in `package.json` is not run first, as for `bun lint`.
 
@@ -11,7 +11,24 @@ use bun_sema_driver::format::{self, Layout, Style};
 use bun_sema_driver::host::Provided;
 use bun_sema_driver::{CommandLine, FlagError, Libs, PlanOptions, RejectedFlag, Report, Request};
 
+/// The arguments after `check`, before the compiler options are parsed. Those are parsed in the
+/// directory that `--cwd` selects, which is where response files (`@args.rsp`) are read.
 #[derive(Default)]
+struct Flags {
+    help: bool,
+    all: bool,
+    timing: bool,
+    no_pretty: bool,
+    build: bool,
+    cwd: Option<String>,
+    /// `-p`, `--project` and `--tsconfig-override` are one option. The last one wins.
+    project: Option<String>,
+    /// Compiler options, response files and paths, for `bun_sema_driver::parse_command_line`.
+    rest: Vec<String>,
+    /// After `--`: paths, even those that look like flags.
+    paths: Vec<String>,
+}
+
 struct Options {
     command_line: CommandLine,
     /// `--pretty`, `--no-pretty`. If neither is given, it depends on the output destination.
@@ -19,76 +36,94 @@ struct Options {
     /// `--all`: never group identical errors.
     all: bool,
     timing: bool,
-    help: bool,
-    cwd: Option<String>,
 }
 
-/// Returns the options, or the usage error to print.
-fn parse(args: &[String], cwd: &[u8]) -> Result<Options, String> {
-    let mut options = Options::default();
-    let mut flags: Vec<&[u8]> = Vec::new();
-    let mut paths: Vec<Vec<u8>> = Vec::new();
-    let mut project = None;
-    let mut no_pretty = false;
+/// The options that take a value, with their names as written after `--`.
+const WITH_VALUE: &[&str] = &["cwd", "threads", "project", "tsconfig-override"];
+
+/// Returns the flags, or the usage error to print.
+fn parse_flags(args: &[String]) -> Result<Flags, String> {
+    let mut flags = Flags::default();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         at += 1;
         match arg.as_str() {
             "--" => {
-                paths.extend(args[at..].iter().map(|path| path.as_bytes().to_vec()));
+                flags.paths.extend_from_slice(&args[at..]);
                 break;
             }
-            "-h" | "--help" => options.help = true,
-            "--all" => options.all = true,
-            "--timing" => options.timing = true,
-            "--no-pretty" => no_pretty = true,
+            "--help" => flags.help = true,
+            "--all" => flags.all = true,
+            "--timing" => flags.timing = true,
+            "--no-pretty" => flags.no_pretty = true,
+            "--build" => flags.build = true,
             // Nothing is ever emitted, and no `check` script is run first.
             "--no-emit" | "--no-script" => {}
-            "--cwd" | "--threads" | "--tsconfig-override" => {
-                let value = args.get(at).ok_or_else(|| format!("{arg} needs a value"))?;
-                at += 1;
-                take_value(&mut options, &mut project, arg, value)?;
-            }
-            _ => match arg.split_once('=') {
-                Some((name @ ("--cwd" | "--threads" | "--tsconfig-override"), value)) => {
-                    take_value(&mut options, &mut project, name, value)?;
-                }
-                _ => flags.push(arg.as_bytes()),
-            },
+            _ => at = long_or_short(&mut flags, args, at, arg)?,
         }
     }
-    if options.help {
-        return Ok(options);
-    }
-    let mut command_line = bun_sema_driver::parse_command_line(&flags, cwd);
-    if let Some(rejected) = command_line.rejected.first() {
-        return Err(rejection(rejected));
-    }
-    command_line.paths.extend(paths);
-    if project.is_some() {
-        command_line.project = project;
-    }
-    let projects = usize::from(command_line.project.is_some()) + command_line.paths.len();
-    if command_line.build && projects > 1 {
-        return Err("--build takes one project".to_owned());
-    }
-    options.pretty = match no_pretty {
-        true => Some(false),
-        false => bun_sema_driver::tristate(&command_line.compiler_options, b"pretty"),
-    };
-    options.command_line = command_line;
-    Ok(options)
+    Ok(flags)
 }
 
-fn take_value(
-    options: &mut Options,
-    project: &mut Option<Vec<u8>>,
-    name: &str,
-    value: &str,
-) -> Result<(), String> {
+/// Handles `arg`, the argument before `at`. Returns where the next argument is.
+fn long_or_short(
+    flags: &mut Flags,
+    args: &[String],
+    at: usize,
+    arg: &str,
+) -> Result<usize, String> {
+    if let Some(long) = arg.strip_prefix("--") {
+        let (name, value) = long
+            .split_once('=')
+            .map_or((long, None), |(name, value)| (name, Some(value)));
+        if !WITH_VALUE.contains(&name) {
+            flags.rest.push(arg.to_owned());
+            return Ok(at);
+        }
+        let (value, at) = match value {
+            Some(value) => (value, at),
+            None => (
+                args.get(at)
+                    .ok_or_else(|| format!("--{name} needs a value"))?
+                    .as_str(),
+                at + 1,
+            ),
+        };
+        take_value(flags, name, value)?;
+        return Ok(at);
+    }
+    let Some(shorts) = arg.strip_prefix('-').filter(|shorts| !shorts.is_empty()) else {
+        flags.rest.push(arg.to_owned());
+        return Ok(at);
+    };
+    // A chain of `bun check`'s own letters: `-b`, `-h`, `-papp`, `-bp app`. Others, such as `-t`,
+    // are compiler options.
+    let Some(end) = shorts.find(|letter| letter != 'b' && letter != 'h') else {
+        flags.build |= shorts.contains('b');
+        flags.help |= shorts.contains('h');
+        return Ok(at);
+    };
+    if !shorts[end..].starts_with('p') {
+        flags.rest.push(arg.to_owned());
+        return Ok(at);
+    }
+    flags.build |= shorts[..end].contains('b');
+    flags.help |= shorts[..end].contains('h');
+    let attached = &shorts[end + 1..];
+    let attached = attached.strip_prefix('=').unwrap_or(attached);
+    if !attached.is_empty() {
+        flags.project = Some(attached.to_owned());
+        return Ok(at);
+    }
+    let value = args.get(at).ok_or("-p needs a value")?;
+    flags.project = Some(value.clone());
+    Ok(at + 1)
+}
+
+fn take_value(flags: &mut Flags, name: &str, value: &str) -> Result<(), String> {
     match name {
-        "--cwd" => options.cwd = Some(value.to_owned()),
-        "--tsconfig-override" => *project = Some(value.as_bytes().to_vec()),
+        "cwd" => flags.cwd = Some(value.to_owned()),
+        "project" | "tsconfig-override" => flags.project = Some(value.to_owned()),
         // WASI preview 1 has one thread, so the count only has to be valid.
         _ => match value.parse::<usize>() {
             Ok(n) if n > 0 => {}
@@ -100,6 +135,36 @@ fn take_value(
         },
     }
     Ok(())
+}
+
+/// Parses the compiler options in `cwd`. Returns the options, or the usage error to print.
+fn parse_options(flags: Flags, cwd: &[u8]) -> Result<Options, String> {
+    let rest: Vec<&[u8]> = flags.rest.iter().map(|arg| arg.as_bytes()).collect();
+    let mut command_line = bun_sema_driver::parse_command_line(&rest, cwd);
+    if let Some(rejected) = command_line.rejected.first() {
+        return Err(rejection(rejected));
+    }
+    command_line
+        .paths
+        .extend(flags.paths.into_iter().map(String::into_bytes));
+    if let Some(project) = flags.project {
+        command_line.project = Some(project.into_bytes());
+    }
+    command_line.build |= flags.build;
+    let projects = usize::from(command_line.project.is_some()) + command_line.paths.len();
+    if command_line.build && projects > 1 {
+        return Err("--build takes one project".to_owned());
+    }
+    let pretty = match flags.no_pretty {
+        true => Some(false),
+        false => bun_sema_driver::tristate(&command_line.compiler_options, b"pretty"),
+    };
+    Ok(Options {
+        command_line,
+        pretty,
+        all: flags.all,
+        timing: flags.timing,
+    })
 }
 
 fn rejection(rejected: &RejectedFlag) -> String {
@@ -150,26 +215,24 @@ pub(super) fn run(
     libs: bun_sema_driver::host::BundledLibs,
     cwd_before: Option<&str>,
 ) -> i32 {
-    if let Some(cwd) = cwd_before
-        && let Err(code) = change_dir(cwd)
-    {
-        return code;
-    }
-    let Ok(cwd) = current_dir() else { return 1 };
-    let options = match parse(args, &cwd) {
-        Ok(options) => options,
+    let flags = match parse_flags(args) {
+        Ok(flags) => flags,
         Err(message) => return usage_error(&message),
     };
-    if options.help {
+    if flags.help {
         print_help();
         return 0;
     }
-    let cwd = match options.cwd.as_deref() {
-        Some(cwd) => match change_dir(cwd).and_then(|()| current_dir()) {
-            Ok(cwd) => cwd,
-            Err(code) => return code,
-        },
-        None => cwd,
+    // `bun --cwd a check --cwd b` checks `a/b`, and compiler options are read from there.
+    for cwd in [cwd_before, flags.cwd.as_deref()].into_iter().flatten() {
+        if let Err(code) = change_dir(cwd) {
+            return code;
+        }
+    }
+    let Ok(cwd) = current_dir() else { return 1 };
+    let options = match parse_options(flags, &cwd) {
+        Ok(options) => options,
+        Err(message) => return usage_error(&message),
     };
     // WASI preview 1 has one thread: parallel regions run here instead of on a pool.
     bun_sema_driver::run_regions_inline_on_this_thread();
@@ -286,27 +349,42 @@ fn print_report(report: &Report, options: &Options, cwd: &[u8]) -> u8 {
     u8::from(!report.is_ok())
 }
 
+/// Upstream's help (`Tag::CheckCommand` in `src/runtime/cli/mod.rs`) without colors. The check runs
+/// on one thread here, `--threads` is accepted and ignored, and `bun --check` is not available.
 const HELP: &str = "Usage: bun check [flags] [...files or directories]
-  Type-check a TypeScript project, like tsc --noEmit.
+  Type check a TypeScript project.
+
+  Uses the nearest tsconfig.json and reports the same errors as tsc.
+  Pass files or directories to check only those and their imports.
+  Project references are followed, like tsc -b, and nothing has to be built first.
 
 Flags:
-  -p, --project PATH    Path to a tsconfig.json or its directory
-  -b, --build           Check the projects in references too, like tsc -b
-  --pretty              Show source code around each error (default in a terminal)
-  --no-pretty           One line per error, like tsc --pretty false (default when piped)
-  --all                 Show every error (above 50, identical errors are grouped)
-  --timing              Print load and check times
-  --cwd PATH            Set the working directory
-  -h, --help            Print this help menu
-
-Compiler options such as --strict or --target es2022 override the tsconfig.json.
+  -p, --project=<val>    Path to a tsconfig.json or its directory
+      --pretty=<val>     Show source code around each error (default in a terminal)
+  -b, --build            Check the projects in references too, like tsc -b
+      --no-pretty        One line per error, like tsc --pretty false (default when piped)
+      --all              Show every error (above 50, identical errors are grouped)
+      --threads=<val>    Accepted; bun-wasm checks on one thread
+      --timing           Print load and check times
+      --cwd=<val>        Set the working directory
+      --no-script        Accepted; bun-wasm never runs a check script instead
+  -h, --help             Print this help menu
+      --strict, --target=<val>, ...  Any compiler option, as for tsc. Overrides tsconfig.json
 
 Examples:
+  Check the current project
   bun check
-  bun check --project tsconfig.build.json
-  bun check src/index.ts --strict
 
-Full documentation is available at https://bun.com/docs/check
+  Check one file and everything it imports
+  bun check src/index.ts
+
+  Check another project
+  bun check -p packages/server
+
+  Try a stricter option without editing tsconfig.json
+  bun check --noUncheckedIndexedAccess
+
+Full documentation is available at https://bun.com/docs/runtime/check
 ";
 
 fn print_help() {

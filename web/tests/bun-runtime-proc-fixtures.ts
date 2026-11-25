@@ -21,6 +21,8 @@ export interface BunRuntimeScenario {
   stdout: string;
   stderr?: string;
   action?: "kill" | "dispose" | "kill-detached";
+  /** The page passes `loadTools` to installBunAdapters, and the server serves bun-tools.wasm. */
+  tools?: boolean;
 }
 const encoder = new TextEncoder();
 function uint(value: number): number[] {
@@ -228,3 +230,25 @@ export const bunRuntimeProcScenarios: readonly BunRuntimeScenario[] = mainScenar
 })), [{ name: "preopen-blocks-fd4-read-fd3-write", fileCursor: "sequential",
   commands: [{ source: `const f=require('node:fs'),b=Buffer.alloc(6);if(f.readSync(4,b,0,6,null)!==6||b.toString()!=='cursor')throw Error('inherited file cursor');if(await Bun.file('preopen-data').text()!=='ROOT_PREOPEN_OK')throw Error('relocated root');f.writeSync(3,'FD3:'+b.toString()+'\\n');`,
   fds: ordinary.concat([{ child: 3, parent: 1 }, { child: 4, parent: "reader" }]) }], stdout: "FD3:cursor\nexternal-root-ok\n" }]);
+
+const toolsCheck = `
+  const run = async () => {
+    const child = Bun.spawn(["bun", "check", "--cwd", "/home/user/check-app", "--no-pretty"], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    return { stdout, stderr, code };
+  };
+  require("node:fs").mkdirSync("/home/user/check-app/src", { recursive: true });
+  await Bun.write("/home/user/check-app/tsconfig.json", JSON.stringify({ compilerOptions: { strict: true, lib: ["es2022"], noEmit: true }, include: ["src"] }));
+  await Bun.write("/home/user/check-app/src/index.ts", "export const total: number = 1 + 2;\\n");
+  const clean = await run();
+  if (clean.code !== 0 || clean.stdout) throw new Error("clean check: " + JSON.stringify(clean));
+  await Bun.write("/home/user/check-app/src/index.ts", "export const total: number = \\"three\\";\\n");
+  const failed = await run();
+  if (failed.code !== 1) throw new Error("failed check: " + JSON.stringify(failed));
+  process.stdout.write("clean=" + clean.code + " failed=" + failed.code + "\\n" + failed.stdout);
+`;
+/** `bun check` through installBunAdapters with `loadTools`, the public package path. Not in the default list: it needs bun-tools.wasm. */
+export const bunRuntimeProcToolsScenario: BunRuntimeScenario = {
+  name: "tools-check", tools: true, commands: [{ source: toolsCheck }],
+  stdout: "clean=0 failed=1\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\nexternal-root-ok\n",
+};
