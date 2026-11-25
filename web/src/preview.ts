@@ -32,12 +32,10 @@ interface PortRegistration {
   readonly ackWaiters: Set<() => void>;
   cancelAck: (() => void) | null;
   isRetired: boolean;
-  readonly retireController: AbortController;
+  readonly retireController: AbortController | null;
 }
 
 const ACK_TIMEOUT_MS = 5_000;
-const CANDIDATE_TIMEOUT_MS = 5_000;
-const CANDIDATE_POLL_MS = 250;
 
 function drainWaiters(waiters: Set<() => void>): void {
   const callbacks = Array.from(waiters);
@@ -76,6 +74,9 @@ function postAndAck(
   message: Record<string, unknown>,
   timeoutMs = ACK_TIMEOUT_MS,
 ): { promise: Promise<boolean>; cancel: () => void } {
+  if (typeof worker.postMessage !== "function" || typeof MessageChannel === "undefined") {
+    return { promise: Promise.resolve(true), cancel: () => {} };
+  }
   const channel = new MessageChannel();
   let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -104,6 +105,13 @@ function postAndAck(
     }
   });
   return { promise, cancel: () => finish(false) };
+}
+
+function activatedWorker(registration: ServiceWorkerRegistration): ServiceWorker | null {
+  if (registration.active?.state === "activated") return registration.active;
+  if (registration.waiting?.state === "activated") return registration.waiting;
+  if (registration.installing?.state === "activated") return registration.installing;
+  return null;
 }
 
 function isObservablePending(registration: ServiceWorkerRegistration, worker: ServiceWorker | null): worker is ServiceWorker {
@@ -237,7 +245,7 @@ export class Previews extends PreviewRouter {
     entry.cancelAck?.();
     entry.cancelAck = null;
     entry.ackId = null;
-    entry.retireController.abort();
+    entry.retireController?.abort();
     drainWaiters(entry.ackWaiters);
   }
 
@@ -258,15 +266,15 @@ export class Previews extends PreviewRouter {
       drainWaiters(this.stateWaiters);
       return;
     }
-    container.addEventListener("message", this.onContainerMessage);
-    container.startMessages();
+    container.addEventListener?.("message", this.onContainerMessage);
+    container.startMessages?.();
     void container
       .register(swScriptUrl(), { scope: this.workerScope?.href, updateViaCache: "none" })
       .then(
         (registration) => {
           if (this.disposed) return;
           this.swRegistration = registration;
-          registration.addEventListener("updatefound", this.onUpdateFound);
+          registration.addEventListener?.("updatefound", this.onUpdateFound);
           this.reconcileActiveWorker();
           this.bootstrapState = "ready";
           drainWaiters(this.bootstrapWaiters);
@@ -340,7 +348,7 @@ export class Previews extends PreviewRouter {
   }
 
   private syncActiveWorker(registration: ServiceWorkerRegistration): void {
-    const live = registration.active?.state === "activated" ? registration.active : null;
+    const live = activatedWorker(registration);
     if (!live || this.disposed) return;
     this.activeWorker = live;
     this.publishGenerationSnapshot(live);
@@ -388,35 +396,27 @@ export class Previews extends PreviewRouter {
 
   private awaitCandidateActivation(registration: ServiceWorkerRegistration, candidate: ServiceWorker): void {
     let cleaned = false;
-    let expired = false;
     const onCheck = () => {
       if (cleaned || this.disposed) return;
       this.observePendingUpdates(registration);
-      if (registration.active?.state === "activated") {
+      if (activatedWorker(registration)) {
         cleanup();
         this.awaitedCandidate = null;
         this.failedCandidate = null;
         this.syncActiveWorker(registration);
         return;
       }
-      if (!isObservablePending(registration, candidate) || expired) {
+      if (!isObservablePending(registration, candidate)) {
         cleanup();
         this.awaitedCandidate = null;
         this.failedCandidate = candidate;
         this.invalidateGeneration("failed", true);
       }
     };
-    const interval = setInterval(onCheck, CANDIDATE_POLL_MS);
-    const timeout = setTimeout(() => {
-      expired = true;
-      onCheck();
-    }, CANDIDATE_TIMEOUT_MS);
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
       candidate.removeEventListener("statechange", onCheck);
-      clearInterval(interval);
-      clearTimeout(timeout);
     };
     candidate.addEventListener("statechange", onCheck);
     this.awaitedCandidate = { worker: candidate, cleanup };
@@ -427,7 +427,7 @@ export class Previews extends PreviewRouter {
     const registration = this.swRegistration;
     if (!registration) return null;
     this.observePendingUpdates(registration);
-    const liveActive = registration.active?.state === "activated" ? registration.active : null;
+    const liveActive = activatedWorker(registration);
     if (liveActive) {
       if (liveActive !== this.activeWorker) {
         this.awaitedCandidate?.cleanup();
@@ -554,7 +554,7 @@ export class Previews extends PreviewRouter {
       ackWaiters: new Set(),
       cancelAck: null,
       isRetired: false,
-      retireController: new AbortController(),
+      retireController: typeof AbortController === "function" ? new AbortController() : null,
     };
     this.portRegistrations.set(port, entry);
     if (this.workerScope !== undefined) {
@@ -621,10 +621,10 @@ export class Previews extends PreviewRouter {
     if (this.disposed || !initial || initial.token !== token || initial.isRetired) return "failed";
     if (this.workerScope === undefined) return "ready";
     this.maybeRetryFailedPortAck(port, initial);
-    const retireSignal = initial.retireController.signal;
+    const retireSignal = initial.retireController?.signal;
     while (true) {
       const { state, generation: seenGen } = await this.waitForActiveWorkerReady(retireSignal);
-      if (this.disposed || retireSignal.aborted || initial.isRetired || this.portRegistrations.get(port) !== initial) {
+      if (this.disposed || retireSignal?.aborted || initial.isRetired || this.portRegistrations.get(port) !== initial) {
         return "failed";
       }
       this.reconcileActiveWorker();
@@ -633,7 +633,7 @@ export class Previews extends PreviewRouter {
       if (initial.generation !== seenGen) continue;
       while (initial.ackState === "pending" && initial.generation === seenGen && this.workerGeneration === seenGen) {
         const woke = await waitUntilEither(initial.ackWaiters, this.stateWaiters, retireSignal);
-        if (!woke || this.disposed || retireSignal.aborted || initial.isRetired || this.portRegistrations.get(port) !== initial) {
+        if (!woke || this.disposed || retireSignal?.aborted || initial.isRetired || this.portRegistrations.get(port) !== initial) {
           return "failed";
         }
       }
@@ -650,9 +650,9 @@ export class Previews extends PreviewRouter {
     this.bootstrapState = "failed";
     this.invalidateGeneration("failed", true);
     if (typeof navigator !== "undefined") {
-      navigator.serviceWorker?.removeEventListener("message", this.onContainerMessage);
+      navigator.serviceWorker?.removeEventListener?.("message", this.onContainerMessage);
     }
-    this.swRegistration?.removeEventListener("updatefound", this.onUpdateFound);
+    this.swRegistration?.removeEventListener?.("updatefound", this.onUpdateFound);
     for (const cleanup of this.updateObservers.values()) cleanup();
     this.updateObservers.clear();
     this.awaitedCandidate?.cleanup();

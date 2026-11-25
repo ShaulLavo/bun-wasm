@@ -49,7 +49,10 @@ async function installAndCommit(
   isClosed: () => boolean,
 ): Promise<InstalledBrowserPrograms> {
   const checkCancelled = () => {
-    if (isClosed() || signal.aborted || runtime.disposed) {
+    if (isClosed()) {
+      throw new ProvisionAbortedError("Browser programs closed during installation");
+    }
+    if (signal.aborted || runtime.disposed) {
       throw new ProvisionAbortedError();
     }
   };
