@@ -30,12 +30,20 @@
     return !["", "0", "false", "no", "off"].includes(value.toLowerCase());
   }
 
-  // FORCE_COLOR is an unsigned level; "" means 1 and a non-number is cast through truthiness.
+  // FORCE_COLOR is an unsigned level (env_var.rs `unsigned`, parsed by fmt.rs `parse_int`): an
+  // optional sign, then decimal digits with underscores between them. "" means 1. A value that
+  // does not parse, is negative and non-zero, overflows or hits a reserved value is cast through
+  // truthiness instead.
+  const U64_RESERVED = (1n << 64n) - 2n;
+
   function forced(value: string | undefined) {
     if (value === undefined) return false;
     if (value === "") return true;
-    if (/^\d+$/.test(value)) return Number(value) !== 0;
-    return truthy(value);
+    const match = /^([+-]?)([0-9](?:[0-9_]*[0-9])?)$/.exec(value);
+    if (!match) return truthy(value);
+    const level = BigInt(match[2].replaceAll("_", ""));
+    if ((match[1] === "-" && level !== 0n) || level >= U64_RESERVED) return truthy(value);
+    return level !== 0n;
   }
 
   let decided: { stdout: boolean; stderr: boolean } | null = null;

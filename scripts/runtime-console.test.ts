@@ -142,6 +142,22 @@ test("global console keeps formatter inputs, duration state and byte writes", ()
   expect(() => instance.write({})).toThrow("Expected an ArrayBuffer or ArrayBufferView");
 });
 
+test("console.table prints native Bun's plain bytes, empty tables included", () => {
+  const writes: string[] = [];
+  const factory: (internal: object) => Console = runInNewContext(emitted("console").text, { process: { stdout: {}, stderr: {} } });
+  const instance = factory({
+    native: { writeStdout: (text: string) => writes.push(text), writeStderr: (text: string) => writes.push(text), now: () => 0 },
+    // No colours: the stub has no `stdout` or `stderr` decision.
+    require: () => ({ formatArgs: (args: unknown[]) => args.map(String).join(" "), bunInspect: (value: unknown) => JSON.stringify(value) }),
+  });
+  instance.table([]);
+  instance.table({});
+  instance.table([1]);
+  // Native Bun 1.4.5 output, stdout piped.
+  const empty = "┌───┐\n│   │\n├───┤\n└───┘\n";
+  expect(writes).toEqual([empty, empty, "┌───┬────────┐\n│   │ Values │\n├───┼────────┤\n│ 0 │ 1      │\n└───┴────────┘\n"]);
+});
+
 function checkContract(source: string) {
   const probe = join(scratch, "probe.ts");
   const config = join(scratch, "tsconfig.json");
