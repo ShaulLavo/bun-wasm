@@ -65,5 +65,18 @@ fs.unwatchFile("parent/child.txt");
 console.log("an interval above 2^31 - 1 ms has not polled:", !longPolled);
 fs.unwatchFile("long.txt");
 
+let thrown = 0;
+const caught = new Promise<void>(resolve => process.once("uncaughtException", () => { thrown++; resolve(); }));
+const throwing = fs.watchFile("throws.txt", options, (current: fs.Stats) => {
+  if (current.size > 0 && thrown === 0) throw new Error("listener failed");
+});
+await nextChange(throwing);
+fs.writeFileSync("throws.txt", "ab");
+await caught;
+const afterThrow = nextChange(throwing);
+fs.writeFileSync("throws.txt", "abc");
+console.log("a listener that threw does not stop polling:", describe(await afterThrow));
+fs.unwatchFile("throws.txt");
+
 fs.watchFile("idle.txt", { persistent: false, interval: 20 }, () => {});
 console.log("a non-persistent watcher lets the process exit");

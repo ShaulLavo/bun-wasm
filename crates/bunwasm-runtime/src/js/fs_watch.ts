@@ -269,8 +269,12 @@
       #elapsed(remaining: number) {
         if (!this.#active) return;
         if (remaining > 0) return this.#wait(remaining);
-        this.#poll();
-        if (this.#active) this.#wait(this.#interval);
+        // A listener may throw to an uncaughtException handler; the next change still arrives.
+        try {
+          this.#poll();
+        } finally {
+          if (this.#active) this.#wait(this.#interval);
+        }
       }
 
       #poll() {
