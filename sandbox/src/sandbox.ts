@@ -2104,6 +2104,21 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         "ok",
       );
     };
+    const retryTransientPreview = (document: Document) => {
+      if (errorRetries < 4) {
+        previous = document;
+        const delay = 250 * ++errorRetries;
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(() => {
+          if (this.preview !== navigation || this.server !== target || this.frame !== frame || this.workspace?.fs.ownershipLost) return;
+          frame.src = requestedHref;
+        }, delay);
+        return;
+      }
+      clearTimeout(retryTimer);
+      frame.removeEventListener("load", loaded);
+      this.setStatus("preview failed to load · press Restart", "error");
+    };
     const loaded = (event: Event) => {
       if (this.preview !== navigation || this.server !== target || this.frame !== frame || this.workspace?.fs.ownershipLost) {
         clearTimeout(retryTimer);
@@ -2119,6 +2134,13 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       }
       if (!document || document === previous || document.readyState !== "complete") return;
       const final = new URL(document.URL);
+      const isExpiredLoading = final.origin === requested.origin
+        && final.pathname.includes("/__preview/.loading/")
+        && (document.body?.textContent ?? "").includes("Preview request is no longer available.");
+      if (isExpiredLoading) {
+        retryTransientPreview(document);
+        return;
+      }
       if (final.origin !== requested.origin || !final.pathname.startsWith(requested.pathname)) return;
       if (isUnusablePreviewError(document)) {
         clearTimeout(retryTimer);
@@ -2127,19 +2149,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         return;
       }
       if (isTransientPreviewError(document)) {
-        if (errorRetries < 4) {
-          previous = document;
-          const delay = 250 * ++errorRetries;
-          clearTimeout(retryTimer);
-          retryTimer = setTimeout(() => {
-            if (this.preview !== navigation || this.server !== target || this.frame !== frame || this.workspace?.fs.ownershipLost) return;
-            frame.src = requestedHref;
-          }, delay);
-          return;
-        }
-        clearTimeout(retryTimer);
-        frame.removeEventListener("load", loaded);
-        this.setStatus("preview failed to load · press Restart", "error");
+        retryTransientPreview(document);
         return;
       }
       markReady(document, final.href);

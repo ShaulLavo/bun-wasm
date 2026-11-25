@@ -148,6 +148,7 @@ export class Previews extends PreviewRouter {
   private bootstrapStarted = false;
   private bootstrapState: PreviewState | null = null;
   private swRegistration: ServiceWorkerRegistration | null = null;
+  private expectedScriptUrl: string | null = null;
   private activeWorker: ServiceWorker | null = null;
   private workerGeneration = 0;
   private currentReadyState: PreviewState = "failed";
@@ -268,8 +269,14 @@ export class Previews extends PreviewRouter {
     }
     container.addEventListener?.("message", this.onContainerMessage);
     container.startMessages?.();
+    const scriptUrl = swScriptUrl();
+    try {
+      this.expectedScriptUrl = new URL(scriptUrl, typeof location !== "undefined" ? location.href : this.mountBaseURL).href;
+    } catch {
+      this.expectedScriptUrl = scriptUrl;
+    }
     void container
-      .register(swScriptUrl(), { scope: this.workerScope?.href, updateViaCache: "none" })
+      .register(scriptUrl, { scope: this.workerScope?.href, updateViaCache: "none" })
       .then(
         (registration) => {
           if (this.disposed) return;
@@ -394,12 +401,27 @@ export class Previews extends PreviewRouter {
     });
   }
 
+  private pendingExpectedUpgrade(registration: ServiceWorkerRegistration, liveActive: ServiceWorker | null): ServiceWorker | null {
+    if (!this.expectedScriptUrl || !liveActive || typeof liveActive.scriptURL !== "string") return null;
+    if (liveActive.scriptURL === this.expectedScriptUrl) return null;
+    return (
+      [registration.waiting, registration.installing].find(
+        (w): w is ServiceWorker =>
+          isObservablePending(registration, w) &&
+          w !== this.failedCandidate &&
+          typeof w.scriptURL === "string" &&
+          w.scriptURL === this.expectedScriptUrl,
+      ) ?? null
+    );
+  }
+
   private awaitCandidateActivation(registration: ServiceWorkerRegistration, candidate: ServiceWorker): void {
     let cleaned = false;
     const onCheck = () => {
       if (cleaned || this.disposed) return;
       this.observePendingUpdates(registration);
-      if (activatedWorker(registration)) {
+      const live = activatedWorker(registration);
+      if (live && !this.pendingExpectedUpgrade(registration, live)) {
         cleanup();
         this.awaitedCandidate = null;
         this.failedCandidate = null;
@@ -410,7 +432,11 @@ export class Previews extends PreviewRouter {
         cleanup();
         this.awaitedCandidate = null;
         this.failedCandidate = candidate;
-        this.invalidateGeneration("failed", true);
+        if (live) {
+          this.syncActiveWorker(registration);
+        } else {
+          this.invalidateGeneration("failed", true);
+        }
       }
     };
     const cleanup = () => {
@@ -428,7 +454,8 @@ export class Previews extends PreviewRouter {
     if (!registration) return null;
     this.observePendingUpdates(registration);
     const liveActive = activatedWorker(registration);
-    if (liveActive) {
+    const upgrading = this.pendingExpectedUpgrade(registration, liveActive);
+    if (liveActive && !upgrading) {
       if (liveActive !== this.activeWorker) {
         this.awaitedCandidate?.cleanup();
         this.awaitedCandidate = null;
@@ -438,9 +465,11 @@ export class Previews extends PreviewRouter {
       return liveActive;
     }
     const candidate =
+      upgrading ??
       [registration.active, registration.waiting, registration.installing].find(
         (w): w is ServiceWorker => isObservablePending(registration, w),
-      ) ?? null;
+      ) ??
+      null;
     if (candidate === null) {
       this.failedCandidate = null;
       if (
