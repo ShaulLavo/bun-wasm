@@ -12,7 +12,7 @@ Bun has no BoringSSL password hashing, so it routes argon2 to its vendored pure-
 
 - `bun_core::strings` and `bun_base64` helpers become `str` methods and the `base64` crate (standard alphabet, no padding), with the same grammar.
 - argon2 hashing always uses one lane (`p=1`), which is what `PasswordObject` passes.
-- Bun hashes on its thread pool and settles a promise. The guest has one JavaScript thread, so `hash` and `verify` return a pending promise at once and compute on a later turn of the event loop through the real `setImmediate` queue, the way `crypto.pbkdf2` does; the hash itself still occupies that turn. Argument errors throw synchronously and hashing errors reject, as in Bun.
+- Bun hashes on its thread pool and settles a promise. The guest has one JavaScript thread, so `hash` and `verify` return a pending promise at once and compute on a later turn of the event loop through the real `setImmediate` queue, the way `crypto.pbkdf2` does; the hash itself still occupies that turn. Argument errors throw synchronously and hashing errors reject, as in Bun; `verify` with an empty password or hash returns an already-settled `false`, as Bun's `resolved_promise_value` does.
 - rust-argon2 aborts when its memory allocation fails, and a guest has far less memory than a native process. Hashing and verification first reserve the Argon2 memory cost and report one the guest cannot allocate as `Password hashing failed: an Argon2 memory cost of N KiB is more memory than bun-wasm can allocate` (code `PASSWORD_OUT_OF_MEMORY`) instead of crashing. Native Bun would try it.
 - Passwords longer than 72 bytes are prehashed with SHA-512 before bcrypt (the `sha2` crate here, Bun's `bun_sha_hmac` upstream), so bytes past 72 still count.
 

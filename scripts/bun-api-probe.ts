@@ -186,7 +186,9 @@ async function writeCase(page: Page, probe: ProbeCase): Promise<void> {
   }
 }
 
-async function runEngine(browser: Browser, url: string, engine: string, cases: ProbeCase[]): Promise<EngineResult> {
+/** Fills `result` as cases finish, so a failure part-way keeps what already ran. */
+async function runEngine(browser: Browser, url: string, result: EngineResult, cases: ProbeCase[]): Promise<void> {
+  const engine = result.engine;
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
@@ -194,10 +196,9 @@ async function runEngine(browser: Browser, url: string, engine: string, cases: P
     await navigateTestPage(page, `${url}${url.includes("?") ? "&" : "?"}engine=${engine}&prompt=off`);
     // An engine that never boots is a result, not a reason to stop probing the others.
     const status = await ready(page, timeout).catch(async (error: Error) => `not ready: ${(await page.textContent("#status").catch(() => null)) ?? error.message}`);
-    const bootMs = Date.now() - started;
-    const result: EngineResult = { engine, bootMs, status, helloMs: [], cases: [] };
-    process.stderr.write(`${engine}: ${status} after ${bootMs} ms\n`);
-    if (!/ready/.test(status) || status.startsWith("not ready")) return result;
+    Object.assign(result, { bootMs: Date.now() - started, status });
+    process.stderr.write(`${engine}: ${status} after ${result.bootMs} ms\n`);
+    if (!/ready/.test(status) || status.startsWith("not ready")) return;
     await writeFile(page, "/home/user/probe/hello.ts", `console.log("hello world");\n`);
     for (let attempt = 0; attempt < 3; attempt++) result.helloMs.push(Math.round((await run(page, "bun /home/user/probe/hello.ts", timeout)).ms));
     for (const probe of cases) {
@@ -210,7 +211,6 @@ async function runEngine(browser: Browser, url: string, engine: string, cases: P
       process.stderr.write(`${engine} ${probe.name}: exit ${ran.code} in ${Math.round(ran.ms)} ms\n`);
       if (ran.code === null) await run(page, "cd /home/user", 10000);
     }
-    return result;
   } finally {
     await context.close();
   }
@@ -253,9 +253,11 @@ async function main(): Promise<void> {
     const results: EngineResult[] = [];
     // One engine failing must not lose the others: record it, save after each engine, print at the end.
     for (const engine of values.engines!.split(",")) {
-      const result = await runEngine(browser, url, engine, cases)
-        .catch((error: Error): EngineResult => ({ engine, bootMs: 0, status: `failed: ${error.message.split("\n")[0]}`, helloMs: [], cases: [] }));
+      const result: EngineResult = { engine, bootMs: 0, status: "not started", helloMs: [], cases: [] };
       results.push(result);
+      await runEngine(browser, url, result, cases).catch((error: Error) => {
+        result.status = `failed after ${result.cases.length} cases: ${error.message.split("\n")[0]}`;
+      });
       if (values.out) writeFileSync(values.out, JSON.stringify({ url, browser: values.browser, results }, null, 2));
     }
     console.log(table(results));

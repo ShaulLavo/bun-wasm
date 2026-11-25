@@ -53,6 +53,12 @@ const server = Bun.serve<Data, Record<string, never>>({
       return new Response(plain);
     }
     if (url.pathname === "/method-generator") return new Response({ async *chunks() { yield "method"; } }.chunks);
+    if (url.pathname === "/commented-generator") {
+      // Comments between the tokens do not change the function's kind.
+      const generator = new Function(`return (async /* c */ function /* d */ * () { yield "commented"; })`)();
+      const method = new Function(`return ({ async /* c */ * m() { yield "-method"; } }).m`)();
+      return new Response(async function* () { for await (const part of generator()) yield part; for await (const part of method()) yield part; });
+    }
     if (url.pathname === "/generator") {
       return new Response(async function* () {
         yield "gen-a ";
@@ -114,6 +120,11 @@ await check("error handler", () => text("/throws"));
 await check("ReadableStream response", () => text("/stream"));
 await check("async generator response", () => text("/generator"));
 await check("async generator body kinds", async () => [await text("/tagged-generator"), (await text("/fake-generator")).replace(/\s+/g, " "), await text("/method-generator")]);
+await check("commented async generator bodies", async () => {
+  const generator = new Function(`return (async /* c */ function /* d */ * () { yield "ok"; })`)();
+  const method = new Function(`return ({ async /* c */ * m() { yield "ok"; } }).m`)();
+  return [await text("/commented-generator"), await new Response(generator).text(), await new Response(method).text()];
+});
 await check("direct stream response", () => text("/direct"));
 await check("streamed body reader", async () => {
   const res = await fetch(base + "/stream");

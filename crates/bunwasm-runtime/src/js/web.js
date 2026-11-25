@@ -1198,13 +1198,15 @@
   }
 
   // An async generator function by its kind, as JSC checks it, not by the mutable
-  // Symbol.toStringTag: its source starts `async function*` or, for a method, `async *name`.
-  // Bound functions print as native code and are not generators, as in Bun.
+  // Symbol.toStringTag or its source text: its prototype is the intrinsic
+  // AsyncGeneratorFunction.prototype. A bound function inherits that prototype but is not a
+  // generator in Bun, and prints as native code.
+  const AsyncGeneratorFunctionPrototype = Object.getPrototypeOf(async function* () {});
   const functionToString = Function.prototype.toString;
   function isAsyncGeneratorFunction(value) {
-    if (typeof value !== "function") return false;
+    if (typeof value !== "function" || Object.getPrototypeOf(value) !== AsyncGeneratorFunctionPrototype) return false;
     try {
-      return /^async\s*(?:function\s*)?\*/.test(Reflect.apply(functionToString, value, []));
+      return !/\[native code\]\s*\}$/.test(Reflect.apply(functionToString, value, []));
     } catch {
       return false;
     }

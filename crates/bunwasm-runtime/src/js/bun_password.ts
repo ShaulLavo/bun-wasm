@@ -66,14 +66,15 @@
     return () => native.passwordHash(input, options.algorithm, options.cost, options.memoryCost, options.timeCost);
   }
 
-  function prepareVerify(password: unknown, hash: unknown, algorithm: unknown): () => boolean {
+  // `undefined` when the password or hash is empty: Bun answers false without hashing.
+  function prepareVerify(password: unknown, hash: unknown, algorithm: unknown): (() => boolean) | undefined {
     if (algorithm !== undefined && algorithm !== null) {
       if (typeof algorithm !== "string") throw typeError("algorithm must be a string");
       if (!ALGORITHMS.includes(algorithm)) throw typeError(`Expected algorithm to be a ${UNKNOWN} for 'verify'.`);
     }
     const input = bytes(password, "password");
     const encoded = bytes(hash, "hash");
-    if (!input.length || !encoded.length) return () => false;
+    if (!input.length || !encoded.length) return undefined;
     return () => native.passwordVerify(input, encoded, algorithm ?? undefined);
   }
 
@@ -100,10 +101,12 @@
       return prepareHash(password, algorithm)();
     },
     verify(password: unknown, hash: unknown, algorithm?: unknown) {
-      return settle(prepareVerify(password, hash, algorithm));
+      const run = prepareVerify(password, hash, algorithm);
+      // An empty password or hash settles at once, as Bun's resolved_promise_value does.
+      return run ? settle(run) : Promise.resolve(false);
     },
     verifySync(password: unknown, hash: unknown, algorithm?: unknown) {
-      return prepareVerify(password, hash, algorithm)();
+      return prepareVerify(password, hash, algorithm)?.() ?? false;
     },
   };
   return { password };

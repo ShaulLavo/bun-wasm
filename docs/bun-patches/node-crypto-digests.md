@@ -44,8 +44,10 @@ module on first use.
 one digest per instance, and Bun's errors for a second digest, a short target and
 a call without `new`. Input is a string, an ArrayBuffer, a view or an in-memory Blob,
 as in Bun; a file-backed Blob or any other value throws `ERR_INVALID_ARG_TYPE`. The
-target may be an encoding (an unknown one throws `ERR_INVALID_ARG_VALUE`), a
-TypedArray or an ArrayBuffer, which receives the digest and is returned.
+target may be an encoding (an unknown one throws `ERR_INVALID_ARG_VALUE`), `"buffer"`
+for a Buffer, or a TypedArray or ArrayBuffer, which receives the digest and is
+returned. A rejected target throws before `digest()` uses up the hasher, so the
+caller can retry, as in Bun.
 
 `Bun.sha(input, target)` in `crates/bunwasm-runtime/src/js/bun.js` is an original
 adapter over `SHA512_256.hash`: Bun's `Bun.sha` is SHA-512/256 with the same input

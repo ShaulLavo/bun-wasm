@@ -46,16 +46,32 @@ await check("Bun.hash inputs", () => {
     thrown(() => (Bun.hash.xxHash32 as unknown as () => number)()), thrown(() => (Bun.hash as unknown as () => bigint)()), thrown(() => Bun.hash.xxHash32(null as unknown as string)),
   ];
 });
-await check("Bun.hash seeds", () => [2 ** 64, 2 ** 70, Infinity, -1, -5, -(2 ** 70), -Infinity, NaN, 1.7, 2n ** 64n, -1n, "5"].map(seed => Bun.hash.xxHash64("bun", seed as number)).concat([Bun.hash("bun", 2 ** 64), Bun.hash.crc32("bun", 5)]));
+await check("Bun.hash seeds", () => [2 ** 64, 2 ** 70, Infinity, -1, -5, -(2 ** 63) - 2048, -(2 ** 64) - 4096, -(2 ** 64), -(2 ** 70), -1e300, -Infinity, NaN, 1.7, -1.7, 2n ** 64n, -1n, "5"].map(seed => Bun.hash.xxHash64("bun", seed as number)).concat([Bun.hash("bun", 2 ** 64), Bun.hash("bun", -(2 ** 63) - 2048), Bun.hash.crc32("bun", 5), Bun.hash.crc32("bun", -(2 ** 63) - 2048)]));
 await check("Bun.sha", () => {
   const target = new ArrayBuffer(32);
   const returned = Bun.sha("bun", target as unknown as "hex");
   return [Buffer.from(Bun.sha("bun")).toString("hex"), Bun.sha(new Blob(["bun"]), "hex"), returned === target, Buffer.from(target).toString("hex"), Bun.SHA256.hash(new Blob(["bun"]), "base64")];
 });
+await check("Bun hash buffer output and digest retry", () => {
+  const sha = Bun.sha("bun", "buffer" as "hex") as unknown as Buffer;
+  const sha256 = Bun.SHA256.hash("bun", "buffer" as "hex") as unknown as Buffer;
+  const hasher = new Bun.SHA256().update("bun");
+  let bogus;
+  try { hasher.digest("bogus" as "hex"); } catch (error) { bogus = (error as { code?: string }).code; }
+  const retried = hasher.digest("hex");
+  const short = new Bun.SHA256().update("bun");
+  let tooSmall;
+  try { short.digest(new Uint8Array(4) as unknown as "hex"); } catch (error) { tooSmall = (error as { code?: string }).code; }
+  return [Buffer.isBuffer(sha), sha.toString("hex"), Buffer.isBuffer(sha256), bogus, retried, tooSmall, short.digest("hex"), Buffer.isBuffer(new Bun.SHA1().update("x").digest("buffer" as "hex"))];
+});
 await check("Bun.password argon2id", async () => {
   const hash = await Bun.password.hash("hunter2");
   assert(hash.startsWith("$argon2id$"), hash);
   return [await Bun.password.verify("hunter2", hash), await Bun.password.verify("wrong", hash)];
+});
+await check("Bun.password empty verify settles at once", async () => {
+  const empty = [Bun.password.verify("x", ""), Bun.password.verify("", "$2b$10$abcdefghijklmnopqrstuu")];
+  return [empty.map(promise => Bun.peek.status(promise)), await Promise.all(empty), Bun.password.verifySync("x", "")];
 });
 await check("Bun.password returns a pending promise", async () => {
   const pending = Bun.password.hash("hunter2", { algorithm: "argon2id", memoryCost: 4096, timeCost: 1 });

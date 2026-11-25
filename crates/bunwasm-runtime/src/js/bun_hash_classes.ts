@@ -20,7 +20,8 @@
     throw typeError("input must be a string, ArrayBuffer, ArrayBufferView or Blob");
   }
 
-  // A buffer target receives the digest and is returned; anything else names an encoding.
+  // A buffer target receives the digest and is returned; "buffer" returns a Buffer; anything else
+  // names an encoding.
   function output(bytes: Uint8Array, target: unknown, byteLength: number): unknown {
     if (target === undefined) return bytes;
     if (ArrayBuffer.isView(target) || target instanceof ArrayBuffer) {
@@ -30,6 +31,7 @@
     }
     const { Buffer } = internal.require("buffer");
     const encoding = String(target);
+    if (encoding === "buffer") return Buffer.from(bytes);
     if (!Buffer.isEncoding(encoding)) throw typeError(`Unknown encoding: ${encoding}`, "ERR_INVALID_ARG_VALUE");
     return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(encoding);
   }
@@ -61,8 +63,10 @@
       },
       digest(this: object, target?: unknown) {
         const state = live(this, "digest again");
+        // A bad target throws before the hasher is used up, so the caller can retry, as in Bun.
+        const result = output(digestBytes(state.chunks), target, byteLength);
         state.done = true;
-        return output(digestBytes(state.chunks), target, byteLength);
+        return result;
       },
     };
     // Bun lists byteLength, digest and update, then constructor.

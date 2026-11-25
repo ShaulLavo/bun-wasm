@@ -358,15 +358,15 @@
     }
   }
 
-  // HashObject.rs reads a number or bigint seed with JSC's toUInt64NoTruncate: a bigint wraps
-  // to 64 bits; a number truncates, saturates at u64 max, wraps from -2^63 and is 0 below it
-  // or when NaN. Any other value is 0. Returns the seed as [high, low] 32-bit words.
+  // HashObject.rs reads a number or bigint seed with JSC's toUInt64NoTruncate, as measured on
+  // native Bun: a bigint wraps to 64 bits; a finite number truncates and wraps (so any negative
+  // number wraps too, and -2^64 is 0) but saturates at u64 max from 2^64 up and at Infinity;
+  // NaN, -Infinity and any other value are 0. Returns the seed as [high, low] 32-bit words.
   const U64_MAX = 2n ** 64n - 1n;
   function hashSeed(seed) {
     if (typeof seed === "bigint") return BigInt.asUintN(64, seed);
-    if (typeof seed !== "number" || Number.isNaN(seed)) return 0n;
+    if (typeof seed !== "number" || Number.isNaN(seed) || seed === -Infinity) return 0n;
     if (seed >= 2 ** 64) return U64_MAX;
-    if (seed < -(2 ** 63)) return 0n;
     return BigInt.asUintN(64, BigInt(Math.trunc(seed)));
   }
   function seedWords(seed) {
