@@ -4,16 +4,23 @@ import { createRequire } from "node:module";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
   GUEST_BUCKET, GUEST_CACHE_CONTROL, GUEST_ORIGIN,
-  decodeGuest, parseGuestDescriptor, readGuestArtifact, verifyGuest, writeGuestDescriptor,
+  assertStandaloneArtifactModule, decodeGuest, parseGuestDescriptor, parseGuestFileDescriptor,
+  readArtifactFile, readGuestArtifact, validateArtifactName, verifyGuest, writeGuestDescriptor,
 } from "./guest-artifact.ts";
 import type { GuestArtifact, GuestDescriptor, GuestFile, GuestFileDescriptor } from "./guest-artifact.ts";
 
 import { acceptGuestPublication } from "./guest-acceptance.ts";
+import { assertNoNameSection } from "./wasm-name-sections.ts";
+
+const RESERVED_BUN_NAMES = new Set([
+  "bun.wasm", "bun-browser.wasm", "bun-jsc.wasm", "quickjs.wasm", "jsc-engine.wasm",
+  "bun-spidermonkey.wasm", "spidermonkey-engine.wasm",
+]);
 
 export type GuestFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -58,6 +65,20 @@ async function publishFile(file: GuestFile, name: string, publisher: GuestPublis
   await verifyPublicGuest(file.descriptor, publisher.fetch);
 }
 
+export async function publishArtifact(file: GuestFile, name: string, publisher: GuestPublisher): Promise<GuestFileDescriptor> {
+  const validName = validateArtifactName(name);
+  const snapshot = snapshotFile(file);
+  const descriptor = parseGuestFileDescriptor(snapshot.descriptor);
+  const expectedKey = `${descriptor.sha256}/${validName}.gz`;
+  const url = new URL(descriptor.url);
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== `/${expectedKey}`) {
+    throw new Error("Artifact URL must be a plain HTTPS URL matching its SHA-256 key");
+  }
+  assertStandaloneArtifactModule(new WebAssembly.Module(Uint8Array.from(decodeGuest(snapshot.gzip))));
+  await publishFile({ ...snapshot, descriptor }, validName, publisher);
+  return descriptor;
+}
+
 export async function publishGuest(artifact: GuestArtifact, publisher: GuestPublisher): Promise<GuestDescriptor> {
   const descriptor = parseGuestDescriptor(artifact.descriptor);
   const files = mapProgramFiles(artifact.files, snapshotFile);
@@ -89,7 +110,7 @@ export function createR2Publisher(options: { accountId: string; token: string; b
       return new Uint8Array(await response.arrayBuffer());
     },
     async upload(artifact) {
-      const path = join(options.scratch, "bun.wasm.gz");
+      const path = join(options.scratch, basename(artifact.key));
       await writeFile(path, artifact.gzip);
       await new Promise<void>((resolve, reject) => {
         const child = spawn(process.execPath, [options.wrangler, "r2", "object", "put", `${options.bucket}/${artifact.key}`,
@@ -112,24 +133,71 @@ export function createR2Publisher(options: { accountId: string; token: string; b
   };
 }
 
+function resolveWrangler(): string {
+  const require = createRequire(new URL("../site/package.json", import.meta.url));
+  return join(dirname(require.resolve("wrangler/package.json")), "bin/wrangler.js");
+}
+
+function validateStandaloneName(raw: string, output: string | undefined): string {
+  const name = validateArtifactName(raw);
+  if (RESERVED_BUN_NAMES.has(name)) {
+    throw new Error(`Use the default Bun guest path without --name to publish ${name}`);
+  }
+  if (output) throw new Error("--output writes BUN_WASM_ASSET and cannot be used with --name");
+  return name;
+}
+
+interface CliPublishContext {
+  readonly inputPath: string;
+  readonly origin: string;
+  readonly bucket: string;
+  readonly dist: string;
+  readonly output: string | undefined;
+  readonly standaloneName: string | undefined;
+  readonly accountId: string;
+  readonly token: string;
+  readonly scratch: string;
+  readonly signal: AbortSignal;
+}
+
+async function runCliPublish(context: CliPublishContext): Promise<void> {
+  if (context.standaloneName) {
+    const file = await readArtifactFile(context.inputPath, context.origin, context.standaloneName);
+    assertNoNameSection(decodeGuest(file.gzip), context.standaloneName);
+    const r2 = createR2Publisher({ accountId: context.accountId, token: context.token, bucket: context.bucket, scratch: context.scratch, wrangler: resolveWrangler(), signal: context.signal });
+    const descriptor = await publishArtifact(file, context.standaloneName, r2);
+    console.log(JSON.stringify(descriptor, null, 2));
+    return;
+  }
+  const requested = (await readGuestArtifact(context.inputPath, context.origin)).descriptor;
+  const artifact = await acceptGuestPublication(resolve(context.dist), requested, context.signal);
+  // Resolve the site's lockfile-pinned Wrangler only after full acceptance.
+  const r2 = createR2Publisher({ accountId: context.accountId, token: context.token, bucket: context.bucket, scratch: context.scratch, wrangler: resolveWrangler(), signal: context.signal });
+  const descriptor = await publishGuest(artifact, r2);
+  // Publication failures must leave the consumer's existing descriptor untouched.
+  if (context.output) await writeGuestDescriptor(context.output, descriptor);
+  console.log(JSON.stringify(descriptor, null, 2));
+}
+
 if (import.meta.main) {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
       origin: { type: "string", default: GUEST_ORIGIN },
       bucket: { type: "string", default: GUEST_BUCKET },
+      name: { type: "string" },
       output: { type: "string" },
       dist: { type: "string", default: fileURLToPath(new URL("../dist/", import.meta.url)) },
       "account-id": { type: "string", default: process.env.CLOUDFLARE_ACCOUNT_ID },
     },
   });
-  if (positionals.length !== 1) throw new Error("Usage: bun scripts/publish-guest.ts <bun.wasm[.gz]> [--output descriptor.ts] [--dist full-build-directory] [--origin https://host] [--bucket bucket] [--account-id id]");
+  if (positionals.length !== 1) throw new Error("Usage: bun scripts/publish-guest.ts <artifact.wasm[.gz]> [--name artifact.wasm] [--output descriptor.ts] [--dist full-build-directory] [--origin https://host] [--bucket bucket] [--account-id id]");
   const accountId = values["account-id"];
   const token = process.env.CLOUDFLARE_API_TOKEN;
   if (!accountId || !/^[a-f0-9]{32}$/.test(accountId)) throw new Error("Set CLOUDFLARE_ACCOUNT_ID or --account-id to the target account's ID");
   if (!token) throw new Error("Set CLOUDFLARE_API_TOKEN in the environment (never pass a token as an argument)");
   if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(values.bucket!)) throw new Error("Invalid R2 bucket name");
-  const requested = (await readGuestArtifact(positionals[0]!, values.origin)).descriptor;
+  const standaloneName = values.name === undefined ? undefined : validateStandaloneName(values.name, values.output);
   const scratchRoot = process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
   const scratch = await mkdtemp(join(scratchRoot, "bun-wasm-guest-publish-"));
   const controller = new AbortController();
@@ -137,14 +205,18 @@ if (import.meta.main) {
   process.once("SIGINT", abort);
   process.once("SIGTERM", abort);
   try {
-    const artifact = await acceptGuestPublication(resolve(values.dist!), requested, controller.signal);
-    // Resolve the site's lockfile-pinned Wrangler only after full acceptance.
-    const require = createRequire(new URL("../site/package.json", import.meta.url));
-    const wrangler = join(dirname(require.resolve("wrangler/package.json")), "bin/wrangler.js");
-    const descriptor = await publishGuest(artifact, createR2Publisher({ accountId, token, bucket: values.bucket!, scratch, wrangler, signal: controller.signal }));
-    // Publication failures must leave the consumer's existing descriptor untouched.
-    if (values.output) await writeGuestDescriptor(values.output, descriptor);
-    console.log(JSON.stringify(descriptor, null, 2));
+    await runCliPublish({
+      inputPath: positionals[0]!,
+      origin: values.origin!,
+      bucket: values.bucket!,
+      dist: values.dist!,
+      output: values.output,
+      standaloneName,
+      accountId,
+      token,
+      scratch,
+      signal: controller.signal,
+    });
   } finally {
     process.removeListener("SIGINT", abort);
     process.removeListener("SIGTERM", abort);

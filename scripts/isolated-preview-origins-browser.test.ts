@@ -272,7 +272,7 @@ interface PlaygroundApi {
   editor?: { path?: string };
   fs: { writeFile(path: string, data: string): Promise<void>; flush(): Promise<void> };
   shell: { submit(command: string): Promise<void> };
-  term?: { buffer?: { active?: { length: number; getLine(index: number): { isWrapped?: boolean; translateToString(trim: boolean): string } | undefined } } };
+  previews?: { serves(port: number): boolean; linkUrl(port: number): string };
 }
 
 /** Starts the two fixture servers in the playground and returns their new-tab links, by port. */
@@ -287,16 +287,10 @@ async function startPlaygroundServers(page: Page): Promise<Map<number, URL>> {
     await playground.fs.flush();
     void playground.shell.submit("bun run /home/user/preview-origins-server.ts");
   }, SERVER);
+  // The terminal names each server `localhost:<port>`; its link targets what `linkUrl` returns.
   const links = await page.waitForFunction(() => {
-    const buffer = (Reflect.get(globalThis, "playground") as unknown as PlaygroundApi | undefined)?.term?.buffer?.active;
-    if (!buffer) return null;
-    let text = "";
-    for (let index = 0; index < buffer.length; index++) {
-      const line = buffer.getLine(index);
-      if (line) text += (index > 0 && !line.isWrapped ? "\n" : "") + line.translateToString(!buffer.getLine(index + 1)?.isWrapped);
-    }
-    const found = Array.from(text.matchAll(/\[preview\] (https?:\/\/\S+)/g), match => match[1]!);
-    return found.length >= 2 ? found : null;
+    const previews = (Reflect.get(globalThis, "playground") as unknown as PlaygroundApi | undefined)?.previews;
+    return previews?.serves(3000) && previews.serves(3001) ? [3000, 3001].map(port => previews.linkUrl(port)) : null;
   }, null, { timeout: 120_000 });
   const byPort = new Map<number, URL>();
   for (const link of await links.jsonValue() as string[]) {

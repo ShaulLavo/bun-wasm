@@ -178,15 +178,19 @@ async function runPlaygroundServer(page: Page, marker: string): Promise<string> 
         if (i > 0 && !line.isWrapped) text += "\n";
         text += line.translateToString(!line.isWrapped);
       }
-      return /\[preview\] http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\//.test(text.slice(start));
+      // The terminal names the server `localhost:3000`; its link targets the routed preview URL.
+      return /\[preview\] localhost:3000\b/.test(text.slice(start));
     },
     baseline,
     { timeout: 60_000 },
   );
-  const terminal = (await playgroundTerminalText(page)).slice(baseline);
-  const match = /\[preview\] (http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\/)/.exec(terminal);
-  expect(match?.[1]).toBeTruthy();
-  return match![1]!;
+  // The link's target is the tab's own routed preview, the same URL the terminal link opens.
+  const url = await page.evaluate(() => {
+    const pg = Reflect.get(globalThis, "playground") as unknown as { previews: { serves(port: number): boolean; url(port: number): string } };
+    return pg.previews.serves(3000) ? pg.previews.url(3000) : "";
+  });
+  expect(url).toMatch(/^http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\/$/);
+  return url;
 }
 
 for (const browserName of browsers) {
