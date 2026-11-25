@@ -23,7 +23,7 @@ for the app's runtime.
 {
 	"dependencies": {
 		"bun-wasm": "github:ShaulLavo/bun-wasm#<commit>",
-		"waffle": "npm:@waffle-os/runtime@0.0.148"
+		"waffle": "npm:@waffle-os/runtime@0.0.149"
 	},
 	"trustedDependencies": ["bun-wasm"]
 }
