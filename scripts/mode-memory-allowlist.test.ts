@@ -76,11 +76,20 @@ const nonMemoryModes = new Set(["fast", "safe", "invalid"]);
 const queryParamNameHint = /search|param|query/i;
 const nonQueryCollectionNames = new Set(["Map", "Headers", "FormData", "Set", "WeakMap"]);
 
-interface FileBindings {
-  readonly allBindings: Map<string, ts.Expression[]>;
-  readonly uniqueConsts: Map<string, ts.Expression>;
-  readonly queryParamVars: Set<string>;
-  readonly nonQueryParamVars: Set<string>;
+type ReceiverKind = "query" | "non-query" | "unknown";
+type ObjectModeState = "none" | "allowed" | "disallowed";
+
+interface BindingInfo {
+  readonly isConst: boolean;
+  readonly count: number;
+  readonly inits: ts.Expression[];
+  readonly typeKind: ReceiverKind;
+}
+
+interface LexicalEnv {
+  readonly parent: LexicalEnv | undefined;
+  readonly bindings: Map<string, BindingInfo>;
+  readonly fnReturns: Map<string, ReceiverKind>;
 }
 
 function isStringLiteral(node: ts.Node): node is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral {
@@ -110,69 +119,140 @@ function methodName(node: ts.Expression): string | undefined {
   return undefined;
 }
 
-function isSearchParamsExpr(expr: ts.Expression): boolean {
-  const target = unwrap(expr);
-  if (ts.isPropertyAccessExpression(target) && target.name.text === "searchParams") return true;
-  if (ts.isNewExpression(target) && methodName(target.expression) === "URLSearchParams") return true;
-  return false;
+function classifyTypeNode(type: ts.TypeNode | undefined): ReceiverKind {
+  if (!type || !ts.isTypeReferenceNode(type) || !ts.isIdentifier(type.typeName)) return "unknown";
+  if (type.typeName.text === "URLSearchParams") return "query";
+  return nonQueryCollectionNames.has(type.typeName.text) ? "non-query" : "unknown";
 }
 
-function isNonQueryCollectionExpr(expr: ts.Expression): boolean {
-  const target = unwrap(expr);
-  const name = ts.isNewExpression(target) ? methodName(target.expression) : undefined;
-  return name !== undefined && nonQueryCollectionNames.has(name);
+function isScopeContainer(node: ts.Node): boolean {
+  return (
+    ts.isSourceFile(node) ||
+    ts.isBlock(node) ||
+    ts.isFunctionDeclaration(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isArrowFunction(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isForStatement(node) ||
+    ts.isForOfStatement(node) ||
+    ts.isForInStatement(node) ||
+    ts.isCatchClause(node) ||
+    ts.isCaseBlock(node)
+  );
 }
 
-function collectBindings(source: ts.SourceFile): FileBindings {
-  const allBindings = new Map<string, ts.Expression[]>();
-  const constCounts = new Map<string, number>();
-  const constCandidate = new Map<string, ts.Expression>();
-  const queryParamVars = new Set<string>();
-  const nonQueryParamVars = new Set<string>();
+function addBinding(env: LexicalEnv, name: string, init: ts.Expression | undefined, isConst: boolean, typeKind: ReceiverKind): void {
+  const prev = env.bindings.get(name);
+  const inits = prev ? prev.inits.concat(init ? [init] : []) : init ? [init] : [];
+  const nextCount = (prev?.count ?? 0) + 1;
+  const resolvedType = typeKind !== "unknown" ? typeKind : (prev?.typeKind ?? "unknown");
+  env.bindings.set(name, { isConst: isConst && nextCount === 1, count: nextCount, inits, typeKind: resolvedType });
+}
 
-  function recordBinding(name: string, init: ts.Expression, isConst: boolean): void {
-    const existing = allBindings.get(name) ?? [];
-    existing.push(init);
-    allBindings.set(name, existing);
-    const nextCount = (constCounts.get(name) ?? 0) + 1;
-    constCounts.set(name, nextCount);
-    if (isConst && nextCount === 1) constCandidate.set(name, init);
-    else constCandidate.delete(name);
-    if (isSearchParamsExpr(init)) queryParamVars.add(name);
-    if (isNonQueryCollectionExpr(init)) nonQueryParamVars.add(name);
+function directExpressionKind(expr: ts.Expression): ReceiverKind {
+  const target = unwrap(expr);
+  if (ts.isPropertyAccessExpression(target) && target.name.text === "searchParams") return "query";
+  if (!ts.isNewExpression(target)) return "unknown";
+  const ctor = methodName(target.expression);
+  if (ctor === "URLSearchParams") return "query";
+  return ctor !== undefined && nonQueryCollectionNames.has(ctor) ? "non-query" : "unknown";
+}
+
+function inferFunctionReturnKind(fn: ts.FunctionLikeDeclaration): ReceiverKind {
+  const declared = classifyTypeNode(fn.type);
+  if (declared !== "unknown") return declared;
+  if (!fn.body) return "unknown";
+  if (!ts.isBlock(fn.body)) return directExpressionKind(fn.body);
+  let inferred: ReceiverKind = "unknown";
+  for (const stmt of fn.body.statements) {
+    if (!ts.isReturnStatement(stmt) || !stmt.expression) continue;
+    const kind = directExpressionKind(stmt.expression);
+    if (kind === "unknown") continue;
+    if (inferred !== "unknown" && inferred !== kind) return "unknown";
+    inferred = kind;
   }
+  return inferred;
+}
 
-  function visit(node: ts.Node): void {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
-      const name = node.name.text;
-      if (node.type && ts.isTypeReferenceNode(node.type) && ts.isIdentifier(node.type.typeName)) {
-        if (node.type.typeName.text === "URLSearchParams") queryParamVars.add(name);
-        else if (nonQueryCollectionNames.has(node.type.typeName.text)) nonQueryParamVars.add(name);
-      }
-      if (node.initializer) {
-        const isConst = Boolean(node.parent && ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const));
-        recordBinding(name, node.initializer, isConst);
-      }
-    } else if (ts.isParameter(node) && ts.isIdentifier(node.name) && node.type && ts.isTypeReferenceNode(node.type) && ts.isIdentifier(node.type.typeName)) {
-      if (node.type.typeName.text === "URLSearchParams") queryParamVars.add(node.name.text);
-      else if (nonQueryCollectionNames.has(node.type.typeName.text)) nonQueryParamVars.add(node.name.text);
+function registerVariableStatement(env: LexicalEnv, stmt: ts.VariableStatement): void {
+  const isConst = Boolean(stmt.declarationList.flags & ts.NodeFlags.Const);
+  for (const decl of stmt.declarationList.declarations) {
+    if (!ts.isIdentifier(decl.name)) continue;
+    const name = decl.name.text;
+    addBinding(env, name, decl.initializer, isConst, classifyTypeNode(decl.type));
+    if (decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer))) {
+      const ret = inferFunctionReturnKind(decl.initializer);
+      if (ret !== "unknown") env.fnReturns.set(name, ret);
     }
-    ts.forEachChild(node, visit);
   }
-  visit(source);
-  return { allBindings, uniqueConsts: constCandidate, queryParamVars, nonQueryParamVars };
 }
 
-function staticText(node: ts.Expression, env: FileBindings, seen = new Set<string>()): string | undefined {
+function registerStatement(env: LexicalEnv, stmt: ts.Statement): void {
+  if (ts.isVariableStatement(stmt)) {
+    registerVariableStatement(env, stmt);
+    return;
+  }
+  if (ts.isFunctionDeclaration(stmt) && stmt.name) {
+    const ret = inferFunctionReturnKind(stmt);
+    if (ret !== "unknown") env.fnReturns.set(stmt.name.text, ret);
+  }
+}
+
+function registerForInitializer(env: LexicalEnv, init: ts.ForInitializer | undefined): void {
+  if (!init || !ts.isVariableDeclarationList(init)) return;
+  const isConst = Boolean(init.flags & ts.NodeFlags.Const);
+  for (const decl of init.declarations) {
+    if (!ts.isIdentifier(decl.name)) continue;
+    addBinding(env, decl.name.text, decl.initializer, isConst, classifyTypeNode(decl.type));
+  }
+}
+
+function createScopeEnv(node: ts.Node, parent: LexicalEnv | undefined): LexicalEnv {
+  const env: LexicalEnv = { parent, bindings: new Map(), fnReturns: new Map() };
+  if (ts.isSourceFile(node) || ts.isBlock(node)) {
+    for (const stmt of node.statements) registerStatement(env, stmt);
+  } else if (ts.isFunctionLike(node)) {
+    for (const param of node.parameters) {
+      if (ts.isIdentifier(param.name)) addBinding(env, param.name.text, param.initializer, false, classifyTypeNode(param.type));
+    }
+  } else if (ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) {
+    registerForInitializer(env, node.initializer);
+  } else if (ts.isCatchClause(node) && node.variableDeclaration && ts.isIdentifier(node.variableDeclaration.name)) {
+    addBinding(env, node.variableDeclaration.name.text, undefined, false, "unknown");
+  }
+  return env;
+}
+
+function lookupBinding(env: LexicalEnv | undefined, name: string): { binding: BindingInfo; scope: LexicalEnv } | undefined {
+  let cur = env;
+  while (cur) {
+    const found = cur.bindings.get(name);
+    if (found) return { binding: found, scope: cur };
+    cur = cur.parent;
+  }
+  return undefined;
+}
+
+function lookupFnReturn(env: LexicalEnv | undefined, name: string): ReceiverKind {
+  let cur = env;
+  while (cur) {
+    const found = cur.fnReturns.get(name);
+    if (found) return found;
+    cur = cur.parent;
+  }
+  return "unknown";
+}
+
+function staticText(node: ts.Expression, env: LexicalEnv, seen = new Set<string>()): string | undefined {
   const target = unwrap(node);
   if (isStringLiteral(target)) return target.text;
   if (ts.isIdentifier(target)) {
     if (seen.has(target.text)) return undefined;
-    const init = env.uniqueConsts.get(target.text);
-    if (!init) return undefined;
+    const found = lookupBinding(env, target.text);
+    if (!found || !found.binding.isConst || found.binding.inits.length !== 1) return undefined;
     const next = new Set(seen);
     next.add(target.text);
-    return staticText(init, env, next);
+    return staticText(found.binding.inits[0]!, found.scope, next);
   }
   if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.PlusToken) {
     const left = staticText(target.left, env, seen);
@@ -191,7 +271,7 @@ function staticText(node: ts.Expression, env: FileBindings, seen = new Set<strin
   return undefined;
 }
 
-function isDisallowedModeValue(node: ts.Expression, env: FileBindings): boolean {
+function isDisallowedModeValue(node: ts.Expression, env: LexicalEnv): boolean {
   const value = staticText(node, env)?.toLowerCase();
   if (value === undefined) return true;
   return !nonMemoryModes.has(value);
@@ -230,21 +310,35 @@ function recordFinding(source: ts.SourceFile, node: ts.Node, file: string, messa
   findings.push({ file, location: location(source, node), scope: enclosingScope(node), message });
 }
 
-function isQueryParamsReceiver(callee: ts.Expression, env: FileBindings): boolean {
-  const target = unwrap(callee);
-  if (!ts.isPropertyAccessExpression(target) && !ts.isElementAccessExpression(target)) return false;
-  const receiver = unwrap(target.expression);
-  if (isSearchParamsExpr(receiver)) return true;
-  if (isNonQueryCollectionExpr(receiver)) return false;
-  if (ts.isIdentifier(receiver)) {
-    if (env.queryParamVars.has(receiver.text)) return true;
-    if (env.nonQueryParamVars.has(receiver.text)) return false;
-    return queryParamNameHint.test(receiver.text);
+function classifyReceiver(expr: ts.Expression, env: LexicalEnv, seen = new Set<string>()): ReceiverKind {
+  const target = unwrap(expr);
+  const direct = directExpressionKind(target);
+  if (direct !== "unknown") return direct;
+  if (ts.isCallExpression(target)) {
+    const calleeName = methodName(target.expression);
+    return calleeName ? lookupFnReturn(env, calleeName) : "unknown";
   }
-  return false;
+  if (!ts.isIdentifier(target) || seen.has(target.text)) return "unknown";
+  const found = lookupBinding(env, target.text);
+  if (!found) return queryParamNameHint.test(target.text) ? "query" : "unknown";
+  if (found.binding.typeKind !== "unknown") return found.binding.typeKind;
+  if (found.binding.inits.length === 0) return queryParamNameHint.test(target.text) ? "query" : "unknown";
+  const next = new Set(seen);
+  next.add(target.text);
+  for (const init of found.binding.inits) {
+    const kind = classifyReceiver(init, found.scope, next);
+    if (kind !== "unknown") return kind;
+  }
+  return "unknown";
 }
 
-function checkTemplateExpression(source: ts.SourceFile, node: ts.TemplateExpression, file: string, env: FileBindings, findings: ModeMemoryFinding[]): void {
+function isQueryParamsReceiver(callee: ts.Expression, env: LexicalEnv): boolean {
+  const target = unwrap(callee);
+  if (!ts.isPropertyAccessExpression(target) && !ts.isElementAccessExpression(target)) return false;
+  return classifyReceiver(target.expression, env) === "query";
+}
+
+function checkTemplateExpression(source: ts.SourceFile, node: ts.TemplateExpression, file: string, env: LexicalEnv, findings: ModeMemoryFinding[]): void {
   const fullStatic = staticText(node, env);
   if (fullStatic !== undefined) {
     if (literalModeMemory.test(fullStatic)) {
@@ -276,7 +370,7 @@ function checkTemplateExpression(source: ts.SourceFile, node: ts.TemplateExpress
   }
 }
 
-function checkCallExpression(source: ts.SourceFile, node: ts.CallExpression, file: string, env: FileBindings, findings: ModeMemoryFinding[]): void {
+function checkCallExpression(source: ts.SourceFile, node: ts.CallExpression, file: string, env: LexicalEnv, findings: ModeMemoryFinding[]): void {
   const name = methodName(node.expression);
   if ((name !== "set" && name !== "append") || node.arguments.length < 2) return;
   if (!isQueryParamsReceiver(node.expression, env)) return;
@@ -285,53 +379,70 @@ function checkCallExpression(source: ts.SourceFile, node: ts.CallExpression, fil
   }
 }
 
-function propertyKeyText(name: ts.PropertyName, env: FileBindings): string | undefined {
+function propertyKeyText(name: ts.PropertyName, env: LexicalEnv): string | undefined {
   if (ts.isIdentifier(name) || isStringLiteral(name)) return name.text;
   if (ts.isComputedPropertyName(name)) return staticText(name.expression, env);
   return undefined;
 }
 
-function hasDisallowedModeInit(expr: ts.Expression, env: FileBindings, seen = new Set<string>()): boolean {
+function resolveObjectModeState(expr: ts.Expression, env: LexicalEnv, seen: Set<string>): ObjectModeState {
   const target = unwrap(expr);
-  if (ts.isObjectLiteralExpression(target)) return hasDisallowedModeProp(target, env, seen);
-  if (ts.isArrayLiteralExpression(target)) return hasDisallowedModeTuple(target, env);
-  if (ts.isIdentifier(target) && !seen.has(target.text)) {
-    const next = new Set(seen);
-    next.add(target.text);
-    for (const init of env.allBindings.get(target.text) ?? []) {
-      if (hasDisallowedModeInit(init, env, next)) return true;
-    }
+  if (ts.isObjectLiteralExpression(target)) return evaluateObjectLiteralMode(target, env, seen);
+  if (!ts.isIdentifier(target) || seen.has(target.text)) return "none";
+  const found = lookupBinding(env, target.text);
+  if (!found) return "none";
+  const next = new Set(seen);
+  next.add(target.text);
+  let state: ObjectModeState = "none";
+  for (const init of found.binding.inits) {
+    const candidate = resolveObjectModeState(init, found.scope, next);
+    if (candidate === "disallowed") return "disallowed";
+    if (candidate === "allowed") state = "allowed";
   }
-  return false;
+  return state;
 }
 
-function hasDisallowedModeProp(expr: ts.ObjectLiteralExpression, env: FileBindings, seen: Set<string>): boolean {
+function evaluateObjectLiteralMode(expr: ts.ObjectLiteralExpression, env: LexicalEnv, seen: Set<string>): ObjectModeState {
+  let state: ObjectModeState = "none";
   for (const prop of expr.properties) {
-    if (ts.isShorthandPropertyAssignment(prop) && prop.name.text === "mode" && isDisallowedModeValue(prop.name, env)) {
-      return true;
+    if (ts.isSpreadAssignment(prop)) {
+      const spreadState = resolveObjectModeState(prop.expression, env, seen);
+      if (spreadState !== "none") state = spreadState;
+      continue;
     }
-    if (ts.isSpreadAssignment(prop) && hasDisallowedModeInit(prop.expression, env, seen)) {
-      return true;
+    if (ts.isShorthandPropertyAssignment(prop) && prop.name.text === "mode") {
+      state = isDisallowedModeValue(prop.name, env) ? "disallowed" : "allowed";
+      continue;
     }
-    if (!ts.isPropertyAssignment(prop)) continue;
-    if (propertyKeyText(prop.name, env) === "mode" && isDisallowedModeValue(prop.initializer, env)) {
-      return true;
+    if (ts.isPropertyAssignment(prop) && propertyKeyText(prop.name, env) === "mode") {
+      state = isDisallowedModeValue(prop.initializer, env) ? "disallowed" : "allowed";
     }
   }
-  return false;
+  return state;
 }
 
-function hasDisallowedModeTuple(expr: ts.ArrayLiteralExpression, env: FileBindings): boolean {
+function hasDisallowedModeTuple(expr: ts.ArrayLiteralExpression, env: LexicalEnv, seen: Set<string>): boolean {
   for (const elem of expr.elements) {
+    if (ts.isSpreadElement(elem) && hasDisallowedModeInit(elem.expression, env, seen)) return true;
     if (!ts.isArrayLiteralExpression(elem) || elem.elements.length < 2) continue;
-    if (staticText(elem.elements[0]!, env) === "mode" && isDisallowedModeValue(elem.elements[1]!, env)) {
-      return true;
-    }
+    if (staticText(elem.elements[0]!, env) === "mode" && isDisallowedModeValue(elem.elements[1]!, env)) return true;
   }
   return false;
 }
 
-function checkNewExpression(source: ts.SourceFile, node: ts.NewExpression, file: string, env: FileBindings, findings: ModeMemoryFinding[]): void {
+function hasDisallowedModeInit(expr: ts.Expression, env: LexicalEnv, seen = new Set<string>()): boolean {
+  const target = unwrap(expr);
+  if (ts.isObjectLiteralExpression(target)) return evaluateObjectLiteralMode(target, env, seen) === "disallowed";
+  if (ts.isArrayLiteralExpression(target)) return hasDisallowedModeTuple(target, env, seen);
+  if (!ts.isIdentifier(target) || seen.has(target.text)) return false;
+  const found = lookupBinding(env, target.text);
+  if (!found) return false;
+  const next = new Set(seen);
+  next.add(target.text);
+  return found.binding.inits.some(init => hasDisallowedModeInit(init, found.scope, next));
+}
+
+function checkNewExpression(source: ts.SourceFile, node: ts.NewExpression, file: string, env: LexicalEnv, findings: ModeMemoryFinding[]): void {
   if (methodName(node.expression) !== "URLSearchParams" || !node.arguments?.length) return;
   const arg = node.arguments[0]!;
   if (hasDisallowedModeInit(arg, env)) {
@@ -339,7 +450,7 @@ function checkNewExpression(source: ts.SourceFile, node: ts.NewExpression, file:
   }
 }
 
-function checkConcatenation(source: ts.SourceFile, node: ts.BinaryExpression, file: string, env: FileBindings, findings: ModeMemoryFinding[]): void {
+function checkConcatenation(source: ts.SourceFile, node: ts.BinaryExpression, file: string, env: LexicalEnv, findings: ModeMemoryFinding[]): void {
   if (node.operatorToken.kind !== ts.SyntaxKind.PlusToken) return;
   const left = staticText(node.left, env);
   if (left !== undefined && dynamicModeQuery.test(left) && isDisallowedModeValue(node.right, env)) {
@@ -353,28 +464,25 @@ function checkConcatenation(source: ts.SourceFile, node: ts.BinaryExpression, fi
   recordFinding(source, node, file, "concatenated mode=memory", findings);
 }
 
-const fastPreFilter = /URLSearchParams|searchParams|mode|memory/i;
-
 export function findModeMemoryUses(file: string, text: string): ModeMemoryFinding[] {
-  if (!fastPreFilter.test(text)) return [];
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-  const env = collectBindings(source);
   const findings: ModeMemoryFinding[] = [];
-  function visit(node: ts.Node): void {
+  function visit(node: ts.Node, env: LexicalEnv): void {
+    const currentEnv = isScopeContainer(node) && !ts.isSourceFile(node) ? createScopeEnv(node, env) : env;
     if (isStringLiteral(node) && literalModeMemory.test(node.text)) {
       recordFinding(source, node, file, `literal ${JSON.stringify(node.text)}`, findings);
     } else if (ts.isBinaryExpression(node)) {
-      checkConcatenation(source, node, file, env, findings);
+      checkConcatenation(source, node, file, currentEnv, findings);
     } else if (ts.isTemplateExpression(node)) {
-      checkTemplateExpression(source, node, file, env, findings);
+      checkTemplateExpression(source, node, file, currentEnv, findings);
     } else if (ts.isCallExpression(node)) {
-      checkCallExpression(source, node, file, env, findings);
+      checkCallExpression(source, node, file, currentEnv, findings);
     } else if (ts.isNewExpression(node)) {
-      checkNewExpression(source, node, file, env, findings);
+      checkNewExpression(source, node, file, currentEnv, findings);
     }
-    ts.forEachChild(node, visit);
+    ts.forEachChild(node, child => visit(child, currentEnv));
   }
-  visit(source);
+  visit(source, createScopeEnv(source, undefined));
   return findings;
 }
 
@@ -449,9 +557,9 @@ test("only allowlisted memory-mode scopes may pass mode=memory", () => {
   const { unexpected, mismatched } = evaluateAllowlist(matched, MODE_MEMORY_ALLOWLIST);
   expect(unexpected, "Unallowlisted mode=memory usage detected; migrate to default persistent FS or add a scoped rule in MODE_MEMORY_ALLOWLIST").toEqual([]);
   expect(mismatched, "Stale or over-broad allowlist count detected; update MODE_MEMORY_ALLOWLIST").toEqual([]);
-}, 30_000);
+}, 60_000);
 
-test("mode=memory detector catches static, dynamic, split, computed, and indirect forms without false positives", () => {
+test("mode=memory detector catches static, dynamic, split, spread, computed, and aliased forms without false positives", () => {
   expect(findModeMemoryUses("probe.ts", 'page.goto(`${base}?engine=browser&mode=memory`)')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'page.goto("http://127.0.0.1/?mode=memory")')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'const script = `new Playground("?engine=quickjs&mode=memory")`;')).toHaveLength(1);
@@ -459,14 +567,18 @@ test("mode=memory detector catches static, dynamic, split, computed, and indirec
   expect(findModeMemoryUses("probe.ts", 'const q = "?mode=" + mode;')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'const q = "?mode=" + "memory";')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'const q = "?mo" + "de=memory";')).toHaveLength(1);
+  expect(findModeMemoryUses("probe.ts", 'page.goto("?mo" + "de=mem" + "ory");')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'const q = `?mo${"de"}=${"memory"}`;')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'url.searchParams.set("mode", "memory");')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'url.searchParams.set("mode", selected);')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'params.append("mode", "memory");')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'const p = new URLSearchParams(); p.set("mode", "memory");')).toHaveLength(1);
+  expect(findModeMemoryUses("probe.ts", 'const p = new URLSearchParams(); const q = p; q.set("mode", "memory");')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'new URLSearchParams({ mode: "memory" });')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'new URLSearchParams({ ["mode"]: "memory" });')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'const options = { mode: "memory" }; new URLSearchParams(options);')).toHaveLength(1);
+  expect(findModeMemoryUses("probe.ts", 'const options = { mode: "memory" }; new URLSearchParams({ mode: "fast", ...options });')).toHaveLength(1);
+  expect(findModeMemoryUses("probe.ts", 'const entries = [["mode", "memory"]]; new URLSearchParams([...entries]);')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'new URLSearchParams({ mode });')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'new URLSearchParams([["mode", "memory"]]);')).toHaveLength(1);
 
@@ -476,8 +588,23 @@ test("mode=memory detector catches static, dynamic, split, computed, and indirec
   expect(findModeMemoryUses("probe.ts", 'const q = `?mode=${"fast"}`;')).toEqual([]);
   expect(findModeMemoryUses("probe.ts", 'url.searchParams.set("mode", "fast");')).toEqual([]);
   expect(findModeMemoryUses("probe.ts", 'new URLSearchParams({ mode: "fast" });')).toEqual([]);
+  expect(findModeMemoryUses("probe.ts", 'const options = { mode: "memory" }; new URLSearchParams({ ...options, mode: "fast" });')).toEqual([]);
   expect(findModeMemoryUses("probe.ts", 'new Map().set("mode", "verify");')).toEqual([]);
   expect(findModeMemoryUses("probe.ts", 'const map = new Map<string, string>(); map.set("mode", "verify");')).toEqual([]);
+  expect(findModeMemoryUses("probe.ts", 'function makeHeaders() { return new Headers(); }\nconst params = makeHeaders(); params.set("mode", "cors");')).toEqual([]);
+
+  // Lexical scoping isolates bindings between separate tests in the same file.
+  const isolatedSource = `
+    function firstTest() {
+      const options = { mode: "memory" };
+      return options;
+    }
+    function secondTest() {
+      const options = { mode: "fast" };
+      return new URLSearchParams(options);
+    }
+  `;
+  expect(findModeMemoryUses("probe.ts", isolatedSource)).toEqual([]);
 
   // Scoped allowlist rejects an unallowlisted scope in an allowlisted file and rejects extra usages in an allowlisted scope.
   const probeSource = `

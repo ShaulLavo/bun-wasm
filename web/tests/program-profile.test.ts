@@ -37,10 +37,10 @@ test("profile paths and module admission cannot alias split and shared programs"
 
 test("both production pages validate selection before creating one runtime with Bun's policy", async () => {
   const page = await models();
-  const requests: RuntimeOptions[] = [];
+  const requests: (RuntimeOptions | undefined)[] = [];
   const stop = new Error("runtime boundary reached");
   page.boundary.onCreateRuntime = (options?: RuntimeOptions) => {
-    if (options) requests.push(options);
+    requests.push(options);
     throw stop;
   };
   const errors = spyOn(console, "error").mockImplementation((error: unknown) => {
@@ -55,7 +55,7 @@ test("both production pages validate selection before creating one runtime with 
       expect(() => new Page("?engine=browser&profile=shared-group")).toThrow(/does not support/);
     }
     expect(requests).toHaveLength(4);
-    for (const request of requests) expect(request.memoryGroups).toEqual(BUN_MEMORY_GROUP_POLICY);
+    for (const request of requests) expect(request?.memoryGroups).toEqual(BUN_MEMORY_GROUP_POLICY);
   } finally {
     errors.mockRestore();
     await page.cleanup();

@@ -89,7 +89,10 @@ try {
         return Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? "").join("\n").includes("ipc-preview-ready");
       }, undefined, { timeout: 90_000 });
       await page.waitForFunction(
-        (targetPort: number) => Boolean(Reflect.get(globalThis, "playground").previews.serves(targetPort)),
+        async (targetPort: number) => {
+          const pg = Reflect.get(globalThis, "playground");
+          return (await pg.previews.ready) === "ready" && Boolean(pg.previews.serves(targetPort));
+        },
         guestPort,
         { timeout: 15_000 },
       );
@@ -97,19 +100,39 @@ try {
         (targetPort: number) => Reflect.get(globalThis, "playground").previews.url(targetPort) as string,
         guestPort,
       );
+      await page.waitForFunction(
+        (expected: string) => {
+          const term = Reflect.get(globalThis, "playground").term;
+          const buffer = term.buffer.active;
+          return Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? "").join("\n").includes(expected);
+        },
+        preview,
+        { timeout: 15_000 },
+      );
       const previewPage = await page.context().newPage();
-      const response = await previewPage.goto(preview);
-      assert.ok(response, "preview navigation response");
-      console.log(JSON.stringify({ previewNavigation: { status: response.status(), serviceWorker: response.fromServiceWorker(), headers: response.headers(), body: await previewPage.locator("body").innerText() } }));
+      const deliveredResponse = previewPage.waitForResponse(
+        res => res.url() === preview && res.request().isNavigationRequest() && res.status() !== 302,
+        { timeout: 30_000 },
+      );
+      await previewPage.goto(preview, { waitUntil: "domcontentloaded" });
+      const response = await deliveredResponse;
+      await previewPage.waitForURL(preview, { timeout: 30_000 });
+      const navText = await response.text();
+      console.log(JSON.stringify({ previewNavigation: { url: response.url(), status: response.status(), serviceWorker: response.fromServiceWorker(), headers: response.headers(), body: navText } }));
+      assert.equal(response.status(), 200);
+      assert.equal(response.fromServiceWorker(), true, "actual service-worker preview request");
+      const navReport = JSON.parse(navText);
+      assert.equal(navReport.token, token);
+      assert.equal(navReport.exchanges.length, 2);
+      assert.deepEqual(navReport.exitBurst, { received: 257, last: 256, callbacks: 257, disconnected: 1, connected: false });
       const result = await previewPage.evaluate(async () => {
-        const response = await fetch(location.href);
-        const text = await response.text();
-        return { status: response.status, text, report: JSON.parse(text) };
+        const res = await fetch(location.href);
+        const text = await res.text();
+        return { status: res.status, text, report: JSON.parse(text) };
       });
       Object.assign(result, { serviceWorker: response.fromServiceWorker() });
       console.log(JSON.stringify({ browser: browser.version(), preview, result, errors }));
       assert.equal(result.status, 200);
-      assert.equal(response.fromServiceWorker(), true, "actual service-worker preview request");
       assert.equal(result.report.token, token);
       assert.equal(result.report.exchanges.length, 2);
       assert.deepEqual(result.report.exitBurst, { received: 257, last: 256, callbacks: 257, disconnected: 1, connected: false });
