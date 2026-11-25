@@ -9,7 +9,7 @@ export const copy = {
   /** Keyed by demo id (see demos.ts). Labels are API names; titles explain them on hover. */
   demos: {
     serve: { label: "Bun.serve", title: "Serve HTTP routes and a bun:sqlite visit counter in a live preview" },
-    sqlite: { label: "bun:sqlite", title: "Create a SQLite table, insert rows in a transaction, and query todos.sqlite" },
+    sqlite: { label: "bun:sqlite", title: "Create a SQLite table in memory, insert rows in a transaction, and query it" },
     test: { label: "bun test", title: "Run bun:test with describe, test.each, mocks, and async assertions" },
     build: { label: "Bun.build", title: "Bundle and minify TSX and TypeScript into dist/ with linked sourcemaps" },
     shell: { label: "Bun.$", title: "Run shell globs, pipes, argument escaping, .json(), and exit codes" },
@@ -51,13 +51,13 @@ export const copy = {
   /** The header's main button: Run when idle, Stop while a command runs. */
   run: {
     run: "▶ Run",
-    runTitle: "Save and run (Ctrl/Cmd-Enter)",
+    runTitle: "Save the open file and run it. Ctrl/Cmd-Enter.",
     stop: "■ Stop",
-    stopTitle: "Stop the running command (press again to force it)",
+    stopTitle: "Stop the running command. Press again to force it.",
   },
   /** The phone-only switch between the three panes of the examples workspace. */
   panes: {
-    aria: "Pane",
+    aria: "Workspace panes",
     code: "Code",
     preview: "Preview",
     terminal: "Terminal",

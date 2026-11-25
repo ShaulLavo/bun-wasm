@@ -172,7 +172,7 @@ test("mocks and async", async () => {
 // Edit the HTML or a route, then press Restart above the preview.
 import { Database } from "bun:sqlite";
 
-// One in-memory database per server, so two tabs never write the same SQLite file.
+// One in-memory database per server, so tabs never write to the same SQLite file.
 const db = new Database(":memory:");
 db.run("CREATE TABLE IF NOT EXISTS visits (at TEXT NOT NULL)");
 
@@ -263,7 +263,7 @@ const math = result.outputs.find((output) => output.path.endsWith("math.js"));
 if (math) console.log("\\nminified math.js:\\n" + (await math.text()).split("\\n")[0]);
 `,
 
-  "db.ts": `// SQLite in WebAssembly, in memory, so tabs never share a database file.
+  "db.ts": `// In-memory SQLite in WebAssembly, so open tabs never share a database file.
 import { Database } from "bun:sqlite";
 
 const db = new Database(":memory:");
