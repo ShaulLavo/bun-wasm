@@ -1734,8 +1734,15 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         Ok(st.resolver.register_object_module(a.str(0)?).into())
     });
     let st = state.clone();
-    t.add("registerMockedFile", move |a| {
-        Ok(st.resolver.register_mocked_file(a.str(0)?).into())
+    t.add("mockModule", move |a| {
+        Ok(st.resolver.register_mock(a.str(0)?, a.str(1)?).into())
+    });
+    let st = state.clone();
+    t.add("mockTarget", move |a| {
+        Ok(st
+            .resolver
+            .mock_target(a.str(0)?)
+            .map_or(Val::Undefined, Val::Str))
     });
     let st = state.clone();
     t.add("clearObjectModules", move |_| {
@@ -2114,6 +2121,33 @@ fn install_crypto(t: &mut Table) {
         verify(a.bytes(0)?, a.bytes(1)?, algorithm)
             .map(Val::Bool)
             .map_err(|err| password_error(err, "verification"))
+    });
+    // Bun.CSRF (js/bun_csrf.ts validates the options): (algorithm, format, expiresIn ms,
+    // secret?, sessionId?) and (token, algorithm, format, maxAge ms, secret?, sessionId?).
+    t.add("csrfGenerate", |a| {
+        let format = crate::csrf::TokenFormat::parse(a.str(1)?)
+            .ok_or_else(|| NativeError::type_error("Invalid format".to_string()))?;
+        crate::csrf::generate(
+            a.opt_bytes(3),
+            a.opt_bytes(4).unwrap_or(&[]),
+            a.num(2)? as u64,
+            a.str(0)?,
+            format,
+        )
+        .map(Val::Str)
+        .ok_or_else(|| NativeError::error("Failed to create CSRF token".to_string()))
+    });
+    t.add("csrfVerify", |a| {
+        let format = crate::csrf::TokenFormat::parse(a.str(2)?)
+            .ok_or_else(|| NativeError::type_error("Invalid format".to_string()))?;
+        Ok(Val::Bool(crate::csrf::verify(
+            a.bytes(0)?,
+            a.opt_bytes(4),
+            a.opt_bytes(5).unwrap_or(&[]),
+            a.num(3)? as u64,
+            a.str(1)?,
+            format,
+        )))
     });
     // node:crypto pbkdf2: (canonical name, password, salt, iterations, keylen).
     t.add("nodePbkdf2", |a| {

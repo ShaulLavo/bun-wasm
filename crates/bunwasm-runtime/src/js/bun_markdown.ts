@@ -20,7 +20,8 @@
     throw Object.assign(new TypeError("Expected a string or buffer to render"), { code: "ERR_INVALID_ARG_TYPE" });
   }
 
-  const isObject = (value: unknown): value is Options => value !== null && typeof value === "object";
+  // JSC's is_object: functions count, so a callable options object is read too.
+  const isObject = (value: unknown): value is Options => value !== null && (typeof value === "object" || typeof value === "function");
   // Bun's get_boolean_loose: a present property counts by its truthiness.
   function loose(options: Options, key: string): boolean | undefined {
     const value = options[key];

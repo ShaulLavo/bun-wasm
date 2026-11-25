@@ -150,6 +150,48 @@ await check("Bun.CSRF", () => {
     token.length,
   ];
 });
+await check("Bun.CSRF ignores replaced globals", () => {
+  const random = crypto.getRandomValues;
+  const now = Date.now;
+  try {
+    crypto.getRandomValues = (<T extends ArrayBufferView | null>(array: T) => array) as typeof crypto.getRandomValues;
+    Date.now = () => 0;
+    const a = Bun.CSRF.generate("secret", { encoding: "hex" });
+    const b = Bun.CSRF.generate("secret", { encoding: "hex" });
+    const defaults = [Bun.CSRF.generate(), Bun.CSRF.generate()];
+    Date.now = now;
+    // A zero timestamp would have expired; equal nonces would make equal tokens.
+    return [a !== b, a.slice(16, 48) !== "0".repeat(32), Bun.CSRF.verify(a, { secret: "secret", encoding: "hex" }), defaults.every(token => Bun.CSRF.verify(token))];
+  } finally {
+    crypto.getRandomValues = random;
+    Date.now = now;
+  }
+});
+await check("Bun.CSRF options", () => {
+  const code = (run: () => unknown) => { try { return run(); } catch (error) { return `${(error as Error).name} ${(error as { code?: string }).code}: ${(error as Error).message}`; } };
+  return [
+    Bun.CSRF.generate("s", { encoding: "HEX" }).length, Bun.CSRF.generate("s", { encoding: "BASE64URL" }).length, Bun.CSRF.generate("s", { encoding: "base64" }).length,
+    Bun.CSRF.generate("s", { algorithm: "SHA-384" }).length, Bun.CSRF.generate("s", { algorithm: "sha-512/256" }).length,
+    code(() => Bun.CSRF.generate(null as unknown as string)), code(() => Bun.CSRF.generate(5 as unknown as string)), code(() => Bun.CSRF.generate("")),
+    code(() => Bun.CSRF.generate("s", { sessionId: 5 as unknown as string })), code(() => Bun.CSRF.generate("s", { sessionId: "" })),
+    code(() => Bun.CSRF.generate("s", { algorithm: "sha512_256" as "sha256" })), code(() => Bun.CSRF.generate("s", { algorithm: null as unknown as "sha256" })),
+    code(() => Bun.CSRF.generate("s", { encoding: "utf8" as "hex" })), code(() => Bun.CSRF.generate("s", { expiresIn: -1 })),
+    code(() => Bun.CSRF.generate("s", { expiresIn: 1.5 })), code(() => Bun.CSRF.generate("s", { expiresIn: "5" as unknown as number })),
+    code(() => Bun.CSRF.verify(5 as unknown as string)), code(() => Bun.CSRF.verify("")), code(() => Bun.CSRF.verify("x", { secret: 5 as unknown as string })),
+    code(() => Bun.CSRF.verify("x", { secret: "s", maxAge: {} as unknown as number })),
+  ];
+});
+await check("Bun.CSRF decoding", () => {
+  const hex = Bun.CSRF.generate("s", { encoding: "hex", algorithm: "sha512" });
+  const url = Bun.CSRF.generate("s");
+  const hexOptions = { secret: "s", encoding: "hex", algorithm: "sha512" } as const;
+  return [
+    hex.length, Bun.CSRF.verify(`${hex}\0`, hexOptions), Bun.CSRF.verify(`${hex}\0\0`, hexOptions), Bun.CSRF.verify(hex.toUpperCase(), hexOptions),
+    Bun.CSRF.verify(`${hex}00`, hexOptions), Bun.CSRF.verify(url, { secret: "s", encoding: "base64" }), Bun.CSRF.verify(`${url}\0`, { secret: "s" }),
+    Bun.CSRF.verify(`  ${url}\n`, { secret: "s" }), Bun.CSRF.verify(`!!!!${url}`, { secret: "s" }), Bun.CSRF.verify(`${url}AAAA`, { secret: "s" }),
+    Bun.CSRF.verify(`${url}${"A".repeat(24)}`, { secret: "s" }), Bun.CSRF.verify(url, 5 as unknown as Bun.CSRFVerifyOptions),
+  ];
+});
 await check("Bun.markdown.html", () => Bun.markdown.html("# Title\n\n| a | b |\n|---|---|\n| 1 | ~~2~~ |\n\n- [x] done\n", { headings: true }));
 await check("Bun.markdown.ansi", () => Bun.markdown.ansi("# Hi\n\n*em* and `code`", { colors: false }));
 await check("structuredClone + Bun types", () => structuredClone({ d: new Date(0), m: new Map([[1, 2]]) }));

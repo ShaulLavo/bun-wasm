@@ -196,8 +196,14 @@ pub struct Resolver {
     custom_conditions: Rc<[String]>,
     experimental_stream_iter: bool,
     object_modules: RefCell<HashMap<String, String>>,
-    /// `mock.module()` replacements by resolved file path.
+    /// `mock.module()` replacements by resolved (or, for a missing file, normalized) path.
     mocked_files: RefCell<HashMap<String, String>>,
+    /// `mock.module()` replacements of builtins by canonical name; only imports see them.
+    mocked_builtins: RefCell<HashMap<String, String>>,
+    /// What each `mock.module()` key replaces, for `require.resolve` and `import.meta.resolve`.
+    mock_targets: RefCell<HashMap<String, String>>,
+    /// Mock keys resolution ignores while `register_mock` looks up the real target.
+    suspended_mocks: RefCell<Vec<String>>,
     next_object_module: Cell<u64>,
     /// package.json contents by directory (`None` = no package.json there).
     package_json: RefCell<HashMap<String, Option<Rc<Json>>>>,
@@ -228,6 +234,9 @@ impl Resolver {
             experimental_stream_iter: false,
             object_modules: RefCell::new(HashMap::new()),
             mocked_files: RefCell::new(HashMap::new()),
+            mock_targets: RefCell::new(HashMap::new()),
+            mocked_builtins: RefCell::new(HashMap::new()),
+            suspended_mocks: RefCell::new(Vec::new()),
             next_object_module: Cell::new(0),
             package_json: RefCell::new(HashMap::new()),
             package_errors: RefCell::new(HashMap::new()),
@@ -258,14 +267,68 @@ impl Resolver {
         key
     }
 
-    /// `mock.module()` on a file: every later import or require that resolves to `path`
-    /// loads the returned module key instead, whatever specifier names it.
-    pub fn register_mocked_file(&self, path: &str) -> String {
+    /// `mock.module(spec)` from the file `from`: every later import or require that resolves
+    /// to the same target, through any specifier, loads the returned module key instead.
+    /// The target is what an import of `spec` resolves to, ignoring earlier mocks (Bun mocks a
+    /// package's import entry); a builtin is its canonical `node:` name; a missing relative or
+    /// absolute file is its normalized path; any other missing name is the name itself.
+    /// Mocking the same target again replaces the earlier mock.
+    pub fn register_mock(&self, spec: &str, from: &str) -> String {
         let key = self.next_object_key();
-        self.mocked_files
-            .borrow_mut()
-            .insert(path.to_owned(), key.clone());
+        let suspended = std::mem::take(&mut *self.suspended_mocks.borrow_mut());
+        let resolved = self.resolve_target(spec, from);
+        *self.suspended_mocks.borrow_mut() = suspended;
+        let original = match resolved {
+            MockTarget::File(path) => {
+                self.mocked_files
+                    .borrow_mut()
+                    .insert(path.clone(), key.clone());
+                path
+            }
+            MockTarget::Name(name) if self.builtin_name(&name).is_some() => {
+                self.mocked_builtins
+                    .borrow_mut()
+                    .insert(name.clone(), key.clone());
+                name
+            }
+            MockTarget::Name(name) => {
+                self.object_modules
+                    .borrow_mut()
+                    .insert(name.clone(), key.clone());
+                name
+            }
+        };
+        self.mock_targets.borrow_mut().insert(key.clone(), original);
+        self.forget_required();
         key
+    }
+
+    fn resolve_target(&self, spec: &str, from: &str) -> MockTarget {
+        // Earlier mocks of the same target must not hide it.
+        let mocked: Vec<String> = self.mock_targets.borrow().keys().cloned().collect();
+        self.suspended_mocks.borrow_mut().extend(mocked);
+        let resolved = self.resolve_unmocked(spec, from, Kind::Import);
+        self.suspended_mocks.borrow_mut().clear();
+        match resolved {
+            Ok(Resolved::File(path)) => MockTarget::File(path),
+            Ok(Resolved::Builtin(name)) if !name.starts_with("bun:plugin:") => {
+                MockTarget::Name(name)
+            }
+            _ if is_relative_or_absolute(spec) => {
+                MockTarget::File(normalize(&join(directory_of(from), spec)))
+            }
+            _ => MockTarget::Name(self.builtin_name(spec).unwrap_or_else(|| spec.to_owned())),
+        }
+    }
+
+    /// The path or name a `mock.module()` key replaces.
+    pub fn mock_target(&self, key: &str) -> Option<String> {
+        self.mock_targets.borrow().get(key).cloned()
+    }
+
+    fn active_mock(&self, key: Option<&String>) -> Option<String> {
+        key.filter(|key| !self.suspended_mocks.borrow().contains(key))
+            .cloned()
     }
 
     fn next_object_key(&self) -> String {
@@ -274,8 +337,12 @@ impl Resolver {
         format!("bun:plugin:{next}")
     }
 
+    /// `Bun.plugin.clearAll()`: plugin modules and every `mock.module()` mock.
     pub fn clear_object_modules(&self) {
         self.object_modules.borrow_mut().clear();
+        self.mocked_files.borrow_mut().clear();
+        self.mocked_builtins.borrow_mut().clear();
+        self.mock_targets.borrow_mut().clear();
         self.forget_required();
     }
 
@@ -288,23 +355,39 @@ impl Resolver {
     /// Resolve `spec` imported from the file `from` (or a directory path ending
     /// in `/` for the entry point / eval code).
     pub fn resolve(&self, spec: &str, from: &str, kind: Kind) -> Result<Resolved, String> {
-        let resolved = self.resolve_unmocked(spec, from, kind)?;
+        let resolved = match self.resolve_unmocked(spec, from, kind) {
+            Ok(resolved) => resolved,
+            // A mocked file need not exist.
+            Err(error)
+                if is_relative_or_absolute(spec) && !self.mocked_files.borrow().is_empty() =>
+            {
+                let path = normalize(&join(directory_of(from), spec));
+                return self
+                    .active_mock(self.mocked_files.borrow().get(&path))
+                    .map(Resolved::Builtin)
+                    .ok_or(error);
+            }
+            Err(error) => return Err(error),
+        };
         let Resolved::File(path) = &resolved else {
             return Ok(resolved);
         };
-        match self.mocked_files.borrow().get(path) {
-            Some(key) => Ok(Resolved::Builtin(key.clone())),
-            None => Ok(resolved),
-        }
+        Ok(self
+            .active_mock(self.mocked_files.borrow().get(path))
+            .map_or(resolved, Resolved::Builtin))
     }
 
     fn resolve_unmocked(&self, spec: &str, from: &str, kind: Kind) -> Result<Resolved, String> {
         self.notes.borrow_mut().clear();
-        if let Some(key) = self.object_modules.borrow().get(spec) {
-            return Ok(Resolved::Builtin(key.clone()));
+        if let Some(key) = self.active_mock(self.object_modules.borrow().get(spec)) {
+            return Ok(Resolved::Builtin(key));
         }
         if let Some(name) = self.builtin_name(spec) {
-            return Ok(Resolved::Builtin(name));
+            // A builtin mock covers every import spelling; require() keeps the real builtin, as in Bun.
+            let mocked = (kind == Kind::Import)
+                .then(|| self.active_mock(self.mocked_builtins.borrow().get(&name)))
+                .flatten();
+            return Ok(Resolved::Builtin(mocked.unwrap_or(name)));
         }
         if spec.starts_with("node:") {
             return Err(format!("No such built-in module: {spec}"));
@@ -628,6 +711,22 @@ impl Resolver {
             _ => None,
         }
     }
+}
+
+enum MockTarget {
+    File(String),
+    Name(String),
+}
+
+/// The directory a specifier is relative to: `from` itself when it ends in `/` (the entry
+/// point or eval code), otherwise the file's directory.
+fn directory_of(from: &str) -> &str {
+    let dir = if from.ends_with('/') {
+        from.trim_end_matches('/')
+    } else {
+        dirname(from)
+    };
+    if dir.is_empty() { "/" } else { dir }
 }
 
 fn is_relative_or_absolute(spec: &str) -> bool {

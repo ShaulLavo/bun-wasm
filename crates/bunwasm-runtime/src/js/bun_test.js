@@ -785,37 +785,40 @@
   mock.restore = () => forEachMock("mockRestore");
   mock.clearAllMocks = () => forEachMock("mockClear");
   // mock.module(specifier, factory): later imports and requires of the module get the factory's
-  // exports (docs/bun-patches/bun-test-mock-module.md). A relative specifier resolves from the
-  // calling file; a specifier that names no file (or a builtin) is replaced by that exact name.
-  // Unlike Bun, a module that was already imported keeps its original exports.
+  // exports (docs/bun-patches/bun-test-mock-module.md). The resolver maps the target, resolved
+  // from the calling file, to a plugin module key, so every spelling of it is covered and a
+  // second mock of the same target replaces the first. Unlike Bun, a module that was already
+  // imported keeps its original exports.
   mock.module = function module(specifier, factory) {
-    if (typeof specifier !== "string") throw new TypeError("mock.module(path, fn) expects a module path string");
-    if (typeof factory !== "function") throw new TypeError("mock.module(path, fn) expects a function");
-    const key = mockedModuleKey(specifier);
+    // BunPlugin.cpp JSMock__jsModuleMock's argument errors.
+    if (arguments.length < 1) throw new TypeError("mock(module, fn) requires a module and function");
+    if (typeof specifier !== "string") throw new TypeError("mock(module, fn) requires a module name string");
+    if (!specifier) throw new TypeError("mock(module, fn) requires a module and function");
+    if (typeof factory !== "function") throw new TypeError("mock(module, fn) requires a function");
+    const { fileURLToPath } = internal.require("node_url");
+    const origin = internal.require("caller_origin")();
+    const from = origin && origin.startsWith("file:") ? fileURLToPath(origin) : `${globalThis.process.cwd()}/`;
+    const key = native.mockModule(specifier.startsWith("file:") ? fileURLToPath(specifier) : specifier, from);
     let exports;
+    let running = false;
     internal.builtinFactories[key] = () => {
       if (exports) return exports;
-      const result = factory();
-      if (isThenable(result)) throw new TypeError("mock.module() factories must return the exports object synchronously in bun-wasm");
-      if (result === null || typeof result !== "object") throw new TypeError("mock.module() factory must return an object");
+      // A factory that loads its own target gets an empty object, as in Bun, not a recursion.
+      if (running) return {};
+      running = true;
+      let result;
+      try {
+        result = factory();
+      } finally {
+        running = false;
+      }
+      // A thenable is a value like any other, as in Bun.
+      if (result === null || (typeof result !== "object" && typeof result !== "function")) throw new TypeError("mock(module, fn) requires a function that returns an object");
       exports = result;
       return exports;
     };
     return undefined;
   };
-
-  function mockedModuleKey(specifier) {
-    const origin = internal.require("caller_origin")();
-    const from = origin && origin.startsWith("file:") ? internal.require("node_url").fileURLToPath(origin) : `${globalThis.process.cwd()}/`;
-    let resolved;
-    try {
-      resolved = native.resolve(specifier, from, true);
-    } catch {
-      resolved = undefined;
-    }
-    if (typeof resolved === "string" && resolved.startsWith("/")) return native.registerMockedFile(resolved);
-    return native.registerObjectModule(specifier);
-  }
 
   const jest = {
     ...internal.fakeTimers.api,

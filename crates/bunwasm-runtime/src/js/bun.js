@@ -474,7 +474,7 @@
     const base = from === undefined ? native.cwd() + "/" : String(from);
     // A directory (no extension, existing dir) resolves relative to itself.
     const fromPath = !base.endsWith("/") && native.exists(base) && native.stat(base).mode & 0o040000 ? base + "/" : base;
-    return native.resolve(String(spec), fromPath, false);
+    return internal.mockedTarget(native.resolve(String(spec), fromPath, false));
   }
 
   // Bun.build(): Bun's bundler (native.build). Outputs are BuildArtifacts, Blobs with a path.

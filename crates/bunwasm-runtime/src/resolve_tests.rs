@@ -619,7 +619,7 @@ fn mocked_file_replaces_every_specifier_that_resolves_to_it() {
         resolver.resolve("./lib/dep", &from, Kind::Require),
         Ok(Resolved::File(fixture.path("lib/dep.ts")))
     );
-    let key = resolver.register_mocked_file(&fixture.path("lib/dep.ts"));
+    let first = resolver.register_mock("./lib/dep", &from);
     for (spec, kind) in [
         ("./lib/dep", Kind::Require),
         ("./lib/dep.ts", Kind::Import),
@@ -627,11 +627,93 @@ fn mocked_file_replaces_every_specifier_that_resolves_to_it() {
     ] {
         assert_eq!(
             resolver.resolve(spec, &from, kind),
-            Ok(Resolved::Builtin(key.clone()))
+            Ok(Resolved::Builtin(first.clone()))
+        );
+    }
+    // A second mock through another spelling replaces the first everywhere.
+    let second = resolver.register_mock("./lib/dep.ts", &from);
+    assert_ne!(first, second);
+    for (spec, kind) in [("./lib/dep", Kind::Require), ("./lib/dep", Kind::Import)] {
+        assert_eq!(
+            resolver.resolve(spec, &from, kind),
+            Ok(Resolved::Builtin(second.clone()))
         );
     }
     assert_eq!(
+        resolver.mock_target(&second),
+        Some(fixture.path("lib/dep.ts"))
+    );
+    assert_eq!(
         resolver.resolve("./other", &from, Kind::Import),
         Ok(Resolved::File(fixture.path("other.ts")))
+    );
+    resolver.clear_object_modules();
+    assert_eq!(
+        resolver.resolve("./lib/dep", &from, Kind::Import),
+        Ok(Resolved::File(fixture.path("lib/dep.ts")))
+    );
+}
+
+#[test]
+fn mocks_of_missing_files_and_builtins_use_their_normalized_names() {
+    let fixture = Fixture::new();
+    fixture.file("a/index.ts");
+    fixture.file("b/index.ts");
+    let resolver = Resolver::new();
+    let in_a = fixture.path("a/index.ts");
+    let in_b = fixture.path("b/index.ts");
+    let missing = resolver.register_mock("./missing.ts", &in_a);
+    assert_eq!(
+        resolver.resolve("./missing.ts", &in_a, Kind::Import),
+        Ok(Resolved::Builtin(missing.clone()))
+    );
+    assert_eq!(
+        resolver.resolve("../a/missing.ts", &in_b, Kind::Require),
+        Ok(Resolved::Builtin(missing))
+    );
+    assert!(
+        resolver
+            .resolve("./missing.ts", &in_b, Kind::Import)
+            .is_err()
+    );
+    let fs = resolver.register_mock("fs/promises", &in_a);
+    assert_eq!(
+        resolver.resolve("node:fs/promises", &in_b, Kind::Import),
+        Ok(Resolved::Builtin(fs.clone()))
+    );
+    assert_eq!(
+        resolver.resolve("fs/promises", &in_b, Kind::Import),
+        Ok(Resolved::Builtin(fs.clone()))
+    );
+    // require() of a builtin keeps the real module, as in Bun.
+    assert_eq!(
+        resolver.resolve("fs/promises", &in_b, Kind::Require),
+        Ok(Resolved::Builtin("node:fs/promises".to_owned()))
+    );
+    assert_eq!(
+        resolver.mock_target(&fs),
+        Some("node:fs/promises".to_owned())
+    );
+}
+
+#[test]
+fn package_mocks_replace_the_import_entry() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "node_modules/dual/package.json",
+        r#"{"name":"dual","exports":{"import":"./esm.mjs","require":"./cjs.cjs"}}"#,
+    );
+    fixture.file("node_modules/dual/esm.mjs");
+    fixture.file("node_modules/dual/cjs.cjs");
+    let resolver = Resolver::new();
+    let from = fixture.path("index.ts");
+    let key = resolver.register_mock("dual", &from);
+    assert_eq!(
+        resolver.mock_target(&key),
+        Some(fixture.path("node_modules/dual/esm.mjs"))
+    );
+    assert_eq!(
+        resolver.resolve("dual", &from, Kind::Import),
+        Ok(Resolved::Builtin(key))
     );
 }

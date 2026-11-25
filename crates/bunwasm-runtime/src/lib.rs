@@ -21,6 +21,7 @@ mod compression;
 mod crypto;
 mod crypto_ec;
 mod crypto_pqc;
+mod csrf;
 pub(crate) mod data;
 mod directory;
 mod encoding;

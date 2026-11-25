@@ -989,6 +989,13 @@
     return args;
   }
 
+  // require.resolve and import.meta.resolve name what a mock.module() key replaces (its file
+  // path or builtin name), as Bun does, not the key that loading uses.
+  function mockedTarget(resolved) {
+    return typeof resolved === "string" && resolved.startsWith("bun:plugin:") ? native.mockTarget(resolved) ?? resolved : resolved;
+  }
+  internal.mockedTarget = mockedTarget;
+
   function resolveFrom(spec, parent, options) {
     if (typeof spec !== "string") {
       const err = new TypeError(`The "id" argument must be of type string. Received ${internal.describe(spec)}`);
@@ -1041,7 +1048,7 @@
     const parent = mod || new Module(fromPath, undefined);
     const require = requireFunction(parent);
     require.resolve = function resolve(spec, options) {
-      const resolved = resolveFrom(spec, parent, options);
+      const resolved = mockedTarget(resolveFrom(spec, parent, options));
       return resolved === "node:" + spec ? spec : resolved;
     };
     require.resolve.paths = function paths(spec) {
@@ -1093,11 +1100,11 @@
         return format === "esm" ? esmNamespaces.get(mod) ?? mod.exports : commonJsNamespace(mod.exports);
       },
       resolve(spec) {
-        const resolved = native.resolve(String(spec), path, false);
-        return isBuiltinId(resolved) ? resolved : pathToFileHref(resolved);
+        const resolved = mockedTarget(native.resolve(String(spec), path, false));
+        return isBuiltinId(resolved) || !resolved.startsWith("/") ? resolved : pathToFileHref(resolved);
       },
       resolveSync(spec) {
-        return native.resolve(String(spec), path, false);
+        return mockedTarget(native.resolve(String(spec), path, false));
       },
     });
     Object.defineProperty(meta, "env", {

@@ -79,8 +79,10 @@ declare namespace BunWasm {
     hostLookup?: (hostname: string, family: 0 | 4 | 6, hints: number) => Promise<Array<{ address: string; family: 4 | 6 }>>;
     hostClose(handle: number): number;
     registerObjectModule(name: string): string;
-    /** mock.module(): later imports and requires resolving to this file load the returned module key. */
-    registerMockedFile(path: string): string;
+    /** mock.module(spec) from `from`: later imports and requires of its target load the returned module key. */
+    mockModule(spec: string, from: string): string;
+    /** The path or builtin name a mock.module() key replaces. */
+    mockTarget(key: string): string | undefined;
     /** Bun.markdown (bunwasm-build markdown.rs): ("html" | "ansi", text, options JSON). */
     markdown(mode: "html" | "ansi", text: Uint8Array, options: string): string;
     clearObjectModules(): void;
@@ -249,6 +251,9 @@ declare namespace BunWasm {
     /** Bun.password (password.rs): (password, algorithm, bcrypt cost, argon2 memoryCost KiB, argon2 timeCost). */
     passwordHash(password: Uint8Array, algorithm: string, cost: number, memoryCost: number, timeCost: number): string;
     passwordVerify(password: Uint8Array, hash: Uint8Array, algorithm?: string): boolean;
+    /** Bun.CSRF (csrf.rs): (algorithm, format, expiresIn ms, secret?, sessionId?). */
+    csrfGenerate(algorithm: string, format: string, expiresIn: number, secret?: Uint8Array, sessionId?: Uint8Array): string;
+    csrfVerify(token: Uint8Array, algorithm: string, format: string, maxAge: number, secret?: Uint8Array, sessionId?: Uint8Array): boolean;
     streams: {
       /** A node:zlib native handle: (mode, options JSON, dictionary). */
       codec(mode: string, options?: string, dictionary?: Uint8Array): number;
