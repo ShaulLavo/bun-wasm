@@ -286,9 +286,29 @@ fn print_report(report: &Report, options: &Options, cwd: &[u8]) -> u8 {
     u8::from(!report.is_ok())
 }
 
+const HELP: &str = "Usage: bun check [flags] [...files or directories]
+  Type-check a TypeScript project, like tsc --noEmit.
+
+Flags:
+  -p, --project PATH    Path to a tsconfig.json or its directory
+  -b, --build           Check the projects in references too, like tsc -b
+  --pretty              Show source code around each error (default in a terminal)
+  --no-pretty           One line per error, like tsc --pretty false (default when piped)
+  --all                 Show every error (above 50, identical errors are grouped)
+  --timing              Print load and check times
+  --cwd PATH            Set the working directory
+  -h, --help            Print this help menu
+
+Compiler options such as --strict or --target es2022 override the tsconfig.json.
+
+Examples:
+  bun check
+  bun check --project tsconfig.build.json
+  bun check src/index.ts --strict
+
+Full documentation is available at https://bun.com/docs/check
+";
+
 fn print_help() {
-    bun_core::pretty!(
-        "Usage: bun check [flags] [...files or directories]\n  Type-check a TypeScript project, like <b>tsc --noEmit<r>.\n\nFlags:\n  -p, --project <path>  Path to a tsconfig.json or its directory\n  -b, --build           Check the projects in <b>references<r> too, like <b>tsc -b<r>\n  --pretty              Show source code around each error <d>(default in a terminal)<r>\n  --no-pretty           One line per error, like <b>tsc --pretty false<r> <d>(default when piped)<r>\n  --all                 Show every error <d>(above 50, identical errors are grouped)<r>\n  --timing              Print load and check times\n  --cwd <path>          Set the working directory\n  -h, --help            Print this help menu\n\nCompiler options such as <b>--strict<r> or <b>--target es2022<r> override the tsconfig.json.\n\nExamples:\n  bun check\n  bun check --project tsconfig.build.json\n  bun check src/index.ts --strict\n\nFull documentation is available at https://bun.com/docs/check\n"
-    );
-    Output::flush();
+    print!("{HELP}");
 }
