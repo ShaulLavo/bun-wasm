@@ -13,11 +13,13 @@ test("CLI dispatch distinguishes Node files, Bun commands, run aliases and eval 
     const source = readFileSync(new URL("../crates/bunwasm-cli/src/main.rs", import.meta.url), "utf8");
     const start = source.indexOf("enum Command {");
     const end = source.indexOf("// Referenced so the linker", start);
+    // The real selector: parse() asks it whether a command belongs to bun-tools.wasm.
+    const toolArgs = readFileSync(new URL("../crates/bunwasm-cli/src/tool_args.rs", import.meta.url), "utf8");
     const definitions = `
       mod bunwasm_runtime { pub const BUN_VERSION: &str = "test"; pub const BUN_REVISION: &str = "test"; }
       #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] enum RunMode { #[default] Once, Hot }
       enum Entry { File(String), Eval(String), Test(Vec<String>) }
-      mod tool_args { pub fn before_command(_: &[String]) -> Option<()> { None } }
+      mod tool_args { ${toolArgs} }
       const HELP: &str = "help";
     `;
     const controls = `
