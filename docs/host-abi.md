@@ -372,6 +372,7 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 | `runtime_proc.wait_job` | `(job, flags, status_ptr) -> errno` |
 | `runtime_proc.kill` | `(pid, sig) -> 0` |
 | `runtime_proc.kill_job` | `(job, sig) -> 0` |
+| `runtime_proc.probe_process` | `(pid) -> 0`, `-63` (`EPERM`), or `-71` (`ESRCH`), read-only logical-PID existence/permission probe |
 | `runtime_proc.poll` | `(subs_ptr, n, timeout_ms, out_ptr) -> n_ready` |
 | `runtime_proc.signal` | `(sig, mode) -> result`, see [Signal dispositions](#signal-dispositions) |
 | `wasi_snapshot_preview1.fd_close` | `(fd) -> errno`, the only way to close a pipe end |
