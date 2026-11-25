@@ -1,5 +1,5 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -155,7 +155,7 @@ test("cold source sync refuses a broken checked-in patch", () => {
 
 // A full sync (source, vendored dependencies, codegen) against a tiny stand-in for Bun's
 // repository: two pins, each with its own dependency pins and our one patch on top.
-function upgradeFixture(run: (f: { vendor: string; oldTip: string; newTip: string; git: (cwd: string, ...args: string[]) => string; pin: (which: "old" | "new") => void; sync: (args?: string[]) => { exitCode: number; stderr: string } }) => void) {
+function upgradeFixture(run: (f: { vendor: string; oldTip: string; newTip: string; git: (cwd: string, ...args: string[]) => string; pin: (which: "old" | "new") => void; sync: (args?: string[], env?: Record<string, string>) => { exitCode: number; stderr: string } }) => void) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-source-upgrade-"));
   try {
     const repository = join(root, "upstream"), vendor = join(root, "vendor", "bun");
@@ -173,6 +173,9 @@ function upgradeFixture(run: (f: { vendor: string; oldTip: string; newTip: strin
       const source = join(root, "unpacked", commit, "package");
       write(join(source, "Cargo.toml"), `# ${commit}\n`);
       write(join(source, "lib.txt"), lines);
+      // "B" sorts before "a" in the C locale and after it in en_US.
+      write(join(source, "B.txt"), "");
+      write(join(source, "a.txt"), "");
       mkdirSync(join(root, "archives", repo), { recursive: true });
       expect(Bun.spawnSync(["tar", "czf", join(root, "archives", repo, `${commit}.tar.gz`), "-C", join(source, ".."), "package"]).exitCode).toBe(0);
     };
@@ -235,8 +238,8 @@ for (const name of ["json_byte_class.rs", "xml_byte_class.rs"]) writeFileSync("b
         .replace("https://github.com/$repo/archive/", `file://${root}/archives/$repo/`);
       writeFileSync(join(root, "scripts", "sync-bun.sh"), script);
     };
-    const sync = (args: string[] = []) => {
-      const result = Bun.spawnSync(["bash", join(root, "scripts", "sync-bun.sh")].concat(args), { env: { ...process.env, BUN_WASM_TEST_TMP: root }, stdout: "pipe", stderr: "pipe" });
+    const sync = (args: string[] = [], env: Record<string, string> = {}) => {
+      const result = Bun.spawnSync(["bash", join(root, "scripts", "sync-bun.sh")].concat(args), { env: { ...process.env, ...env, BUN_WASM_TEST_TMP: root }, stdout: "pipe", stderr: "pipe" });
       return { exitCode: result.exitCode, stderr: result.stderr.toString() };
     };
     run({ vendor, oldTip, newTip, git, pin, sync });
@@ -324,5 +327,86 @@ test("an untouched dependency tree from before the markers moves to the new patc
     expect(synced.exitCode, synced.stderr).toBe(0);
     expect(readFileSync(join(vendor, "vendor/rust-argon2/lib.txt"), "utf8")).toBe("one patched\ntwo patched\nthree\n");
     expect(readFileSync(join(vendor, "vendor/.bun-wasm-rust-argon2.source"), "utf8")).toContain("\ntree ");
+  });
+});
+
+test("a mode change, an added empty directory and a file in a tree's place are refused", () => {
+  upgradeFixture(({ vendor, pin, sync }) => {
+    const refused = () => {
+      const result = sync();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("refusing to replace it");
+    };
+    pin("old");
+    expect(sync().exitCode).toBe(0);
+
+    const lib = join(vendor, "vendor/lolhtml/lib.txt"), mode = statSync(lib).mode & 0o777;
+    chmodSync(lib, mode | 0o100);
+    refused();
+    expect(statSync(lib).mode & 0o777).toBe(mode | 0o100);
+    chmodSync(lib, mode);
+    expect(sync().exitCode).toBe(0);
+
+    const empty = join(vendor, "vendor/lolhtml/empty");
+    mkdirSync(empty);
+    refused();
+    expect(existsSync(empty)).toBe(true);
+    rmSync(empty, { recursive: true });
+    expect(sync().exitCode).toBe(0);
+
+    const tree = join(vendor, "vendor/rust-argon2");
+    rmSync(tree, { recursive: true });
+    writeFileSync(tree, "my notes\n");
+    refused();
+    expect(readFileSync(tree, "utf8")).toBe("my notes\n");
+  });
+});
+
+test("the next sync finishes a replacement that was interrupted at any step", () => {
+  upgradeFixture(({ vendor, pin, sync }) => {
+    const tree = join(vendor, "vendor/lolhtml"), marker = join(vendor, "vendor/.bun-wasm-lolhtml.source"), old = join(vendor, "vendor/.bun-wasm-lolhtml.old");
+    const finished = () => {
+      const result = sync();
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(readFileSync(join(tree, "lib.txt"), "utf8")).toBe("new html\n");
+      expect(existsSync(old)).toBe(false);
+      expect(readFileSync(marker, "utf8")).toBe(upgraded);
+    };
+    pin("old");
+    expect(sync().exitCode).toBe(0);
+    const stale = readFileSync(marker, "utf8");
+    pin("new");
+    expect(sync().exitCode).toBe(0);
+    const upgraded = readFileSync(marker, "utf8"), inode = statSync(tree).ino;
+    expect(upgraded).not.toBe(stale);
+
+    // Stopped after the new tree moved in, before its marker was written: the tree is kept.
+    writeFileSync(marker, stale);
+    finished();
+    rmSync(marker);
+    finished();
+    expect(statSync(tree).ino).toBe(inode);
+
+    // Stopped while the old tree was being removed.
+    mkdirSync(join(old, "half"), { recursive: true });
+    writeFileSync(join(old, "half", "left.txt"), "old html\n");
+    finished();
+    expect(statSync(tree).ino).toBe(inode);
+
+    // Stopped between moving the old tree aside and moving the new one in.
+    renameSync(tree, old);
+    finished();
+  });
+});
+
+test("a tree is recognized under another locale", () => {
+  upgradeFixture(({ vendor, pin, sync }) => {
+    const tree = join(vendor, "vendor/lolhtml");
+    pin("old");
+    expect(sync([], { LC_ALL: "C", LANG: "C" }).exitCode).toBe(0);
+    const inode = statSync(tree).ino;
+    const result = sync([], { LC_ALL: "en_US.UTF-8", LANG: "en_US.UTF-8" });
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(statSync(tree).ino).toBe(inode);
   });
 });

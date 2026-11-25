@@ -118,14 +118,18 @@ fi
 staging=""
 trap '[[ -z "$staging" ]] || rm -rf "$staging"' EXIT
 trap 'exit 130' INT TERM
-tree_digest() { # <dir>: one digest over the content of every file and link below it
+# One digest over a tree: the type, mode and path of every entry, the content of every
+# file and the target of every link. The C locale keeps the order the same everywhere.
+tree_digest() { # <dir>
   (
+    export LC_ALL=C
     cd "$1"
+    find . -mindepth 1 -printf '%y %m %P\n' | sort
     find . -type f -print0 | sort -z | xargs -0 -r sha256sum
-    find . -type l -printf '%p -> %l\n' | sort
+    find . -type l -printf '%P -> %l\n' | sort
   ) | sha256sum | cut -d' ' -f1
 }
-refuse_dependency() { # <dir>
+refuse_dependency() { # <path>
   echo "error: $1 has content this script did not put there, and git does not track it; refusing to replace it" >&2
   echo "save what you need from it, remove it (rm -rf $1) and run scripts/sync-bun.sh again" >&2
   exit 1
@@ -134,19 +138,26 @@ fetch() { # <dir> <repo> <commit> [patch, relative to vendor/bun]...
   local name=$1 repo=$2 commit=$3
   shift 3
   local dir=$bun_dir/vendor/$name stamp=$bun_dir/vendor/.bun-wasm-$name.source
-  local want file current="" recorded="" stage
+  # Where a known old tree goes before it is removed. Only this script puts a tree there,
+  # so what an interrupted run left behind is removed here.
+  local old=$bun_dir/vendor/.bun-wasm-$name.old
+  local want file current="" recorded="" stage known=0
   want=$(
     printf '%s\n' "$commit"
     for file in "$@"; do
       printf '%s %s\n' "$(sha256sum < "$bun_dir/$file" | cut -d' ' -f1)" "$file"
     done
   )
+  rm -rf "$old"
+  if [[ -L "$dir" || ( -e "$dir" && ! -d "$dir" ) ]]; then
+    refuse_dependency "$dir"
+  fi
   if [[ -d "$dir" && -n "$(ls -A "$dir")" ]]; then
     current=$(tree_digest "$dir")
     recorded=$(sed -n 's/^tree //p' "$stamp" 2>/dev/null || true)
   fi
-  if [[ -n "$recorded" ]]; then
-    [[ "$current" == "$recorded" ]] || refuse_dependency "$dir"
+  if [[ -n "$current" && "$current" == "$recorded" ]]; then
+    known=1
     if [[ "$(grep -v '^tree ' "$stamp")" == "$want" ]]; then
       return
     fi
@@ -154,22 +165,39 @@ fetch() { # <dir> <repo> <commit> [patch, relative to vendor/bun]...
   # Unpack and patch beside the tree, and move the result in only once it is complete.
   mkdir -p "$bun_dir/vendor"
   staging=$(mktemp -d "$bun_dir/vendor/.bun-wasm-$name.XXXXXX")
-  curl -fsSL "https://github.com/$repo/archive/$commit.tar.gz" | tar xz --strip-components=1 -C "$staging"
-  local -a stages=("$(tree_digest "$staging")")
+  mkdir "$staging/tree"
+  curl -fsSL "https://github.com/$repo/archive/$commit.tar.gz" | tar xz --strip-components=1 -C "$staging/tree"
+  local -a stages=("$(tree_digest "$staging/tree")")
   for file in "$@"; do
-    patch -d "$staging" -p1 < "$bun_dir/$file"
-    stages+=("$(tree_digest "$staging")")
+    patch -d "$staging/tree" -p1 < "$bun_dir/$file"
+    stages+=("$(tree_digest "$staging/tree")")
   done
-  if [[ -n "$current" && -z "$recorded" ]]; then
-    for stage in "${stages[@]}"; do
-      [[ "$stage" != "$current" ]] || current=""
-    done
-    [[ -z "$current" ]] || refuse_dependency "$dir"
+  # The tree is already the one wanted: a run was interrupted before it wrote the marker,
+  # or the marker is gone. Keep the tree.
+  if [[ "$current" == "${stages[-1]}" ]]; then
+    printf '%s\ntree %s\n' "$want" "$current" > "$stamp"
+    rm -rf "$staging"
+    staging=""
+    return
   fi
-  rm -rf "$dir"
-  mv "$staging" "$dir"
-  staging=""
+  if [[ -z "$recorded" ]]; then
+    for stage in "${stages[@]}"; do
+      [[ "$stage" != "$current" ]] || known=1
+    done
+  fi
+  if [[ -n "$current" && "$known" == 0 ]]; then
+    refuse_dependency "$dir"
+  fi
+  # An interrupted removal then leaves only the .old directory, never half of the tree.
+  if [[ -n "$current" ]]; then
+    mv "$dir" "$old"
+  elif [[ -d "$dir" ]]; then
+    rmdir "$dir"
+  fi
+  mv "$staging/tree" "$dir"
   printf '%s\ntree %s\n' "$want" "${stages[-1]}" > "$stamp"
+  rm -rf "$staging" "$old"
+  staging=""
 }
 lolhtml=$(grep -oP 'LOLHTML_COMMIT = "\K[0-9a-f]+' "$bun_dir/scripts/build/deps/lolhtml.ts")
 argon2=$(grep -oP 'RUST_ARGON2_COMMIT = "\K[0-9a-f]+' "$bun_dir/scripts/build/deps/rust-argon2.ts")
