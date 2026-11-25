@@ -11,10 +11,12 @@ class Ide {
   readonly requests: SessionRequest[] = [];
   readonly ports: MessagePort[] = [];
   private readonly waiters = new Set<() => void>();
-  constructor(readonly port: MessagePort) {
+  /** `answer`: what a live listener (`cookies`) or a replaced one (`detach`) says once the worker holds the port. */
+  constructor(readonly port: MessagePort, answer: "cookies" | "detach" = "cookies") {
     port.onmessage = (event: MessageEvent<SessionRequest>) => {
       this.requests.push(event.data);
       this.ports.push(...event.ports);
+      if (event.data.t === "attached") this.reply(answer === "cookies" ? { t: "cookies", cookies: [] } : { t: "detach" });
       for (const wake of Array.from(this.waiters)) wake();
     };
   }
@@ -52,10 +54,11 @@ function setup(options: { relays?: number; ideOrigins?: string[]; attachWaitMs?:
     pingTimeoutMs: 200,
     cookieAckMs: 200,
   });
-  const attach = (relay = relays[0]!): Ide => {
+  const attach = (relay = relays[0]!, answer: "cookies" | "detach" = "cookies"): Ide => {
     const channel = new MessageChannel();
+    const ide = new Ide(channel.port1, answer);
     worker.message({ data: { type: SW_ATTACH }, ports: [channel.port2], source: relay });
-    return new Ide(channel.port1);
+    return ide;
   };
   return { worker, clients, relays, page, attach };
 }
@@ -136,6 +139,7 @@ test("a request crosses unchanged, with the headers a service worker cannot see 
 test("a framed HTML navigation gets the shim, the cookies script may see, and the headers its embedder needs", async () => {
   const { worker, attach } = setup();
   const ide = attach();
+  await ide.next("attached");
   ide.reply({ t: "cookies", cookies: [{ name: "theme", value: 'da"rk<', path: "/", expires: null, secure: false }] });
   const pending = worker.fetch(request("/dashboard", { mode: "navigate", destination: "iframe", credentials: "include" }), "")!;
   const open = await ide.next("open");
@@ -220,6 +224,28 @@ test("an attachment whose tab is gone is dropped, its requests fail, and the nex
   expect(await (await next).text()).toBe("from the new owner");
   first.port.close();
   second.port.close();
+});
+
+test("a port whose listener was replaced on its way is never used, whichever port arrives first", async () => {
+  // A dev server that restarts as it starts sends two ports within a millisecond.
+  for (const order of ["live-first", "stale-first"] as const) {
+    const { worker, relays, attach } = setup();
+    const first = attach(relays[0], order === "live-first" ? "cookies" : "detach");
+    const pending = order === "stale-first" ? worker.fetch(request("/early"), "page")! : undefined;
+    const second = attach(relays[0], order === "live-first" ? "detach" : "cookies");
+    const [live, stale] = order === "live-first" ? [first, second] : [second, first];
+    await stale.next("attached");
+    const answered = pending ?? worker.fetch(request("/late"), "page")!;
+    const open = await live.next("open");
+    respond(live, open.id, [], [order]);
+    expect(await (await answered).text()).toBe(order);
+    expect(stale.requests).toEqual([{ t: "attached" }]);
+    expect(worker.attachments.length).toBe(1);
+    // The relay frame was not asked for another port: one was already on its way.
+    expect(relays[0]!.messages).toEqual([]);
+    first.port.close();
+    second.port.close();
+  }
 });
 
 test("a cookie write keeps its place: the IDE receives it before any later request", async () => {

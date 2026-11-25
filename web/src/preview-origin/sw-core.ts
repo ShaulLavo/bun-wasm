@@ -49,6 +49,8 @@ interface Attachment {
   readonly port: MessagePort;
   readonly exchanges: Map<number, OpenExchange>;
   readonly pings: Map<number, (alive: boolean) => void>;
+  /** The IDE page answered on the port, so a live listener is behind it. */
+  confirmed: boolean;
   lastSeen: number;
   verified: number;
 }
@@ -119,10 +121,23 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
     for (const answer of Array.from(attachment.pings.values())) answer(false);
     attachment.port.onmessage = null;
     try { attachment.port.close(); } catch {}
+    for (const wake of Array.from(attachWaiters)) wake();
+  }
+
+  /**
+   * A port counts once the IDE page answers on it. A listener that was replaced while its port was
+   * still on the way answers with `detach` only, so its port is never used, whatever order ports arrive in.
+   */
+  function confirm(attachment: Attachment): void {
+    attachment.confirmed = true;
+    // One relay frame serves one listener at a time: its earlier ports are over.
+    for (const previous of attachments.filter(item => item !== attachment && item.confirmed && item.clientId === attachment.clientId)) retire(previous);
+    for (const wake of Array.from(attachWaiters)) wake();
   }
 
   function receive(attachment: Attachment, reply: SessionReply): void {
     attachment.lastSeen = now();
+    if (!attachment.confirmed && reply.t !== "detach") confirm(attachment);
     switch (reply.t) {
       case "pong": attachment.pings.get(reply.n)?.(true); return;
       case "detach": retire(attachment); return;
@@ -142,9 +157,7 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
   }
 
   function attach(clientId: string, port: MessagePort): void {
-    const attachment: Attachment = { clientId, port, exchanges: new Map(), pings: new Map(), lastSeen: now(), verified: now() };
-    // One relay frame holds one attachment: a new port replaces its predecessor.
-    for (const previous of attachments.filter(item => item.clientId === clientId)) retire(previous);
+    const attachment: Attachment = { clientId, port, exchanges: new Map(), pings: new Map(), confirmed: false, lastSeen: now(), verified: now() };
     attachments.push(attachment);
     port.onmessage = (event: MessageEvent<SessionReply>) => receive(attachment, event.data);
     post(attachment, { t: "attached" });
@@ -174,27 +187,46 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
     return attachments.includes(attachment);
   }
 
-  async function requestAttachment(): Promise<Attachment | null> {
-    const relays = (await options.clients.matchAll()).filter(isRelay);
-    if (relays.length === 0) return null;
-    const attached = new Promise<void>(resolve => {
+  /** Resolves when the set of attachments changed, or after `ms`. */
+  function attachmentsChanged(ms: number): Promise<void> {
+    return new Promise<void>(resolve => {
       const wake = () => {
         clearTimeout(timer);
         attachWaiters.delete(wake);
         resolve();
       };
-      const timer = setTimeout(wake, attachWaitMs);
+      const timer = setTimeout(wake, ms);
       attachWaiters.add(wake);
     });
+  }
+
+  /** Asks every relay frame for a port, once, unless one is already on its way to being confirmed. */
+  async function askRelays(): Promise<boolean> {
+    const relays = (await options.clients.matchAll()).filter(isRelay);
     for (const relay of relays) {
       try { relay.postMessage({ type: SW_NEED_PORT }); } catch {}
     }
-    await attached;
-    return attachments.at(-1) ?? null;
+    return relays.length > 0;
+  }
+
+  async function requestAttachment(): Promise<Attachment | null> {
+    const deadline = now() + attachWaitMs;
+    let asked = false;
+    for (let left = attachWaitMs; left > 0; left = deadline - now()) {
+      const confirmed = attachments.findLast(item => item.confirmed);
+      if (confirmed) return confirmed;
+      const pending = attachments.some(item => !item.confirmed);
+      if (!pending && !asked && !(await askRelays())) return null;
+      asked ||= !pending;
+      await attachmentsChanged(left);
+    }
+    return attachments.findLast(item => item.confirmed) ?? null;
   }
 
   async function findAttachment(): Promise<Attachment | null> {
-    for (const attachment of attachments.toReversed()) {
+    // A port nobody confirmed within the wait belongs to a listener that is gone.
+    for (const stale of attachments.filter(item => !item.confirmed && now() - item.lastSeen > attachWaitMs)) retire(stale);
+    for (const attachment of attachments.filter(item => item.confirmed).reverse()) {
       if (await usable(attachment)) return attachment;
       retire(attachment);
     }

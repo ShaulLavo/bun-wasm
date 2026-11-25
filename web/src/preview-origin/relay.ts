@@ -46,12 +46,14 @@ async function worker(): Promise<ServiceWorker> {
 
 async function start(): Promise<void> {
   if (parent === window || !container || allowed.length === 0) return;
+  let forwarding: Promise<unknown> = Promise.resolve();
   addEventListener("message", event => {
     if (event.source !== parent || !allowed.includes(event.origin)) return;
     const port = event.ports[0];
     if (relayMessage(event.data)?.event !== "attach" || !port) return;
-    // The worker may have been replaced since this page loaded, so each port goes to the current one.
-    void worker().then(active => active.postMessage({ type: SW_ATTACH }, [port]));
+    // The worker may have been replaced since this page loaded, so each port goes to the current
+    // one, and ports go out in the order they came in.
+    forwarding = forwarding.then(worker).then(active => active.postMessage({ type: SW_ATTACH }, [port])).catch(() => {});
   });
   container.addEventListener("message", event => {
     if ((event.data as { type?: unknown } | null)?.type === SW_NEED_PORT) tell("need-port");
