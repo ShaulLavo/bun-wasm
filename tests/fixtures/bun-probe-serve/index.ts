@@ -41,6 +41,18 @@ const server = Bun.serve<Data, Record<string, never>>({
       });
       return new Response(stream, { headers: { "content-type": "text/plain" } });
     }
+    if (url.pathname === "/tagged-generator") {
+      // The body's kind decides, not its Symbol.toStringTag.
+      const generator = async function* () { yield "tagged"; };
+      Object.defineProperty(generator, Symbol.toStringTag, { value: "Custom" });
+      return new Response(generator);
+    }
+    if (url.pathname === "/fake-generator") {
+      const plain = function () { return "called"; };
+      Object.defineProperty(plain, Symbol.toStringTag, { value: "AsyncGeneratorFunction" });
+      return new Response(plain);
+    }
+    if (url.pathname === "/method-generator") return new Response({ async *chunks() { yield "method"; } }.chunks);
     if (url.pathname === "/generator") {
       return new Response(async function* () {
         yield "gen-a ";
@@ -101,6 +113,7 @@ await check("fallback 404", () => text("/missing"));
 await check("error handler", () => text("/throws"));
 await check("ReadableStream response", () => text("/stream"));
 await check("async generator response", () => text("/generator"));
+await check("async generator body kinds", async () => [await text("/tagged-generator"), (await text("/fake-generator")).replace(/\s+/g, " "), await text("/method-generator")]);
 await check("direct stream response", () => text("/direct"));
 await check("streamed body reader", async () => {
   const res = await fetch(base + "/stream");

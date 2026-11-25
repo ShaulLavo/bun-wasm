@@ -99,6 +99,12 @@ impl Table {
 /// Bun's `password_error_instance`: `Password hashing failed with error "WeakParameters"`,
 /// code `PASSWORD_WEAK_PARAMETERS`.
 fn password_error(err: crate::password::Error, verb: &str) -> NativeError {
+    if let crate::password::Error::OutOfMemory(kib) = err {
+        return NativeError::error(format!(
+            "Password {verb} failed: an Argon2 memory cost of {kib} KiB is more memory than bun-wasm can allocate"
+        ))
+        .prop("code", "PASSWORD_OUT_OF_MEMORY");
+    }
     let name = err.name();
     let mut code = String::from("PASSWORD");
     for ch in name.chars() {
@@ -2104,7 +2110,8 @@ fn install_crypto(t: &mut Table) {
         }
     });
     t.add("wyhash", |a| {
-        let seed = a.opt_num(1).unwrap_or(0.0) as u64;
+        // Bun.hash: (data, seed high 32 bits, seed low 32 bits).
+        let seed = ((a.opt_num(1).unwrap_or(0.0) as u64) << 32) | a.opt_num(2).unwrap_or(0.0) as u64;
         Ok(Val::BigUint(bun_wyhash::hash_with_seed(seed, a.bytes(0)?)))
     });
     // node:zlib's processChunkSync for the sync and callback convenience

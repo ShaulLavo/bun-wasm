@@ -16,6 +16,10 @@ The async adapter snapshots the selected input bytes before deferring work.
 Minification follows `Config::from_js` boolean/object normalization, and unused
 import trimming explicitly defaults to the public API's tree-shaking setting.
 This does not implement Bun's macro callbacks or worker-pool scheduling.
+`scan()` and `scanImports()` list each import as `{ kind, path }`: `named_imports_to_js`
+in `JSTranspiler.rs` builds the entry with `create_object2`, and native Bun 1.4.4's objects
+enumerate `kind` first. `scan_json` used to emit `path` first, so `Bun.inspect` and
+`Object.keys` showed the other order (`tests/fixtures/bun-probe-utils`).
 
 
 ## Classification

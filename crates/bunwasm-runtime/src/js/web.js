@@ -1197,6 +1197,19 @@
     }
   }
 
+  // An async generator function by its kind, as JSC checks it, not by the mutable
+  // Symbol.toStringTag: its source starts `async function*` or, for a method, `async *name`.
+  // Bound functions print as native code and are not generators, as in Bun.
+  const functionToString = Function.prototype.toString;
+  function isAsyncGeneratorFunction(value) {
+    if (typeof value !== "function") return false;
+    try {
+      return /^async\s*(?:function\s*)?\*/.test(Reflect.apply(functionToString, value, []));
+    } catch {
+      return false;
+    }
+  }
+
   // Body helpers shared by Request and Response.
   // Like Bun, a string or byte body adds no Content-Type header; `served` is the type
   // Bun.serve sends for it when the response sets none.
@@ -1225,7 +1238,7 @@
     if (typeof body[Symbol.asyncIterator] === "function") return { stream: bodyStreams.fromAsyncIterable(body), type: null };
     // Bun calls an async generator function body and streams what it yields; other functions
     // stay their source text, as in Bun.
-    if (typeof body === "function" && body[Symbol.toStringTag] === "AsyncGeneratorFunction") return { stream: bodyStreams.fromAsyncIterable(body()), type: null };
+    if (isAsyncGeneratorFunction(body)) return { stream: bodyStreams.fromAsyncIterable(body()), type: null };
     return { bytes: native.utf8Encode(String(body)), type: null, served: "text/plain;charset=utf-8" };
   }
 

@@ -1,6 +1,6 @@
 // Bun.password: argument handling from Bun's src/runtime/crypto/PasswordObject.rs over the
 // native argon2/bcrypt port in password.rs (docs/bun-patches/bun-password.md). Bun hashes off
-// the JavaScript thread; here the async forms compute in place and settle a promise.
+// the JavaScript thread; here the async forms compute on a later event-loop turn.
 (function (internal: BunWasm.Internal) {
   "use strict";
   const native = internal.native;
@@ -77,9 +77,19 @@
     return () => native.passwordVerify(input, encoded, algorithm ?? undefined);
   }
 
-  // Validation errors throw synchronously, as in Bun; computation errors reject.
+  // Validation errors throw synchronously, as in Bun; the hash runs on a later turn of the event
+  // loop (Bun uses its thread pool), so the call returns a pending promise at once, and
+  // computation errors reject. The real timers keep fake timers in tests from holding it back.
   function settle<T>(run: () => T): Promise<T> {
-    return new Promise(resolve => resolve(run()));
+    return new Promise((resolve, reject) => {
+      internal.realTimers.setImmediate(() => {
+        try {
+          resolve(run());
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
   }
 
   const password = {

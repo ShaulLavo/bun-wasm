@@ -38,11 +38,30 @@ await check("Bun.CryptoHasher sha256", () => new Bun.CryptoHasher("sha256").upda
 await check("Bun.CryptoHasher algorithms", () => ["md5", "sha1", "sha512", "blake2b256", "sha3-256"].map(algorithm => new Bun.CryptoHasher(algorithm as Bun.SupportedCryptoAlgorithms).update("bun").digest("hex").slice(0, 16)));
 await check("Bun.CryptoHasher hmac", () => new Bun.CryptoHasher("sha256", "secret").update("bun").digest("base64"));
 await check("Bun.SHA256.hash", () => Bun.SHA256.hash("bun", "hex"));
-await check("Bun.sha", () => Buffer.from(Bun.sha("bun")).toString("hex").slice(0, 16));
+await check("Bun.hash inputs", () => {
+  const blob = new Blob(["bun"]);
+  const thrown = (run: () => unknown) => { try { return run(); } catch (error) { return (error as { code?: string }).code; } };
+  return [
+    Bun.hash.xxHash32(blob), Bun.hash(blob), Bun.hash.crc32(blob), Bun.hash.xxHash32(new Uint16Array([1, 2])), Bun.hash.xxHash32(123),
+    thrown(() => (Bun.hash.xxHash32 as unknown as () => number)()), thrown(() => (Bun.hash as unknown as () => bigint)()), thrown(() => Bun.hash.xxHash32(null as unknown as string)),
+  ];
+});
+await check("Bun.hash seeds", () => [2 ** 64, 2 ** 70, Infinity, -1, -5, -(2 ** 70), -Infinity, NaN, 1.7, 2n ** 64n, -1n, "5"].map(seed => Bun.hash.xxHash64("bun", seed as number)).concat([Bun.hash("bun", 2 ** 64), Bun.hash.crc32("bun", 5)]));
+await check("Bun.sha", () => {
+  const target = new ArrayBuffer(32);
+  const returned = Bun.sha("bun", target as unknown as "hex");
+  return [Buffer.from(Bun.sha("bun")).toString("hex"), Bun.sha(new Blob(["bun"]), "hex"), returned === target, Buffer.from(target).toString("hex"), Bun.SHA256.hash(new Blob(["bun"]), "base64")];
+});
 await check("Bun.password argon2id", async () => {
   const hash = await Bun.password.hash("hunter2");
   assert(hash.startsWith("$argon2id$"), hash);
   return [await Bun.password.verify("hunter2", hash), await Bun.password.verify("wrong", hash)];
+});
+await check("Bun.password returns a pending promise", async () => {
+  const pending = Bun.password.hash("hunter2", { algorithm: "argon2id", memoryCost: 4096, timeCost: 1 });
+  const status = Bun.peek.status(pending);
+  await pending;
+  return status;
 });
 await check("Bun.password bcrypt", async () => {
   const hash = await Bun.password.hash("hunter2", { algorithm: "bcrypt", cost: 4 });

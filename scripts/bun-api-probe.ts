@@ -1,7 +1,7 @@
 // Runs the Bun API probe fixtures (tests/fixtures/bun-probe-*) in the playground on each engine,
 // the way a person types them, and prints a pass table. docs/bun-api-probe.md describes the probe.
 //
-//   bun scripts/bun-api-probe.ts [--url URL] [--engines quickjs,jsc,browser,spidermonkey]
+//   bun scripts/bun-api-probe.ts [--url URL] [--engines quickjs,jsc,browser[,spidermonkey]]
 //     [--browser chromium|webkit] [--cases bun-probe-utils,...] [--out results.json] [--network]
 //
 // Without --url it serves the local web/dist (build it with `bun web/build.ts`). --network adds the
@@ -25,7 +25,8 @@ type EngineResult = { engine: string; bootMs: number; status: string; helloMs: n
 const { values } = parseArgs({
   options: {
     url: { type: "string" },
-    engines: { type: "string", default: "quickjs,jsc,browser,spidermonkey" },
+    // SpiderMonkey is staged only when the site was built with SPIDERMONKEY_WASM; name it to include it.
+    engines: { type: "string", default: "quickjs,jsc,browser" },
     browser: { type: "string", default: "chromium" },
     cases: { type: "string" },
     out: { type: "string" },
@@ -53,13 +54,18 @@ export function records(text: string): Map<string, { ok: boolean; body: string }
   return out;
 }
 
-/** bun test reports `(pass) describe > name` lines on stderr; native expectations keep them in expected_stderr.txt. */
+/**
+ * bun test reports `(pass) describe > name` lines on stderr (native expectations keep them in
+ * expected_stderr.txt), then a summary: ` 14 pass`, ` 2 snapshots, 32 expect() calls`,
+ * `Ran 16 tests across 1 file.` Every summary line is a check keyed by its words, so any count change differs.
+ */
 function testReport(text: string): Map<string, { ok: boolean; body: string }> {
   const out = new Map<string, { ok: boolean; body: string }>();
   for (const match of text.matchAll(/^\((pass|fail|skip|todo)\) (.+?)(?: \[[\d.]+m?s\])?$/gm)) out.set(match[2]!, { ok: match[1] !== "fail", body: match[1]! });
-  for (const match of text.matchAll(/^ (\d+) (pass|fail|skip|todo)$/gm)) out.set(`total ${match[2]}`, { ok: true, body: match[1]! });
-  const snapshots = /^snapshots: (.+)$/m.exec(text);
-  if (snapshots) out.set("snapshots", { ok: true, body: snapshots[1]! });
+  for (const match of text.matchAll(/^(?: \d+ .+|snapshots: .+|Ran \d+ tests? across \d+ files?\.)(?= \[|$)/gm)) {
+    const line = match[0].trim();
+    out.set(`summary ${line.replace(/\d+/g, "#")}`, { ok: true, body: line });
+  }
   return out;
 }
 
@@ -80,7 +86,8 @@ function filesOf(directory: string): string[] {
   });
 }
 
-type ProbeCase = { name: string; directory?: string; command: string; expected: (output: string) => CheckResult[] };
+/** `exit` is the command's expected exit code (0 unless the fixture's expected_exit says otherwise). */
+type ProbeCase = { name: string; directory?: string; command: string; exit?: number; expected: (output: string) => CheckResult[] };
 
 const CONTROL_FILES = new Set(["expected.txt", "expected_stderr.txt", "expected_exit", "cmd", "args", "host", "manual", "show"]);
 
@@ -96,6 +103,7 @@ function fixtureCase(name: string): ProbeCase {
     name,
     directory,
     command: `bun ${cmd}${stdin}`,
+    exit: existsIn(directory, "expected_exit") ? Number(readFileSync(join(directory, "expected_exit"), "utf8").trim()) : 0,
     expected: output => compare(expected, isTest ? testReport(output) : records(output)),
   };
 }
@@ -196,7 +204,9 @@ async function runEngine(browser: Browser, url: string, engine: string, cases: P
       await writeCase(page, probe);
       const cd = probe.directory ? `cd /home/user/probe/${probe.name} && ` : "";
       const ran = await run(page, `${cd}${probe.command}`, timeout);
-      result.cases.push({ name: probe.name, code: ran.code, ms: Math.round(ran.ms), checks: probe.expected(ran.output), output: ran.output });
+      const wanted = probe.exit ?? 0;
+      const exit: CheckResult = ran.code === wanted ? { name: "exit code", verdict: "pass" } : { name: "exit code", verdict: "fail", detail: `expected ${wanted}, got ${ran.code ?? "timeout"}` };
+      result.cases.push({ name: probe.name, code: ran.code, ms: Math.round(ran.ms), checks: probe.expected(ran.output).concat([exit]), output: ran.output });
       process.stderr.write(`${engine} ${probe.name}: exit ${ran.code} in ${Math.round(ran.ms)} ms\n`);
       if (ran.code === null) await run(page, "cd /home/user", 10000);
     }
@@ -241,8 +251,13 @@ async function main(): Promise<void> {
     const url = values.url ?? await task.serve();
     const browser = await task.launch(values.browser === "webkit" ? webkit : chromium);
     const results: EngineResult[] = [];
-    for (const engine of values.engines!.split(",")) results.push(await runEngine(browser, url, engine, cases));
-    if (values.out) writeFileSync(values.out, JSON.stringify({ url, browser: values.browser, results }, null, 2));
+    // One engine failing must not lose the others: record it, save after each engine, print at the end.
+    for (const engine of values.engines!.split(",")) {
+      const result = await runEngine(browser, url, engine, cases)
+        .catch((error: Error): EngineResult => ({ engine, bootMs: 0, status: `failed: ${error.message.split("\n")[0]}`, helloMs: [], cases: [] }));
+      results.push(result);
+      if (values.out) writeFileSync(values.out, JSON.stringify({ url, browser: values.browser, results }, null, 2));
+    }
     console.log(table(results));
   } finally {
     await task.cleanup();

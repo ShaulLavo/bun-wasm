@@ -319,8 +319,24 @@
     return width;
   }
 
-  function hash(data, seed = 0) {
-    return native.wyhash(hashInput(data), Number(seed));
+  function hash(data) {
+    const [high, low] = seedWords(arguments[1]);
+    return native.wyhash(hashData(data), high, low);
+  }
+
+  // HashObject.rs hash_wrap: strings hash as UTF-8, buffers and in-memory Blobs as their bytes,
+  // other values as their string form; a missing value or a file-backed Blob is an error.
+  function hashData(data) {
+    if (typeof data === "string") return native.utf8Encode(data);
+    if (ArrayBuffer.isView(data) || data instanceof ArrayBuffer) return internal.toUint8(data).slice();
+    if (data instanceof Blob) {
+      if (data._isLazy()) throw Object.assign(new TypeError("File blob cannot be used here"), { code: "ERR_INVALID_ARG_TYPE" });
+      return data._bytes();
+    }
+    if (data === undefined || data === null) {
+      throw Object.assign(new TypeError("data must be a string, ArrayBuffer, ArrayBufferView or Blob"), { code: "ERR_INVALID_ARG_TYPE" });
+    }
+    return native.utf8Encode(String(data));
   }
 
   function hashInput(data) {
@@ -342,21 +358,31 @@
     }
   }
 
-  hash.wyhash = hash;
-  hash.crc32 = (data) => native.crc32(hashInput(data));
-  hash.adler32 = (data) => native.adler32(hashInput(data));
-  // HashObject.rs reads a number or bigint seed as u64; anything else is 0.
+  // HashObject.rs reads a number or bigint seed with JSC's toUInt64NoTruncate: a bigint wraps
+  // to 64 bits; a number truncates, saturates at u64 max, wraps from -2^63 and is 0 below it
+  // or when NaN. Any other value is 0. Returns the seed as [high, low] 32-bit words.
+  const U64_MAX = 2n ** 64n - 1n;
   function hashSeed(seed) {
     if (typeof seed === "bigint") return BigInt.asUintN(64, seed);
-    if (typeof seed === "number" && Number.isFinite(seed)) return BigInt.asUintN(64, BigInt(Math.trunc(seed)));
-    return 0n;
+    if (typeof seed !== "number" || Number.isNaN(seed)) return 0n;
+    if (seed >= 2 ** 64) return U64_MAX;
+    if (seed < -(2 ** 63)) return 0n;
+    return BigInt.asUintN(64, BigInt(Math.trunc(seed)));
   }
+  function seedWords(seed) {
+    const value = hashSeed(seed);
+    return [Number(value >> 32n), Number(value & 0xffffffffn)];
+  }
+
+  hash.wyhash = hash;
+  // crc32 continues from a u32 seed; adler32 has none, as in Bun.
+  hash.crc32 = function crc32(data) { return native.crc32(hashData(data), seedWords(arguments[1])[1]); };
+  hash.adler32 = function adler32(data) { return native.adler32(hashData(data)); };
   for (const name of ["cityHash32", "cityHash64", "xxHash32", "xxHash64", "xxHash3", "murmur32v2", "murmur32v3", "murmur64v2", "rapidhash"]) {
     hash[name] = {
       [name](data) {
-        const value = hashSeed(arguments[1]);
-        const input = hashInput(data);
-        return native.bunHash(name, typeof input === "string" ? native.utf8Encode(input) : input, Number(value >> 32n), Number(value & 0xffffffffn));
+        const [high, low] = seedWords(arguments[1]);
+        return native.bunHash(name, hashData(data), high, low);
       },
     }[name];
   }

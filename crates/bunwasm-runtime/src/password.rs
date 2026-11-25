@@ -22,6 +22,8 @@ pub(crate) enum Error {
     WeakParameters,
     UnsupportedAlgorithm,
     Unexpected,
+    /// An argon2 memory cost, in KiB, larger than the guest can allocate.
+    OutOfMemory(u32),
 }
 
 impl Error {
@@ -31,6 +33,7 @@ impl Error {
             Error::WeakParameters => "WeakParameters",
             Error::UnsupportedAlgorithm => "UnsupportedAlgorithm",
             Error::Unexpected => "Unexpected",
+            Error::OutOfMemory(_) => "OutOfMemory",
         }
     }
 }
@@ -118,6 +121,7 @@ pub(crate) fn hash(password: &[u8], params: Params) -> Result<String, Error> {
         variant: params.algorithm.variant(),
         version: argon2::Version::Version13,
     };
+    ensure_memory(params.memory_cost)?;
     argon2::hash_encoded(password, &salt, &config).map_err(map_argon2)
 }
 
@@ -173,6 +177,15 @@ fn normalise_argon2_version(encoded: &str) -> Result<std::borrow::Cow<'_, str>, 
 }
 
 /// Caps the cost a stored hash may demand, as Bun does, so a hostile hash cannot exhaust memory.
+/// Native Bun hashes with whatever memory the machine has; a Wasm guest has at most 4 GiB of
+/// address space and usually much less, and rust-argon2 aborts when its allocation fails.
+/// Reserve the cost up front so an unaffordable one is an error instead of a crash.
+fn ensure_memory(kib: u32) -> Result<(), Error> {
+    let bytes = (kib as usize).checked_mul(1024).ok_or(Error::OutOfMemory(kib))?;
+    let mut probe: Vec<u8> = Vec::new();
+    probe.try_reserve_exact(bytes).map_err(|_| Error::OutOfMemory(kib))
+}
+
 fn check_argon2_limits(encoded: &str) -> Result<(), Error> {
     let mut segments = encoded.split('$').skip(2);
     let mut params = segments.next().unwrap_or("");
@@ -192,6 +205,9 @@ fn check_argon2_limits(encoded: &str) -> Result<(), Error> {
         let value: u32 = value.parse().map_err(|_| Error::InvalidEncoding)?;
         if value > limit {
             return Err(Error::WeakParameters);
+        }
+        if key == "m" {
+            ensure_memory(value)?;
         }
     }
     Ok(())
