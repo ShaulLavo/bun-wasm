@@ -68,6 +68,18 @@ be removed to reclaim space.
 `BUN_CONFIG_HTTP_IDLE_TIMEOUT` sets the download idle timeout in seconds, with
 a default of 300. Failed downloads are not retried.
 
+An install that starts without `node_modules` (and without `--frozen-lockfile`
+or `--lockfile-only`) downloads and extracts packages while it waits on
+registry metadata. It stages them in its own `bun-wasm-early-<random>`
+directory under `$TMPDIR` (or `/tmp`), and moves them into `node_modules` once
+the dependency graph is final. Each install removes only its own staging
+directory. When the temporary directory resolves to the project or a directory
+inside it, or can't be resolved, the install does none of this work and runs
+as usual. An install that is killed leaves its staging behind. The sandbox and
+playground remove `/tmp/bun-wasm-early-*` when they boot, before any guest
+runs. With the native launcher, leftovers are left to the system's temporary
+file cleaner.
+
 Lifecycle scripts are always skipped, including scripts on trusted dependencies
 and the root project. Packages with install hooks produce a `Blocked N
 postinstalls` message. No native executables run. Workspace members and local directory links use the
