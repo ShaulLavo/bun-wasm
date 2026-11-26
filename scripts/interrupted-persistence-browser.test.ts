@@ -210,8 +210,9 @@ function attachCorruptionGuard(page: Page, errors: string[], isInterrupting?: ()
   page.on("pageerror", error => {
     const message = error.message;
     if (isCancelledLoadingStatusPoll(error)) return;
-    // WebKit surfaces aborted cross-origin fetches during intentional reload/close as access-control pageerrors.
-    if (isInterrupting?.() && /due to access control checks|cancelled|aborted|Load failed/i.test(message)) return;
+    // WebKit surfaces aborted cross-origin fetches during intentional reload/close as access-control pageerrors,
+    // and work still pending in the page it is tearing down (such as archive downloads) as "Context is stopped".
+    if (isInterrupting?.() && /due to access control checks|cancelled|aborted|Load failed|Context is stopped/i.test(message)) return;
     errors.push(`pageerror: ${message}`);
   });
   page.on("console", message => {
