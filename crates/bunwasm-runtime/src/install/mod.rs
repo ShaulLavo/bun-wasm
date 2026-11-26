@@ -1360,8 +1360,11 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
         // removed when the process ends (after the program, which may load files late).
         let mut random = [0u8; 16];
         getrandom::fill(&mut random).map_err(|e| e.to_string())?;
+        // `std::env::temp_dir` is unsupported on WASI.
+        let temp =
+            std::env::var_os("TMPDIR").map_or_else(|| "/tmp".into(), std::path::PathBuf::from);
         let staging = cwd
-            .join(std::env::temp_dir())
+            .join(temp)
             .join(format!("bun-wasm-bunx-{:x}", u128::from_le_bytes(random)));
         fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
         let installed = install_x(&staging, &cwd, &name, &range, &registry, parser);
