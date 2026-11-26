@@ -95,7 +95,7 @@ test("real service reads enforce exact file bounds and retain only complete batc
     expect(fs.reads.every(read => typeof read.length === "number" && read.length <= 262_144)).toBe(true);
     expect(fs.operations.every(row => ["preopen", "resolve", "stat", "read"].includes(row.operation))).toBe(true);
     expect(fs.disposed()).toBe(true);
-    expect(fs.outstanding()).toBe(0);
+    expect(await fs.outstanding()).toBe(0);
     expect(JSON.stringify(events)).not.toContain("discarded fragment");
   }, 0);
 });
@@ -154,7 +154,7 @@ test.each(["absent", "invalid", "stalled"])("%s memory telemetry stays unavailab
       expect(events[0]).toMatchObject({ status: "captured", memory: { status: "unavailable" }, files: expect.arrayContaining([expect.objectContaining({ status: "manifest" })]) });
       expect(JSON.stringify(events)).not.toContain("SECRET");
       expect(fs.disposed()).toBe(true);
-      expect(fs.outstanding()).toBe(0);
+      expect(await fs.outstanding()).toBe(0);
     } finally { await withScoped(transport, page => page.evaluate("globalThis.releaseMemory?.();")); }
   }, 0);
 });
@@ -227,7 +227,7 @@ test("outer cancellation disposes completions before cleanup and admits no later
       const operations = fs.operations.length;
       await Bun.sleep(100);
       expect(fs.operations).toHaveLength(operations);
-      expect(fs.outstanding()).toBe(0);
+      expect(await fs.outstanding()).toBe(0);
       expect(await withScoped(transport, page => page.evaluate("commands"))).toEqual(["bun run build"]);
       expect(await withScoped(transport, page => page.evaluate("inputs"))).toEqual([]);
     } finally { build.resolve(); scope.close(); }
@@ -354,7 +354,7 @@ test.each([
       const capture = await withScoped(transport, page => page.evaluate<NextBuildCapture>(`${reader}\n${close}\n__goalsNextBuildRead(Date.now() + ${finish === "close" ? hangCapMs : 120})`));
       expect(target === "processes" ? capture.processes : capture.memory).toMatchObject({ status: "unavailable" });
       expect(fs.disposed()).toBe(true);
-      expect(fs.outstanding()).toBe(0);
+      expect(await fs.outstanding()).toBe(0);
       expect(await withScoped(transport, page => page.evaluate("__metadataArmed"))).toBe(true);
       expect(await withScoped(transport, page => page.evaluate("__explicitClose"))).toBe(finish === "close");
       await withScoped(transport, page => page.evaluate("__releaseMetadata();"));
@@ -378,7 +378,7 @@ test("full execution cancels a pending baseline and disposes before owned cleanu
       if (expression.includes("const read = globalThis.__goalsNextBuildRead")) abort = setTimeout(() => controller.abort(new Error("outer cancelled")), 30);
       return evaluate(expression, admission, options);
     };
-    transport.cleanup = async () => { expect(fs.disposed()).toBe(true); expect(fs.outstanding()).toBe(0); return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
+    transport.cleanup = async () => { expect(fs.disposed()).toBe(true); expect(await fs.outstanding()).toBe(0); return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
     try {
       const result = await execute({ framework: next!, box: { framework: "next", engine: "quickjs", browser: "chrome" }, url: "http://fixture/?engine=quickjs", timeoutMs: 1000, buildTimeoutMs: 110_000, signal: controller.signal,
         nextBuildObservation: value => events.push(value), async createTransport() { return transport; }, async saveLog() {},
@@ -414,7 +414,7 @@ test.each(["failure", "final"])("opt-in Next observer preserves current launch-f
     };
     let cleaned = false;
     const logs: string[] = [];
-    transport.cleanup = async () => { expect(fs.disposed()).toBe(true); expect(fs.outstanding()).toBe(0); cleaned = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
+    transport.cleanup = async () => { expect(fs.disposed()).toBe(true); expect(await fs.outstanding()).toBe(0); cleaned = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
     const result = await execute({ framework: next!, box: { framework: "next", engine: "quickjs", browser: "chrome" }, url: "http://fixture/?engine=quickjs", timeoutMs: 1000, buildTimeoutMs: 110_000,
       nextBuildObservation: value => events.push(value), async createTransport() { return transport; }, async saveLog(text) { expect(cleaned).toBe(false); logs.push(text); },
     });

@@ -354,7 +354,7 @@ fn install_host_natives(t: &mut Table, state: &Rc<State>) -> usize {
     let st = state.clone();
     t.add("hostCjsSource", move |a| {
         let path = a.str(0)?;
-        let (code, _) = st.load_source(path)?;
+        let (code, _) = st.load_source_once(path)?;
         let (wrapped, first_line) = modules::cjs_wrapper(&host_dynamic_imports(
             &code,
             path,

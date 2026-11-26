@@ -60,6 +60,17 @@ pub fn finish(name: &'static str, started: Option<Instant>, bytes: usize) {
     }
 }
 
+/// How many times `name` ran since tracing started, for tests.
+#[cfg(test)]
+pub fn calls(name: &str) -> u64 {
+    ROWS.with(|rows| {
+        rows.borrow()
+            .as_ref()
+            .and_then(|rows| rows.get(name))
+            .map_or(0, |row| row.count)
+    })
+}
+
 /// Prints and clears the collected rows.
 pub fn report(total: Duration) {
     let Some(rows) = ROWS.with(|rows| rows.borrow_mut().take()) else {

@@ -436,6 +436,46 @@ impl State {
     /// Read, transpile and classify a file. Ordinary results stay cached while
     /// content is unchanged; binary-qualified loaders requalify on every load.
     pub fn load_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
+        self.fresh_source.take();
+        self.read_source(path)
+    }
+
+    /// [`Self::load_source`] for `require()`'s format check (`moduleFormat`): when the file is
+    /// CommonJS, the compile that follows in the same synchronous step may reuse this read
+    /// ([`Self::load_source_once`]). Import graphs are prepared across promise callbacks, so
+    /// their checks (`hostModuleRecord`, the split engines' module sources) never arm it.
+    pub fn probe_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
+        let loaded = self.load_source(path)?;
+        let stdin = self.main_arg.borrow().as_str() == "-" && self.main.borrow().as_str() == path;
+        let cacheable =
+            !oxc_memory::depends_on_binary(path) && !rolldown_memory::depends_on_binary(path);
+        if loaded.1 == Format::Cjs && cacheable && !stdin {
+            *self.fresh_source.borrow_mut() = Some(path.to_owned());
+        }
+        Ok(loaded)
+    }
+
+    /// The source a CommonJS compile step evaluates. A `require()` compile right after its
+    /// file's format check, with no guest code in between, reuses that check's read, as Bun
+    /// reads a module once per load. Any other load, a path change through the natives, a check
+    /// of another file, or a compile with no check just before it reads the file as it is now,
+    /// and that read arms nothing.
+    pub fn load_source_once(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
+        let fresh = self.fresh_source.take().is_some_and(|fresh| fresh == path);
+        if fresh && let Some(hit) = self.sources.borrow().get(path) {
+            return Ok(hit.clone());
+        }
+        self.load_source(path)
+    }
+
+    /// A path changed through this process's natives: forget remembered require() targets and
+    /// the read a pending compile would reuse.
+    pub fn paths_changed(&self) {
+        self.resolver.forget_required();
+        self.fresh_source.take();
+    }
+
+    fn read_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
         if let Some(code) = self.load_text_module(path)? {
             return Ok((Rc::from(code), Format::Esm));
         }
@@ -1048,6 +1088,72 @@ mod tests {
         // A missing line or file keeps the column.
         assert_eq!(state.source_column(callee, path, 3, 9), 9);
         assert_eq!(state.source_column(callee, "/missing.js", 1, 9), 9);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_compile_reuses_the_read_of_the_format_check_just_before_it() {
+        let dir = std::env::temp_dir().join(format!("bunwasm-read-once-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("lib.cjs");
+        let other = dir.join("other.cjs");
+        let path = file.to_str().unwrap();
+        let other_path = other.to_str().unwrap();
+        let state = State::new(
+            Vec::new(),
+            Box::new(crate::transpiler::PassthroughTranspiler),
+        );
+        let compile = || state.load_source_once(path).unwrap().0.to_string();
+        std::fs::write(&file, "module.exports = 1;").unwrap();
+        std::fs::write(&other, "module.exports = 0;").unwrap();
+        assert_eq!(state.probe_source(path).unwrap().1, Format::Cjs);
+        // Written by another process after the check: this load's compile keeps what the check
+        // read, without reading the file again. The next compile reads it.
+        std::fs::write(&file, "module.exports = 2;").unwrap();
+        assert_eq!(compile(), "module.exports = 1;");
+        assert_eq!(compile(), "module.exports = 2;");
+        // A check of another file in between: the compile reads again.
+        state.probe_source(path).unwrap();
+        state.probe_source(other_path).unwrap();
+        std::fs::write(&file, "module.exports = 3;").unwrap();
+        assert_eq!(compile(), "module.exports = 3;");
+        // So does a path change made through this process's natives.
+        state.probe_source(path).unwrap();
+        std::fs::write(&file, "module.exports = 4;").unwrap();
+        state.paths_changed();
+        assert_eq!(compile(), "module.exports = 4;");
+        // Loads that are not format checks arm nothing.
+        state.load_source(path).unwrap();
+        std::fs::write(&file, "module.exports = 5;").unwrap();
+        assert_eq!(compile(), "module.exports = 5;");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A graph checks both CommonJS leaves before compiling either (Sol's two-leaf retry). The
+    /// first leaf's compile misses and reads the file; that read arms nothing, so a retry after
+    /// the page rewrites the file runs the new bytes.
+    #[test]
+    fn a_compile_miss_arms_nothing_for_a_later_retry() {
+        let dir = std::env::temp_dir().join(format!("bunwasm-two-leaf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bad = dir.join("bad.cjs");
+        let other = dir.join("other.cjs");
+        let (bad_path, other_path) = (bad.to_str().unwrap(), other.to_str().unwrap());
+        let state = State::new(
+            Vec::new(),
+            Box::new(crate::transpiler::PassthroughTranspiler),
+        );
+        std::fs::write(&bad, "throw new Error('old-code');").unwrap();
+        std::fs::write(&other, "module.exports = 'other';").unwrap();
+        state.probe_source(bad_path).unwrap();
+        state.probe_source(other_path).unwrap();
+        let compile = |path: &str| state.load_source_once(path).unwrap().0.to_string();
+        assert_eq!(compile(bad_path), "throw new Error('old-code');");
+        // The import failed; the page fixes the file and the guest retries the same graph,
+        // whose format records it already has: no new check runs.
+        std::fs::write(&bad, "module.exports = 'fixed';").unwrap();
+        assert_eq!(compile(bad_path), "module.exports = 'fixed';");
+        assert_eq!(compile(other_path), "module.exports = 'other';");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

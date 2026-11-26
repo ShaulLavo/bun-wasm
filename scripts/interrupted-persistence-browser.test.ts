@@ -56,7 +56,7 @@ interface LocalRegistry {
   dependencies: Record<string, string>;
   readonly tarballsCompleted: number;
   readonly heldCount: number;
-  holdAfter(completedCount: number | null): void;
+  holdAfter(position: number | null): void;
   waitForHeld(timeoutMs?: number): Promise<void>;
   releaseHeld(): void;
   close(): Promise<void>;
@@ -71,15 +71,20 @@ function closeHeldStream(controller: ReadableStreamDefaultController<Uint8Array>
 
 /**
  * Deterministic offline npm registry with 16 multi-file packages and a mid-stream hold gate.
- * When `holdAfter(N)` is active, the first `N` tarballs complete normally (so real files are
- * extracted into IndexedDB) while subsequent tarball responses stream half their bytes and stay
- * open until `releaseHeld()`, guaranteeing `bun install` cannot finish before interruption.
+ * When `holdAfter(N)` is active, the package at position `N` in install order (bun installs in
+ * sorted name order) streams half its archive and stays open until `releaseHeld()`, so
+ * `bun install` cannot finish before interruption. Every other archive completes normally, so
+ * the `N` packages before it are extracted into IndexedDB first. Holding one response by
+ * position, rather than every response after the first `N` to arrive, keeps that true whatever
+ * order concurrent requests arrive in, and leaves no earlier request queued behind held ones.
  */
 function startLocalRegistry(packageCount = 16): LocalRegistry {
   const packages = new Map<string, { meta: string; tgz: Uint8Array }>();
   const dependencies: Record<string, string> = {};
   let tarballsCompleted = 0;
-  let holdThreshold: number | null = null;
+  let heldPosition: number | null = null;
+  // Each package's position in install order, filled once every package exists.
+  const installPosition = new Map<string, number>();
   const heldReleases = new Set<() => void>();
   const heldWaiters = new Set<() => void>();
   const notifyHeld = () => {
@@ -128,7 +133,7 @@ function startLocalRegistry(packageCount = 16): LocalRegistry {
         const name = path.slice(0, -4);
         const entry = packages.get(name);
         if (!entry) return new Response("not found", { status: 404, headers: corsHeaders });
-        if (holdThreshold !== null && tarballsCompleted >= holdThreshold) {
+        if (heldPosition !== null && installPosition.get(name) === heldPosition) {
           return new Response(heldTarballStream(entry.tgz), {
             headers: { ...corsHeaders, "content-type": "application/gzip" },
           });
@@ -172,6 +177,7 @@ function startLocalRegistry(packageCount = 16): LocalRegistry {
     });
     packages.set(name, { meta, tgz });
   }
+  for (const [position, name] of Array.from(packages.keys()).sort().entries()) installPosition.set(name, position);
   const releaseHeld = () => {
     for (const release of Array.from(heldReleases)) release();
   };
@@ -180,7 +186,7 @@ function startLocalRegistry(packageCount = 16): LocalRegistry {
     dependencies,
     get tarballsCompleted() { return tarballsCompleted; },
     get heldCount() { return heldReleases.size; },
-    holdAfter(completedCount: number | null) { holdThreshold = completedCount; },
+    holdAfter(position: number | null) { heldPosition = position; },
     waitForHeld(timeoutMs = 30_000): Promise<void> {
       if (heldReleases.size > 0) return Promise.resolve();
       return new Promise((resolvePromise, reject) => {
@@ -398,7 +404,7 @@ async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOri
     // persistent VFS while the next tarball stream stays held open mid-body so `bun install` cannot finish.
     for (let cycle = 0; cycle < 4; cycle++) {
       const beforeCompleted = registry.tarballsCompleted;
-      registry.holdAfter(beforeCompleted + 1 + cycle);
+      registry.holdAfter(1 + cycle);
       const rmExit = await page.evaluate(async ({ base, dependencies }) => {
         const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
         if (!pg?.fs || !pg?.shell) throw new Error("Missing playground handle");
