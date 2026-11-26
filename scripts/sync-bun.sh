@@ -132,8 +132,10 @@ tree_digest() { # <dir>
     find . -type l -printf '%P -> %l\n' | sort
   ) | sha256sum | cut -d' ' -f1
 }
-remove_tree() { # <dir>: a tree whose root may have lost its write bit
-  [[ ! -d "$1" ]] || chmod -R u+rwX "$1"
+# Removing an entry needs write permission on its directory only. File modes are left
+# alone: a file may also be linked from outside the tree.
+remove_tree() { # <dir>: a tree whose directories may have lost their write bit
+  [[ ! -d "$1" ]] || find "$1" -type d -exec chmod u+rwx {} +
   rm -rf "$1"
 }
 refuse_dependency() { # <path>
@@ -199,14 +201,17 @@ fetch() { # <dir> <repo> <commit> [patch, relative to vendor/bun]...
     refuse_dependency "$dir"
   fi
   # An interrupted removal then leaves only the .old directory, never half of the tree.
+  local mode=""
   if [[ -n "$current" ]]; then
-    # The digest does not hold directory modes, so the new root keeps the old root's.
-    chmod --reference="$dir" "$staging/tree"
+    mode=$(stat -c %a "$dir")
     mv "$dir" "$old"
   elif [[ -d "$dir" ]]; then
     rmdir "$dir"
   fi
   mv "$staging/tree" "$dir"
+  # The digest does not hold directory modes, so the new root keeps the old root's. It is
+  # set after the move: a directory that is not writable cannot move to another parent.
+  [[ -z "$mode" ]] || chmod "$mode" "$dir"
   printf '%s\ntree %s\n' "$want" "${stages[-1]}" > "$stamp"
   rm -rf "$staging"
   staging=""

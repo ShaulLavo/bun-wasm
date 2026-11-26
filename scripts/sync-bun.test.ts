@@ -1,5 +1,5 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -454,5 +454,30 @@ test("an unmarked tree unpacked under another umask is recognized", () => {
     const upgraded = sync([], {}, "022");
     expect(upgraded.exitCode, upgraded.stderr).toBe(0);
     expect(readFileSync(join(vendor, "vendor/rust-argon2/lib.txt"), "utf8")).toBe("one patched\ntwo patched\nthree\n");
+  });
+});
+
+test("removing a read-only old tree leaves a file linked from outside as it was", () => {
+  upgradeFixture(({ vendor, pin, sync }) => {
+    const tree = join(vendor, "vendor/lolhtml"), backup = join(vendor, "..", "backup.txt");
+    pin("old");
+    expect(sync().exitCode).toBe(0);
+    // A read-only backup that shares its inode with a file in the tree, and a read-only root.
+    linkSync(join(tree, "lib.txt"), backup);
+    chmodSync(backup, 0o444);
+    chmodSync(tree, 0o555);
+    pin("new");
+    try {
+      const upgraded = sync();
+      expect(upgraded.exitCode, upgraded.stderr).toBe(0);
+      expect(readFileSync(join(tree, "lib.txt"), "utf8")).toBe("new html\n");
+      expect(existsSync(join(vendor, "vendor/.bun-wasm-lolhtml.old"))).toBe(false);
+      expect(readFileSync(backup, "utf8")).toBe("old html\n");
+      expect(statSync(backup).mode & 0o777).toBe(0o444);
+      expect(statSync(tree).mode & 0o777).toBe(0o555);
+    } finally {
+      // The new root has the old root's mode. The fixture needs write access to remove it.
+      for (const path of readdirSync(join(vendor, "vendor"))) chmodSync(join(vendor, "vendor", path), 0o755);
+    }
   });
 });
