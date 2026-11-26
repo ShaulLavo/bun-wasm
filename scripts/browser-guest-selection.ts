@@ -71,6 +71,7 @@ const commonInputs = [
   "web/src/host-crypto.ts",
   "web/src/host-memory-policy.ts",
   "web/src/install-cache.ts",
+  "web/src/install-staging.ts",
   "web/src/jsc-allocation-boundary.ts",
   "web/src/launch-failure.ts",
   "web/src/memory-channel.ts",

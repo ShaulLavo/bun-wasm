@@ -20,12 +20,26 @@ export function installFixtureTargets(environment: NodeJS.ProcessEnv = process.e
   }));
 }
 
-export async function installFixture(directory: string, base: string, args: string[] = [], expected = 0, archives = false, environment: string[] = [], target?: InstallFixtureTarget) {
+/** The guest mounts and home: the project at the guest root, or at `/project` beside `temp`
+ * mounted as `/tmp`, so the guest's temporary directory is outside the project. */
+function guestLayout(directory: string, temp?: string): string[] {
+  if (temp === undefined) return ["--dir", `${directory}::/`, "--env", "PWD=/", "--env", "HOME=/", "--env", "BUN_INSTALL_CACHE_DIR=/cache"];
+  return ["--dir", `${directory}::/project`, "--dir", `${temp}::/tmp`, "--env", "PWD=/project", "--env", "HOME=/project", "--env", "BUN_INSTALL_CACHE_DIR=/project/cache"];
+}
+
+/** The program and arguments that run `bun install` in `directory` for `target`. */
+export function installFixtureCommand(directory: string, base: string, args: string[] = [], archives = false, environment: string[] = [], target?: InstallFixtureTarget, temp?: string): [string, string[]] {
   const engine = target?.engine ?? process.env.INSTALL_ENGINE ?? "quickjs";
   const wasm = target?.wasm ?? resolve(process.env.BUN_WASM ?? join(root, "dist", engine === "quickjs" ? "bun.wasm" : `bun-${engine}.wasm`));
-  const guest = ["--wasm", wasm, "--dir", `${directory}::/`, "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache"].concat(environment.flatMap(value => ["--env", value]), ["--", "install"], archives ? [] : ["--lockfile-only"], args);
+  const guest = ["--wasm", wasm].concat(guestLayout(directory, temp), ["--env", `NPM_CONFIG_REGISTRY=${base}`], environment.flatMap(value => ["--env", value]), ["--", "install"], archives ? [] : ["--lockfile-only"], args);
   const launcher = process.env.BUN_WASM_LAUNCHER ?? join(process.env.CARGO_TARGET_DIR ?? join(root, "target"), "release/bun-wasm");
-  const child = spawn(engine === "browser" ? "node" : launcher, engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(guest) : guest, { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
+  return engine === "browser" ? ["node", ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(guest)] : [launcher, guest];
+}
+
+export async function installFixture(directory: string, base: string, args: string[] = [], expected = 0, archives = false, environment: string[] = [], target?: InstallFixtureTarget, temp?: string) {
+  const engine = target?.engine ?? process.env.INSTALL_ENGINE ?? "quickjs";
+  const [program, argv] = installFixtureCommand(directory, base, args, archives, environment, target, temp);
+  const child = spawn(program, argv, { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", bytes => { output += bytes; });
   child.stderr.on("data", bytes => { output += bytes; });

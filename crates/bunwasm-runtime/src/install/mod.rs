@@ -1,4 +1,5 @@
 //! Hoisted npm installs over the optional fetch ABI. No JS engine or OS processes.
+mod early;
 mod io;
 mod local;
 mod migration;
@@ -162,6 +163,15 @@ fn execute(
             );
         }
         let mut resolver = Resolver::new(registry, resolution_lock, opts.refresh);
+        // Frozen and lockfile-only runs never stage anything.
+        let mut _staging = None;
+        if !opts.frozen && !opts.lockfile_only && no_modules() {
+            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+            if let Some((early, guard)) = early::Early::start(&cwd, opts.refresh) {
+                resolver.early = Some(early);
+                _staging = Some(guard);
+            }
+        }
         if command == "update" && member.is_some() {
             resolver.member_update = Some(resolve::MemberUpdate {
                 member: manifest["name"]
@@ -437,14 +447,38 @@ fn forget_installed_source(path: &Path) -> Result<()> {
     }
 }
 
+/// Whether the project has no `node_modules` yet.
+fn no_modules() -> bool {
+    matches!(
+        fs::symlink_metadata("node_modules"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
 /// Installs missing packages. Returns the installed count and, for each package extracted
 /// here, the manifest fields that name its binaries, so linking need not read them back.
 fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, Value>)> {
     let mut installed = 0;
     let mut manifests = BTreeMap::new();
-    let keys: Vec<_> = resolver.packages.keys().cloned().collect();
-    let mut downloads = io::Downloads::new(io::TARBALL_PREFETCHES);
     let mut archives = Archives::new(resolver.packages.values());
+    // What resolution prepared while it waited. The download pool, with the archive
+    // requests still in flight, carries on into the install phase.
+    let (mut downloads, mut early) = match resolver.early.take() {
+        Some(mut early) => {
+            let needed: Vec<String> = resolver
+                .packages
+                .values()
+                .filter(|package| !early.prepared(package))
+                .map(|package| package.tarball.clone())
+                .collect();
+            let mut downloads = std::mem::replace(&mut early.downloads, io::Downloads::new(0));
+            downloads.retain(&needed);
+            downloads.set_limit(io::TARBALL_PREFETCHES);
+            (downloads, Some(early))
+        }
+        None => (io::Downloads::new(io::TARBALL_PREFETCHES), None),
+    };
+    let keys: Vec<_> = resolver.packages.keys().cloned().collect();
     let mut lookahead = keys.iter();
     // Lookahead already found these missing. Only their own installs add them; reinstalling a
     // parent can remove a nested package, so positive answers are checked again.
@@ -455,22 +489,27 @@ fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, 
             downloads: &mut downloads,
             archives: &archives,
             absent: &mut absent,
+            early: early.as_ref(),
         };
         prefetch.fill(&mut lookahead);
         let package = &resolver.packages[key];
-        if !absent.remove(key) && trace::time("present-check", || package_present(package)) {
-            archives.skip(package);
-            continue;
-        }
-        let result = install_package(
-            package,
-            Install {
-                refresh: resolver.refresh,
-                registry: &resolver.registry,
-                downloads: &mut downloads,
-                archives: &mut archives,
-            },
-        );
+        let install = Install {
+            refresh: resolver.refresh,
+            registry: &resolver.registry,
+            downloads: &mut downloads,
+            archives: &mut archives,
+        };
+        let prepared = early.as_mut().and_then(|early| early.claim(package));
+        let result = match prepared {
+            Some(outcome) => install_prepared(package, outcome, install),
+            None if !absent.remove(key)
+                && trace::time("present-check", || package_present(package)) =>
+            {
+                install.archives.skip(package);
+                continue;
+            }
+            None => install_package(package, install),
+        };
         if let Err(error) = result {
             if !package.optional || package.explicit_tarball {
                 return Err(format!("{}@{}: {error}", package.name, package.version));
@@ -497,6 +536,8 @@ struct Prefetch<'a> {
     downloads: &'a mut io::Downloads,
     archives: &'a Archives,
     absent: &'a mut BTreeSet<String>,
+    /// What resolution prepared while it waited.
+    early: Option<&'a early::Early>,
 }
 
 impl Prefetch<'_> {
@@ -508,7 +549,9 @@ impl Prefetch<'_> {
             let Some(package) = self.resolver.packages.get(key) else {
                 continue;
             };
-            if package.local.is_some() || trace::time("present-check", || package_present(package))
+            if package.local.is_some()
+                || self.early.is_some_and(|early| early.prepared(package))
+                || trace::time("present-check", || package_present(package))
             {
                 continue;
             }
@@ -629,6 +672,18 @@ fn install_package(package: &Package, install: Install<'_>) -> Result<Option<Val
         None => downloads.fetch(&package.tarball, true, bypass, registry),
     };
     let bytes = fetched.inspect_err(|_| archives.skip(package))?;
+    install_bytes(package, bytes, bypass, downloads, registry, archives)
+}
+
+/// Installs `package` from its fetched archive.
+fn install_bytes(
+    package: &Package,
+    bytes: Vec<u8>,
+    bypass: bool,
+    downloads: &mut io::Downloads,
+    registry: &io::Registry,
+    archives: &mut Archives,
+) -> Result<Option<Value>> {
     let mut tick = || downloads.tick(registry);
     let result = extract_package(package, &bytes, &mut tick);
     // Only archives that installed a package are kept for the next one.
@@ -639,6 +694,60 @@ fn install_package(package: &Package, install: Install<'_>) -> Result<Option<Val
     result
 }
 
+/// Installs `package` from what resolution prepared for it: publishes a staged package,
+/// installs from the archive it fetched, or reports the error its fetch ended with. The
+/// outcome is the package's own fetch, so nothing is fetched again.
+fn install_prepared(
+    package: &Package,
+    outcome: early::Outcome,
+    install: Install<'_>,
+) -> Result<Option<Value>> {
+    let Install {
+        refresh,
+        registry,
+        downloads,
+        archives,
+    } = install;
+    let bypass = refresh && !package.explicit_tarball;
+    match outcome {
+        early::Outcome::Failed(error) => {
+            archives.skip(package);
+            Err(error)
+        }
+        early::Outcome::Fetched(bytes) => {
+            install_bytes(package, bytes, bypass, downloads, registry, archives)
+        }
+        early::Outcome::Staged {
+            staging,
+            bins,
+            bytes,
+        } => {
+            // A staging that cannot be moved into place (another filesystem, say) is
+            // extracted again from its archive, as without early work.
+            if publish_staged(&staging, package).is_err() {
+                return install_bytes(package, bytes, bypass, downloads, registry, archives);
+            }
+            if bypass {
+                archives.skip(package);
+            } else {
+                archives.release(&package.tarball, bytes);
+            }
+            Ok(Some(bins))
+        }
+    }
+}
+
+/// Moves a package staged during resolution into its place in `node_modules`.
+fn publish_staged(staging: &Path, package: &Package) -> Result<()> {
+    let path = package.path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    trace::time("publish", || {
+        publish_package(staging, &path, package, io::write)
+    })
+}
+
 /// Checks, extracts and publishes one archive. `tick` runs during extraction so downloads
 /// keep moving.
 fn extract_package(
@@ -646,25 +755,38 @@ fn extract_package(
     bytes: &[u8],
     tick: &mut dyn FnMut(),
 ) -> Result<Option<Value>> {
-    trace::time("integrity", || io::integrity(bytes, &package.integrity))?;
-    let path = package.path();
-    let staging = path.with_file_name(format!(
-        ".{}.bun-wasm-tmp",
-        package.name.rsplit('/').next().unwrap()
-    ));
-    empty_directory(&staging)?;
+    let staging = stage_package(package, bytes)?;
     let result = trace::time("extract", || io::extract(bytes, &staging, tick))
-        .and_then(|()| validate_package(&staging, package))
-        .and_then(|bins| {
-            trace::time("publish", || {
-                publish_package(&staging, &path, package, io::write)
-            })?;
-            Ok(Some(bins))
-        });
+        .and_then(|()| complete_package(&staging, package));
     if result.is_err() {
         let _ = fs::remove_dir_all(staging);
     }
-    result
+    result.map(Some)
+}
+
+/// Checks the archive's integrity and makes its empty staging directory beside its place.
+fn stage_package(package: &Package, bytes: &[u8]) -> Result<std::path::PathBuf> {
+    let staging = package.path().with_file_name(format!(
+        ".{}.bun-wasm-tmp",
+        package.name.rsplit('/').next().unwrap()
+    ));
+    stage_at(package, bytes, &staging)?;
+    Ok(staging)
+}
+
+/// Checks the archive's integrity and makes `staging` an empty directory for it.
+fn stage_at(package: &Package, bytes: &[u8], staging: &Path) -> Result<()> {
+    trace::time("integrity", || io::integrity(bytes, &package.integrity))?;
+    empty_directory(staging)
+}
+
+/// Validates an extracted package and publishes it. Returns its binary fields.
+fn complete_package(staging: &Path, package: &Package) -> Result<Value> {
+    let bins = validate_package(staging, package)?;
+    trace::time("publish", || {
+        publish_package(staging, &package.path(), package, io::write)
+    })?;
+    Ok(bins)
 }
 
 /// Creates `path` as a new empty directory, replacing a leftover one. The common case (it
@@ -1410,6 +1532,8 @@ fn package_binary(
         .filter(|file| file.is_file()))
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod early_tests;
 #[cfg(test)]
 mod lockfile_tests;
 #[cfg(test)]
