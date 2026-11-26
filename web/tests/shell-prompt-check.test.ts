@@ -108,7 +108,7 @@ test("plain transcript helper rejects prompt-on and implicit modes before readin
 const transcriptCallers = [
   "scripts/browser-import-rejections.test.ts", "scripts/bun-api-probe.ts",
   "scripts/dev-html-browser.test.ts",
-  "scripts/hot-run-browser.test.ts",
+  "scripts/hot-run-browser.test.ts", "scripts/cjs-reread-browser.test.ts",
   "scripts/spidermonkey-memory-browser.test.ts", "scripts/webcrypto-browser.test.ts",
   "scripts/app-matrix/browser.mjs", "scripts/app-matrix/next-acceptance.ts", "scripts/io-resource-context.ts", "tests/esbuild/browser.mjs",
   "scripts/install-download-browser.test.ts", "scripts/shared-fresh-backing-browser.test.ts", "scripts/worker-large-message-browser.test.ts",
@@ -138,6 +138,8 @@ const nonTranscriptCallers = [
   "scripts/typescript-language-server-browser.test.ts",
   // The preview-origin check starts servers and reads preview frames; it uses playground.mjs only to serve the site.
   "scripts/isolated-preview-origins-browser.test.ts",
+  // Serves the browser-guest site and launches a browser; its callers read the transcript.
+  "scripts/browser-guest-page.ts",
 ];
 const inheritedTranscriptCallers = ["web/tests/browser-quickjs-stack.ts", "web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts", "scripts/bench-engines.test.ts", "scripts/engine-chromium-bench.ts"];
 

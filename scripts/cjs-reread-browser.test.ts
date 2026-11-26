@@ -1,10 +1,7 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { chromium, webkit, type Browser, type Page } from "playwright";
-import { buildSite, verifySite } from "./browser-guest-site";
-import { ready, run, session, terminalText, writeFile } from "../web/tests/playground.mjs";
+import type { Browser, Page } from "playwright";
+import { withGuestSite } from "./browser-guest-page";
+import { ready, run, terminalText, writeFile } from "../web/tests/playground.mjs";
 import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 // Tests here start real browsers. The limit only catches a hang.
@@ -56,26 +53,7 @@ console.log("result", (await import("./cjs-failed/last.cjs")).default);
 
 for (const browserName of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",")) {
   test(`${browserName}: a CommonJS file rewritten by the page runs as rewritten`, async () => {
-    const provided = process.env.BUN_WASM_BROWSER_SITE;
-    if (process.env.CI && !provided) throw new Error("CI must provide the existing browser-guest site");
-    const scratch = provided ? undefined : mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-cjs-reread-site-"));
-    const directory = provided ? resolve(provided) : scratch!;
-    const previousRoot = process.env.ROOT;
-    const task = session("bun-wasm-cjs-reread-");
-    try {
-      const before = provided ? verifySite(directory) : buildSite(directory);
-      process.env.ROOT = join(directory, "site");
-      const url = await task.serve();
-      if (browserName !== "chromium" && browserName !== "webkit") throw new Error(`Unsupported browser ${browserName}`);
-      const browser = await task.launch(browserName === "chromium" ? chromium : webkit);
-      await scenario(browser, url);
-      expect(verifySite(directory)).toEqual(before);
-    } finally {
-      if (previousRoot === undefined) delete process.env.ROOT;
-      else process.env.ROOT = previousRoot;
-      await task.cleanup();
-      if (scratch) rmSync(scratch, { recursive: true, force: true });
-    }
+    await withGuestSite(browserName, "bun-wasm-cjs-reread", scenario);
   }, 300000);
 }
 
