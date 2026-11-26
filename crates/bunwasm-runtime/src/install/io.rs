@@ -477,6 +477,38 @@ impl Downloads {
         refresh: bool,
         registry: &Registry,
     ) -> Result<Vec<u8>> {
+        self.fetch_with(url, tarball, refresh, registry, &mut |_| false)
+    }
+
+    /// Sets how many requests prefetching may keep in flight.
+    pub fn set_limit(&mut self, limit: usize) {
+        self.limit = limit;
+    }
+
+    /// Whether `fetch(url)` would return without waiting: its response has fully arrived (or
+    /// failed), or a fresh cache file will serve it.
+    pub fn ready(&mut self, url: &str, tarball: bool, registry: &Registry) -> bool {
+        self.pump(registry);
+        if let Some((_, download)) = self.pending.iter().find(|(pending, _)| pending == url) {
+            return download.as_ref().map_or(true, |download| {
+                matches!(download.state, Body::Done | Body::Failed(_))
+            });
+        }
+        let cache = cache_path(url);
+        self.cache.may_hold(url) && fresh_cache(&cache, tarball) && cache.is_file()
+    }
+
+    /// `fetch`, running `idle` while the response has not arrived yet. `idle` gets the
+    /// other pending downloads so its own long work can let them move, and returns whether
+    /// it did anything; when it did not, the wait blocks in the host as usual.
+    pub fn fetch_with(
+        &mut self,
+        url: &str,
+        tarball: bool,
+        refresh: bool,
+        registry: &Registry,
+        idle: &mut dyn FnMut(&mut Downloads) -> bool,
+    ) -> Result<Vec<u8>> {
         let download = match self.take(url) {
             Some(request) => request?,
             None => {
@@ -490,7 +522,7 @@ impl Downloads {
                 Download::start(&url, tarball, refresh, registry)?
             }
         };
-        download.finish(self, registry)
+        download.finish(self, registry, idle)
     }
 
     /// Lets other responses move during long guest work, at most every `PUMP_INTERVAL`.
@@ -613,14 +645,19 @@ impl Download {
         })
     }
 
-    fn finish(mut self, others: &mut Downloads, registry: &Registry) -> Result<Vec<u8>> {
+    fn finish(
+        mut self,
+        others: &mut Downloads,
+        registry: &Registry,
+        idle: &mut dyn FnMut(&mut Downloads) -> bool,
+    ) -> Result<Vec<u8>> {
         let (download, store) = if self.tarball {
             ("tarball-download", "tarball-cache-write")
         } else {
             ("metadata-download", "metadata-cache-write")
         };
         let started = trace::start_time();
-        let completed = self.complete(others, registry);
+        let completed = self.complete(others, registry, idle);
         // Failed attempts count too, with whatever arrived (a failure frees the body).
         trace::finish(download, started, self.body.len());
         completed?;
@@ -634,7 +671,12 @@ impl Download {
     }
 
     /// Waits for the whole response. The idle timer starts here, on consumption.
-    fn complete(&mut self, others: &mut Downloads, registry: &Registry) -> Result<()> {
+    fn complete(
+        &mut self,
+        others: &mut Downloads,
+        registry: &Registry,
+        idle: &mut dyn FnMut(&mut Downloads) -> bool,
+    ) -> Result<()> {
         let mut pending = Pending::new(idle_timeout(), Instant::now());
         loop {
             // Others first: a notification for this response that arrives after its read
@@ -646,6 +688,7 @@ impl Download {
             match &self.state {
                 Body::Done => return Ok(()),
                 Body::Failed(error) => return Err(error.clone()),
+                Body::Head | Body::Reading if idle(others) => {}
                 Body::Head | Body::Reading => wait(&mut pending, &self.url)?,
             }
         }

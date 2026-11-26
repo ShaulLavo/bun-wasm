@@ -1,4 +1,5 @@
 //! Hoisted npm installs over the optional fetch ABI. No JS engine or OS processes.
+mod early;
 mod io;
 mod local;
 mod migration;
@@ -162,6 +163,10 @@ fn execute(
             );
         }
         let mut resolver = Resolver::new(registry, resolution_lock, opts.refresh);
+        // A frozen or lockfile-only run must leave node_modules alone when it fails.
+        if !opts.frozen && !opts.lockfile_only && no_modules() {
+            resolver.early = Some(early::Early::new(opts.refresh));
+        }
         if command == "update" && member.is_some() {
             resolver.member_update = Some(resolve::MemberUpdate {
                 member: manifest["name"]
@@ -437,20 +442,38 @@ fn forget_installed_source(path: &Path) -> Result<()> {
     }
 }
 
+/// Whether the project has no `node_modules` yet.
+fn no_modules() -> bool {
+    matches!(
+        fs::symlink_metadata("node_modules"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
 /// Installs missing packages. Returns the installed count and, for each package extracted
 /// here, the manifest fields that name its binaries, so linking need not read them back.
 fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, Value>)> {
     let mut installed = 0;
     let mut manifests = BTreeMap::new();
-    let keys: Vec<_> = resolver.packages.keys().cloned().collect();
-    let mut downloads = io::Downloads::new(io::TARBALL_PREFETCHES);
     let mut archives = Archives::new(resolver.packages.values());
-    // Without node_modules nothing is installed yet, and only this run's own installs write
-    // the source records that a present package needs.
-    let fresh = matches!(
-        fs::symlink_metadata("node_modules"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    );
+    // Early installs exist only when no node_modules existed before resolution.
+    let fresh = resolver.early.is_some() || no_modules();
+    let (mut downloads, mut early) = match resolver.early.take() {
+        Some(mut early) => {
+            early.reconcile(&resolver.packages)?;
+            let needed: Vec<String> = resolver
+                .packages
+                .iter()
+                .filter(|(key, _)| !early.done.contains_key(*key))
+                .map(|(_, package)| package.tarball.clone())
+                .collect();
+            early.downloads.retain(&needed);
+            early.downloads.set_limit(io::TARBALL_PREFETCHES);
+            (early.downloads, early.done)
+        }
+        None => (io::Downloads::new(io::TARBALL_PREFETCHES), BTreeMap::new()),
+    };
+    let keys: Vec<_> = resolver.packages.keys().cloned().collect();
     let mut lookahead = keys.iter();
     // Lookahead already found these missing. Only their own installs add them; reinstalling a
     // parent can remove a nested package, so positive answers are checked again.
@@ -461,10 +484,17 @@ fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, 
             downloads: &mut downloads,
             archives: &archives,
             absent: &mut absent,
+            early: &early,
             fresh,
         };
         prefetch.fill(&mut lookahead);
         let package = &resolver.packages[key];
+        if let Some(done) = early.remove(key) {
+            archives.skip(package);
+            manifests.insert(key.clone(), done.bins);
+            installed += 1;
+            continue;
+        }
         if !fresh
             && !absent.remove(key)
             && trace::time("present-check", || package_present(package))
@@ -508,6 +538,8 @@ struct Prefetch<'a> {
     downloads: &'a mut io::Downloads,
     archives: &'a Archives,
     absent: &'a mut BTreeSet<String>,
+    /// Installed during resolution.
+    early: &'a BTreeMap<String, early::Done>,
     fresh: bool,
 }
 
@@ -521,6 +553,7 @@ impl Prefetch<'_> {
                 continue;
             };
             if package.local.is_some()
+                || self.early.contains_key(key)
                 || !self.fresh && trace::time("present-check", || package_present(package))
             {
                 continue;
@@ -642,16 +675,18 @@ fn install_package(package: &Package, install: Install<'_>) -> Result<Option<Val
         ),
     };
     let bytes = fetched.inspect_err(|_| archives.skip(package))?;
-    let result = extract_package(package, &bytes, downloads, registry, fresh);
+    let mut tick = || downloads.tick(registry);
+    let result = extract_package(package, &bytes, &mut tick, fresh);
     archives.release(&package.tarball, bytes);
     result
 }
 
+/// Checks, extracts and publishes one archive. `tick` runs during extraction so downloads
+/// keep moving.
 fn extract_package(
     package: &Package,
     bytes: &[u8],
-    downloads: &mut io::Downloads,
-    registry: &io::Registry,
+    tick: &mut dyn FnMut(),
     fresh: bool,
 ) -> Result<Option<Value>> {
     trace::time("integrity", || io::integrity(bytes, &package.integrity))?;
@@ -661,8 +696,7 @@ fn extract_package(
         package.name.rsplit('/').next().unwrap()
     ));
     empty_directory(&staging)?;
-    let mut tick = || downloads.tick(registry);
-    let result = trace::time("extract", || io::extract(bytes, &staging, &mut tick))
+    let result = trace::time("extract", || io::extract(bytes, &staging, tick))
         .and_then(|manifest| validate_package(&staging, package, manifest))
         .and_then(|bins| {
             trace::time("publish", || {
@@ -1428,6 +1462,8 @@ fn package_binary(
         .filter(|file| file.is_file()))
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod early_tests;
 #[cfg(test)]
 mod lockfile_tests;
 #[cfg(test)]
