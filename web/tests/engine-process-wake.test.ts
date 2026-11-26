@@ -240,14 +240,9 @@ test("ioBeginPump skips idle hot turns and wakes immediately on process, watch, 
   const hostClass: unknown = runInNewContext(source.concat("\nEngineHost;"), {
     TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask,
     SLOT_NAMES: [], Atomics, AggregateError,
-    createScriptEvaluation: () => ({}),
-    transferArrayBuffers: () => {},
-    isWasmMemoryBuffer: () => false,
-    bindSharedObjectHost: () => ({}),
-    hostCrypto: () => ({}),
     Date: Object.assign(function FakeDate() { return new Date(now); }, { now: () => now }),
   });
-  const proto = (hostClass as { prototype: { valueNatives: (m: unknown) => Record<string, (...a: unknown[]) => unknown> } }).prototype;
+  const proto = (hostClass as { prototype: { attachIoHooks: (i: Record<string, (...a: unknown[]) => unknown>) => void } }).prototype;
   const host = {
     exited: false,
     pendingAsync: 0,
@@ -264,19 +259,11 @@ test("ioBeginPump skips idle hot turns and wakes immediately on process, watch, 
       fsWatchWord: () => watchWord,
       fsWatchReady: () => watchReady,
     },
-    schedule() {},
-    evalAt() {},
-    importKey() {},
-    evalPolyfill() {},
-    exit() {},
-    promiseStates: new WeakMap(),
-    promiseThen() {},
-    native: {},
-    internal: {},
   };
-  const natives = Reflect.apply(proto.valueNatives, host, [() => null]);
-  const begin = (force = false) => Boolean(natives.ioBeginPump!(force));
-  const end = (progressed = false) => { natives.ioEndPump!(progressed); };
+  const internalHooks: Record<string, (...a: unknown[]) => unknown> = {};
+  Reflect.apply(proto.attachIoHooks, host, [internalHooks]);
+  const begin = (force = false) => Boolean(internalHooks.ioBeginPump!(force));
+  const end = (progressed = false) => { internalHooks.ioEndPump!(progressed); };
 
   // Initial turn runs.
   expect(begin(false)).toBe(true);
@@ -306,13 +293,13 @@ test("ioBeginPump skips idle hot turns and wakes immediately on process, watch, 
   expect(begin(false)).toBe(false);
 
   // markIoDirty wakes immediately.
-  natives.markIoDirty!();
+  internalHooks.markIoDirty!();
   expect(begin(false)).toBe(true);
   end(false);
   expect(begin(false)).toBe(false);
 
   // Progress keeps pumping until quiescent.
-  natives.markIoDirty!();
+  internalHooks.markIoDirty!();
   expect(begin(false)).toBe(true);
   end(true);
   expect(begin(false)).toBe(true);

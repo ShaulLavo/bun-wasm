@@ -536,6 +536,7 @@ class EngineHost {
       return this.exit(70);
     }
     this.internal = internal;
+    this.attachIoHooks(internal);
     this.stackPrograms = internal.hasNativeStackTrace
       ? createStackPrograms(bytes => native.hash("sha256", bytes)) : undefined;
     internal.isProgramScriptHash = hash => this.stackPrograms?.has(hash) === true;
@@ -679,44 +680,6 @@ class EngineHost {
       // promise (top-level await) with nothing armed.
       wake(ms) {
         host.schedule(ms > 0 ? ms : 0);
-      },
-      markIoDirty() {
-        host.ioDirty = true;
-      },
-      markWatchDirty() {
-        host.watchStillReady = true;
-        host.ioDirty = true;
-      },
-      ioBeginPump(force) {
-        const wakeWord = host.o.processWake;
-        if (!wakeWord) return true;
-        const wake = nativeAtomicsLoad(wakeWord, 0);
-        const watchWord = host.o.fsWatchWord?.();
-        const watchGen = watchWord ? nativeAtomicsLoad(watchWord, 3) : NaN;
-        const watchChanged = Boolean(watchWord && watchGen !== host.lastWatchWord);
-        if (
-          !force &&
-          !host.ioDirty &&
-          !host.watchStillReady &&
-          !watchChanged &&
-          wake === host.lastIoWake &&
-          nativeDateNow() - host.lastIoPumpAt < 16
-        ) {
-          return false;
-        }
-        host.ioDirty = false;
-        host.pumpWakeBefore = wake;
-        host.pumpWatchBefore = watchGen;
-        host.pumpWatchChecked = watchChanged || host.watchStillReady;
-        return true;
-      },
-      ioEndPump(progressed) {
-        if (!host.o.processWake) return;
-        host.lastIoWake = host.pumpWakeBefore;
-        host.lastWatchWord = host.pumpWatchBefore;
-        host.watchStillReady = host.pumpWatchChecked ? Boolean(host.o.fsWatchReady?.()) : false;
-        if (progressed) host.ioDirty = true;
-        host.lastIoPumpAt = nativeDateNow();
       },
       compileCjs(path) {
         return host.evalAt(host.native.hostCjsSource(path), path);
@@ -1393,6 +1356,48 @@ class EngineHost {
   // stores.
   enterRoot() {
     if (!this.o.asyncContext) this.asyncContext = undefined;
+  }
+
+  attachIoHooks(internal) {
+    const host = this;
+    internal.markIoDirty = () => {
+      host.ioDirty = true;
+    };
+    internal.markWatchDirty = () => {
+      host.watchStillReady = true;
+      host.ioDirty = true;
+    };
+    internal.ioBeginPump = force => {
+      const wakeWord = host.o.processWake;
+      if (!wakeWord) return true;
+      const wake = nativeAtomicsLoad(wakeWord, 0);
+      const watchWord = host.o.fsWatchWord?.();
+      const watchGen = watchWord ? nativeAtomicsLoad(watchWord, 3) : NaN;
+      const watchChanged = Boolean(watchWord && watchGen !== host.lastWatchWord);
+      if (
+        !force &&
+        !host.ioDirty &&
+        !host.watchStillReady &&
+        !watchChanged &&
+        wake === host.lastIoWake &&
+        nativeDateNow() - host.lastIoPumpAt < 16
+      ) {
+        return false;
+      }
+      host.ioDirty = false;
+      host.pumpWakeBefore = wake;
+      host.pumpWatchBefore = watchGen;
+      host.pumpWatchChecked = watchChanged || host.watchStillReady;
+      return true;
+    };
+    internal.ioEndPump = progressed => {
+      if (!host.o.processWake) return;
+      host.lastIoWake = host.pumpWakeBefore;
+      host.lastWatchWord = host.pumpWatchBefore;
+      host.watchStillReady = host.pumpWatchChecked ? Boolean(host.o.fsWatchReady?.()) : false;
+      if (progressed) host.ioDirty = true;
+      host.lastIoPumpAt = nativeDateNow();
+    };
   }
 
   // Pipe and child changes publish on the process wake word: run the loop for them rather than

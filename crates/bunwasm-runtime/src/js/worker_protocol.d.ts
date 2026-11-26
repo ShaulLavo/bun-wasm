@@ -254,10 +254,6 @@ declare namespace BunWasm {
     isWasmMemoryBuffer?(value: unknown): boolean;
     isWasmCapability?(value: unknown): boolean;
     hostPoll(timeout: number): number;
-    markIoDirty?(): void;
-    markWatchDirty?(): void;
-    ioBeginPump?(force?: boolean): boolean;
-    ioEndPump?(progressed: boolean): void;
   }
   /** `subscriptions` lists what the idle event loop may sleep on (procPoll format); see net.js ioWait. */
   interface IoWaiter {
@@ -305,6 +301,10 @@ declare namespace BunWasm {
     require(name: "worker_threads"): { isMainThread: boolean; initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
     require(name: "net"): NetWaiterModule;
     require(name: "io_pump"): (waiters: Set<IoWaiter>, watchWaiters?: Set<IoWaiter>) => boolean;
+    markIoDirty?(): void;
+    markWatchDirty?(): void;
+    ioBeginPump?(force?: boolean): boolean;
+    ioEndPump?(progressed: boolean): void;
     removeIoWaiter(waiter: IoWaiter): void;
     cancelIoWaiters(): void;
     require(name: "node_url"): { fileURLToPath(url: URL): string };

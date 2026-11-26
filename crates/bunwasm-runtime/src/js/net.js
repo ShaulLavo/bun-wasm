@@ -24,7 +24,7 @@
     if (waiter.ref === undefined) waiter.ref = true;
     (waiter.watch === true ? watchWaiters : waiters).add(waiter);
     // A host-owned event loop (engine-host) steps waiters only when woken.
-    if (native.markIoDirty) native.markIoDirty();
+    if (internal.markIoDirty) internal.markIoDirty();
     if (native.wake) native.wake(0);
     return waiter;
   }
@@ -74,13 +74,13 @@
   // readable this turn reaches its listeners, and queues their deferred work, ahead of it.
   const pumpIo = internal.require("io_pump");
   internal.pumpIo = (force) => {
-    if (native.ioBeginPump && !native.ioBeginPump(force)) return false;
+    if (internal.ioBeginPump && !internal.ioBeginPump(force)) return false;
     let progressed = false;
     try {
       progressed = pumpIo(waiters, watchWaiters);
       return progressed;
     } finally {
-      if (native.ioEndPump) native.ioEndPump(progressed);
+      if (internal.ioEndPump) internal.ioEndPump(progressed);
     }
   };
 
@@ -368,7 +368,7 @@
         if (this.onData) this.ownership.dispatch(() => this.onData?.(chunk));
         if (this.closed || !this.ownership.valid(epoch)) return true;
       }
-      if (native.markIoDirty) native.markIoDirty();
+      if (internal.markIoDirty) internal.markIoDirty();
       if (native.wake) native.wake(0);
       return progressed ? "progress" : false;
     }
@@ -519,7 +519,7 @@
       const chunked = (header(head.headers, "transfer-encoding") || "").toLowerCase().includes("chunked");
       const length = Number(header(head.headers, "content-length") || 0);
       if (!chunked && !(length > 0)) return null;
-      const onDemand = () => { if (native.markIoDirty) native.markIoDirty(); if (native.wake) native.wake(0); };
+      const onDemand = () => { if (internal.markIoDirty) internal.markIoDirty(); if (native.wake) native.wake(0); };
       const body = new (uploads().RequestUpload)(chunked, length, onDemand, maxBody);
       return Object.assign(head, { body: internal.require("body_streams").markNetwork(body.stream), streamed: true, chunked, trailers: [], length: buffer.length, upload: body, initial: buffer.subarray(head.headLength) });
     }

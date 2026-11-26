@@ -135,7 +135,7 @@
         queue.push({ bytes, offset: 0, callback: done });
         queuedBytes += bytes.length;
         const accepted = queuedBytes < HIGH_WATER_MARK;
-        native.markIoDirty?.();
+        internal.markIoDirty?.();
         flush();
         return state === "open" && accepted;
       },
