@@ -824,3 +824,68 @@ test("an unhandled unscoped watch_next error still fails and closes remaining wa
   first.close();
   second.close();
 });
+
+test("a late join during a watch_next pump drains the joined watch's backlog before socket waiters", () => {
+  const world = fixture({ resolve: path => ({ ino: path === "/a" ? 1n : 2n }) });
+  const seen: string[] = [];
+  let late: ReturnType<typeof world.module.watch> | undefined;
+  const watchA = world.module.watch("/a", (_type, name) => {
+    seen.push(`a:${String(name)}`);
+    // Joining /b moves /b's queued record into its backlog via captureBoundary before watch_next returns EAGAIN.
+    late = world.module.watch("/b", (_t, n) => seen.push(`b-late:${String(n)}`));
+  });
+  const watchB = world.module.watch("/b", (_type, name) => seen.push(`b:${String(name)}`));
+  let socketRan = false;
+  world.internal.addIoWaiter({
+    ref: true,
+    step() {
+      if (socketRan) return true;
+      socketRan = true;
+      seen.push("socket");
+      return true;
+    },
+    fail() {},
+  });
+  const nextResults: ([number, Uint8Array | number] | number)[] = [[40, chunk(record("change", "one"))]];
+  const readB: (Uint8Array | number)[] = [chunk(record("change", "two"))];
+  world.internal.native.fsWatchReady = () => nextResults.length > 0 || readB.length > 0;
+  world.internal.native.fsWatchNext = () => nextResults.shift() ?? -6;
+  world.internal.native.fsWatchRead = (id: number) => (id === 41 ? (readB.shift() ?? -6) : -6);
+  try {
+    expect(world.pump()).toBe(true);
+    expect(seen).toEqual(["a:one", "b:two", "socket"]);
+  } finally {
+    watchA.close();
+    watchB.close();
+    late?.close();
+  }
+});
+
+test("an unscoped watch_next error detaches sharing keys so a watch opened in an error handler stays open", () => {
+  const world = fixture({ resolve: path => ({ ino: path === "/a" ? 1n : 2n }) });
+  const events: string[] = [];
+  let reopened: ReturnType<typeof world.module.watch> | undefined;
+  const watchA = world.module.watch("/a").on("error", (error: { code: string }) => {
+    events.push(`a:${error.code}`);
+    reopened = world.module.watch("/b", (_type, name) => events.push(`b-new:${String(name)}`))
+      .on("error", (err: { code: string }) => events.push(`b-new:${err.code}`));
+  });
+  const watchB = world.module.watch("/b").on("error", (error: { code: string }) => events.push(`b:${error.code}`));
+  const nextResults: ([number, Uint8Array | number] | number)[] = [-29];
+  world.internal.native.fsWatchReady = () => nextResults.length > 0;
+  world.internal.native.fsWatchNext = () => nextResults.shift() ?? -6;
+  try {
+    expect(world.pump()).toBe(true);
+    expect(events).toEqual(["a:EIO", "b:EIO"]);
+    expect(world.closed.toSorted()).toEqual([40, 41]);
+    expect(reopened).toBeDefined();
+    // The replacement watch on /b got a fresh id (42) instead of joining the failing shared watch.
+    nextResults.push([42, chunk(record("change", "after"))]);
+    expect(world.pump()).toBe(true);
+    expect(events).toEqual(["a:EIO", "b:EIO", "b-new:after"]);
+  } finally {
+    watchA.close();
+    watchB.close();
+    reopened?.close();
+  }
+});

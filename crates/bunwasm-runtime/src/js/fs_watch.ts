@@ -342,11 +342,15 @@
       dispatchPayload(shared, payload, ++shared.seq);
     }
 
-    /** An unscoped provider error (no watch id) fails every watch. */
+    /** An unscoped provider error (no watch id) fails every watch. Detach sharing keys before
+     * running any handler so a watcher opened inside an error listener gets a fresh registration
+     * instead of joining one about to fail. */
     function failAll(errno: number) {
+      const affected = Array.from(sharedById.values()).filter(shared => !shared.closed);
+      for (const shared of affected) detachKey(shared);
       let hasError = false;
       let firstError: unknown;
-      for (const shared of Array.from(sharedById.values())) {
+      for (const shared of affected) {
         if (shared.closed) continue;
         try {
           dispatchPayload(shared, errno, ++shared.seq);
@@ -366,21 +370,46 @@
     // this many results. The provider still reports ready, so the next turn continues.
     const MAX_NEXT_PER_PUMP = 4096;
 
-    function pumpWatches(): boolean | "progress" {
+    function flushAllBacklogs(budget: { remaining: number }): boolean {
       let progressed = false;
-      for (const shared of Array.from(sharedById.values())) {
-        if (flushBacklog(shared)) progressed = true;
+      while (backlogCount > 0 && budget.remaining > 0) {
+        let flushed = false;
+        for (const shared of Array.from(sharedById.values())) {
+          if (budget.remaining <= 0) break;
+          if (shared.backlog.length === 0) continue;
+          budget.remaining--;
+          if (flushBacklog(shared)) {
+            flushed = true;
+            progressed = true;
+          }
+        }
+        if (!flushed) break;
       }
-      for (let calls = 0; sharedById.size > 0 && calls < MAX_NEXT_PER_PUMP; calls++) {
+      return progressed;
+    }
+
+    function pumpWatches(): boolean | "progress" {
+      const budget = { remaining: MAX_NEXT_PER_PUMP };
+      let progressed = flushAllBacklogs(budget);
+      while (sharedById.size > 0 && budget.remaining > 0) {
         const next = native.fsWatchNext();
-        if (next === AGAIN) break;
+        if (next === AGAIN) {
+          if (backlogCount > 0 && flushAllBacklogs(budget)) {
+            progressed = true;
+            continue;
+          }
+          break;
+        }
+        budget.remaining--;
         progressed = true;
         if (typeof next === "number") {
           failAll(next);
           break;
         }
         deliverNext(next[0], next[1]);
+        if (backlogCount > 0 && flushAllBacklogs(budget)) progressed = true;
       }
+      if (backlogCount > 0 && flushAllBacklogs(budget)) progressed = true;
       return sharedById.size === 0 ? true : (progressed && "progress");
     }
 
