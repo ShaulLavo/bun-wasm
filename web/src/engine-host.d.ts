@@ -37,6 +37,8 @@ export interface EngineHostOptions {
     caps: Record<string, boolean>;
     onNews(cb: () => void): void;
   };
+  /** Optional shared watch generation cells (`word[3]` moves on every watch commit). */
+  fsWatchWord?: () => Int32Array | undefined;
   /** Optional direct filesystem watch readiness check on the Browser engine, avoiding Wasm round trips. */
   fsWatchReady?: () => boolean;
   /** Optional direct ready-only watch drain on the Browser engine, avoiding Wasm round trips and idle scans. */

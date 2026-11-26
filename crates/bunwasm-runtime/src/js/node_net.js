@@ -192,6 +192,7 @@
         this._readReady = true;
         this._onreadStopped = false;
         if (this._conn?.readDemand) this._conn.readDemand();
+        if (native.markIoDirty) native.markIoDirty();
         if (native.wake) native.wake(0);
       }
       read(size) {

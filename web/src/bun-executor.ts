@@ -216,6 +216,10 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
         onWasmCallTrap: telemetry ? (_error, index) => publishBrowserCallTrap(instance, index, telemetry, message => host.postMessage(message)) : undefined,
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
         sharedObjects, net, terminal, processWake: runtimeState?.wake,
+        fsWatchWord: () => {
+          const table = wasiWatches?.() as { readonly word?: Int32Array } | undefined;
+          return table?.word;
+        },
         fsWatchReady: () => {
           const table = wasiWatches?.() as { ready?(): boolean } | undefined;
           return table?.ready ? table.ready() : false;

@@ -87,6 +87,7 @@
     private wake(): void {
       if (this.closed) return;
       this.updateRefs();
+      (internal.native as unknown as { markIoDirty?: () => void }).markIoDirty?.();
       internal.native.wake?.(0);
     }
     private activate(raw: BunWasm.Tls.Raw, unread: Uint8Array): void {

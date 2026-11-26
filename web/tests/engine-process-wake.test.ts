@@ -231,3 +231,95 @@ test("terminal callback errors do not mask cleanup errors or skip completion", a
   expect(caught.errors).toEqual([cancellation, disposal, onExit]);
   expect(resolved).toEqual([1]);
 });
+
+test("ioBeginPump skips idle hot turns and wakes immediately on process, watch, dirty, or forced events", () => {
+  const processWake = new Int32Array(new SharedArrayBuffer(4));
+  const watchWord = new Int32Array(new SharedArrayBuffer(16));
+  let watchReady = false;
+  let now = 1000;
+  const hostClass: unknown = runInNewContext(source.concat("\nEngineHost;"), {
+    TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask,
+    SLOT_NAMES: [], Atomics, AggregateError,
+    createScriptEvaluation: () => ({}),
+    Date: Object.assign(function FakeDate() { return new Date(now); }, { now: () => now }),
+  });
+  const proto = (hostClass as { prototype: { valueNatives: (m: unknown) => Record<string, (...a: unknown[]) => unknown> } }).prototype;
+  const host = {
+    exited: false,
+    pendingAsync: 0,
+    ioDirty: true,
+    lastIoWake: NaN,
+    lastWatchWord: NaN,
+    watchStillReady: false,
+    lastIoPumpAt: 0,
+    pumpWakeBefore: 0,
+    pumpWatchBefore: NaN,
+    pumpWatchChecked: false,
+    o: {
+      processWake,
+      fsWatchWord: () => watchWord,
+      fsWatchReady: () => watchReady,
+    },
+    schedule() {},
+    evalAt() {},
+    importKey() {},
+    evalPolyfill() {},
+    exit() {},
+    promiseStates: new WeakMap(),
+    promiseThen() {},
+    native: {},
+    internal: {},
+  };
+  const natives = Reflect.apply(proto.valueNatives, host, [() => null]);
+  const begin = (force = false) => Boolean(natives.ioBeginPump!(force));
+  const end = (progressed = false) => { natives.ioEndPump!(progressed); };
+
+  // Initial turn runs.
+  expect(begin(false)).toBe(true);
+  end(false);
+
+  // 500 hot turns with no wake, no watch change, and < 16ms elapsed all skip.
+  let ran = 0;
+  for (let i = 0; i < 500; i++) {
+    if (begin(false)) { ran++; end(false); }
+  }
+  expect(ran).toBe(0);
+
+  // processWake bump wakes immediately.
+  Atomics.add(processWake, 0, 1);
+  expect(begin(false)).toBe(true);
+  end(false);
+  expect(begin(false)).toBe(false);
+
+  // watchWord[3] bump wakes immediately and retains watchStillReady until drained.
+  watchReady = true;
+  Atomics.add(watchWord, 3, 1);
+  expect(begin(false)).toBe(true);
+  end(false);
+  expect(begin(false)).toBe(true);
+  watchReady = false;
+  end(false);
+  expect(begin(false)).toBe(false);
+
+  // markIoDirty wakes immediately.
+  natives.markIoDirty!();
+  expect(begin(false)).toBe(true);
+  end(false);
+  expect(begin(false)).toBe(false);
+
+  // Progress keeps pumping until quiescent.
+  natives.markIoDirty!();
+  expect(begin(false)).toBe(true);
+  end(true);
+  expect(begin(false)).toBe(true);
+  end(false);
+  expect(begin(false)).toBe(false);
+
+  // force=true (idle turn) always runs, and 16ms safety ceiling wakes during hot bursts.
+  expect(begin(true)).toBe(true);
+  end(false);
+  now += 16;
+  expect(begin(false)).toBe(true);
+  end(false);
+  expect(begin(false)).toBe(false);
+});

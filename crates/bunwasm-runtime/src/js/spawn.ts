@@ -491,6 +491,7 @@
         const data = bytes(chunk);
         if (data.length) queue.push({ data: data.slice(), callback });
         else complete(callback);
+        (native as unknown as { markIoDirty?: () => void }).markIoDirty?.();
         flush();
         return data.length;
       },
@@ -622,7 +623,8 @@
       const wakeIo = () => {
         if (!registered) return;
         refreshRef();
-        const host = native as unknown as { wake?: (timeout: number) => void };
+        const host = native as unknown as { wake?: (timeout: number) => void; markIoDirty?: () => void };
+        host.markIoDirty?.();
         host.wake?.(0);
       };
       const stream = fd >= 0 && !discard ? new web.ReadableStream({

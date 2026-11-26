@@ -255,6 +255,7 @@
           shared = { id, key, subscribers: new Set(), closed: false };
           sharedById.set(id, shared);
           if (key !== undefined) sharedByKey.set(key, shared);
+          native.markWatchDirty?.();
         }
         this.#shared = shared;
         this.#path = path;

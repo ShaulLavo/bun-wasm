@@ -490,6 +490,14 @@ class EngineHost {
     this.records = null;
     this.asyncContext = undefined;
     this.wakeArmed = false;
+    this.ioDirty = true;
+    this.lastIoWake = NaN;
+    this.lastWatchWord = NaN;
+    this.watchStillReady = false;
+    this.lastIoPumpAt = 0;
+    this.pumpWakeBefore = 0;
+    this.pumpWatchBefore = NaN;
+    this.pumpWatchChecked = false;
     if (NativeMessageChannel) {
       this.channel = new NativeMessageChannel();
       this.channel.port1.onmessage = () => {
@@ -593,10 +601,24 @@ class EngineHost {
     if (net) {
       Object.assign(native, net.natives);
       if (native.hostLookup) native.hostLookup = trackLookup(native.hostLookup, promise => this.track(promise));
-      net.onNews(() => this.schedule(0));
+      net.onNews(() => {
+        this.ioDirty = true;
+        this.schedule(0);
+      });
     }
     if (this.o.terminal) native.terminalSetRawMode = raw => this.o.terminal.setRawMode(raw);
-    if (this.o.fsWatchReady && native.fsWatchReady) native.fsWatchReady = this.o.fsWatchReady;
+    if (this.o.fsWatchReady && native.fsWatchReady) {
+      const watchReady = this.o.fsWatchReady;
+      const watchWord = this.o.fsWatchWord;
+      native.fsWatchReady = watchWord
+        ? () => {
+            if (this.watchStillReady) return watchReady();
+            const word = watchWord();
+            if (!word) return false;
+            return nativeAtomicsLoad(word, 3) !== this.lastWatchWord ? watchReady() : false;
+          }
+        : watchReady;
+    }
     if (this.o.fsWatchNext) native.fsWatchNext = this.o.fsWatchNext;
     native.engine = "host";
     // Name the host's engine only where the host reports it: Node's real V8 version.
@@ -657,6 +679,44 @@ class EngineHost {
       // promise (top-level await) with nothing armed.
       wake(ms) {
         host.schedule(ms > 0 ? ms : 0);
+      },
+      markIoDirty() {
+        host.ioDirty = true;
+      },
+      markWatchDirty() {
+        host.watchStillReady = true;
+        host.ioDirty = true;
+      },
+      ioBeginPump(force) {
+        const wakeWord = host.o.processWake;
+        if (!wakeWord) return true;
+        const wake = nativeAtomicsLoad(wakeWord, 0);
+        const watchWord = host.o.fsWatchWord?.();
+        const watchGen = watchWord ? nativeAtomicsLoad(watchWord, 3) : NaN;
+        const watchChanged = Boolean(watchWord && watchGen !== host.lastWatchWord);
+        if (
+          !force &&
+          !host.ioDirty &&
+          !host.watchStillReady &&
+          !watchChanged &&
+          wake === host.lastIoWake &&
+          nativeDateNow() - host.lastIoPumpAt < 16
+        ) {
+          return false;
+        }
+        host.ioDirty = false;
+        host.pumpWakeBefore = wake;
+        host.pumpWatchBefore = watchGen;
+        host.pumpWatchChecked = watchChanged || host.watchStillReady;
+        return true;
+      },
+      ioEndPump(progressed) {
+        if (!host.o.processWake) return;
+        host.lastIoWake = host.pumpWakeBefore;
+        host.lastWatchWord = host.pumpWatchBefore;
+        host.watchStillReady = host.pumpWatchChecked ? Boolean(host.o.fsWatchReady?.()) : false;
+        if (progressed) host.ioDirty = true;
+        host.lastIoPumpAt = nativeDateNow();
       },
       compileCjs(path) {
         return host.evalAt(host.native.hostCjsSource(path), path);
@@ -1300,7 +1360,7 @@ class EngineHost {
     // Network handles (net.js waiters): step them; the networking host's
     // onNews wakes the loop when something changes.
     const io = this.guard(() => this.internal.ioPending(), 0);
-    if (io > 0 && !(next === 0 && this.internal.ioPumped) && step(() => this.guard(() => this.internal.pumpIo(), false)) && next !== 0) next = 0;
+    if (io > 0 && !(next === 0 && this.internal.ioPumped) && step(() => this.guard(() => this.internal.pumpIo(next !== 0), false)) && next !== 0) next = 0;
     if (this.o.debug) this.o.debug(`pump next=${next} pending=${this.pendingAsync} io=${io}`);
     this.flush();
     if (this.exited) return;
@@ -1345,6 +1405,7 @@ class EngineHost {
     this.wakeArmed = true;
     nativePromiseThen(wait.value, () => {
       this.wakeArmed = false;
+      this.ioDirty = true;
       this.schedule(0);
     });
   }
