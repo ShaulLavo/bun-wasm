@@ -175,7 +175,7 @@ test("a watch reconcile during installation leaves the install running", async (
   } finally { await f.cleanup(); }
 });
 
-test("a watch reconcile during installation lists the workspace once the install exits", async () => {
+test("a watch reconcile during installation waits across the install-to-dev handoff until dev listens", async () => {
   const f = await fixture();
   try {
     const fs = f.page.fixture.fs;
@@ -185,7 +185,23 @@ test("a watch reconcile during installation lists the workspace once the install
     const reconcile = method<Reconcile>(f.sandbox, "handleWatchReconcile");
     for (const reason of restartReasons) await reconcile(reason);
     expect(lists).toBe(0);
-    await f.dev();
+    // Hold the post-install flush so we also check watch/changed activity during the handoff window.
+    const flush = deferred<void>();
+    f.page.fixture.checkpoints.push(flush);
+    f.install.done.resolve({ code: 0 });
+    await turn();
+    expect(f.page.runs).toHaveLength(1);
+    expect(lists).toBe(0);
+    await reconcile("fs-overflow");
+    method<() => void>(f.sandbox, "changed")();
+    await turn();
+    expect(lists).toBe(0);
+    flush.resolve();
+    await turn();
+    const run = f.page.runs.at(-1)!;
+    expect(run.args).toEqual(["run", "dev"]);
+    expect(lists).toBe(0);
+    await f.listen(run);
     expect(lists).toBe(1);
   } finally { await f.cleanup(); }
 });
@@ -271,7 +287,7 @@ test("an owner tab's watch reconcile restarts only its serving dev server, and o
   }
 });
 
-test("lockfile changes and the editor's fallback list the workspace only after the install exits", async () => {
+test("lockfile changes and the editor's fallback list the workspace only once dev listens", async () => {
   const f = await fixture();
   try {
     const fs = f.page.fixture.fs;
@@ -288,12 +304,287 @@ test("lockfile changes and the editor's fallback list the workspace only after t
     await Bun.sleep(250);
     expect(lists).toBe(0);
     expect(editor.path).toBe("");
-    await f.dev();
+    const run = await f.dev();
+    await turn();
+    expect(lists).toBe(0);
+    expect(editor.path).toBe("");
+    await f.listen(run);
     await turn();
     expect(lists).toBeGreaterThanOrEqual(1);
     expect(editor.path).not.toBe("");
     expect(editor.path).not.toBe(active);
   } finally { await f.cleanup(); }
+});
+
+function trackListings(f: Awaited<ReturnType<typeof fixture>>) {
+  const fs = f.page.fixture.fs;
+  const listFiles = fs.listFiles.bind(fs);
+  let lists = 0;
+  fs.listFiles = (root) => { lists++; return listFiles(root); };
+  return { count: () => lists, reset: () => { lists = 0; } };
+}
+
+async function pauseAtPostInstallFlush(f: Awaited<ReturnType<typeof fixture>>) {
+  await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+  const flush = deferred<void>();
+  f.page.fixture.checkpoints.push(flush);
+  f.install.done.resolve({ code: 0 });
+  await turn();
+  return flush;
+}
+
+test("a failed install, flush failure, or dev exit before listening runs deferred listing", async () => {
+  // 1. Failed install runs deferred listing immediately.
+  {
+    const f = await fixture();
+    try {
+      const listings = trackListings(f);
+      await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+      expect(listings.count()).toBe(0);
+      f.install.done.resolve({ code: 1 });
+      await turn();
+      expect(listings.count()).toBe(1);
+    } finally { await f.cleanup(); }
+  }
+
+  // 2. Post-install fs.flush() failure runs deferred listing.
+  {
+    const f = await fixture();
+    try {
+      const listings = trackListings(f);
+      const flush = await pauseAtPostInstallFlush(f);
+      expect(listings.count()).toBe(0);
+      flush.reject(new Error("flush refused"));
+      await turn();
+      expect(listings.count()).toBe(1);
+    } finally { await f.cleanup(); }
+  }
+
+  // 3. Dev exiting before listening runs deferred listing.
+  {
+    const f = await fixture();
+    try {
+      const listings = trackListings(f);
+      await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+      const run = await f.dev();
+      expect(listings.count()).toBe(0);
+      run.done.resolve({ code: 1 });
+      await turn();
+      expect(listings.count()).toBe(1);
+    } finally { await f.cleanup(); }
+  }
+
+  // 4. Standalone command("install") without handoffToDev runs deferred listing on exit.
+  {
+    const f = await fixture();
+    try {
+      const run = await f.dev();
+      await f.listen(run);
+      run.done.resolve({ code: 0 });
+      await turn();
+      const listings = trackListings(f);
+      const revision = Reflect.get(f.sandbox, "serverRevision") as number;
+      const wasm = Reflect.get(f.sandbox, "wasm") as { module: WebAssembly.Module };
+      const standalone = method<(...args: unknown[]) => Promise<RunResult | undefined>>(f.sandbox, "command")(
+        "install",
+        { engine: f.sandbox.engine, profile: f.sandbox.profile, module: wasm.module, env: {}, runtime: f.page.runtime, moduleScope: true, network: Reflect.get(f.sandbox, "network") },
+        0,
+        revision,
+      );
+      await turn();
+      const standaloneRun = f.page.runs.at(-1)!;
+      expect(standaloneRun.args).toEqual(["install"]);
+      await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+      expect(listings.count()).toBe(0);
+      standaloneRun.done.resolve({ code: 0 });
+      await standalone;
+      await turn();
+      expect(listings.count()).toBe(1);
+    } finally { await f.cleanup(); }
+  }
+});
+
+test("coordinated runDevServerLoop defers listing across install-to-dev handoff and flushes on failure", async () => {
+  const f = await fixture();
+  try {
+    const devRun = await f.dev();
+    await f.listen(devRun);
+    devRun.done.resolve({ code: 0 });
+    await turn();
+
+    const listings = trackListings(f);
+    const ws = Reflect.get(f.sandbox, "workspace");
+    const runLoop = method<(revision: number, ws: unknown) => Promise<void>>(f.sandbox, "runDevServerLoop");
+    const revision1 = Reflect.get(f.sandbox, "serverRevision") as number;
+    const loop1 = runLoop(revision1, ws);
+    await turn();
+    const install1 = f.page.runs.at(-1)!;
+    expect(install1.args).toEqual(["install"]);
+    await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+    expect(listings.count()).toBe(0);
+
+    const flush1 = deferred<void>();
+    f.page.fixture.checkpoints.push(flush1);
+    install1.done.resolve({ code: 0 });
+    await turn();
+    expect(listings.count()).toBe(0);
+    flush1.resolve();
+    await turn();
+    const dev1 = f.page.runs.at(-1)!;
+    expect(dev1.args).toEqual(["run", "dev"]);
+    expect(listings.count()).toBe(0);
+    await f.listen(dev1);
+    expect(listings.count()).toBe(1);
+    dev1.done.resolve({ code: 0 });
+    await loop1;
+
+    // A flush failure during coordinated handoff still runs deferred listing.
+    listings.reset();
+    const revision2 = Reflect.get(f.sandbox, "serverRevision") as number;
+    const loop2 = runLoop(revision2, ws);
+    await turn();
+    const install2 = f.page.runs.at(-1)!;
+    await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+    const flush2 = deferred<void>();
+    f.page.fixture.checkpoints.push(flush2);
+    install2.done.resolve({ code: 0 });
+    await turn();
+    expect(listings.count()).toBe(0);
+    flush2.reject(new Error("coordinated flush failed"));
+    await loop2;
+    await turn();
+    expect(listings.count()).toBe(1);
+  } finally { await f.cleanup(); }
+});
+
+test("deferred listing survives a Reset template or stopDevServer during the post-install flush", async () => {
+  // 1. Reset template aborts during post-install flush: deferred listing runs once reset clears its flags.
+  {
+    const f = await fixture();
+    try {
+      const listings = trackListings(f);
+      const flush = await pauseAtPostInstallFlush(f);
+      expect(listings.count()).toBe(0);
+
+      const fetch = f.page.boundary.fetch;
+      f.page.boundary.fetch = async () => { throw new Error("template download failed"); };
+      const reset = f.sandbox.reset();
+      flush.resolve();
+      await reset;
+      f.page.boundary.fetch = fetch;
+      await turn();
+      expect(listings.count()).toBe(1);
+    } finally { await f.cleanup(); }
+  }
+
+  // 2. Direct stopDevServer during post-install flush clears the handoff and runs deferred listing.
+  {
+    const f = await fixture();
+    try {
+      const listings = trackListings(f);
+      const flush = await pauseAtPostInstallFlush(f);
+      expect(listings.count()).toBe(0);
+      method<(reason: string) => void>(f.sandbox, "stopDevServer")("cancelled");
+      flush.resolve();
+      await turn();
+      expect(listings.count()).toBe(1);
+    } finally { await f.cleanup(); }
+  }
+});
+
+test("folder toggle refreshFiles defers during post-install flush and runs once dev listens", async () => {
+  const f = await fixture();
+  try {
+    const listings = trackListings(f);
+    const flush = deferred<void>();
+    f.page.fixture.checkpoints.push(flush);
+    f.install.done.resolve({ code: 0 });
+    await turn();
+
+    f.page.fixture.files.set("/home/user/app/toggled.txt", "1");
+    await f.sandbox.refreshFiles();
+    expect(listings.count()).toBe(0);
+    expect(f.sandbox.files).not.toContain("toggled.txt");
+
+    flush.resolve();
+    await turn();
+    const devRun = f.page.runs.at(-1)!;
+    expect(devRun.args).toEqual(["run", "dev"]);
+    expect(listings.count()).toBe(0);
+
+    await f.listen(devRun);
+    await turn();
+    expect(listings.count()).toBe(1);
+    expect(f.sandbox.files).toContain("toggled.txt");
+
+    f.page.fixture.files.set("/home/user/app/after.txt", "2");
+    await f.sandbox.refreshFiles();
+    expect(listings.count()).toBe(2);
+    expect(f.sandbox.files).toContain("after.txt");
+  } finally { await f.cleanup(); }
+});
+
+test("deferred listing retries after an aborted coordinated reset rejects enterResetGate", async () => {
+  for (const rejectAfterResetClears of [false, true]) {
+    const f = await fixture();
+    try {
+      let resetIntent = false;
+      let holdNextGates = false;
+      const heldGates: ReturnType<typeof deferred<{ resetGeneration: number; release: () => void }>>[] = [];
+      let gateCalls = 0;
+      const rejectHeld = () => {
+        for (const gate of heldGates.splice(0)) gate.reject(new f.page.ResetInProgressError());
+      };
+      Reflect.set(f.sandbox, "coordinator", {
+        role: "owner",
+        hasActiveResetIntent: () => resetIntent,
+        broadcastOwnerState() {},
+        enterResetGate: async () => {
+          if (!holdNextGates) return { resetGeneration: 1, release() {} };
+          gateCalls++;
+          if (gateCalls <= 2) {
+            const gate = deferred<{ resetGeneration: number; release: () => void }>();
+            heldGates.push(gate);
+            return gate.promise;
+          }
+          return { resetGeneration: 1, release() {} };
+        },
+        resetWorkspace: async () => {
+          resetIntent = true;
+          if (!rejectAfterResetClears) rejectHeld();
+          await turn();
+          resetIntent = false;
+        },
+      });
+
+      const listings = trackListings(f);
+      const editor = f.sandbox.editor!;
+      const active = editor.path;
+      f.page.fixture.files.delete(`/home/user/app/${active}`);
+      await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+      expect(editor.path).toBe("");
+      f.page.fixture.files.set("/home/user/app/after-reset-abort.txt", "ok");
+
+      const devRun = await f.dev();
+      holdNextGates = true;
+      await f.listen(devRun);
+      expect(gateCalls).toBe(2);
+      expect(listings.count()).toBe(0);
+
+      await f.sandbox.reset();
+      if (rejectAfterResetClears) rejectHeld();
+      await turn();
+
+      // One retry for refreshFiles and one for editor fallback — no duplicate third listing.
+      expect(listings.count()).toBe(2);
+      expect(f.sandbox.files).toContain("after-reset-abort.txt");
+      expect(editor.path).not.toBe("");
+      expect(editor.path).not.toBe(active);
+    } finally {
+      Reflect.set(f.sandbox, "coordinator", null);
+      await f.cleanup();
+    }
+  }
 });
 
 test("deferred listing work survives a Reset template that stops the install and then aborts", async () => {
