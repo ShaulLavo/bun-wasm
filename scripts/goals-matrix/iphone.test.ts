@@ -1,6 +1,6 @@
 import { Scope, type Admission } from "./scope";
 import { withScoped } from "./scope-fixture";
-import { afterEach, test, expect, spyOn, setDefaultTimeout, jest } from "bun:test";
+import { afterEach, describe, test, expect, spyOn, setDefaultTimeout, jest } from "bun:test";
 import { IphoneBus } from "./iphone-bus";
 import { createIphoneTransport, nativeButtonRef, validateIphoneControl } from "./iphone-transport";
 import { checkClick } from "./playground";
@@ -55,20 +55,24 @@ test("bus rejects wrong documents, stale replies and expired commands", async ()
 });
 
 let pendingDeadlineTeardown: (() => Promise<void>) | undefined;
-afterEach(async () => {
-  jest.useRealTimers();
-  const cleanup = pendingDeadlineTeardown;
-  pendingDeadlineTeardown = undefined;
-  await cleanup?.();
-});
 
-test("native cleanup shares one deadline, cancels its child and never dispatches a later input", async () => {
-  const { started, active, deadline } = await sharedCleanupDeadline();
-  expect(started.map(item => item.args[0])).toEqual(["open", "batch"]);
-  expect(started.map(item => item.timeoutMs)).toEqual([200, 125]);
-  expect(started.every(item => item.at < deadline && item.timeoutMs > 0 && item.timeoutMs <= deadline - item.at)).toBe(true);
-  expect(started[1]!.signal.aborted).toBe(true);
-  expect(active()).toBe(0);
+// Only this test uses fake timers, so its timer reset and child teardown run only after it.
+describe("shared cleanup deadline", () => {
+  afterEach(async () => {
+    jest.useRealTimers();
+    const cleanup = pendingDeadlineTeardown;
+    pendingDeadlineTeardown = undefined;
+    await cleanup?.();
+  });
+
+  test("native cleanup shares one deadline, cancels its child and never dispatches a later input", async () => {
+    const { started, active, deadline } = await sharedCleanupDeadline();
+    expect(started.map(item => item.args[0])).toEqual(["open", "batch"]);
+    expect(started.map(item => item.timeoutMs)).toEqual([200, 125]);
+    expect(started.every(item => item.at < deadline && item.timeoutMs > 0 && item.timeoutMs <= deadline - item.at)).toBe(true);
+    expect(started[1]!.signal.aborted).toBe(true);
+    expect(active()).toBe(0);
+  });
 });
 
 async function sharedCleanupDeadline() {
