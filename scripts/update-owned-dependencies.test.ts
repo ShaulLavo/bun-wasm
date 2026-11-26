@@ -324,6 +324,42 @@ test("verifyUnrelatedPackages authorizes hoisted-to-nested split + root-slot pee
   ).toThrow(/unrelated peer provider/i);
 });
 
+test("verifyUnrelatedPackages sees devDependencies pin updates even when peerDependencies keeps a wildcard", () => {
+  const beforeLock = {
+    workspaces: {
+      "": {
+        devDependencies: { waffle: "npm:@waffle-os/runtime@0.0.150" },
+        peerDependencies: { waffle: "*" },
+      },
+    },
+    packages: {
+      waffle: ["@waffle-os/runtime@0.0.150", "", {}, "sha512-waffle150"],
+    },
+  };
+  const newManifest = {
+    devDependencies: { waffle: "npm:@waffle-os/runtime@0.0.152" },
+    peerDependencies: { waffle: "*" },
+  };
+  const afterLock = {
+    workspaces: {
+      "": newManifest,
+    },
+    packages: {
+      waffle: ["@waffle-os/runtime@0.0.152", "", {}, "sha512-waffle152"],
+    },
+  };
+
+  expect(() =>
+    verifyUnrelatedPackages(
+      JSON.stringify(beforeLock),
+      JSON.stringify(afterLock),
+      new Map(),
+      new Map(),
+      newManifest,
+    ),
+  ).not.toThrow();
+});
+
 test("updateReleaseLock fails with Locked release integrity mismatch on tampered unchanged npm bash-web archive", async () => {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-lock-tamper-"));
   try {

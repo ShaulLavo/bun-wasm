@@ -174,7 +174,7 @@ export function instrumentRoutedWorker(source: string): string {
 }
 
 
-const sources: Record<string, string> = {"browser/service-worker.ts": "9c2ff1deaef93b9a5935b3398439723058b257992af108191203c7d3bc8481a1", "browser/preview.ts": "a5522ece8cc7aaf740089285e1a79b3b25f5b775e09fdbaa1cdb5422b53d6fae", "browser/net/helper.ts": "9b50338211f802b4de82ecba361b42836893d945a3af621fa64f2685cb0ef5aa", "browser/net/runtime.ts": "adc3b3c9055f952994fc82b6257faab20a568a57a096f8edc22ff9bbdecd04db"};
+const sources: Record<string, string> = {"browser/service-worker.ts": "11141b1fc8b8ffd0d7810d46bfa599e8923c84d6e719a597c70afa72f47ddce2", "browser/preview.ts": "a5522ece8cc7aaf740089285e1a79b3b25f5b775e09fdbaa1cdb5422b53d6fae", "browser/net/helper.ts": "9b50338211f802b4de82ecba361b42836893d945a3af621fa64f2685cb0ef5aa", "browser/net/runtime.ts": "adc3b3c9055f952994fc82b6257faab20a568a57a096f8edc22ff9bbdecd04db"};
 export function verifySource(path: string, source: string): void {
   if (sources[path] !== sha(source)) throw Error(`Storage routing source differs from the qualified Waffle source: ${path}`);
 }

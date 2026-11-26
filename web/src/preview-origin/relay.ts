@@ -5,6 +5,7 @@
 // It also tells the IDE page what one of that page's frames holds (frame-watch.ts): this page
 // shares the preview's origin, so it can look where the IDE page cannot. An IDE tab that only
 // shows another tab's server mounts it with `?inspect` for that alone.
+import { activated } from "waffle/browser/service-worker";
 import { describeFrame } from "./frame-watch";
 import { RELAY_INSPECT_QUERY, RELAY_MESSAGE, SW_ATTACH, SW_NEED_PORT, SW_PATH, relayMessage, type RelayEvent, type RelayMessage } from "./protocol";
 
@@ -17,30 +18,33 @@ function ideOrigins(): string[] {
 }
 
 const allowed = ideOrigins();
-const container = navigator.serviceWorker;
+const container = typeof navigator !== "undefined" ? navigator.serviceWorker : undefined;
 
 /** Only an allowed IDE origin receives it: the browser drops a message whose target origin differs. */
 function tell(event: RelayEvent): void {
   for (const origin of allowed) parent.postMessage({ type: RELAY_MESSAGE, event }, origin);
 }
 
-/** Resolves with the registration's activated worker, or null when its newest worker was discarded. */
-function activeWorker(registration: ServiceWorkerRegistration): Promise<ServiceWorker | null> {
-  const worker = registration.installing ?? registration.waiting ?? registration.active;
-  if (!worker) return Promise.resolve(null);
-  return new Promise(resolve => {
-    const check = () => {
-      if (worker.state !== "activated" && worker.state !== "redundant") return;
-      worker.removeEventListener("statechange", check);
-      resolve(worker.state === "activated" ? worker : registration.active);
-    };
-    worker.addEventListener("statechange", check);
-    check();
-  });
+/**
+ * Resolves with the registration's active worker, or null when no non-redundant worker is active.
+ * Reuses Waffle's `activated()` so a stale WebKit active worker whose state stays "installing"
+ * still settles while a redundant worker still fails.
+ */
+export async function activeWorker(registration: ServiceWorkerRegistration): Promise<ServiceWorker | null> {
+  const pending = registration.installing ?? registration.waiting;
+  try {
+    await activated(registration);
+    if (pending?.state === "activated") return pending;
+  } catch {
+    // A discarded upgrade falls back to an existing non-redundant active worker.
+  }
+  const active = registration.active;
+  return active && active.state !== "redundant" ? active : null;
 }
 
 /** Registers the worker and waits until one is active. An install that fails is tried again. */
 async function worker(): Promise<ServiceWorker> {
+  if (!container) throw new Error("Service workers are unavailable");
   for (let attempt = 0; attempt < REGISTER_ATTEMPTS; attempt++) {
     const registration = await container.register(SW_PATH, { scope: "/", updateViaCache: "none" });
     const active = await activeWorker(registration);
@@ -77,4 +81,4 @@ async function start(): Promise<void> {
   tell("ready");
 }
 
-void start();
+if (typeof window !== "undefined" && typeof parent !== "undefined") void start();

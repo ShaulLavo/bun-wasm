@@ -20,7 +20,7 @@
     "@xterm/xterm": "^6.0.0",
     "bash-web": "https://registry.npmjs.org/bash-web/-/bash-web-0.0.114.tgz",
     "codemirror": "^6.0.2",
-    "waffle": "npm:@waffle-os/runtime@0.0.151",
+    "waffle": "npm:@waffle-os/runtime@0.0.152",
     "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz"
   },
   "devDependencies": {
