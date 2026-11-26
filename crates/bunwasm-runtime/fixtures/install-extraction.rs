@@ -11,6 +11,17 @@ fn create_dir_all(path: impl AsRef<Path>) -> std::io::Result<()> {
     fs::create_dir_all(path)
 }
 
+fn create_dir(path: impl AsRef<Path>) -> std::io::Result<()> {
+    DIRECTORIES.fetch_add(1, Ordering::Relaxed);
+    fs::create_dir(path)
+}
+
+/// Extraction writes into an existing empty directory, as the installer's staging is.
+fn destination(path: &Path) -> &Path {
+    fs::create_dir_all(path).unwrap();
+    path
+}
+
 fn archive(entries: &[(&str, tar::EntryType, &[u8])]) -> Vec<u8> {
     let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     let mut tar = tar::Builder::new(encoder);
@@ -36,8 +47,9 @@ fn repeated_parents(root: &Path) {
         ("package/a", tar::EntryType::Directory, b""),
     ]);
     DIRECTORIES.store(0, Ordering::Relaxed);
-    extraction::extract(&bytes, root, &mut || {}).unwrap();
-    assert_eq!(DIRECTORIES.load(Ordering::Relaxed), 3);
+    extraction::extract(&bytes, destination(root), &mut || {}).unwrap();
+    // One mkdir per directory: the known root and the explicit entry for `a` cost none.
+    assert_eq!(DIRECTORIES.load(Ordering::Relaxed), 2);
     assert_eq!(fs::read(root.join("a/first")).unwrap(), b"replacement");
     assert_eq!(fs::read(root.join("a/last")).unwrap(), b"last");
     assert!(fs::read(root.join("b/empty")).unwrap().is_empty());
@@ -52,7 +64,10 @@ fn repeated_parents(root: &Path) {
         ("package/large.wasm", file, large.as_slice()),
     ]);
     let mut ticks = 0;
-    extraction::extract(&manifests, &root.join("manifest"), &mut || ticks += 1).unwrap();
+    extraction::extract(&manifests, destination(&root.join("manifest")), &mut || {
+        ticks += 1
+    })
+    .unwrap();
     assert_eq!(
         fs::read(root.join("manifest/package.json")).unwrap(),
         b"last"
@@ -82,8 +97,9 @@ fn saturated_cache(root: &Path) {
         })
         .collect();
     DIRECTORIES.store(0, Ordering::Relaxed);
-    extraction::extract(&archive(&entries), root, &mut || {}).unwrap();
-    assert_eq!(DIRECTORIES.load(Ordering::Relaxed), 1176);
+    extraction::extract(&archive(&entries), destination(root), &mut || {}).unwrap();
+    // 1100 directories, then the 77 past the 1024-entry memory (root included) once more.
+    assert_eq!(DIRECTORIES.load(Ordering::Relaxed), 1177);
     for index in 0..1100 {
         assert_eq!(
             fs::read(root.join(format!("d{index}/file"))).unwrap(),
@@ -93,6 +109,7 @@ fn saturated_cache(root: &Path) {
 }
 
 fn invalid_entries(root: &Path) {
+    let root = destination(root);
     for kind in [tar::EntryType::Symlink, tar::EntryType::Link] {
         let error = extraction::extract(&archive(&[("package/link", kind, b"")]), root, &mut || {})
             .unwrap_err();
@@ -113,6 +130,20 @@ fn invalid_entries(root: &Path) {
         .to_string();
     assert_eq!(error, expected);
     assert_eq!(fs::read(root.join("file")).unwrap(), b"file");
+    // A deeper conflict reports what create_dir_all reports, not the fast path's error.
+    let deep = archive(&[
+        ("package/file", tar::EntryType::Regular, b"file"),
+        (
+            "package/file/nested/child",
+            tar::EntryType::Regular,
+            b"child",
+        ),
+    ]);
+    let error = extraction::extract(&deep, root, &mut || {}).unwrap_err();
+    let expected = fs::create_dir_all(root.join("file/nested"))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(error, expected);
     assert!(extraction::extract(b"invalid gzip", root, &mut || {}).is_err());
 }
 

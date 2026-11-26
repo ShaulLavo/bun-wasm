@@ -444,21 +444,32 @@ fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, 
     let mut manifests = BTreeMap::new();
     let keys: Vec<_> = resolver.packages.keys().cloned().collect();
     let mut downloads = io::Downloads::new(io::TARBALL_PREFETCHES);
+    let mut archives = Archives::new(resolver.packages.values());
     let mut lookahead = keys.iter();
     // Lookahead already found these missing. Only their own installs add them; reinstalling a
     // parent can remove a nested package, so positive answers are checked again.
     let mut absent = BTreeSet::new();
     for key in &keys {
-        prefetch_packages(resolver, &mut lookahead, &mut downloads, &mut absent);
+        let mut prefetch = Prefetch {
+            resolver,
+            downloads: &mut downloads,
+            archives: &archives,
+            absent: &mut absent,
+        };
+        prefetch.fill(&mut lookahead);
         let package = &resolver.packages[key];
         if !absent.remove(key) && trace::time("present-check", || package_present(package)) {
+            archives.skip(package);
             continue;
         }
         let result = install_package(
             package,
-            resolver.refresh,
-            &resolver.registry,
-            &mut downloads,
+            Install {
+                refresh: resolver.refresh,
+                registry: &resolver.registry,
+                downloads: &mut downloads,
+                archives: &mut archives,
+            },
         );
         if let Err(error) = result {
             if !package.optional || package.explicit_tarball {
@@ -480,57 +491,169 @@ fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, 
     Ok((installed, manifests))
 }
 
-fn prefetch_packages<'a>(
-    resolver: &Resolver,
-    lookahead: &mut impl Iterator<Item = &'a String>,
-    downloads: &mut io::Downloads,
-    absent: &mut BTreeSet<String>,
-) {
-    while !downloads.is_full() {
-        let Some(key) = lookahead.next() else {
-            break;
-        };
-        let Some(package) = resolver.packages.get(key) else {
-            continue;
-        };
-        if package.local.is_some() || trace::time("present-check", || package_present(package)) {
-            continue;
+/// Starts downloads for the packages after the current one, in install order.
+struct Prefetch<'a> {
+    resolver: &'a Resolver,
+    downloads: &'a mut io::Downloads,
+    archives: &'a Archives,
+    absent: &'a mut BTreeSet<String>,
+}
+
+impl Prefetch<'_> {
+    fn fill<'k>(&mut self, lookahead: &mut impl Iterator<Item = &'k String>) {
+        while !self.downloads.is_full() {
+            let Some(key) = lookahead.next() else {
+                break;
+            };
+            let Some(package) = self.resolver.packages.get(key) else {
+                continue;
+            };
+            if package.local.is_some() || trace::time("present-check", || package_present(package))
+            {
+                continue;
+            }
+            self.absent.insert(key.clone());
+            if self.archives.holds(&package.tarball) {
+                continue;
+            }
+            self.downloads.prefetch(
+                &package.tarball,
+                true,
+                self.resolver.refresh && !package.explicit_tarball,
+                &self.resolver.registry,
+            );
         }
-        absent.insert(key.clone());
-        downloads.prefetch(
-            &package.tarball,
-            true,
-            resolver.refresh && !package.explicit_tarball,
-            &resolver.registry,
-        );
     }
 }
 
-fn install_package(
-    package: &Package,
+/// Archives that several packages in one install share (the same version placed at more than
+/// one path). The first use downloads or reads it; later uses take it from memory, so each is
+/// fetched and read once.
+struct Archives {
+    /// Uses left per archive URL, for archives used more than once.
+    uses: BTreeMap<String, usize>,
+    kept: BTreeMap<String, Vec<u8>>,
+    kept_bytes: usize,
+}
+
+/// Memory that kept archives may hold. Past it, a later use fetches the archive again.
+const SHARED_ARCHIVES: usize = 32 * 1024 * 1024;
+
+impl Archives {
+    fn new<'a>(packages: impl IntoIterator<Item = &'a Package>) -> Self {
+        let mut uses = BTreeMap::new();
+        for package in packages {
+            if package.local.is_none() {
+                *uses.entry(package.tarball.clone()).or_insert(0) += 1;
+            }
+        }
+        uses.retain(|_, count| *count > 1);
+        Self {
+            uses,
+            kept: BTreeMap::new(),
+            kept_bytes: 0,
+        }
+    }
+
+    fn holds(&self, url: &str) -> bool {
+        self.kept.contains_key(url)
+    }
+
+    /// The kept archive for `url`, if an earlier package fetched it.
+    fn take(&mut self, url: &str) -> Option<Vec<u8>> {
+        let bytes = self.kept.remove(url)?;
+        self.kept_bytes -= bytes.capacity();
+        Some(bytes)
+    }
+
+    /// One package that uses `url` is done with `bytes`, which installed it. Keeps them while
+    /// others still need them, counting their whole allocation against the budget.
+    fn release(&mut self, url: &str, bytes: Vec<u8>) {
+        let Some(left) = self.uses.get_mut(url) else {
+            return;
+        };
+        *left -= 1;
+        if *left == 0 {
+            self.uses.remove(url);
+            return;
+        }
+        if self.kept_bytes + bytes.capacity() <= SHARED_ARCHIVES {
+            self.kept_bytes += bytes.capacity();
+            self.kept.insert(url.into(), bytes);
+        }
+    }
+
+    /// A package that uses `url` is already installed.
+    fn skip(&mut self, package: &Package) {
+        if package.local.is_some() {
+            return;
+        }
+        if let Some(bytes) = self.take(&package.tarball) {
+            self.release(&package.tarball, bytes);
+            return;
+        }
+        if let Some(left) = self.uses.get_mut(&package.tarball) {
+            *left -= 1;
+        }
+    }
+}
+
+/// What installing one package needs besides the package.
+struct Install<'a> {
     refresh: bool,
-    registry: &io::Registry,
-    downloads: &mut io::Downloads,
-) -> Result<Option<Value>> {
+    registry: &'a io::Registry,
+    downloads: &'a mut io::Downloads,
+    archives: &'a mut Archives,
+}
+
+fn install_package(package: &Package, install: Install<'_>) -> Result<Option<Value>> {
+    let Install {
+        refresh,
+        registry,
+        downloads,
+        archives,
+    } = install;
     if let Some(local) = &package.local {
         forget_installed_source(&package.path())?;
         return local::link(&local.path, &package.path()).map(|()| None);
     }
-    let bytes = downloads.fetch(
-        &package.tarball,
-        true,
-        refresh && !package.explicit_tarball,
-        registry,
-    )?;
-    trace::time("integrity", || io::integrity(&bytes, &package.integrity))?;
+    // A request that bypasses the cache (`--force`) always downloads, as each package did.
+    let bypass = refresh && !package.explicit_tarball;
+    let kept = if bypass {
+        None
+    } else {
+        archives.take(&package.tarball)
+    };
+    let fetched = match kept {
+        Some(bytes) => Ok(bytes),
+        None => downloads.fetch(&package.tarball, true, bypass, registry),
+    };
+    let bytes = fetched.inspect_err(|_| archives.skip(package))?;
+    let mut tick = || downloads.tick(registry);
+    let result = extract_package(package, &bytes, &mut tick);
+    // Only archives that installed a package are kept for the next one.
+    match &result {
+        Ok(_) if !bypass => archives.release(&package.tarball, bytes),
+        _ => archives.skip(package),
+    }
+    result
+}
+
+/// Checks, extracts and publishes one archive. `tick` runs during extraction so downloads
+/// keep moving.
+fn extract_package(
+    package: &Package,
+    bytes: &[u8],
+    tick: &mut dyn FnMut(),
+) -> Result<Option<Value>> {
+    trace::time("integrity", || io::integrity(bytes, &package.integrity))?;
     let path = package.path();
     let staging = path.with_file_name(format!(
         ".{}.bun-wasm-tmp",
         package.name.rsplit('/').next().unwrap()
     ));
     empty_directory(&staging)?;
-    let mut tick = || downloads.tick(registry);
-    let result = trace::time("extract", || io::extract(&bytes, &staging, &mut tick))
+    let result = trace::time("extract", || io::extract(bytes, &staging, tick))
         .and_then(|()| validate_package(&staging, package))
         .and_then(|bins| {
             trace::time("publish", || {
@@ -1291,3 +1414,5 @@ fn package_binary(
 mod lockfile_tests;
 #[cfg(test)]
 mod publish_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod reuse_tests;
