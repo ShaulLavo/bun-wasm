@@ -382,7 +382,7 @@ test("final verification checks the selected shared program after all case clean
   });
 });
 
-const site = "https://bun.sprockt.dev/";
+const site = "https://bun.shaulavo.dev/";
 function liveArguments(root: string): string[] {
   return argumentsFor(root).filter(value => !value.startsWith("--root=") && !value.startsWith("--source-file=")).concat([`--base-url=${site}`]);
 }
@@ -398,7 +398,7 @@ test("live mode takes a site root instead of a prepared build and recorded commi
 test.each(["root=/prepared/site", "source-file=/prepared/source.json", "asset-source=local"])("live mode rejects the local input --%s", option => {
   expect(() => smokeOptions(liveArguments("/unused").concat([`--${option}`]))).toThrow("--base-url tests a deployed site");
 });
-test.each(["http://bun.sprockt.dev/", "https://bun.sprockt.dev/playground/", "https://bun.sprockt.dev/?v=1", "https://user:pass@bun.sprockt.dev/", "bun.sprockt.dev"])("live mode rejects the base URL %s", url => {
+test.each(["http://bun.shaulavo.dev/", "https://bun.shaulavo.dev/playground/", "https://bun.shaulavo.dev/?v=1", "https://user:pass@bun.shaulavo.dev/", "bun.shaulavo.dev"])("live mode rejects the base URL %s", url => {
   expect(() => smokeOptions(liveArguments("/unused").filter(value => !value.startsWith("--base-url=")).concat([`--base-url=${url}`]))).toThrow("--base-url");
 });
 test("local mode still requires its prepared root and recorded commit", () => {

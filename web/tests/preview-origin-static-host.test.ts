@@ -3,16 +3,16 @@ import { previewOriginAssets } from "../preview-origin-build";
 import { handlePreviewOriginRequest, IDE_ORIGINS_PLACEHOLDER, type PreviewOriginHostConfig } from "../src/preview-origin/host";
 import { OWN_PAGE_ATTRIBUTE, RELAY_INSPECT_QUERY, RELAY_PATH, SW_PATH } from "../src/preview-origin/protocol";
 
-const HOST = `${"a".repeat(52)}-5173-pv.sprockt.dev`;
+const HOST = `${"a".repeat(52)}-5173-pv.shaulavo.dev`;
 const config: PreviewOriginHostConfig = {
-  domain: "sprockt.dev",
-  ideOrigins: ["https://bun.sprockt.dev", "https://sprockt.dev"],
+  domain: "shaulavo.dev",
+  ideOrigins: ["https://bun.shaulavo.dev", "https://sprockt.dev"],
   asset: name => `asset:${name}${name === "relay.html" ? ` origins=${IDE_ORIGINS_PLACEHOLDER};` : ""}`,
 };
 const get = (url: string, headers: Record<string, string> = {}, method = "GET") => handlePreviewOriginRequest(new Request(url, { method, headers }), config);
 
 test("any other host is not this handler's to answer", () => {
-  for (const url of ["https://bun.sprockt.dev/", "https://sprockt.dev/__bunwasm-preview/sw.js", "https://www-pv.sprockt.dev/", `https://${HOST}.evil.dev/`]) expect(get(url)).toBeNull();
+  for (const url of ["https://bun.shaulavo.dev/", "https://shaulavo.dev/__bunwasm-preview/sw.js", "https://www-pv.shaulavo.dev/", `https://${HOST}.evil.dev/`]) expect(get(url)).toBeNull();
 });
 
 test("the worker script is served for the whole origin with the allowed IDE origins in front", async () => {
@@ -22,20 +22,20 @@ test("the worker script is served for the whole origin with the allowed IDE orig
   expect(response.headers.get("service-worker-allowed")).toBe("/");
   expect(response.headers.get("cache-control")).toBe("no-store");
   expect(response.headers.get("cross-origin-embedder-policy")).toBe("require-corp");
-  expect(await response.text()).toBe('self.__bunwasmPreviewIdeOrigins=["https://bun.sprockt.dev","https://sprockt.dev"];\nasset:sw.js');
+  expect(await response.text()).toBe('self.__bunwasmPreviewIdeOrigins=["https://bun.shaulavo.dev","https://sprockt.dev"];\nasset:sw.js');
 });
 
 test("the relay page names the IDE origins and only they may frame it", async () => {
   const response = await get(`https://${HOST}${RELAY_PATH}`)!;
-  expect(response.headers.get("content-security-policy")).toBe("frame-ancestors https://bun.sprockt.dev https://sprockt.dev");
+  expect(response.headers.get("content-security-policy")).toBe("frame-ancestors https://bun.shaulavo.dev https://sprockt.dev");
   expect(response.headers.get("cross-origin-resource-policy")).toBe("cross-origin");
-  expect(await response.text()).toBe('asset:relay.html origins=["https://bun.sprockt.dev","https://sprockt.dev"];');
+  expect(await response.text()).toBe('asset:relay.html origins=["https://bun.shaulavo.dev","https://sprockt.dev"];');
 });
 
 test("a framed navigation boots the worker, a top-level one is told to use the IDE, and nothing else is answered", async () => {
   const framed = await get(`https://${HOST}/dashboard?x=1`, { "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe" })!;
   expect(await framed.text()).toBe("asset:bootstrap.html");
-  expect(framed.headers.get("content-security-policy")).toStartWith("frame-ancestors https://bun.sprockt.dev");
+  expect(framed.headers.get("content-security-policy")).toStartWith("frame-ancestors https://bun.shaulavo.dev");
   expect(framed.status).toBe(200);
   // The same answer the installed service worker gives a top-level visit (preview-origin-sw.test.ts).
   const top = await get(`https://${HOST}/account/secret`, { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" })!;

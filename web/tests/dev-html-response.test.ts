@@ -195,11 +195,11 @@ test("private origins require the request host and effective port; disposed adap
       expect(f.adapter.respond(request).status).toBe(403);
     }
     expect(f.adapter.upgrade(f.request(endpoint, { headers: { origin: "http://localhost:5173" } }))).toBe(true);
-    // The plain listener sits behind TLS when the preview page is served over HTTPS (bun.sprockt.dev).
+    // The plain listener sits behind TLS when the preview page is served over HTTPS (bun.shaulavo.dev).
     expect(f.adapter.upgrade(f.request(endpoint, { headers: { origin: "https://localhost:5173" } }))).toBe(true);
-    const tunneled = (origin: string, urlHost = "bun.sprockt.dev", hostHeader?: string) =>
+    const tunneled = (origin: string, urlHost = "bun.shaulavo.dev", hostHeader?: string) =>
       new Request(`http://${urlHost}${endpoint}`, { headers: hostHeader ? { origin, host: hostHeader } : { origin } });
-    expect(f.adapter.upgrade(tunneled("https://bun.sprockt.dev"))).toBe(true);
+    expect(f.adapter.upgrade(tunneled("https://bun.shaulavo.dev"))).toBe(true);
     // Wire Host with explicit default ports: :80 is dropped from http URLs; :443 is dropped from https Origins.
     expect(f.adapter.upgrade(tunneled("https://preview.example:80", "preview.example", "preview.example:80"))).toBe(true);
     expect(f.adapter.upgrade(tunneled("https://preview.example", "preview.example:443", "preview.example:443"))).toBe(true);
@@ -207,7 +207,7 @@ test("private origins require the request host and effective port; disposed adap
     expect(f.adapter.upgrade(tunneled("https://[::1]", "[::1]:443", "[::1]:443"))).toBe(true);
     expect(f.adapter.upgrade(tunneled("https://[::1]:80", "[::1]", "[::1]:80"))).toBe(true);
     for (const bad of [
-      tunneled("https://bun.sprockt.dev:8443"),
+      tunneled("https://bun.shaulavo.dev:8443"),
       tunneled("https://evil.example"),
       tunneled("http://localhost:5174"),
       tunneled("https://preview.example:81", "preview.example", "preview.example:80"),
@@ -216,13 +216,13 @@ test("private origins require the request host and effective port; disposed adap
       tunneled("https://preview.example:443", "preview.example:443", "preview.example:443"),
       tunneled("https://[::1]:444", "[::1]:443", "[::1]:443"),
       tunneled("https://evil.example", "preview.example", "evil.example"),
-      new Request(`https://bun.sprockt.dev${endpoint}`, { headers: { origin: "http://bun.sprockt.dev" } }),
-      new Request(`https://bun.sprockt.dev${endpoint}`, { headers: { origin: "http://localhost:5173" } }),
+      new Request(`https://bun.shaulavo.dev${endpoint}`, { headers: { origin: "http://bun.shaulavo.dev" } }),
+      new Request(`https://bun.shaulavo.dev${endpoint}`, { headers: { origin: "http://localhost:5173" } }),
     ]) {
       expect(f.adapter.upgrade(bad)).toBe(false);
       expect(f.adapter.respond(bad).status).toBe(403);
     }
-    expect(f.adapter.upgrade(new Request(`https://bun.sprockt.dev${endpoint}`, { headers: { origin: "https://bun.sprockt.dev" } }))).toBe(true);
+    expect(f.adapter.upgrade(new Request(`https://bun.shaulavo.dev${endpoint}`, { headers: { origin: "https://bun.shaulavo.dev" } }))).toBe(true);
     expect(f.upgrades).toHaveLength(9);
     f.adapter.dispose();
     f.adapter.dispose();

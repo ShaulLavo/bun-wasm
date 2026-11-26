@@ -19,7 +19,7 @@ const MAX_TEXT = 16 * 1024;
 const MAX_HEADERS = 1024;
 
 export interface PreviewOriginConfig {
-  /** The registrable part every preview host ends with: "sprockt.dev", "localhost:4173". */
+  /** The registrable part every preview host ends with: "shaulavo.dev", "localhost:4173". */
   domain: string;
   /** Defaults to https, or http when the domain is a loopback name. */
   scheme?: "https" | "http";

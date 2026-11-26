@@ -4,7 +4,7 @@ In this tutorial we run, test, bundle and serve TypeScript inside a browser tab,
 
 ## Open the playground
 
-Open <https://bun.sprockt.dev/playground/>. The header shows `bun.wasm ready` once the guest has loaded. Press **Run**.
+Open <https://bun.shaulavo.dev/playground/>. The header shows `bun.wasm ready` once the guest has loaded. Press **Run**.
 
 The terminal on the right prints the program's output:
 
@@ -81,7 +81,7 @@ user@bun:~$ echo 'const server = Bun.serve({ port: 3000, fetch: () => new Respon
 user@bun:~$ echo 'console.log(await (await fetch("http://localhost:3000")).text());' >> serve.ts
 user@bun:~$ echo 'server.stop(); process.exit(0);' >> serve.ts
 user@bun:~$ bun run serve.ts
-[preview] https://bun.sprockt.dev/playground/__preview/3000/ (Ctrl-C stops the server)
+[preview] https://bun.shaulavo.dev/playground/__preview/3000/ (Ctrl-C stops the server)
 hello from Bun.serve
 ```
 
@@ -105,7 +105,7 @@ user@bun:~$ bun run db.ts
 
 ## Start a React app
 
-Open <https://bun.sprockt.dev/>. This is the sandbox. It edits a small React app in an in-memory filesystem and runs `bun ./index.html` in a worker. Bun's bundler compiles React in your browser. The status line reads `dev server ready` when the preview is up.
+Open <https://bun.shaulavo.dev/>. This is the sandbox. It edits a small React app in an in-memory filesystem and runs `bun ./index.html` in a worker. Bun's bundler compiles React in your browser. The status line reads `dev server ready` when the preview is up.
 
 ![The bun.wasm sandbox: a file tree and src/App.tsx on the left, a running React page reading Hello from bun.wasm with a counter on the right, and the terminal below showing Bun's dev server started on localhost:5173](assets/sandbox.png)
 

@@ -1,7 +1,7 @@
 # Deploy the owner's sandbox
 
 The existing Cloudflare Worker `bun-wasm` serves the sandbox at
-https://bun.sprockt.dev/ and the terminal playground at `/playground/`.
+https://bun.shaulavo.dev/ and the terminal playground at `/playground/`.
 Deploy merged main whenever a framework template lands, even when that framework
 does not run successfully yet.
 

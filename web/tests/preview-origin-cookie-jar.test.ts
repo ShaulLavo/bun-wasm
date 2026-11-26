@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { CookieJar } from "../src/preview-origin/cookie-jar";
 
 const NOW = Date.UTC(2026, 10, 25);
-const jar = (secure = true, initial: unknown[] = []) => new CookieJar("abc-5173-pv.sprockt.dev", secure, initial);
+const jar = (secure = true, initial: unknown[] = []) => new CookieJar("abc-5173-pv.shaulavo.dev", secure, initial);
 
 test("server cookies come back on matching paths, longest path first", () => {
   const cookies = jar();
@@ -66,9 +66,9 @@ test("Max-Age and Expires end a cookie, and Max-Age wins", () => {
 test("a cookie stays on its own host: other domains are refused and Domain never widens it", () => {
   const cookies = jar();
   expect(cookies.setFromHeader("a=1; Domain=evil.dev", "/", NOW)).toBe(false);
-  expect(cookies.setFromHeader("b=1; Domain=bun.sprockt.dev", "/", NOW)).toBe(false);
+  expect(cookies.setFromHeader("b=1; Domain=bun.shaulavo.dev", "/", NOW)).toBe(false);
   // A parent domain matches, but the jar is this origin's alone, so no sibling ever receives it.
-  expect(cookies.setFromHeader("c=1; Domain=sprockt.dev", "/", NOW)).toBe(true);
+  expect(cookies.setFromHeader("c=1; Domain=shaulavo.dev", "/", NOW)).toBe(true);
   expect(cookies.header("/", NOW)).toBe("c=1");
 });
 
@@ -79,7 +79,7 @@ test("Secure and prefixed cookies need what browsers require of them", () => {
   expect(cookies.setFromHeader("__Secure-a=1", "/", NOW)).toBe(false);
   expect(cookies.setFromHeader("__Secure-a=1; Secure", "/", NOW)).toBe(true);
   expect(cookies.setFromHeader("__Host-b=1; Secure", "/", NOW)).toBe(false);
-  expect(cookies.setFromHeader("__Host-b=1; Secure; Path=/; Domain=sprockt.dev", "/", NOW)).toBe(false);
+  expect(cookies.setFromHeader("__Host-b=1; Secure; Path=/; Domain=shaulavo.dev", "/", NOW)).toBe(false);
   expect(cookies.setFromHeader("__Host-b=1; Secure; Path=/", "/", NOW)).toBe(true);
 });
 

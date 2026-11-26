@@ -306,7 +306,7 @@ test("closing during an upgrade disposes the tunnel port", async () => {
   expect(socket.readyState).toBe(3);
 });
 
-const ROOT_ORIGIN = `https://${"a".repeat(52)}-5173-pv.sprockt.dev/`;
+const ROOT_ORIGIN = `https://${"a".repeat(52)}-5173-pv.shaulavo.dev/`;
 
 async function openRootSocket(preview: PreviewFixture): Promise<{ socket: PreviewSocket; tunnel: Tunnel }> {
   const socket = new preview.context.WebSocket(`wss://${new URL(ROOT_ORIGIN).host}/hmr?token=fixture`);

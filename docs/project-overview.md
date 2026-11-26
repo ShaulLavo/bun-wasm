@@ -1,6 +1,6 @@
 # Project overview
 
-bun-wasm compiles Bun v1.4.5's Rust toolchain to `wasm32-wasip1` and pairs it with a Bun-compatible runtime, so Bun runs inside a browser tab. The in-Wasm guests also run natively under a Wasmtime launcher. Open the [sandbox](https://bun.sprockt.dev/) to install and run real framework starters in your tab, or the [playground](https://bun.sprockt.dev/playground/) for an editor, a terminal with Bun-style colored test and error output, and one-click demos of `Bun.serve`, `bun:sqlite`, `bun test`, `Bun.build`, `Bun.$` and `Bun.file` with a docked server preview.
+bun-wasm compiles Bun v1.4.5's Rust toolchain to `wasm32-wasip1` and pairs it with a Bun-compatible runtime, so Bun runs inside a browser tab. The in-Wasm guests also run natively under a Wasmtime launcher. Open the [sandbox](https://bun.shaulavo.dev/) to install and run real framework starters in your tab, or the [playground](https://bun.shaulavo.dev/playground/) for an editor, a terminal with Bun-style colored test and error output, and one-click demos of `Bun.serve`, `bun:sqlite`, `bun test`, `Bun.build`, `Bun.$` and `Bun.file` with a docked server preview.
 
 ![The bun.wasm sandbox: a file tree and src/App.tsx on the left, a running React page with a counter on the right, and Bun's dev server output in the terminal below](assets/sandbox.png)
 

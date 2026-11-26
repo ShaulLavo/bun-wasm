@@ -4,12 +4,12 @@ import { CookieJar } from "../src/preview-origin/cookie-jar";
 import { PortSession } from "../src/preview-origin/port-session";
 import type { NavigationAnswer, SessionReply } from "../src/preview-origin/protocol";
 
-const ORIGIN = `https://${"a".repeat(52)}-5173-pv.sprockt.dev`;
+const ORIGIN = `https://${"a".repeat(52)}-5173-pv.shaulavo.dev`;
 const GRANT = Object.freeze({ owner: "owner-1", port: 5173, origin: ORIGIN, capability: "capability-that-never-leaves-the-ide" });
 const bytes = (value: string) => new TextEncoder().encode(value);
 const text = (value: Uint8Array) => new TextDecoder().decode(value);
 
-const WRAPPER = `https://bun.sprockt.dev/preview-frame.html?preview-origin=https%3A%2F%2Fsprockt.dev&url=${encodeURIComponent(`${ORIGIN}/`)}`;
+const WRAPPER = `https://bun.shaulavo.dev/preview-frame.html?preview-origin=https%3A%2F%2Fshaulavo.dev&url=${encodeURIComponent(`${ORIGIN}/`)}`;
 
 function setup(sockets?: Set<{ close(): void }>, socketSilenceMs?: number) {
   const dispatched: { open: PreviewHostOpen; exchange: PreviewHostExchange }[] = [];
@@ -80,8 +80,8 @@ test("the handler supplies its own grant and ignores any the preview origin send
 
 test("a request for another origin, a malformed message or a reused id never reaches Waffle", async () => {
   const f = setup();
-  f.remote.postMessage(open(1, "", { url: "https://bun.sprockt.dev/secret" }));
-  f.remote.postMessage(open(2, "", { url: `https://${"b".repeat(52)}-5173-pv.sprockt.dev/` }));
+  f.remote.postMessage(open(1, "", { url: "https://bun.shaulavo.dev/secret" }));
+  f.remote.postMessage(open(2, "", { url: `https://${"b".repeat(52)}-5173-pv.shaulavo.dev/` }));
   f.remote.postMessage({ t: "open", id: 3 });
   f.remote.postMessage({ t: "bind", port: 3000 });
   f.remote.postMessage("open");

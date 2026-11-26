@@ -46,8 +46,8 @@ test("a live first visit keeps the real HTTPS origin", async () => {
   let visit;
   try {
     const context = await browser.newContext();
-    visit = await firstVisit(context, "https://bun.sprockt.dev/?engine=browser", { delayActivation: false });
-    assert.equal(visit.url, "https://bun.sprockt.dev/?engine=browser");
+    visit = await firstVisit(context, "https://bun.shaulavo.dev/?engine=browser", { delayActivation: false });
+    assert.equal(visit.url, "https://bun.shaulavo.dev/?engine=browser");
   } finally {
     try { await browser.close(); }
     finally { await visit?.close(); }

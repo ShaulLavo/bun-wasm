@@ -7,7 +7,7 @@ on `/`, needs per-template fixes and shares the IDE's cookies and storage.
 With preview origins, each listening port in a workspace gets its own origin:
 
 ```
-https://<id>-<port>-pv.<domain>/        https://k3q9...x2m4-5173-pv.sprockt.dev/
+https://<id>-<port>-pv.<domain>/        https://k3q9...x2m4-5173-pv.shaulavo.dev/
 ```
 
 The app runs at `/` with its own cookies, storage, and service worker scope. The app needs no
@@ -27,7 +27,7 @@ Open the printed address on `localhost` with `?preview-origin`. Previews load fr
 only on `.test` or loopback hosts like `localhost`, `127.0.0.1`, and `[::1]`, and only for preview
 domains under `localhost` or `.test`. Because the IDE gives each preview origin a channel to its dev
 server, URL parameters cannot pick public hosts. Set a public domain at build time with
-`BUN_WASM_PREVIEW_ORIGIN=sprockt.dev bun web/build.ts`.
+`BUN_WASM_PREVIEW_ORIGIN=shaulavo.dev bun web/build.ts`.
 
 ## How a request travels
 
@@ -118,10 +118,10 @@ the `url` query parameter, as `showPreviewFrame` does.
 
 Locally, `web/serve.ts` serves preview hosts on its own port. On Cloudflare,
 `site/preview-worker.ts` and `site/wrangler.preview.jsonc` run as a separate Worker on
-`*-pv.sprockt.dev/*` so preview hosts never serve IDE files. `bun run deploy` skips that Worker.
+`*-pv.shaulavo.dev/*` so preview hosts never serve IDE files. `bun run deploy` skips that Worker.
 
-Production previews share the `sprockt.dev` site with `bun.sprockt.dev` and `sprockt.dev`. Preview
-code can set `Domain=sprockt.dev` cookies and send same-site requests. Services on that domain must
+Production previews share the `shaulavo.dev` site with `bun.shaulavo.dev` and other services on `shaulavo.dev`. Preview
+code can set `Domain=shaulavo.dev` cookies and send same-site requests. Services on that domain must
 use `__Host-` cookies, which browsers lock to one exact host, and verify the exact `Origin` header
 on authenticated endpoints.
 

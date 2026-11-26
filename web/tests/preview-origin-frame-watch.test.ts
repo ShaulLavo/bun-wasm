@@ -26,8 +26,8 @@ test("a frame of another origin, a blank frame and a frame that is gone are unre
   expect(describeFrame(() => undefined)).toBe("unreadable");
 });
 
-const ORIGIN = `https://${"a".repeat(52)}-5173-pv.sprockt.dev`;
-const OTHER_PORT = `https://${"a".repeat(52)}-3000-pv.sprockt.dev`;
+const ORIGIN = `https://${"a".repeat(52)}-5173-pv.shaulavo.dev`;
+const OTHER_PORT = `https://${"a".repeat(52)}-3000-pv.shaulavo.dev`;
 const ok = (url: string) => ({ url, status: 200, location: null });
 const redirect = (url: string, location: string, status = 302) => ({ url, status, location });
 const tracker = () => new UnreadableNavigation(url => url.startsWith(ORIGIN) || url.startsWith(OTHER_PORT));

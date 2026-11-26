@@ -1,4 +1,4 @@
-// The Worker behind every preview host (`<id>-<port>-pv.sprockt.dev`, docs/preview-origins.md).
+// The Worker behind every preview host (`<id>-<port>-pv.shaulavo.dev`, docs/preview-origins.md).
 // It serves the preview origin's service worker and three fixed pages, and never an IDE file:
 // once a preview's service worker is installed, no request of the app reaches this Worker again.
 // Any name that does not have the exact preview shape gets a 404.
