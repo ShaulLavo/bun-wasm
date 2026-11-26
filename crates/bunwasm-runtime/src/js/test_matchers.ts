@@ -5,9 +5,18 @@
   promiseState(value: Promise<unknown>): string;
   promiseThen<T, U>(value: Promise<T>, fulfilled: (value: T) => U | Promise<U>, rejected?: (error: unknown) => U | Promise<U>): Promise<U>;
 }) {
-  type Context = { not?: boolean; promise?: string };
+  // The runner's `<tag>` markup (bun_test.js `pf`): colours when the report is coloured.
+  type Markup = (strings: TemplateStringsArray, ...values: unknown[]) => string;
+  type Context = { not?: boolean; promise?: string; markup?: Markup };
   type Outcome = { invalid: true } | { invalid?: false; threw: boolean; value: unknown };
   type Failure = { params?: string; body: string; raw?: boolean } | null;
+
+  // Without the runner's markup (harnesses that load this file alone) the tags just go.
+  const withoutTags: Markup = (strings, ...values) => {
+    let out = strings[0].replace(/<\/?\w*>/g, "");
+    for (let i = 0; i < values.length; i++) out += String(values[i]) + strings[i + 1].replace(/<\/?\w*>/g, "");
+    return out;
+  };
 
   const promiseThen = internal.promiseThen;
   const schedule = internal.realTimers.setTimeout;
@@ -160,7 +169,8 @@
     if (typeof end !== "number") throw new Error("toBeWithin() requires the second argument to be a number");
     const pass = typeof received === "number" && received >= start && received < end;
     if (pass !== !!ctx.not) return null;
-    return { body: `\n\nExpected: ${ctx.not ? "not " : ""}between ${start} (inclusive) and ${end} (exclusive)\nReceived: ${String(received)}\n` };
+    const m = ctx.markup ?? withoutTags;
+    return { body: m`\n\nExpected: ${ctx.not ? "not " : ""}between <green>${start}<r> <d>(inclusive)<r> and <green>${end}<r> <d>(exclusive)<r>\nReceived: <red>${String(received)}<r>\n` };
   }
 
   function even(value: unknown): boolean {
@@ -214,7 +224,7 @@
       throw new Error("toBeArrayOfSize() requires the first argument to be a number");
     }
     if ((Array.isArray(received) && received.length === size) !== !!ctx.not) return null;
-    return { body: `\n\nReceived: ${inspect(received)}\n` };
+    return { body: (ctx.markup ?? withoutTags)`\n\nReceived: <red>${inspect(received)}<r>\n` };
   }
 
   function ignoringWhitespace(inspect: (value: unknown) => string, ctx: Context, received: unknown, ...args: unknown[]): Failure {
@@ -226,7 +236,7 @@
     const pass = isStringValue(received)
       && String(received).replace(/[ \t-\r]/g, "") === String(expected).replace(/[ \t-\r]/g, "");
     if (pass !== !!ctx.not) return null;
-    return { body: `\n\nExpected: ${ctx.not ? "not " : ""}${inspect(expected)}\nReceived: ${inspect(received)}\n` };
+    return { body: (ctx.markup ?? withoutTags)`\n\nExpected: ${ctx.not ? "not " : ""}<green>${inspect(expected)}<r>\nReceived: <red>${inspect(received)}<r>\n` };
   }
 
   function extended(inspect: (value: unknown) => string) {
@@ -246,8 +256,10 @@
     equals(received: unknown, expected: unknown, strict: boolean): boolean | Promise<boolean>;
     inspect(value: unknown): string;
     formatDiff(received: string, expected: string, strict: boolean): string;
+    markup?: Markup;
   }): Failure | Promise<Failure> {
     const { not, results, nth, expected, equals, inspect, formatDiff } = options;
+    const m = options.markup ?? withoutTags;
     if (typeof nth !== "number" || !Number.isInteger(nth) || Object.is(nth, -0) || nth < -(2 ** 51) || nth >= 2 ** 51) {
       throw new TypeError("toHaveNthReturnedWith() first argument must be an integer");
     }
@@ -258,21 +270,21 @@
     const type = record && "type" in record ? record.type : undefined;
     const value = record && "value" in record ? record.value : undefined;
     const pass = type === "return" && equals(value, expected, false);
-    return settle(pass, matched => nthReturnFailure(matched, !!not, call, results.length, type, value, expected, inspect, formatDiff));
+    return settle(pass, matched => nthReturnFailure(matched, !!not, call, results.length, type, value, expected, inspect, formatDiff, m));
   }
 
   function nthReturnFailure(pass: boolean, not: boolean, call: number, count: number, type: unknown, value: unknown, expected: unknown,
-    inspect: (value: unknown) => string, formatDiff: (received: string, expected: string, strict: boolean) => string): Failure {
+    inspect: (value: unknown) => string, formatDiff: (received: string, expected: string, strict: boolean) => string, m: Markup): Failure {
     if (pass !== !!not) return null;
-    if (not) return { body: `\n\nExpected mock function not to have returned on call ${call}: ${inspect(expected)}\nBut it did.\n` };
+    if (not) return { body: m`\n\nExpected mock function not to have returned on call ${call}: <green>${inspect(expected)}<r>\nBut it did.\n` };
     if (call > count) {
       return { body: `\n\nThe mock function was called ${count} time${count === 1 ? "" : "s"}, but call ${call} was requested.\n` };
     }
-    if (type === "throw") return { body: `\n\nCall ${call} threw an error: ${inspect(value)}\n` };
+    if (type === "throw") return { body: m`\n\nCall ${call} threw an error: <red>${inspect(value)}<r>\n` };
     if (typeof value === "string" && typeof expected === "string") {
       return { body: `\n\nCall ${call}:\n${formatDiff(value, expected, false)}\n` };
     }
-    return { body: `\n\nCall ${call}:\nExpected: ${inspect(expected)}\nReceived: ${inspect(value)}` };
+    return { body: m`\n\nCall ${call}:\nExpected: <green>${inspect(expected)}<r>\nReceived: <red>${inspect(value)}<r>` };
   }
 
   function pending() {

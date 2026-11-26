@@ -760,6 +760,7 @@ pub fn table(state: &Rc<State>) -> Table {
     });
     crate::glob::install(&mut t);
     crate::semver::install(&mut t);
+    crate::test_diff::install(&mut t);
     t.add("bunStringRoundTrip", |a| {
         bun_string_round_trip(a.bytes(0)?, a.str(1)?)
     });

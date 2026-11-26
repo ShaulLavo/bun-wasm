@@ -20,6 +20,9 @@ bunwasm-crypto-sys = { path = "../bunwasm-crypto-sys" }
 bun_dotenv = { path = "../../vendor/bun/src/dotenv" }
 bun_glob = { path = "../../vendor/bun/src/glob" }
 bun_semver = { path = "../../vendor/bun/src/semver" }
+bun_text_diff = { path = "../../vendor/bun/src/text_diff" }
+bstr = { version = "1", default-features = false, features = ["alloc"] }
+const_format = "0.2"
 bunwasm-semver = { path = "../bunwasm-semver" }
 bun_sys = { path = "../../vendor/bun/src/sys" }
 bun_node_path = { path = "../../vendor/bun/src/node_path" }

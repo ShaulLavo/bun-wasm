@@ -54,12 +54,15 @@ mod quickjs_embedding;
 #[cfg(all(test, feature = "engine-split"))]
 #[path = "../../bunwasm-engine-quickjs/src/rejection_queue.rs"]
 mod rejection_queue;
+// Bun's diff printer, copied from vendor/bun (docs/bun-patches/test-diff-printer.md).
+mod print_diff;
 mod resolve;
 mod semver;
 mod source_column;
 mod sourcemap;
 mod sqlite;
 mod streams;
+mod test_diff;
 mod time_zone;
 mod tls;
 pub mod transpiler;

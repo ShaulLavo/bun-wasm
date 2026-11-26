@@ -66,7 +66,7 @@ try {
   });
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
-  await page.goto(`http://127.0.0.1:${port}/?engine=browser&mode=memory&wasm=/bun-browser.wasm.gz`);
+  await page.goto(`http://127.0.0.1:${port}/?engine=browser&wasm=/bun-browser.wasm.gz`);
   await ready(page);
   const workersBefore = await page.evaluate(() => Reflect.get(globalThis, "ipcWorkerCounts")());
   const token = crypto.randomUUID();
@@ -88,27 +88,68 @@ try {
         const buffer = term.buffer.active;
         return Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? "").join("\n").includes("ipc-preview-ready");
       }, undefined, { timeout: 90_000 });
-      const preview = `http://127.0.0.1:${port}/__preview/${guestPort}/`;
+      await page.waitForFunction(
+        async (targetPort: number) => {
+          const pg = Reflect.get(globalThis, "playground");
+          return (await pg.previews.ready) === "ready" && Boolean(pg.previews.serves(targetPort));
+        },
+        guestPort,
+        { timeout: 15_000 },
+      );
+      const preview = await page.evaluate(
+        (targetPort: number) => Reflect.get(globalThis, "playground").previews.url(targetPort) as string,
+        guestPort,
+      );
+      // Terminal prints `[preview] localhost:<port>` only after waitUntilRegistered + isListenerReady.
+      await page.waitForFunction(
+        (expected: string) => {
+          const term = Reflect.get(globalThis, "playground").term;
+          const buffer = term.buffer.active;
+          return Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? "").join("\n").includes(expected);
+        },
+        `[preview] localhost:${guestPort}`,
+        { timeout: 15_000 },
+      );
+      const expectedReport = {
+        token,
+        exchanges: [
+          { id: "a", ready: true, replies: 12, callbacks: 12, disconnected: 1, closedError: "ERR_IPC_CHANNEL_CLOSED" },
+          { id: "b", ready: true, replies: 12, callbacks: 12, disconnected: 1, closedError: "ERR_IPC_CHANNEL_CLOSED" },
+        ],
+        exitBurst: { received: 257, last: 256, callbacks: 257, disconnected: 1, connected: false },
+        bye: 73,
+        idleExited: true,
+        advancedRejected: true,
+        selfMessage: true,
+        selfDisconnects: 1,
+        bunReply: token,
+      };
       const previewPage = await page.context().newPage();
-      const response = await previewPage.goto(preview);
-      assert.ok(response, "preview navigation response");
-      console.log(JSON.stringify({ previewNavigation: { status: response.status(), serviceWorker: response.fromServiceWorker(), headers: response.headers(), body: await previewPage.locator("body").innerText() } }));
+      const deliveredResponse = previewPage.waitForResponse(
+        res => res.url() === preview && res.request().isNavigationRequest() && res.status() !== 302,
+        { timeout: 30_000 },
+      );
+      await previewPage.goto(preview, { waitUntil: "domcontentloaded" });
+      const response = await deliveredResponse;
+      await previewPage.waitForURL(preview, { timeout: 30_000 });
+      const navText = await response.text();
+      console.log(JSON.stringify({ previewNavigation: { url: response.url(), status: response.status(), serviceWorker: response.fromServiceWorker(), headers: response.headers(), body: navText } }));
+      assert.equal(response.status(), 200);
+      assert.equal(response.fromServiceWorker(), true, "actual service-worker preview request");
+      assert.deepEqual(JSON.parse(navText), expectedReport);
       const result = await previewPage.evaluate(async () => {
-        const response = await fetch(location.href);
-        const text = await response.text();
-        return { status: response.status, text, report: JSON.parse(text) };
+        const res = await fetch(location.href);
+        const text = await res.text();
+        return { status: res.status, text, report: JSON.parse(text) };
       });
       Object.assign(result, { serviceWorker: response.fromServiceWorker() });
       console.log(JSON.stringify({ browser: browser.version(), preview, result, errors }));
       assert.equal(result.status, 200);
-      assert.equal(response.fromServiceWorker(), true, "actual service-worker preview request");
-      assert.equal(result.report.token, token);
-      assert.equal(result.report.exchanges.length, 2);
-      assert.deepEqual(result.report.exitBurst, { received: 257, last: 256, callbacks: 257, disconnected: 1, connected: false });
+      assert.deepEqual(result.report, expectedReport);
       await page.waitForFunction(initial => Reflect.get(globalThis, "ipcWorkerCounts")().active === initial + 1, workersBefore.active, { timeout: 15_000 });
       console.log(JSON.stringify({ childrenReapedWhileParentLive: await page.evaluate(() => Reflect.get(globalThis, "ipcWorkerCounts")()) }));
       assert.deepEqual(errors, []);
-      await previewPage.evaluate(url => fetch(url + "stop").then(response => response.text()), preview);
+      await previewPage.evaluate(url => fetch(new URL("stop", url).href).then(response => response.text()), preview);
       await previewPage.close();
       assert.equal((await execution).code, 0);
     } catch (error) {

@@ -55,7 +55,7 @@ export async function withPage<T>(host: Host, engine: string, use: (page: Measur
   const transport = await createSafariTransport({ endpoint: host.endpoint, browser: "safari", timeoutMs: 200_000 });
   const page = { transport, signal: host.signal };
   try {
-    await observe(page, 200_000, page => page.navigate(`${host.url}?engine=${engine}&prompt=off&mode=memory&cold=${crypto.randomUUID()}`));
+    await observe(page, 200_000, page => page.navigate(`${host.url}?engine=${engine}&prompt=off&cold=${crypto.randomUUID()}`));
     await observe(page, 120_000, page => ready(page, engine, 120_000));
     return await use(page);
   } finally { await transport.close(true); }

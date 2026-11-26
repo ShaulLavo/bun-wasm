@@ -9,6 +9,8 @@
 #   args                        optional extra program arguments, one per line
 #   cmd                         optional: bun arguments replacing `run /index.*`, one per line
 #   stdin                       optional file piped to stdin
+#   env                         optional NAME=value lines for native Bun and the guest
+#                               (FORCE_COLOR=1 checks coloured output without a terminal)
 #   jsc-current-behavior         optional reason for a non-parity JSC assertion; requires expected-jsc.txt
 #   expected_stderr.txt         optional expected stderr (e.g. `bun test` reports)
 #   host                        optional marker: start the local networking test server;
@@ -207,10 +209,18 @@ if [[ ${#names[@]} == 0 ]]; then
   done
 fi
 
+# Coloured output (fixtures whose `env` sets FORCE_COLOR) gets the same treatment: a coloured
+# duration becomes `[TIME]`, ✓ and ✗ lines lose it (native Bun times only tests above 10µs),
+# and native Bun's dim working-directory prefix
+# on stack frames (`--update` runs in a scratch directory, the guest at `/`) becomes `/`.
 normalize() {
   sed -E -e 's/\[[0-9]+(\.[0-9]+)?m?s\]/[TIME]/g' \
-    -e 's/^(\((pass|fail|skip|todo)\) .*) \[TIME\]$/\1/' -e 's/^bun test v[^ ]+ \([0-9a-f]+\)/bun test vVERSION/' \
-    -e 's/^Bun v[0-9.]+ \([^)]*\)$/Bun vVERSION (PLATFORM)/' \
+    -e 's/\x1b\[0m\x1b\[2m\[(\x1b\[1m|\x1b\[0m\x1b\[33m)?[0-9]+(\.[0-9]+)?ms\x1b\[0m\x1b\[2m\]\x1b\[0m/[TIME]/g' \
+    -e 's/^(\((pass|fail|skip|todo)\) .*) \[TIME\]$/\1/' -e 's/^(\x1b\[0m\x1b\[3[12]m(✓|✗)\x1b\[0m.*) \[TIME\]$/\1/' \
+    -e 's/^bun test v[^ ]+ \([0-9a-f]+\)/bun test vVERSION/' \
+    -e 's/^(\x1b\[0m\x1b\[1mbun test \x1b\[0m\x1b\[2m)v[^ ]+ \([0-9a-f]+\)/\1vVERSION/' \
+    -e 's/^(\x1b\[2m)?Bun v[0-9.]+ \([^)]*\)(\x1b\[0m)?$/\1Bun vVERSION (PLATFORM)\2/' \
+    -e 's#\x1b\[2m/\x1b\[0m\x1b\[36m#/#g' \
     -e 's/^Bundled ([0-9]+) modules? in [0-9]+ms/Bundled \1 modules in Nms/'
 }
 
@@ -360,6 +370,10 @@ for name in "${names[@]}"; do
   entry="$(entry_of "$work")"
   args=()
   [[ -f "$work/args" ]] && mapfile -t args <"$work/args"
+  fixture_env=()
+  [[ -f "$work/env" ]] && mapfile -t fixture_env <"$work/env"
+  fixture_env_flags=()
+  for assignment in "${fixture_env[@]}"; do fixture_env_flags+=(--env "$assignment"); done
   if [[ -f "$work/cmd" ]]; then
     mapfile -t cmd <"$work/cmd"
   else
@@ -382,7 +396,7 @@ for name in "${names[@]}"; do
   if [[ $update == 1 ]]; then
     native_cmd=("${cmd[@]}")
     [[ ! -f "$work/cmd" ]] && native_cmd=(run "./$entry")
-    (cd "$work" && AGENT=0 CLAUDECODE='' HOME=/ "$native_bun" "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+    (cd "$work" && env AGENT=0 CLAUDECODE='' HOME=/ "${fixture_env[@]}" "$native_bun" "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
     code=$?
     if [[ "$code" != "$expected_exit" ]]; then
       echo "native Bun failed $name (exit $code, expected $expected_exit)"
@@ -405,11 +419,11 @@ for name in "${names[@]}"; do
     gc_flags=()
     [[ ! -f "$src/expose-gc" ]] || gc_flags=(--expose-gc)
     (cd "$work" && exec timeout --kill-after=5s 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --shell "$shell_wasm" --env-utility "$env_wasm" --context "$context" --modules "$modules" "${net_flag[@]}" --dir "$work::/" \
-      --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" -- \
+      --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" "${fixture_env_flags[@]}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err") &
   else
     (cd "$work" && exec env "${child_env[@]}" timeout --kill-after=5s 60 "$launcher" --wasm "$wasm" --engine "$engine=$wasm" --shell "$shell_wasm" --env-utility "$env_wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" --dir "$work::/" --env PWD=/ --env HOME=/ \
-      --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=native --env "TEST_SERVER=${TEST_SERVER:-}" "${guest_env[@]}" -- \
+      --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=native --env "TEST_SERVER=${TEST_SERVER:-}" "${guest_env[@]}" "${fixture_env_flags[@]}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err") &
   fi
   child_pid=$!

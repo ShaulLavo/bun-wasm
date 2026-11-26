@@ -122,7 +122,7 @@ async function opened(browser: Browser, url: string, engine: string, check: (pag
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
-    await navigateTestPage(page, `${url}?engine=${engine}&prompt=off&mode=memory`);
+    await navigateTestPage(page, `${url}?engine=${engine}&prompt=off`);
     await ready(page, 120_000);
     await writeFile(page, "/home/user/depth.js", probe);
     await check(page);
