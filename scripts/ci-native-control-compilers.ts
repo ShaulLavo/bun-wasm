@@ -51,7 +51,8 @@ function readStat(pid: string): string[] | null {
     if (end < 0) throw new Error(`Malformed owned-process stat ${pid}`);
     return text.slice(end + 2).trim().split(/\s+/);
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    // ESRCH: the process was reaped between opening its stat file and reading it.
+    if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ESRCH")) return null;
     throw error;
   }
 }
