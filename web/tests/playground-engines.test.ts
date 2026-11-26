@@ -106,15 +106,15 @@ for (const [query, tier] of [
 
 test("selecting SpiderMonkey keeps workspace parameters and removes the custom core override", async () => {
   const page = await fixture(pair);
-  page.boundary.location.href = "https://example.test/?template=vite-react&mode=memory&wasm=custom.wasm";
+  page.boundary.location.href = "https://example.test/?template=vite-react&mode=fast&wasm=custom.wasm";
   const assign = spyOn(page.boundary.location, "assign");
-  const playground = new page.Playground("?template=vite-react&mode=memory&wasm=custom.wasm");
+  const playground = new page.Playground("?template=vite-react&mode=fast&wasm=custom.wasm");
   playground.chooseEngine("spidermonkey");
   expect(assign).toHaveBeenCalledTimes(1);
   const url = new URL(String(assign.mock.calls[0]?.[0]));
   expect(url.searchParams.get("engine")).toBe("spidermonkey");
   expect(url.searchParams.get("template")).toBe("vite-react");
-  expect(url.searchParams.get("mode")).toBe("memory");
+  expect(url.searchParams.get("mode")).toBe("fast");
   expect(url.searchParams.has("wasm")).toBe(false);
   assign.mockRestore();
 });

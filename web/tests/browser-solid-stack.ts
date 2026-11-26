@@ -16,7 +16,7 @@ try {
   const browser = await s.launch(playwright.firefox);
   const page = await browser.newPage();
   const base = process.env.BUN_WASM_TEST_URL ?? await s.serve();
-  await page.goto(`${base}?template=solidstart&engine=jsc&prompt=off&mode=memory`);
+  await page.goto(`${base}?template=solidstart&engine=jsc&prompt=off`);
   await ready(page);
   const installed = await run(page, "bun install", 90_000);
   assert.equal(installed.code, 0, installed.output);

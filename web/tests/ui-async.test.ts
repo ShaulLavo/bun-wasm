@@ -18,14 +18,21 @@ async function pageFixture(sources?: Record<string, string>, fixture = pageFiles
   return page;
 }
 
+async function startSandbox(page: Awaited<ReturnType<typeof pageFixture>>, search = "") {
+  const sandbox = new page.Sandbox(search);
+  sandbox.start();
+  for (let i = 0; i < 20 && !sandbox.editor; i++) await turn();
+  return sandbox;
+}
+
 async function editorFixture(app: "web" | "sandbox") {
   const page = await pageFixture();
   const { fixture } = page;
-  fixture.control.holdWrites = true;
   fixture.fs.readFile = async path => fixture.reads.get(path)?.promise ?? encoder.encode(path);
   const playgroundEditor = new page.PlaygroundEditor(filesystem(fixture), { run: async () => {}, report(error) { throw error; }, changed() {} });
-  const sandbox = new page.Sandbox("");
-  sandbox.start();
+  const sandbox = await startSandbox(page);
+  fixture.writes.length = 0;
+  fixture.control.holdWrites = true;
   const sandboxEditor = sandbox.editor!;
   pageCleanups.push(async () => { sandboxEditor.discard(); });
   const statuses: string[] = [];
@@ -162,8 +169,7 @@ test("sandbox reset cancels debounced writes and locks the editor before replaci
 
 test("sandbox reset waits for the stopped guest and durable template before reloading", async () => {
   const page = await pageFixture({ "index.html": "template", "package.json": projectPackage });
-  const sandbox = new page.Sandbox("");
-  sandbox.start();
+  const sandbox = await startSandbox(page);
   const stopped = deferred<{ code: number }>();
   const checkpoint = deferred<void>();
   const events: string[] = [];
@@ -181,7 +187,7 @@ test("sandbox reset waits for the stopped guest and durable template before relo
   expect(events).toEqual(["stop", "template:true"]);
   checkpoint.resolve();
   await resetting;
-  expect(events).toEqual(["stop", "template:true", "discard"]);
+  expect(events).toEqual(["stop", "template:true", "discard", "reload"]);
 });
 
 test("sandbox reports failed filesystem saves and rejects explicit flush", async () => {
@@ -199,6 +205,8 @@ test("sandbox flushAll retries a failed save after its debounce timer was remove
   editor.setText("keep this document");
   const saving = editor.flush("src/main.ts").catch((error: unknown) => error);
   fixture.writes[0]!.done.reject(new Error("errno 51"));
+  await turn();
+  fixture.writes[1]?.done.reject(new Error("errno 51"));
   expect(await saving).toBeInstanceOf(Error);
   expect(editor.hasPending).toBe(true);
   fixture.control.holdWrites = false;
@@ -209,8 +217,7 @@ test("sandbox flushAll retries a failed save after its debounce timer was remove
 
 test.each([false, true])("sandbox keeps failed-file warnings when the next saved file is edited: %s", async edited => {
   const page = await pageFixture();
-  const sandbox = new page.Sandbox("?mode=memory");
-  sandbox.start();
+  const sandbox = await startSandbox(page);
   const editor = sandbox.editor!;
   pageCleanups.push(async () => { editor.discard(); });
   const write = page.fixture.fs.writeFile;
@@ -626,7 +633,7 @@ test("sandbox reset during a Restart wait still waits for the stopped server", a
   expect(events).toEqual([]);
   page.runs[1]!.done.resolve({ code: 137 });
   await resetting;
-  expect(events).toEqual(["template"]);
+  expect(events).toEqual(["template", "reload"]);
   expect(page.runs).toHaveLength(2);
 });
 
@@ -642,7 +649,7 @@ test("sandbox reset after Restart proceeds once a stopped run that never ends pa
     expect(capped.length).toBeGreaterThanOrEqual(1);
     capped[0]!();
     await resetting;
-    expect(events).toEqual(["template"]);
+    expect(events).toEqual(["template", "reload"]);
   } finally { restore(); }
 });
 
@@ -703,8 +710,7 @@ test("playground reports storage waiting, locks after takeover, and offers the s
 
 test("sandbox takeover locks workspace controls and Restart reloads the saved workspace", async () => {
   const page = await pageFixture();
-  const sandbox = new page.Sandbox("");
-  sandbox.start();
+  const sandbox = await startSandbox(page);
   page.fixture.fs.ownershipLost = true;
   page.fixture.fs.onOwnershipLost?.();
   expect(sandbox.failure).toBe("startup");
@@ -758,10 +764,9 @@ test("sandbox awaits its post-install checkpoint before starting dev", async () 
 
 test("sandbox retries an exited installer after quota output, then checkpoints the retry", async () => {
   const page = await pageFixture({ "package.json": projectPackage, "src/App.tsx": "app" });
-  const sandbox = new page.Sandbox("");
+  const sandbox = await startSandbox(page);
   let reclaims = 0;
   Reflect.set(sandbox, "storage", { recovery: new StorageRecovery(async () => { reclaims++; }), initialize: async (_fs: unknown, seed: () => Promise<void>) => seed(), close() {} });
-  sandbox.start();
   method<() => void>(sandbox, "terminalOpened")();
   await turn();
   page.runs[0]!.hooks.stderr(encoder.encode("error: ENOSPC\n"));

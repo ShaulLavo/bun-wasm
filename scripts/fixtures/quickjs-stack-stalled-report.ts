@@ -36,7 +36,7 @@ try {
   const failure = new errors.TimeoutError("fixture navigation timeout");
   page.goto = async () => { throw failure; };
   const open = () => process.env.NAVIGATION_CONSUMER === "browser"
-    ? openPlaygroundPage(page, `${server.url}?engine=browser&prompt=off&mode=memory`)
+    ? openPlaygroundPage(page, `${server.url}?engine=browser&prompt=off`)
     : openQuickjsStackPage(page, String(server.url));
   await assert.rejects(open, error => error === failure);
   assert.equal(writes, 1);
