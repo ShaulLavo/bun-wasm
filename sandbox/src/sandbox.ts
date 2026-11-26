@@ -225,7 +225,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       const token = this.previews.registerListener(port, helper);
       const server: Server = { port, helper, token };
       this.server = server;
-      if (this.restartableRun()) this.runDeferredListing();
+      // The dev run now serves, so listings that waited for it can run.
+      if (this.listingDeferred && this.runScript === "dev") this.runDeferredListing();
       measureStartup("dev-server", this.serverTiming.started, { port });
       void this.showPreview(server, this.serverTiming.visibleStart).catch(this.report);
     },
