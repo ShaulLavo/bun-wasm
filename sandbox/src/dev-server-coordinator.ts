@@ -60,8 +60,12 @@ export type RetireResult =
   | { readonly ok: false; readonly reason: "pending-settlement"; readonly pending: Promise<unknown> }
   | { readonly ok: false; readonly reason: "other" };
 
+const RESTART_NOT_WANTED = "The dev server this restart was for has already ended";
+
 export interface RetireOptions {
   readonly mode: "teardown" | "retire-only" | "reopen";
+  /** What the terminal says ended a command this retirement stops, such as "resetting the template". */
+  readonly stopReason: string;
   readonly onlyIfUnusable?: boolean;
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
@@ -621,6 +625,7 @@ export class DevServerCoordinator {
       if (ws !== null && targetWorkspace !== null && ws !== targetWorkspace) return;
       const retired = await this.host.retireRuntime({
         mode: "retire-only",
+        stopReason: "a reset in another tab",
         timeoutMs: this.stopWaitMs,
         shouldBegin: () =>
           this.ownResetId === null &&
@@ -775,6 +780,7 @@ export class DevServerCoordinator {
     while (true) {
       const ensured = await this.host.retireRuntime({
         mode: "reopen",
+        stopReason: "resetting the template",
         onlyIfUnusable,
         timeoutMs: this.stopWaitMs,
         signal,
@@ -1060,7 +1066,11 @@ export class DevServerCoordinator {
     );
   }
 
-  private async runOwnerRestart(attemptId: string, controller: AbortController): Promise<{ ok: boolean; error?: string }> {
+  private async runOwnerRestart(
+    attemptId: string,
+    controller: AbortController,
+    stillWanted: () => boolean,
+  ): Promise<{ ok: boolean; error?: string }> {
     const pending = await this.syncPendingResetLocks(controller.signal);
     if (controller.signal.aborted || pending || this.hasActiveResetIntent()) {
       return { ok: false, error: "Reset in progress" };
@@ -1070,12 +1080,14 @@ export class DevServerCoordinator {
     if (pending2 || !this.isActiveOwnerAttempt(attemptId, controller.signal)) {
       return { ok: false, error: "Ownership or reset state changed" };
     }
+    if (!stillWanted()) return { ok: false, error: RESTART_NOT_WANTED };
     if (this.needsRuntimeRecycleBeforeRestart()) {
       const retired = await this.host.retireRuntime({
         mode: "reopen",
+        stopReason: "restarting",
         timeoutMs: this.stopWaitMs,
         signal: controller.signal,
-        shouldBegin: () => this.isActiveOwnerAttempt(attemptId),
+        shouldBegin: () => this.isActiveOwnerAttempt(attemptId) && stillWanted(),
         shouldReopen: () => this.isActiveOwnerAttempt(attemptId),
       });
       if (!retired.ok) {
@@ -1092,9 +1104,16 @@ export class DevServerCoordinator {
     return { ok: true };
   }
 
-  async restartOwnedDevServer(): Promise<{ ok: boolean; error?: string }> {
+  /**
+   * `stillWanted` lets an automatic restart name its target: it is checked before anything is
+   * aborted, when the queued restart starts, and before retirement, so a restart whose target
+   * already ended (or was restarted by an earlier request) does nothing.
+   */
+  async restartOwnedDevServer(stillWanted: () => boolean = () => true): Promise<{ ok: boolean; error?: string }> {
+    if (!stillWanted()) return { ok: false, error: RESTART_NOT_WANTED };
     this.ownerRecovery?.controller.abort();
     return this.enqueueOwnerAction(async () => {
+      if (!stillWanted()) return { ok: false, error: RESTART_NOT_WANTED };
       this.ownerRecovery?.controller.abort();
       if (this.electionAttempt) await Promise.allSettled([this.electionAttempt.promise]);
       if (this.currentAttemptId === null || !this.isActiveOwnerAttempt(this.currentAttemptId)) {
@@ -1105,7 +1124,7 @@ export class DevServerCoordinator {
       this.restartLaunchController?.abort();
       this.restartLaunchController = controller;
       try {
-        return await this.runOwnerRestart(attemptId, controller);
+        return await this.runOwnerRestart(attemptId, controller, stillWanted);
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       } finally {
@@ -1135,6 +1154,7 @@ export class DevServerCoordinator {
           while (true) {
             const ensured = await this.host.retireRuntime({
               mode: "reopen",
+              stopReason: "recovering the dev server",
               timeoutMs: this.stopWaitMs,
               signal: controller.signal,
               shouldBegin: () => !this.hasActiveResetIntent() && this.role === "owner" && this.currentAttemptId === attemptId,
@@ -1248,6 +1268,7 @@ export class DevServerCoordinator {
 
         const retired = await this.host.retireRuntime({
           mode: "reopen",
+          stopReason: "handing the dev server to another tab",
           timeoutMs: this.stopWaitMs,
           signal: controller.signal,
           shouldBegin: () =>
@@ -1601,12 +1622,12 @@ export class DevServerCoordinator {
   ): Promise<{ ownerRetirementStarted: boolean; ownerLeasesReleased: boolean }> {
     if (this.hasOwnerState()) {
       this.broadcastOwnerStopping("reset");
-      const retired = await this.host.retireRuntime({ mode: "reopen", timeoutMs, signal });
+      const retired = await this.host.retireRuntime({ mode: "reopen", stopReason: "resetting the template", timeoutMs, signal });
       if (!retired.ok) throw new ResetAbortedError("Owner failed to retire before reset");
       this.demoteAndReleaseOwnerLeases();
       return { ownerRetirementStarted: true, ownerLeasesReleased: true };
     }
-    const ensured = await this.host.retireRuntime({ mode: "reopen", onlyIfUnusable: true, timeoutMs, signal });
+    const ensured = await this.host.retireRuntime({ mode: "reopen", stopReason: "resetting the template", onlyIfUnusable: true, timeoutMs, signal });
     if (!ensured.ok) throw new ResetAbortedError("Workspace failed to reopen before reset");
     return { ownerRetirementStarted: false, ownerLeasesReleased: false };
   }

@@ -53,6 +53,8 @@ interface TabHarness {
   reloaded: boolean;
   reopenedCount: number;
   retiredCount: number;
+  /** The `stopReason` of every retirement that began. */
+  stopReasons: string[];
   launches: number;
   devActive: boolean;
   reports: string[];
@@ -125,6 +127,7 @@ function makeTab(
     reloaded: false,
     reopenedCount: 0,
     retiredCount: 0,
+    stopReasons: [],
     launches: 0,
     devActive: false,
     reports: [],
@@ -174,6 +177,7 @@ function makeTab(
       if (opts.shouldBegin && !opts.shouldBegin()) return { ok: false, reason: "other" };
       h.devActive = false;
       h.retiredCount++;
+      h.stopReasons.push(opts.stopReason);
       if (h.workspace) (h.workspace.runtime as any).disposed = true;
       h.workspace = null;
       if (opts.mode === "reopen") {
@@ -298,6 +302,51 @@ test("Follower-initiated coordinated reset quiesces live Owner, commits reset, a
 
   owner.coordinator.stop();
   follower.coordinator.stop();
+});
+
+test("an owner's own Reset template stops its command for the reset, not for a restart", async () => {
+  const locks = new TestLockManager();
+  const hub = new TestBroadcastHub();
+  const owner = makeTab("tab-owner", locks, hub, new MemoryClaimsStore(), createSharedResetState());
+  await owner.coordinator.attemptElection();
+  await wait();
+  expect(owner.coordinator.role).toBe("owner");
+
+  await owner.coordinator.resetWorkspace();
+  await wait(80);
+
+  expect(owner.stopReasons.length).toBeGreaterThanOrEqual(1);
+  expect(new Set(owner.stopReasons)).toEqual(new Set(["resetting the template"]));
+  owner.coordinator.stop();
+});
+
+test("an automatic restart does nothing once its target ended, even queued behind another restart", async () => {
+  const locks = new TestLockManager();
+  const hub = new TestBroadcastHub();
+  const owner = makeTab("tab-owner", locks, hub, new MemoryClaimsStore(), createSharedResetState());
+  await owner.coordinator.attemptElection();
+  await wait();
+  expect(owner.coordinator.role).toBe("owner");
+  const launches = owner.launches;
+
+  expect((await owner.coordinator.restartOwnedDevServer(() => false)).ok).toBe(false);
+  expect(owner.retiredCount).toBe(0);
+  expect(owner.launches).toBe(launches);
+
+  // Two reconciles for one serving run: the first restart ends that run, so the queued second
+  // finds its target gone and must not retire the first restart's new command.
+  const target = owner.retiredCount;
+  const stillWanted = () => owner.retiredCount === target;
+  const [first, second] = await Promise.all([
+    owner.coordinator.restartOwnedDevServer(stillWanted),
+    owner.coordinator.restartOwnedDevServer(stillWanted),
+  ]);
+  expect(first.ok).toBe(true);
+  expect(second.ok).toBe(false);
+  expect(owner.retiredCount).toBe(1);
+  expect(owner.stopReasons).toEqual(["restarting"]);
+  expect(owner.launches).toBe(launches + 1);
+  owner.coordinator.stop();
 });
 
 test("enterResetGate recovers an interrupted reset transaction durably before granting shared gate", async () => {

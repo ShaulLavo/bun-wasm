@@ -84,12 +84,6 @@ const APP = `${HOME}/app`;
 const PORT = 5173;
 const DEFAULT_ENGINE: Engine = "browser";
 const STOP_WAIT_MS = 30_000;
-/** What the terminal says ended a command when the runtime retires under it. */
-const RETIRE_STOP_REASONS: Record<RetireOptions["mode"], string> = {
-  reopen: "restarting",
-  "retire-only": "a reset in another tab",
-  teardown: "the tab is closing",
-};
 
 interface WorkspaceRuntime extends CoordinatorWorkspace {
   readonly runtime: Runtime;
@@ -180,8 +174,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private runScript: "install" | "dev" | null = null;
   /** Why `stopDevServer` ended a run, printed when that run's `command()` returns. */
   private readonly stopReasons = new WeakMap<Run, string>();
-  /** A watch reconcile arrived during `bun install`; the file list refreshes when it exits. */
-  private refreshAfterInstall = false;
+  /** `listenerRevision` when `run` started: a later listener means the run is serving. */
+  private runListenerRevision = 0;
+  /** A file listing waited for a busy command; it runs once that command exits or serves. */
+  private listingDeferred = false;
   private readonly stopping = new Set<StoppingRun>();
   private server: Server | null = null;
   private preview: PreviewNavigation | null = null;
@@ -229,6 +225,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       const token = this.previews.registerListener(port, helper);
       const server: Server = { port, helper, token };
       this.server = server;
+      if (this.restartableRun()) this.runDeferredListing();
       measureStartup("dev-server", this.serverTiming.started, { port });
       void this.showPreview(server, this.serverTiming.visibleStart).catch(this.report);
     },
@@ -361,6 +358,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         app: APP,
         readFile: (path, existingLease, signal) => this.readEditorFile(path, existingLease as ResetGateLease | undefined, signal),
         listFiles: (existingLease, signal) => this.listProjectFiles(existingLease as ResetGateLease | undefined, signal),
+        deferListing: () => this.deferListing(),
         save: (path, text, revision, editResetGen, options) => this.save(path, text, revision, editResetGen, options),
         checkpoint: (signal) => this.checkpointWorkspace(signal),
         currentResetGeneration: () => this.coordinator?.currentResetGeneration ?? 0,
@@ -706,23 +704,49 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private handleWatchedPaths(paths: readonly string[]): void {
     if (this.disposed || this.resetting || this.localResetting || this.coordinator?.hasActiveResetIntent()) return;
     const meaningful = paths.filter((p) => !p.startsWith("node_modules/") && !p.split("/").some((part) => part.startsWith(".")));
-    if (meaningful.length > 0) {
-      if (this.refreshFilesThrottleTimer === null) {
-        this.refreshFilesThrottleTimer = setTimeout(() => {
-          this.refreshFilesThrottleTimer = null;
-          void this.refreshFiles().catch(() => {});
-        }, 200);
-      }
-      void this.editorInstance?.syncPaths(meaningful).catch(() => {});
-    }
+    if (meaningful.length === 0) return;
+    void this.editorInstance?.syncPaths(meaningful).catch(() => {});
+    if (this.refreshFilesThrottleTimer !== null) return;
+    this.refreshFilesThrottleTimer = setTimeout(() => {
+      this.refreshFilesThrottleTimer = null;
+      if (!this.deferListing()) void this.refreshFiles().catch(() => {});
+    }, 200);
+  }
+
+  /**
+   * The run a watch reconcile may restart: the dev script once it serves, that is once it opened
+   * a listener after it started. `bun install`, and install steps inside a script such as
+   * `bun install && vite`, write thousands of files that overflow this watch; restarting them
+   * killed the install and ran it again, with no message.
+   */
+  private restartableRun(): Run | null {
+    if (this.runScript !== "dev" || !this.server || this.listenerRevision === this.runListenerRevision) return null;
+    return this.run;
+  }
+
+  /**
+   * True while a command runs but serves nothing yet (installing or starting). A file listing
+   * walks every node_modules file, about 30,000 mid-install, in one filesystem task that stalls
+   * the command's own calls, so it waits for runDeferredListing().
+   */
+  private deferListing(): boolean {
+    if (this.run === null || this.restartableRun() !== null) return false;
+    this.listingDeferred = true;
+    return true;
+  }
+
+  private runDeferredListing(): void {
+    if (!this.listingDeferred) return;
+    this.listingDeferred = false;
+    void this.refreshFiles().catch(() => {});
+    void this.editorInstance?.chooseFallbackFile().catch(() => {});
   }
 
   private async handleWatchReconcile(reason: ReconcileReason | "ui-reconcile"): Promise<void> {
     if (this.disposed || this.resetting || this.localResetting || this.coordinator?.hasActiveResetIntent()) return;
-    // Listing the workspace walks every node_modules file: mid-install that is one filesystem
-    // task over about 30,000 files, which stalls every other call. List once the install exits.
-    if (this.runScript === "install" && reason !== "ui-reconcile") this.refreshAfterInstall = true;
-    else await this.refreshFiles().catch(() => {});
+    // Captured before any await: only this serving run may be restarted, never a later one.
+    const target = reason === "ui-reconcile" ? null : this.restartableRun();
+    if (reason === "ui-reconcile" || !this.deferListing()) await this.refreshFiles().catch(() => {});
     await this.editorInstance?.syncFromFs().catch(() => {});
     if (reason === "ui-reconcile") {
       if (this.serverState.state === "starting" && !this.run) {
@@ -730,17 +754,12 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       }
       return;
     }
-    // Only a running dev server is restarted. `bun install` writes thousands of files, which can
-    // overflow this watch; restarting then killed the install and ran it again, with no message.
-    if (
-      this.runScript === "dev" &&
-      (reason === "fs-overflow" || reason === "recovered" || reason === "rebound")
-    ) {
-      if (this.coordinator && this.coordinator.role === "owner") {
-        void this.coordinator.restartOwnedDevServer();
-      } else if (!this.coordinator) {
-        void this.startLocalDevServer().catch(this.report);
-      }
+    if (!target || this.run !== target || reason === "ancestor-moved") return;
+    const stillWanted = () => this.run === target;
+    if (this.coordinator && this.coordinator.role === "owner") {
+      void this.coordinator.restartOwnedDevServer(stillWanted);
+    } else if (!this.coordinator) {
+      void this.startLocalDevServer().catch(this.report);
     }
   }
 
@@ -1138,6 +1157,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
       const retired = await this.retireRuntime({
         mode: "reopen",
+        stopReason: "resetting the template",
         timeoutMs: Math.max(1, deadline - performance.now()),
       });
       if (!retired.ok) {
@@ -1706,7 +1726,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         this.serverRevision++;
         this.activeDevLaunch = null;
         if (this.workspace) this.workspace.launchInvalidated = true;
-        this.stopDevServer(RETIRE_STOP_REASONS[options.mode]);
+        this.stopDevServer(options.stopReason);
         this.server = null;
         if (this.coordinator?.restartLaunchController && this.coordinator.restartLaunchController.signal !== options.signal) {
           this.coordinator.restartLaunchController.abort();
@@ -1994,22 +2014,21 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const current = startRun({ ...options, args }, hooks);
     this.run = current;
     this.runScript = script;
+    this.runListenerRevision = listenerRevision;
     const result = await current.done;
     stage(`${script}-done`);
     output.flush();
-    if (script === "install" && this.refreshAfterInstall) {
-      this.refreshAfterInstall = false;
-      void this.refreshFiles().catch(() => {});
-    }
     if (result.error) term.write(`\x1b[31m${result.error}\x1b[0m\r\n`);
     if (this.run !== current) {
       // Say why the run ended, so a restart is never silent.
       const reason = this.stopReasons.get(current) ?? "replaced by a newer run";
       if (!this.disposed && !this.teardownRequested) term.write(`\x1b[2m[${script} stopped: ${reason}]\x1b[0m\r\n`);
+      if (this.run === null) this.runDeferredListing();
       return;
     }
     this.run = null;
     this.runScript = null;
+    this.runDeferredListing();
     if (script === "install" && (storageFailed || isStorageFull(result.error))) {
       throw new Error("Dependency installation ran out of storage", { cause: `ENOSPC\n${result.error ?? ""}\n${diagnostic}` });
     }
@@ -2351,6 +2370,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
     const retireResult = await this.retireRuntime({
       mode: "teardown",
+      stopReason: "the tab is closing",
       timeoutMs: Math.max(1, teardownDeadline - performance.now()),
     });
     const bootPromise = this.provisionalBoot?.promise ?? null;
@@ -2370,7 +2390,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     failedBeforeStartup: boolean,
   ): Promise<void> {
     const deadline = performance.now() + STOP_WAIT_MS;
-    const retireResult = await this.retireRuntime({ mode: "teardown", timeoutMs: STOP_WAIT_MS });
+    const retireResult = await this.retireRuntime({ mode: "teardown", stopReason: "the tab is closing", timeoutMs: STOP_WAIT_MS });
     const bootPromise = this.provisionalBoot?.promise ?? null;
     const bootJoinRes = await withDeadline(bootPromise ?? Promise.resolve(), deadline);
     await this.finalizeTeardown(

@@ -3,7 +3,7 @@ import { NetNamespace } from "waffle/browser/net/helper";
 import { NetHelper } from "../web/src/net/helper";
 import { createRing } from "../web/src/net/ring";
 import type { RunResult } from "../web/src/runner";
-import { method, models, turn } from "../web/tests/ui-model-helpers";
+import { deferred, method, models, turn } from "../web/tests/ui-model-helpers";
 
 const sources = { "package.json": JSON.stringify({ scripts: { dev: "vite", build: "vite build" } }), "src/App.tsx": "app" };
 
@@ -190,41 +190,127 @@ test("a watch reconcile during installation lists the workspace once the install
   } finally { await f.cleanup(); }
 });
 
-test("a watch reconcile during the dev server restarts it and says why the old one ended", async () => {
+test("a watch reconcile during a serving dev server restarts it and says why the old one ended", async () => {
   const f = await fixture();
   try {
     const run = await f.dev();
+    await f.listen(run);
     await method<Reconcile>(f.sandbox, "handleWatchReconcile")("rebound");
     expect(run.kills).toEqual([9]);
     run.done.resolve({ code: 137 });
     await turn();
-    expect(f.output()).toContain("[dev stopped: restarting]");
+    expect(f.output().match(/\[dev stopped: [^\]]*\]/g)).toEqual(["[dev stopped: restarting]"]);
     const install = f.page.runs.at(-1)!;
     expect(install).not.toBe(f.install);
     expect(install.args).toEqual(["install"]);
   } finally { await f.cleanup(); }
 });
 
-test("an owner tab's watch reconcile restarts only its dev server, never its install", async () => {
+test("a dev script installs before it serves: a reconcile restarts it only once it listens", async () => {
   const f = await fixture();
   try {
-    let restarts = 0;
+    // `"dev": "bun install && bunx vite"` is still installing until it opens a listener.
+    const run = await f.dev();
+    const reconcile = method<Reconcile>(f.sandbox, "handleWatchReconcile");
+    for (const reason of restartReasons) await reconcile(reason);
+    expect(run.kills).toEqual([]);
+    expect(f.page.runs.at(-1)).toBe(run);
+    await f.listen(run);
+    await reconcile("fs-overflow");
+    expect(run.kills).toEqual([9]);
+  } finally { await f.cleanup(); }
+});
+
+test("a reconcile that began during installation never restarts the dev run that follows", async () => {
+  const f = await fixture();
+  try {
+    // Hold the reconcile inside its editor sync while the install exits and dev starts serving.
+    const held = Object.keys(sources).map((path) => {
+      const read = deferred<Uint8Array | undefined>();
+      f.page.fixture.reads.set(`/home/user/app/${path}`, read);
+      return read;
+    });
+    const reconcile = method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+    const run = await f.dev();
+    await f.listen(run);
+    for (const read of held) read.resolve(new TextEncoder().encode("app"));
+    f.page.fixture.reads.clear();
+    await reconcile;
+    await turn();
+    expect(run.kills).toEqual([]);
+    expect(f.page.runs.at(-1)).toBe(run);
+  } finally { await f.cleanup(); }
+});
+
+test("an owner tab's watch reconcile restarts only its serving dev server, and only that run", async () => {
+  const f = await fixture();
+  try {
+    const guards: (() => boolean)[] = [];
     Reflect.set(f.sandbox, "coordinator", {
       role: "owner",
       hasActiveResetIntent: () => false,
       broadcastOwnerState() {},
-      restartOwnedDevServer: async () => { restarts++; return { ok: true }; },
+      restartOwnedDevServer: async (stillWanted: () => boolean) => { guards.push(stillWanted); return { ok: true }; },
     });
     const reconcile = method<Reconcile>(f.sandbox, "handleWatchReconcile");
     for (const reason of restartReasons) await reconcile(reason);
-    expect(restarts).toBe(0);
-    await f.dev();
+    expect(guards).toHaveLength(0);
+    const run = await f.dev();
     await reconcile("fs-overflow");
-    expect(restarts).toBe(1);
+    expect(guards).toHaveLength(0);
+    await f.listen(run);
+    await reconcile("fs-overflow");
+    expect(guards).toHaveLength(1);
+    expect(guards[0]!()).toBe(true);
+    // Once that run ends, the queued restart it asked for is no longer wanted.
+    method<(reason: string) => void>(f.sandbox, "stopDevServer")("restarting");
+    expect(guards[0]!()).toBe(false);
   } finally {
     Reflect.set(f.sandbox, "coordinator", null);
     await f.cleanup();
   }
+});
+
+test("lockfile changes and the editor's fallback list the workspace only after the install exits", async () => {
+  const f = await fixture();
+  try {
+    const fs = f.page.fixture.fs;
+    const listFiles = fs.listFiles.bind(fs);
+    let lists = 0;
+    fs.listFiles = (root) => { lists++; return listFiles(root); };
+    const editor = f.sandbox.editor!;
+    const active = editor.path;
+    expect(active).not.toBe("");
+    // The open file disappears mid-install: the editor needs a listing to pick another one.
+    f.page.fixture.files.delete(`/home/user/app/${active}`);
+    method<(paths: readonly string[]) => void>(f.sandbox, "handleWatchedPaths")(["bun.lock", active]);
+    await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+    await Bun.sleep(250);
+    expect(lists).toBe(0);
+    expect(editor.path).toBe("");
+    await f.dev();
+    await turn();
+    expect(lists).toBeGreaterThanOrEqual(1);
+    expect(editor.path).not.toBe("");
+    expect(editor.path).not.toBe(active);
+  } finally { await f.cleanup(); }
+});
+
+test("a retirement says the cause it was given, once", async () => {
+  const f = await fixture();
+  try {
+    const retired = method<(options: { mode: "reopen"; stopReason: string; timeoutMs: number }) => Promise<unknown>>(f.sandbox, "retireRuntime")({
+      mode: "reopen",
+      stopReason: "resetting the template",
+      timeoutMs: 1_000,
+    });
+    await turn();
+    expect(f.install.kills).toEqual([9]);
+    f.install.done.resolve({ code: 137 });
+    await retired;
+    await turn();
+    expect(f.output().match(/\[install stopped: [^\]]*\]/g)).toEqual(["[install stopped: resetting the template]"]);
+  } finally { await f.cleanup(); }
 });
 
 test("an install stopped by Restart says why it ended", async () => {
