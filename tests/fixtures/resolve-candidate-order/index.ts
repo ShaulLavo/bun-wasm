@@ -38,6 +38,10 @@ write("real/linked/index.js", marker("linked: through a symlink"));
 mkdirSync(join(root, "app/node_modules"), { recursive: true });
 symlinkSync("../../real/linked", join(root, "app/node_modules/linked"));
 write("app/deep/more/entry.js", "");
+write(
+  "app/deep/more/entry.mjs",
+  "export const resolve = (specifier) => import.meta.resolve(specifier);\nexport const load = (specifier) => import(specifier);\n",
+);
 
 const from = createRequire(join(root, "app/deep/more/entry.js"));
 const app = createRequire(join(root, "app/entry.js"));
@@ -55,11 +59,12 @@ const cases: [string, NodeJS.Require][] = [
 ];
 for (const [specifier, require] of cases) console.log(`require ${specifier}: ${require(specifier)}`);
 
-const importer = pathToFileURL(join(root, "app/deep/more/entry.js")).href;
-for (const specifier of ["far", "near", "linked", "main-file"]) {
-  const resolved = import.meta.resolve(specifier, importer);
+const { resolve, load } = await import(pathToFileURL(join(root, "app/deep/more/entry.mjs")).href);
+for (const specifier of ["far", "near", "main-file"]) {
+  const resolved = resolve(specifier);
   console.log(`import ${specifier}: ${resolved.slice(pathToFileURL(root).href.length)}`);
 }
+console.log(`import linked: ${(await load("linked")).default}`);
 for (const specifier of ["missing-package", "../../ext/missing"]) {
   try {
     from(specifier);

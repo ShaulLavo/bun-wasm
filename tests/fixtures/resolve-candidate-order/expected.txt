@@ -10,7 +10,7 @@ require main-file: main-file: main.js before main/index
 require linked: linked: through a symlink
 import far: /node_modules/far/index.js
 import near: /app/node_modules/near/index.js
-import linked: /real/linked/index.js
 import main-file: /node_modules/main-file/lib.js
+import linked: linked: through a symlink
 require missing-package: MODULE_NOT_FOUND
 require ../../ext/missing: MODULE_NOT_FOUND
