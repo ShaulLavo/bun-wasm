@@ -386,6 +386,9 @@ fn new_state(
         transpiler,
     );
     state.mode = mode;
+    if mode == RunMode::Hot {
+        state.resolver.remember_imports(false);
+    }
     let state = Rc::new(state);
     *state.main.borrow_mut() = main_path.clone();
     if let Entry::File(arg) = entry {

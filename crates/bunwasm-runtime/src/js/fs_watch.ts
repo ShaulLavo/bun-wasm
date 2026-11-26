@@ -5,6 +5,8 @@
     /** Whole records, 0 at end of stream, or a negative WASI errno (-6 when nothing is pending). */
     fsWatchRead(id: number): Uint8Array | number;
     fsWatchClose(id: number): number;
+    /** A polled change was seen: forget remembered module resolutions (natives.rs). */
+    fsChangeObserved(): void;
   };
   nextTick(callback: () => void): void;
 }) {
@@ -279,6 +281,7 @@
         const previous = this.#previous;
         if (POLL_COMPARED.every(key => previous[key] === current[key])) return;
         this.#previous = current;
+        internal.native.fsChangeObserved();
         this.emit("change", current, previous);
       }
 
