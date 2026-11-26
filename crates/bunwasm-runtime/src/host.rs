@@ -440,6 +440,7 @@ mod runtime_fs {
         pub fn watch_read(id: i32, buf: i32, len: i32, out_len: i32) -> i32;
         pub fn watch_ready() -> i32;
         pub fn watch_close(id: i32) -> i32;
+        pub fn path_realpath(fd: i32, path: i32, len: i32, buf: i32, cap: i32, used: i32) -> i32;
     }
 }
 
@@ -725,6 +726,77 @@ fn watch_read_into(id: u32, buf: &mut [u8]) -> Result<usize, (i32, usize)> {
 /// `watch_close`: 0, or the positive errno (8 for an unknown or closed id).
 pub fn fs_watch_close(id: u32) -> i32 {
     proc_call!(runtime_fs::watch_close(id as i32))
+}
+
+/// `realpath(3)`: `path` (absolute, or from the working directory) with every link followed.
+/// Preview 1 has no such call, and libc's realpath costs one `path_readlink` round trip per
+/// component, so this asks the host once (`runtime_fs.path_realpath`, docs/host-abi.md).
+#[cfg(target_arch = "wasm32")]
+pub fn realpath(path: &str) -> std::io::Result<String> {
+    use std::ffi::{CStr, CString, c_char};
+    unsafe extern "C" {
+        fn __wasilibc_find_abspath(
+            path: *const c_char,
+            prefix: *mut *const c_char,
+            relative: *mut *const c_char,
+        ) -> i32;
+    }
+    let absolute = match path.starts_with('/') {
+        true => path.to_owned(),
+        false => crate::resolve::join(&std::env::current_dir()?.to_string_lossy(), path),
+    };
+    let absolute = CString::new(absolute).map_err(|_| std::io::Error::from_raw_os_error(28))?;
+    let (mut prefix, mut relative) = (std::ptr::null(), std::ptr::null());
+    // SAFETY: a NUL-terminated path; the results point into it or into libc's preopen table.
+    let fd = unsafe { __wasilibc_find_abspath(absolute.as_ptr(), &mut prefix, &mut relative) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: libc returned NUL-terminated strings that outlive this call.
+    let (prefix, relative) = unsafe { (CStr::from_ptr(prefix), CStr::from_ptr(relative)) };
+    let real = realpath_from(fd, relative.to_bytes())?;
+    if real.starts_with('/') {
+        return Ok(real);
+    }
+    // A preopen outside the guest's root namespace answers below itself.
+    let base = format!("/{}", prefix.to_string_lossy());
+    Ok(crate::resolve::normalize(&crate::resolve::join(
+        &base, &real,
+    )))
+}
+
+/// One `path_realpath` into a buffer that grows to the length the host reports.
+#[cfg(target_arch = "wasm32")]
+fn realpath_from(fd: i32, relative: &[u8]) -> std::io::Result<String> {
+    let mut buf = vec![0u8; 1024];
+    loop {
+        let mut used = 0u32;
+        let errno = proc_call!(runtime_fs::path_realpath(
+            fd,
+            ptr(relative),
+            relative.len() as i32,
+            ptr_mut(&mut buf),
+            buf.len() as i32,
+            ptr_mut(std::slice::from_mut(&mut used))
+        ));
+        let used = used as usize;
+        if errno == WATCH_NOBUFS && used > buf.len() {
+            buf.resize(used, 0);
+            continue;
+        }
+        if errno != 0 {
+            return Err(std::io::Error::from_raw_os_error(errno));
+        }
+        buf.truncate(used);
+        return Ok(String::from_utf8(buf)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()));
+    }
+}
+
+/// Host builds (unit tests) use the platform's realpath.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn realpath(path: &str) -> std::io::Result<String> {
+    std::fs::canonicalize(path).map(|real| real.to_string_lossy().into_owned())
 }
 
 /// `runtime_proc.signal(sig, mode)` (docs/host-abi.md, "Signal dispositions"). A selected default

@@ -1331,14 +1331,7 @@ fn install_fs(t: &mut Table, state: &Rc<State>) {
     });
     t.add("realpath", |a| {
         let path = required_path(a.str(0)?, "realpath")?;
-        let real = fs::canonicalize(path)
-            .map(|p| p.to_string_lossy().into_owned())
-            .or_else(|e| match fs::metadata(path) {
-                // WASI has no realpath; a lexically normalized path is the best we can do.
-                Ok(_) => Ok(resolve::normalize(path)),
-                Err(_) => Err(e),
-            })
-            .map_err(|e| io_error(e, "realpath", Some(path)))?;
+        let real = crate::host::realpath(path).map_err(|e| io_error(e, "realpath", Some(path)))?;
         Ok(real.into())
     });
     t.add("readlink", |a| {

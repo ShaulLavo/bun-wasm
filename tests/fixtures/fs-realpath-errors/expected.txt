@@ -1,0 +1,14 @@
+link store/pkg@1/node_modules/pkg/lib/index.js
+dotdot "app"
+trailing store/pkg@1/node_modules/pkg/lib
+native store/pkg@1/node_modules/pkg
+relative store/pkg@1/node_modules/pkg/lib app
+promise store/pkg@1/node_modules/pkg
+long true true
+missing ENOENT
+missing parent ENOENT
+dangling ENOENT
+not a directory ENOTDIR
+trailing file ok
+loop ELOOP
+callback ENOENT
