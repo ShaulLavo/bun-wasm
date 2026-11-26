@@ -743,7 +743,10 @@ pub fn realpath(path: &str) -> std::io::Result<String> {
     }
     let absolute = match path.starts_with('/') {
         true => path.to_owned(),
-        false => crate::resolve::join(&std::env::current_dir()?.to_string_lossy(), path),
+        false => std::env::current_dir()?
+            .join(path)
+            .to_string_lossy()
+            .into_owned(),
     };
     let absolute = CString::new(absolute).map_err(|_| std::io::Error::from_raw_os_error(28))?;
     let (mut prefix, mut relative) = (std::ptr::null(), std::ptr::null());
@@ -759,10 +762,13 @@ pub fn realpath(path: &str) -> std::io::Result<String> {
         return Ok(real);
     }
     // A preopen outside the guest's root namespace answers below itself.
-    let base = format!("/{}", prefix.to_string_lossy());
-    Ok(crate::resolve::normalize(&crate::resolve::join(
-        &base, &real,
-    )))
+    // The answer is canonical below the preopen: no `.` or `..` left to fold.
+    let base = format!("/{}", prefix.to_string_lossy().trim_end_matches('/'));
+    Ok(match real.as_str() {
+        "." => base,
+        _ if base == "/" => format!("/{real}"),
+        _ => format!("{base}/{real}"),
+    })
 }
 
 /// One `path_realpath` into a buffer that grows to the length the host reports.
