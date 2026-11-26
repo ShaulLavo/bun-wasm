@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
 import { installNativeWasmLifetime } from "../web/src/native-wasm-lifetime";
+import { createIoPumpGate } from "../web/src/io-pump-gate";
 import { observePromise } from "../web/src/promise-reactions";
 import { SLOT_NAMES } from "../web/src/net/trampoline";
 
@@ -17,7 +18,7 @@ const methods = ["compile", "compileStreaming", "instantiate", "instantiateStrea
 function fixture(name: typeof methods[number]) {
   const gate = Promise.withResolvers<object>();
   const wasm = { [name]: () => gate.promise };
-  const context = createContext({ WebAssembly: wasm, installNativeWasmLifetime, observePromise, SLOT_NAMES, memoryViews: () => ({}), Promise, setTimeout, clearTimeout, queueMicrotask, TextEncoder, TextDecoder, URL });
+  const context = createContext({ WebAssembly: wasm, installNativeWasmLifetime, createIoPumpGate, observePromise, SLOT_NAMES, memoryViews: () => ({}), Promise, setTimeout, clearTimeout, queueMicrotask, TextEncoder, TextDecoder, URL });
   const Host = runInContext(source + "\nEngineHost;", context);
   const host = new Host({ instance: { exports: {} } }, () => {});
   host.internal = {};
@@ -65,11 +66,12 @@ import { createContext, runInContext } from 'node:vm';
 import { spawnSync } from "node:child_process";
 import { readFileSync } from 'node:fs';
 import { installNativeWasmLifetime } from ${JSON.stringify(new URL("../web/src/native-wasm-lifetime.ts", import.meta.url).href)};
+import { createIoPumpGate } from ${JSON.stringify(new URL("../web/src/io-pump-gate.ts", import.meta.url).href)};
 import { observePromise } from ${JSON.stringify(new URL("../web/src/promise-reactions.ts", import.meta.url).href)};
 import { SLOT_NAMES } from ${JSON.stringify(new URL("../web/src/net/trampoline.ts", import.meta.url).href)};
 const source = readFileSync(${JSON.stringify(new URL("../web/src/engine-host.js", import.meta.url).pathname)}, 'utf8')
   .replace(/^import .*;\\n/gm, '').replace('export function startEngineHost', 'function startEngineHost');
-const context = createContext({ installNativeWasmLifetime, observePromise, SLOT_NAMES, memoryViews: () => ({}),
+const context = createContext({ installNativeWasmLifetime, createIoPumpGate, observePromise, SLOT_NAMES, memoryViews: () => ({}),
   setTimeout, clearTimeout, queueMicrotask, TextEncoder, TextDecoder, URL, Response });
 const Host = runInContext(source + '\\nEngineHost;', context);
 const host = new Host({ instance: { exports: {} } }, () => {});

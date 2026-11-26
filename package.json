@@ -82,6 +82,7 @@
     "web/src/bun-terminal.ts",
     "web/src/promise-reactions.ts",
     "web/src/tick-scheduler.ts",
+    "web/src/io-pump-gate.ts",
     "web/src/buffer-transfer.ts",
     "web/src/shared-objects",
     "web/src/nested",

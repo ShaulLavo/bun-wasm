@@ -14,11 +14,13 @@ interface WatchModule {
 
 // Factory controls only. No Waffle subscription or event delivery is simulated.
 function watchOptions() {
-  const effects = { stats: 0, opens: 0, closes: 0 };
+  const effects = { resolves: 0, stats: 0, opens: 0, closes: 0 };
   const waiters = new Set<unknown>();
   const internal = {
     native: {
-      fsWatchOpen() { return 30 + effects.opens++; },
+      fsWatchResolve(): [number, string] { effects.resolves++; return [30 + effects.opens, ""]; },
+      fsWatchOpenFd() { return 30 + effects.opens++; },
+      fsWatchDropFd() {},
       fsWatchRead: () => -6,
       fsWatchClose() { effects.closes++; return 0; },
     },
@@ -54,7 +56,7 @@ test.each(invalidOptions)("watch rejects %j before filesystem work or watch regi
   let watcher: Watcher | undefined;
   try {
     expect(() => { watcher = module.watch("/fixture.txt", value); }).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
-    expect(effects).toEqual({ stats: 0, opens: 0, closes: 0 });
+    expect(effects).toEqual({ resolves: 0, stats: 0, opens: 0, closes: 0 });
   } finally { watcher?.close(); }
 });
 
@@ -64,6 +66,6 @@ for (const value of [undefined, null, "", { encoding: "" }, { encoding: null }, 
     const watcher = module.watch("/fixture.txt", value);
     try { expect(watcher).toBeInstanceOf(EventEmitter); }
     finally { watcher.close(); }
-    expect(effects).toEqual({ stats: 1, opens: 1, closes: 1 });
+    expect(effects).toEqual({ resolves: 1, stats: 0, opens: 1, closes: 1 });
   });
 }

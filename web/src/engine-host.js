@@ -14,6 +14,7 @@ import { hostCrypto } from "./host-crypto.ts";
 import { reportWasmCallTrap } from "./wasm-call-trap.ts";
 import { installSharedBufferRealm } from "./shared-objects/realm.ts";
 import { createTickScheduler } from "./tick-scheduler.ts";
+import { createIoPumpGate } from "./io-pump-gate.ts";
 import { decodeUtf8, defineField, encodeUtf8, encodeUtf8Into, IN_PLACE_ENCODE } from "./engine-codec.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
@@ -490,6 +491,11 @@ class EngineHost {
     this.records = null;
     this.asyncContext = undefined;
     this.wakeArmed = false;
+    this.ioPump = createIoPumpGate({
+      processWake: o.processWake,
+      fsWatchWord: o.fsWatchWord,
+      fsWatchReady: o.fsWatchReady,
+    });
     if (NativeMessageChannel) {
       this.channel = new NativeMessageChannel();
       this.channel.port1.onmessage = () => {
@@ -528,6 +534,7 @@ class EngineHost {
       return this.exit(70);
     }
     this.internal = internal;
+    this.attachIoHooks(internal);
     this.stackPrograms = internal.hasNativeStackTrace
       ? createStackPrograms(bytes => native.hash("sha256", bytes)) : undefined;
     internal.isProgramScriptHash = hash => this.stackPrograms?.has(hash) === true;
@@ -593,9 +600,15 @@ class EngineHost {
     if (net) {
       Object.assign(native, net.natives);
       if (native.hostLookup) native.hostLookup = trackLookup(native.hostLookup, promise => this.track(promise));
-      net.onNews(() => this.schedule(0));
+      net.onNews(() => {
+        this.ioPump.onNetNews();
+        this.schedule(0);
+      });
     }
     if (this.o.terminal) native.terminalSetRawMode = raw => this.o.terminal.setRawMode(raw);
+    if (this.o.fsWatchReady && native.fsWatchReady) {
+      native.fsWatchReady = () => this.ioPump.watchReady();
+    }
     native.engine = "host";
     // Name the host's engine only where the host reports it: Node's real V8 version.
     // Browser workers expose no engine version, so they add no key.
@@ -1292,12 +1305,13 @@ class EngineHost {
       return this.schedule(0);
     }
     if (this.testComplete) return this.finish();
+    this.internal.ioPumped = false;
     let next = step(() => this.guard(() => this.internal.runTimers(), 0));
     if (this.exited) return;
     // Network handles (net.js waiters): step them; the networking host's
     // onNews wakes the loop when something changes.
     const io = this.guard(() => this.internal.ioPending(), 0);
-    if (io > 0 && step(() => this.guard(() => this.internal.pumpIo(), false)) && next !== 0) next = 0;
+    if (io > 0 && !(next === 0 && this.internal.ioPumped) && step(() => this.guard(() => this.internal.pumpIo(next !== 0), false)) && next !== 0) next = 0;
     if (this.o.debug) this.o.debug(`pump next=${next} pending=${this.pendingAsync} io=${io}`);
     this.flush();
     if (this.exited) return;
@@ -1332,6 +1346,14 @@ class EngineHost {
     if (!this.o.asyncContext) this.asyncContext = undefined;
   }
 
+  attachIoHooks(internal) {
+    const gate = this.ioPump;
+    internal.markIoDirty = () => gate.markIoDirty();
+    internal.markWatchDirty = () => gate.markWatchDirty();
+    internal.ioBeginPump = force => gate.beginPump(force);
+    internal.ioEndPump = progressed => gate.endPump(progressed);
+  }
+
   // Pipe and child changes publish on the process wake word: run the loop for them rather than
   // waiting out the bounded rescan. Other sources still rely on that rescan.
   wakeOnProcessChange(observed) {
@@ -1342,6 +1364,7 @@ class EngineHost {
     this.wakeArmed = true;
     nativePromiseThen(wait.value, () => {
       this.wakeArmed = false;
+      this.ioPump?.onProcessWake();
       this.schedule(0);
     });
   }

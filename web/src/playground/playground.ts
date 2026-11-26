@@ -10,6 +10,7 @@ import { BrowserPrograms, ProvisionAbortedError, type ProvisioningStatus } from 
 import { ENGINES, type Engine, WasmMissing, createToolsLoader, engineBuildHint, engineUnavailable, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../engine-loader";
 import { installCompileObserver, measurementEnvironment } from "../compile-observer";
 import { HOME, examples } from "../examples";
+import { PAGE_INSTALL_ENV } from "../install-cache";
 import { normalize } from "../fs";
 import { HostedPreviews } from "../hosted-previews";
 import type { BunNetworkOptions, BunProcessStart, RuntimeNetworkHelper } from "../net/helper";
@@ -1251,7 +1252,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const shell = await BrowserSession.create({
       runtime,
       cwd: HOME,
-      env: { ...engineEnv, ...previewHostEnv(this.previewOrigins), HOME, USER: "user", PATH: `${ENGINE_BIN[this.engine]}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
+      env: { ...engineEnv, ...previewHostEnv(this.previewOrigins), ...PAGE_INSTALL_ENV, HOME, USER: "user", PATH: `${ENGINE_BIN[this.engine]}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
       cols: term.cols,
       rows: term.rows,
       wasmUrl: new URL("./programs/shell-engine.wasm", location.href),

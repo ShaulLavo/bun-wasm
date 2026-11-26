@@ -48,6 +48,7 @@
     "web/src/engine-stack-budget.ts",
     "web/src/fs.ts",
     "web/src/host-memory-policy.ts",
+    "web/src/install-cache.ts",
     "web/src/memory-channel.ts",
     "web/src/memory-telemetry.ts",
     "web/src/net/helper.ts",

@@ -43,7 +43,10 @@ async function checkBrowser(browserName, runtime, url) {
     await command(page, "bun add -D --exact @fixture/scoped@1.0.0");
     await writeFile(page, "/home/user/check-dev.ts", 'import scoped from "@fixture/scoped"; console.log("scoped import:", scoped);\n');
     assert.match(await command(page, "bun run check-dev.ts"), /scoped import: @fixture\/scoped@1\.0\.0/);
-    await command(page, "rm -r node_modules .bun");
+    // The page hosts keep no install cache: only the browser's caches serve the reinstall.
+    await writeFile(page, "/home/user/check-cache.ts", 'import fs from "node:fs"; console.log("install cache:", fs.existsSync(".bun/install/cache"));\n');
+    assert.match(await command(page, "bun run check-cache.ts"), /install cache: false/);
+    await command(page, "rm -r node_modules");
     assert.ok(await page.evaluate(async () => (await caches.open("bun-wasm-install-v1")).keys().then(keys => keys.length)) >= 3);
     registry.setOffline(true);
     try {

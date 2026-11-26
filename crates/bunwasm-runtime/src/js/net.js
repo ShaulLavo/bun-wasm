@@ -16,21 +16,28 @@
   // --- I/O core -------------------------------------------------------------
 
   // Waiters: { step(): boolean (true = done), ref: boolean, fail(err), permanent?: boolean }.
+  // Filesystem watches stay in their own set so pumpIo never sorts or scans them while idle.
   const waiters = new Set();
+  const watchWaiters = new Set();
 
   function addWaiter(waiter) {
     if (waiter.ref === undefined) waiter.ref = true;
-    waiters.add(waiter);
+    (waiter.watch === true ? watchWaiters : waiters).add(waiter);
     // A host-owned event loop (engine-host) steps waiters only when woken.
+    if (internal.markIoDirty) internal.markIoDirty();
     if (native.wake) native.wake(0);
     return waiter;
   }
 
   function removeWaiter(waiter) {
-    waiters.delete(waiter);
+    if (waiter.watch === true) watchWaiters.delete(waiter);
+    else waiters.delete(waiter);
   }
 
   function cancelIoWaiters() {
+    for (const waiter of Array.from(watchWaiters)) {
+      if (waiter.cancel) waiter.cancel();
+    }
     for (const waiter of Array.from(waiters)) {
       if (waiter.cancel) waiter.cancel();
     }
@@ -42,6 +49,7 @@
 
   internal.ioPending = function ioPending() {
     let n = 0;
+    for (const w of watchWaiters) if (w.ref) n++;
     for (const w of waiters) if (w.ref) n++;
     return n;
   };
@@ -49,6 +57,7 @@
   // Sleeps in procPoll when every referenced waiter names what it waits on (runtime_proc
   // descriptors and children); returns false when the caller should use the host poll instead.
   internal.ioWait = function ioWait(timeout) {
+    for (const waiter of watchWaiters) if (waiter.ref) return false;
     const watched = [];
     for (const waiter of waiters) {
       if (!waiter.ref) continue;
@@ -64,7 +73,16 @@
   // first: a socket step can run a request handler synchronously, so a change already
   // readable this turn reaches its listeners, and queues their deferred work, ahead of it.
   const pumpIo = internal.require("io_pump");
-  internal.pumpIo = () => pumpIo(waiters);
+  internal.pumpIo = (force) => {
+    if (internal.ioBeginPump && !internal.ioBeginPump(force)) return false;
+    let progressed = false;
+    try {
+      progressed = pumpIo(waiters, watchWaiters);
+      return progressed;
+    } finally {
+      if (internal.ioEndPump) internal.ioEndPump(progressed);
+    }
+  };
 
   function hostError(handle, fallback) {
     const text = native.hostError(handle);
@@ -350,6 +368,7 @@
         if (this.onData) this.ownership.dispatch(() => this.onData?.(chunk));
         if (this.closed || !this.ownership.valid(epoch)) return true;
       }
+      if (internal.markIoDirty) internal.markIoDirty();
       if (native.wake) native.wake(0);
       return progressed ? "progress" : false;
     }
@@ -500,7 +519,7 @@
       const chunked = (header(head.headers, "transfer-encoding") || "").toLowerCase().includes("chunked");
       const length = Number(header(head.headers, "content-length") || 0);
       if (!chunked && !(length > 0)) return null;
-      const onDemand = () => { if (native.wake) native.wake(0); };
+      const onDemand = () => { if (internal.markIoDirty) internal.markIoDirty(); if (native.wake) native.wake(0); };
       const body = new (uploads().RequestUpload)(chunked, length, onDemand, maxBody);
       return Object.assign(head, { body: internal.require("body_streams").markNetwork(body.stream), streamed: true, chunked, trailers: [], length: buffer.length, upload: body, initial: buffer.subarray(head.headLength) });
     }

@@ -2408,6 +2408,25 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     });
     t.add("procClose", |a| Ok(host::proc_close(a.i32(0)?).into()));
     // runtime_fs watches: ids and records for fs_watch.ts, failures as negative WASI errnos.
+    t.add("fsWatchResolve", |a| {
+        Ok(match host::fs_watch_resolve(a.str(0)?) {
+            Ok((fd, identity)) => Val::Array(vec![
+                Val::Num(fd as f64),
+                Val::Str(identity.unwrap_or_default()),
+            ]),
+            Err(errno) => (-errno).into(),
+        })
+    });
+    t.add("fsWatchOpenFd", |a| {
+        Ok(match host::fs_watch_open_fd(a.i32(0)?, a.bool(1)) {
+            Ok(id) => (id as f64).into(),
+            Err(errno) => (-errno).into(),
+        })
+    });
+    t.add("fsWatchDropFd", |a| {
+        host::fs_watch_drop_fd(a.i32(0)?);
+        Ok(Val::Undefined)
+    });
     t.add("fsWatchOpen", |a| {
         Ok(match host::fs_watch_open(a.str(0)?, a.bool(1)) {
             Ok(id) => (id as f64).into(),
@@ -2416,7 +2435,10 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     });
     t.add("fsWatchReady", |_| Ok(host::fs_watch_ready().into()));
     t.add("fsWatchRead", |a| {
-        Ok(match host::fs_watch_read(a.u32(0)?) {
+        let max_bytes = a
+            .opt_num(1)
+            .map(|n| n.clamp(0.0, 16.0 * 1024.0 * 1024.0) as usize);
+        Ok(match host::fs_watch_read(a.u32(0)?, max_bytes) {
             Ok(bytes) if bytes.is_empty() => 0.into(),
             Ok(bytes) => Val::Bytes(bytes),
             Err(errno) => (-errno).into(),
