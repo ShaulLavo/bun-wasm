@@ -1,41 +1,72 @@
-//! Installs packages while resolution waits on registry metadata.
+//! Prepares packages while resolution waits on registry metadata.
 //!
 //! A cold resolution spends most of its time waiting for metadata, and the install phase
 //! after it spends most of its time extracting archives. When an install starts without
-//! `node_modules`, packages that resolution has already placed are downloaded and extracted
-//! during those waits. Placement never moves a package once it is added, so the result is
-//! the same tree the install phase would have built; the install phase skips what is done
-//! here, and `reconcile` removes anything that the final graph no longer contains.
+//! `node_modules`, the archives of packages resolution has placed are fetched and extracted
+//! during those waits, into private staging at `STAGING` in the project root. Workspace
+//! globs never match a dot directory, and nothing else that resolution reads refers to it.
+//! Nothing touches `node_modules` until the install phase, which runs after the final graph
+//! and lockfile exist and publishes each staged package by rename, in install order.
 //!
-//! Only successes count. A package whose download or extraction fails here is left to the
-//! install phase, which then reports or tolerates the failure exactly as it does today.
+//! Every fetch made here is the fetch for that package: its outcome, failure included, is
+//! handed to the install phase, which never fetches again to replace it. When a fetch
+//! succeeded but staging did not finish, the install phase installs from those same bytes,
+//! so archive errors appear exactly as without early work.
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeSet, VecDeque},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use serde_json::Value;
 
 use super::{
-    Package, forget_installed_source, installed_source,
+    Package, installed_source,
     io::{self, Downloads, Registry},
     trace,
 };
 
+/// Where early work stages packages, relative to the project root.
+pub const STAGING: &str = ".bun-wasm-early";
 /// Archives requested ahead while metadata is still loading. Metadata decides when
 /// resolution ends, so archives take a small share of the connection.
 const EARLY_TARBALLS: usize = 8;
 /// Larger packages wait for the install phase: a paused extraction resumes by inflating
 /// its archive again from the start, so huge archives would repeat too much of that.
 const EARLY_FILES: u64 = 2048;
+const EARLY_BYTES: u64 = 32 * 1024 * 1024;
+/// After this many pauses an extraction runs to its end, bounding the inflation it repeats.
+const MAX_PAUSES: u32 = 8;
+/// Memory that staged packages' archives may keep for later packages with the same archive.
+const KEPT_ARCHIVES: usize = 16 * 1024 * 1024;
 
-/// A package installed during resolution.
-pub struct Done {
-    /// The source record it was installed with.
-    source: Vec<u8>,
-    path: PathBuf,
-    pub bins: Value,
+/// Removes staging left by an interrupted run. Every install calls it before resolving.
+pub fn discard_staging() {
+    let _ = fs::remove_dir_all(STAGING);
+}
+
+/// Removes the staging directory when the install ends, however it ends.
+pub struct StagingGuard;
+
+impl Drop for StagingGuard {
+    fn drop(&mut self) {
+        discard_staging();
+    }
+}
+
+/// What early work did for one package, keyed by its source record.
+pub enum Outcome {
+    /// Extracted and validated in `staging`; the install phase publishes it by rename.
+    Staged {
+        staging: PathBuf,
+        bins: Value,
+        /// The archive, kept while it fits, for later packages with the same archive.
+        bytes: Option<Vec<u8>>,
+    },
+    /// The archive arrived but staging did not finish; install from these bytes.
+    Fetched(Vec<u8>),
+    /// The fetch failed with this error.
+    Failed(String),
 }
 
 pub struct Early {
@@ -45,17 +76,21 @@ pub struct Early {
     /// through packages compatible with this platform.
     active: BTreeSet<String>,
     queue: VecDeque<Package>,
-    queued: BTreeSet<String>,
-    /// The package being extracted, between the pauses that let resolution go on.
+    /// Archive URLs queued or handled, so each is fetched here at most once.
+    urls: BTreeSet<String>,
     current: Option<Job>,
-    pub done: BTreeMap<String, Done>,
+    outcomes: Vec<(Vec<u8>, Outcome)>,
+    jobs: usize,
+    kept_bytes: usize,
 }
 
+/// The package being extracted, between the pauses that let resolution go on.
 struct Job {
     package: Package,
     bytes: Vec<u8>,
     staging: PathBuf,
     extraction: io::Extraction,
+    pauses: u32,
 }
 
 impl Early {
@@ -65,9 +100,11 @@ impl Early {
             refresh,
             active: BTreeSet::new(),
             queue: VecDeque::new(),
-            queued: BTreeSet::new(),
+            urls: BTreeSet::new(),
             current: None,
-            done: BTreeMap::new(),
+            outcomes: Vec::new(),
+            jobs: 0,
+            kept_bytes: 0,
         }
     }
 
@@ -80,12 +117,14 @@ impl Early {
         {
             return;
         }
-        let key = package.key();
-        self.active.insert(key.clone());
-        if package.local.is_some() || package.explicit_tarball || !small(&package.meta) {
+        self.active.insert(package.key());
+        if package.local.is_some()
+            || package.explicit_tarball
+            || !small(&package.meta)
+            || !self.urls.insert(package.tarball.clone())
+        {
             return;
         }
-        self.queued.insert(key);
         self.queue.push_back(package.clone());
         self.prefetch(registry);
     }
@@ -100,7 +139,7 @@ impl Early {
         }
     }
 
-    /// Installs one queued package whose archive has arrived. Returns whether it did any
+    /// Works on one queued package whose archive has arrived. Returns whether it did any
     /// work. `metadata` keeps moving during the extraction.
     pub fn work(
         &mut self,
@@ -117,7 +156,7 @@ impl Early {
         true
     }
 
-    /// Finishes the package in progress, so resolution leaves no partial extraction.
+    /// Finishes the package in progress, so no extraction is left half done.
     pub fn settle(&mut self, registry: &Registry) {
         if self.current.is_none() {
             return;
@@ -128,34 +167,41 @@ impl Early {
         });
     }
 
-    /// Takes the next ready package and stages it. Returns whether a job started.
+    /// Fetches the next ready package and stages it. Returns whether it did anything.
     fn start(&mut self, registry: &Registry) -> bool {
         let Some(index) = self.next(registry) else {
             return false;
         };
         let package = self.queue.remove(index).unwrap();
-        self.queued.remove(&package.key());
-        let Ok(bytes) = self
+        let bytes = match self
             .downloads
             .fetch(&package.tarball, true, self.refresh, registry)
-        else {
-            return true;
+        {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.record(&package, Outcome::Failed(error));
+                return true;
+            }
         };
-        let Ok(staging) = super::stage_package(&package, &bytes) else {
+        self.jobs += 1;
+        let staging = Path::new(STAGING).join(self.jobs.to_string());
+        if super::stage_at(&package, &bytes, &staging).is_err() {
+            let _ = fs::remove_dir_all(&staging);
+            self.record(&package, Outcome::Fetched(bytes));
             return true;
-        };
+        }
         self.current = Some(Job {
             extraction: io::Extraction::new(&staging),
             package,
             bytes,
             staging,
+            pauses: 0,
         });
         true
     }
 
-    /// Extracts the current package until resolution's awaited response arrives, then
-    /// publishes it once complete. A failure removes its staging directory and leaves the
-    /// package to the install phase.
+    /// Extracts the current package until resolution's awaited response arrives, and
+    /// validates it once complete.
     fn resume(
         &mut self,
         metadata: &mut Downloads,
@@ -170,114 +216,69 @@ impl Early {
             downloads.tick(registry);
             metadata.tick(registry);
         };
+        let mut never = || false;
+        let pause: &mut dyn FnMut() -> bool = if job.pauses < MAX_PAUSES {
+            &mut *arrived
+        } else {
+            &mut never
+        };
         let ran = job
             .extraction
-            .run(&job.bytes, &job.staging, &mut tick, arrived);
-        let extracted = match ran {
-            Ok(io::Extracted::Paused) => return,
-            Ok(io::Extracted::Done) => Ok(()),
-            Err(error) => Err(error),
-        };
+            .run(&job.bytes, &job.staging, &mut tick, pause);
+        if matches!(ran, Ok(io::Extracted::Paused)) {
+            job.pauses += 1;
+            return;
+        }
         let job = self.current.take().unwrap();
-        let completed =
-            extracted.and_then(|()| super::complete_package(&job.staging, &job.package));
-        let Ok(bins) = completed else {
+        let validated = ran.and_then(|_| super::validate_package(&job.staging, &job.package));
+        let Ok(bins) = validated else {
             let _ = fs::remove_dir_all(&job.staging);
+            self.record(&job.package, Outcome::Fetched(job.bytes));
             return;
         };
-        self.done.insert(
-            job.package.key(),
-            Done {
-                source: installed_source(&job.package),
-                path: job.package.path(),
-                bins,
-            },
-        );
+        let bytes = (self.kept_bytes + job.bytes.capacity() <= KEPT_ARCHIVES).then(|| {
+            self.kept_bytes += job.bytes.capacity();
+            job.bytes
+        });
+        let outcome = Outcome::Staged {
+            staging: job.staging,
+            bins,
+            bytes,
+        };
+        self.record(&job.package, outcome);
     }
 
-    /// The first queued package that can be installed now: its ancestors in the tree are
-    /// installed here and its archive is ready. Packages whose ancestors will not be are
-    /// dropped, so they wait for the install phase together with those ancestors.
+    fn record(&mut self, package: &Package, outcome: Outcome) {
+        self.outcomes.push((installed_source(package), outcome));
+    }
+
+    /// The first queued package whose archive is ready.
     fn next(&mut self, registry: &Registry) -> Option<usize> {
         self.downloads.poll(registry);
-        let mut index = 0;
-        while index < self.queue.len() {
-            let package = &self.queue[index];
-            match self.ancestors(package) {
-                Ancestors::Lost => {
-                    let package = self.queue.remove(index).unwrap();
-                    self.queued.remove(&package.key());
-                    continue;
-                }
-                Ancestors::Done if self.downloads.ready(&package.tarball, true, self.refresh) => {
-                    return Some(index);
-                }
-                Ancestors::Done | Ancestors::Waiting => index += 1,
-            }
-        }
-        None
-    }
-
-    fn ancestors(&self, package: &Package) -> Ancestors {
-        for level in 1..package.chain.len() {
-            let key = package.chain[..level].join("/");
-            if self.done.contains_key(&key) {
-                continue;
-            }
-            let extracting = self
-                .current
-                .as_ref()
-                .is_some_and(|job| job.package.key() == key);
-            if extracting || self.queued.contains(&key) {
-                return Ancestors::Waiting;
-            }
-            return Ancestors::Lost;
-        }
-        Ancestors::Done
-    }
-
-    /// Keeps the early installs that the final graph contains unchanged and removes the
-    /// rest, along with anything installed inside them.
-    pub fn reconcile(&mut self, packages: &BTreeMap<String, Package>) -> io::Result<()> {
-        let mut removed: Vec<PathBuf> = Vec::new();
-        let keys: Vec<String> = self.done.keys().cloned().collect();
-        for key in keys {
-            let done = &self.done[&key];
-            let inside_removed = removed.iter().any(|path| done.path.starts_with(path));
-            let kept = !inside_removed
-                && packages
-                    .get(&key)
-                    .is_some_and(|package| installed_source(package) == done.source);
-            if kept {
-                continue;
-            }
-            let done = self.done.remove(&key).unwrap();
-            if !inside_removed {
-                remove(&done.path)?;
-                removed.push(done.path);
-            }
-        }
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-impl Early {
-    pub fn move_to_front(&mut self, key: &str) {
-        let index = self
-            .queue
+        let refresh = self.refresh;
+        let downloads = &mut self.downloads;
+        self.queue
             .iter()
-            .position(|package| package.key() == key)
-            .unwrap();
-        let package = self.queue.remove(index).unwrap();
-        self.queue.push_front(package);
+            .position(|package| downloads.ready(&package.tarball, true, refresh))
     }
-}
 
-enum Ancestors {
-    Done,
-    Waiting,
-    Lost,
+    /// Takes the outcome prepared for `package`: the first one with its source record.
+    pub fn claim(&mut self, package: &Package) -> Option<Outcome> {
+        let source = installed_source(package);
+        let index = self
+            .outcomes
+            .iter()
+            .position(|(prepared, _)| *prepared == source)?;
+        Some(self.outcomes.remove(index).1)
+    }
+
+    /// Whether an outcome is waiting for `package`, so its archive needs no prefetch.
+    pub fn prepared(&self, package: &Package) -> bool {
+        let source = installed_source(package);
+        self.outcomes
+            .iter()
+            .any(|(prepared, _)| *prepared == source)
+    }
 }
 
 /// Whether the registry says the package is small enough to extract during resolution.
@@ -291,12 +292,17 @@ fn small(meta: &Value) -> bool {
             .is_none_or(|size| size <= EARLY_BYTES)
 }
 
-const EARLY_BYTES: u64 = 32 * 1024 * 1024;
-
-fn remove(path: &std::path::Path) -> io::Result<()> {
-    forget_installed_source(path)?;
-    match fs::remove_dir_all(path) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.to_string()),
-        _ => Ok(()),
+#[cfg(test)]
+impl Early {
+    /// The kind of each prepared outcome, in the order they were prepared.
+    pub fn kinds(&self) -> Vec<&'static str> {
+        self.outcomes
+            .iter()
+            .map(|(_, outcome)| match outcome {
+                Outcome::Staged { .. } => "staged",
+                Outcome::Fetched(_) => "fetched",
+                Outcome::Failed(_) => "failed",
+            })
+            .collect()
     }
 }

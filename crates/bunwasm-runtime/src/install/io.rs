@@ -672,6 +672,9 @@ impl Download {
             }
             if !worked {
                 wait(&mut pending, &self.url)?;
+            } else if pending.expired(Instant::now()) {
+                // Idle work never extends a stalled response's deadline.
+                return Err(format!("Timeout downloading {}", self.url));
             }
         }
     }

@@ -1,11 +1,11 @@
-//! Packages installed while resolution waits: order, eligibility and reconciliation.
-use std::{collections::BTreeMap, fs, path::Path, process::Command};
+//! Packages prepared while resolution waits: staging, eligibility, outcomes and publication.
+use std::{fs, path::Path, process::Command};
 
 use serde_json::{Value, json};
 
 use super::{
     Package, Resolver,
-    early::Early,
+    early::{self, Early},
     install_packages, installed_source_path, io,
     resolve::test_support::{archive_entries, cache_archive, seed_cache},
     trace,
@@ -78,28 +78,24 @@ fn drain(early: &mut Early) -> usize {
 }
 
 #[test]
-fn nested_packages_wait_for_their_ancestors() {
+fn early_work_stages_outside_node_modules() {
     if !child() {
-        return in_child("nested_packages_wait_for_their_ancestors");
+        return in_child("early_work_stages_outside_node_modules");
     }
     let outer = plain("outer", &["outer"]);
     let nested = plain("inner", &["outer", "inner"]);
-    let lone = plain("lone", &["missing", "lone"]);
-    seed_cache(&[&outer, &nested, &lone]);
+    seed_cache(&[&outer, &nested]);
     let mut early = Early::new(false);
     early.added(&outer, None, &registry());
     early.added(&nested, Some("outer"), &registry());
-    early.added(&lone, Some("outer"), &registry());
-    // Queued ahead of its parent, it must wait: installing the parent afterwards would
-    // replace the directory it landed in.
-    early.move_to_front("outer/inner");
     assert_eq!(drain(&mut early), 2);
-    assert!(early.done.contains_key("outer") && early.done.contains_key("outer/inner"));
+    assert_eq!(early.kinds(), ["staged", "staged"]);
     assert!(
-        !early.done.contains_key("missing/lone"),
-        "its ancestor is not installed here"
+        !Path::new("node_modules").exists(),
+        "early work wrote into node_modules"
     );
-    assert!(nested.path().join("package.json").is_file());
+    assert_eq!(fs::read_dir(early::STAGING).unwrap().count(), 2);
+    assert!(early.prepared(&outer) && early.prepared(&nested));
 }
 
 #[test]
@@ -113,62 +109,31 @@ fn incompatible_and_large_packages_are_left_to_the_install_phase() {
     early.added(&below, Some("foreign"), &registry);
     early.added(&large, None, &registry);
     assert_eq!(drain(&mut early), 0);
-    assert!(early.done.is_empty());
+    assert!(early.kinds().is_empty());
+}
+
+fn resolver_with(early: Early, packages: &[&Package]) -> Resolver {
+    let mut resolver = Resolver::new(registry(), json!({}), false);
+    resolver.early = Some(early);
+    for package in packages {
+        resolver.packages.insert(package.key(), (*package).clone());
+    }
+    resolver
 }
 
 #[test]
-fn reconciliation_removes_what_the_final_graph_dropped_or_changed() {
+fn the_install_phase_publishes_staged_packages_and_counts_them() {
     if !child() {
-        return in_child("reconciliation_removes_what_the_final_graph_dropped_or_changed");
-    }
-    let kept = plain("kept", &["kept"]);
-    let dropped = plain("dropped", &["dropped"]);
-    let changed = plain("changed", &["changed"]);
-    let inside = plain("inside", &["changed", "inside"]);
-    seed_cache(&[&kept, &dropped, &changed, &inside]);
-    let mut early = Early::new(false);
-    for (package, parent) in [
-        (&kept, None),
-        (&dropped, None),
-        (&changed, None),
-        (&inside, Some("changed")),
-    ] {
-        early.added(package, parent, &registry());
-    }
-    assert_eq!(drain(&mut early), 4);
-    let mut replaced = changed.clone();
-    replaced.tarball = "https://registry.invalid/changed/-/changed-2.0.0.tgz".into();
-    let packages = BTreeMap::from([
-        ("kept".to_owned(), kept.clone()),
-        ("changed".to_owned(), replaced),
-        ("changed/inside".to_owned(), inside.clone()),
-    ]);
-    early.reconcile(&packages).unwrap();
-    assert_eq!(early.done.keys().collect::<Vec<_>>(), ["kept"]);
-    assert!(kept.path().join("package.json").is_file());
-    for gone in [&dropped, &changed, &inside] {
-        assert!(!gone.path().exists(), "{} was left behind", gone.key());
-        assert!(!installed_source_path(&gone.path()).exists());
-    }
-}
-
-#[test]
-fn the_install_phase_skips_early_installs_and_counts_them() {
-    if !child() {
-        return in_child("the_install_phase_skips_early_installs_and_counts_them");
+        return in_child("the_install_phase_publishes_staged_packages_and_counts_them");
     }
     let first = package("first", &["first"], json!({"bin": "cli.js"}));
     let second = plain("second", &["second"]);
     seed_cache(&[&first, &second]);
-    let mut resolver = Resolver::new(registry(), json!({}), false);
     let mut early = Early::new(false);
     early.added(&first, None, &registry());
     assert_eq!(drain(&mut early), 1);
-    resolver.early = Some(early);
-    for package in [&first, &second] {
-        resolver.packages.insert(package.key(), package.clone());
-    }
     trace::start();
+    let mut resolver = resolver_with(early, &[&first, &second]);
     let (installed, manifests) = install_packages(&mut resolver).unwrap();
     assert_eq!(installed, 2);
     assert_eq!(
@@ -177,7 +142,66 @@ fn the_install_phase_skips_early_installs_and_counts_them() {
         "only the second package is extracted now"
     );
     assert_eq!(manifests.keys().collect::<Vec<_>>(), ["first", "second"]);
-    assert!(second.path().join("package.json").is_file());
+    for package in [&first, &second] {
+        assert!(package.path().join("package.json").is_file());
+        assert_eq!(
+            fs::read(installed_source_path(&package.path())).unwrap(),
+            super::installed_source(package)
+        );
+    }
+    assert_eq!(
+        fs::read_dir(early::STAGING).unwrap().count(),
+        0,
+        "staged packages were moved"
+    );
+}
+
+#[test]
+fn packages_the_final_graph_dropped_or_changed_are_never_published() {
+    if !child() {
+        return in_child("packages_the_final_graph_dropped_or_changed_are_never_published");
+    }
+    let kept = plain("kept", &["kept"]);
+    let dropped = plain("dropped", &["dropped"]);
+    let changed = versioned("changed", "1.0.0", &["changed"]);
+    let replaced = versioned("changed", "2.0.0", &["changed"]);
+    seed_cache(&[&kept, &dropped, &changed, &replaced]);
+    let mut early = Early::new(false);
+    for package in [&kept, &dropped, &changed] {
+        early.added(package, None, &registry());
+    }
+    assert_eq!(drain(&mut early), 3);
+    let mut resolver = resolver_with(early, &[&kept, &replaced]);
+    let (installed, _) = install_packages(&mut resolver).unwrap();
+    assert_eq!(installed, 2);
+    assert!(!dropped.path().exists());
+    assert_eq!(installed_version(&replaced), "2.0.0");
+    early::discard_staging();
+    assert!(!Path::new(early::STAGING).exists());
+}
+
+#[test]
+fn a_fetch_that_failed_early_is_the_package_result() {
+    if !child() {
+        return in_child("a_fetch_that_failed_early_is_the_package_result");
+    }
+    // Nothing is cached and the native test host has no network: the early fetch fails.
+    let required = plain("required", &["required"]);
+    let mut optional = plain("optional", &["optional"]);
+    optional.optional = true;
+    let mut early = Early::new(false);
+    early.added(&required, None, &registry());
+    early.added(&optional, None, &registry());
+    assert_eq!(drain(&mut early), 2);
+    assert_eq!(early.kinds(), ["failed", "failed"]);
+    let mut resolver = resolver_with(early, &[&optional, &required]);
+    let error = install_packages(&mut resolver).unwrap_err();
+    assert!(error.starts_with("required@1.0.0: "), "{error}");
+    assert!(error.contains("networking support"), "{error}");
+    assert!(
+        !resolver.packages.contains_key("optional"),
+        "the optional failure was tolerated"
+    );
 }
 
 fn versioned(name: &str, version: &str, chain: &[&str]) -> Package {
@@ -197,9 +221,9 @@ fn installed_version(package: &Package) -> String {
 }
 
 #[test]
-fn a_final_graph_that_hoists_differently_replaces_early_installs() {
+fn a_final_graph_that_hoists_differently_still_uses_what_was_staged() {
     if !child() {
-        return in_child("a_final_graph_that_hoists_differently_replaces_early_installs");
+        return in_child("a_final_graph_that_hoists_differently_still_uses_what_was_staged");
     }
     // Resolution first placed shared@1 at the root, but the final graph put shared@2 there
     // and moved shared@1 under `user`.
@@ -217,8 +241,14 @@ fn a_final_graph_that_hoists_differently_replaces_early_installs() {
     for package in [&final_root, &user, &inside] {
         resolver.packages.insert(package.key(), package.clone());
     }
+    trace::start();
     let (installed, _) = install_packages(&mut resolver).unwrap();
     assert_eq!(installed, 3);
+    assert_eq!(
+        trace::calls("extract"),
+        1,
+        "shared@1, staged for the root, is published nested"
+    );
     assert_eq!(installed_version(&final_root), "2.0.0");
     assert_eq!(installed_version(&inside), "1.0.0");
     assert_eq!(
@@ -228,39 +258,32 @@ fn a_final_graph_that_hoists_differently_replaces_early_installs() {
 }
 
 #[test]
-fn an_interrupted_early_install_leaves_only_complete_packages() {
+fn staging_an_interrupted_run_left_is_never_published() {
     if !child() {
-        return in_child("an_interrupted_early_install_leaves_only_complete_packages");
+        return in_child("staging_an_interrupted_run_left_is_never_published");
     }
-    let done = plain("done", &["done"]);
-    let cut = plain("cut", &["cut"]);
-    seed_cache(&[&done, &cut]);
+    // An earlier run was killed with `left` staged; the next run resolves a different graph.
+    let left = plain("left", &["left"]);
+    let other = plain("other", &["other"]);
+    seed_cache(&[&left, &other]);
+    let mut killed = Early::new(false);
+    killed.added(&left, None, &registry());
+    assert_eq!(drain(&mut killed), 1);
+    drop(killed);
+    assert_eq!(fs::read_dir(early::STAGING).unwrap().count(), 1);
+    early::discard_staging();
     let mut early = Early::new(false);
-    early.added(&done, None, &registry());
+    early.added(&other, None, &registry());
     assert_eq!(drain(&mut early), 1);
-    // The run stops while `cut` is being extracted: its staging directory holds part of it,
-    // and nothing exists at its final path.
-    let staging = Path::new("node_modules/.cut.bun-wasm-tmp");
-    fs::create_dir_all(staging).unwrap();
-    fs::write(staging.join("partial.js"), b"half").unwrap();
-    drop(early);
-    assert!(
-        !cut.path().exists(),
-        "a package appears only by a complete rename"
-    );
-
-    // The next install sees node_modules and checks what is there.
-    let mut resolver = Resolver::new(registry(), json!({}), false);
-    for package in [&done, &cut] {
-        resolver.packages.insert(package.key(), package.clone());
-    }
-    trace::start();
+    let mut resolver = resolver_with(early, &[&other]);
     let (installed, _) = install_packages(&mut resolver).unwrap();
-    assert_eq!(installed, 1, "the completed early install is kept");
-    assert_eq!(trace::calls("extract"), 1);
-    assert!(cut.path().join("package.json").is_file());
-    assert!(!cut.path().join("partial.js").exists());
-    assert!(!staging.exists());
+    assert_eq!(installed, 1);
+    assert!(!left.path().exists());
+    assert_eq!(
+        fs::read_dir("node_modules").unwrap().count(),
+        2,
+        "only other and its record"
+    );
 }
 
 #[test]
@@ -296,7 +319,9 @@ fn extraction_pauses_whenever_resolution_has_its_response() {
         slices, 5,
         "four entries of the parent, then the child in one entry"
     );
-    assert!(early.done.contains_key("parent") && early.done.contains_key("parent/child"));
+    assert_eq!(early.kinds(), ["staged", "staged"]);
+    let mut resolver = resolver_with(early, &[&parent, &child]);
+    install_packages(&mut resolver).unwrap();
     assert_eq!(fs::read(parent.path().join("lib/c.js")).unwrap(), b"c");
     assert!(child.path().join("package.json").is_file());
 }
@@ -318,9 +343,10 @@ fn settling_finishes_a_paused_extraction() {
     let mut early = Early::new(false);
     early.added(&parent, None, &registry());
     assert!(early.work(&mut io::Downloads::new(0), &registry(), &mut || true));
-    assert!(early.done.is_empty(), "paused after the first entry");
+    assert!(early.kinds().is_empty(), "paused after the first entry");
     early.settle(&registry());
-    assert!(early.done.contains_key("parent"));
+    assert_eq!(early.kinds(), ["staged"]);
+    let mut resolver = resolver_with(early, &[&parent]);
+    install_packages(&mut resolver).unwrap();
     assert_eq!(fs::read(parent.path().join("a.js")).unwrap(), b"a");
-    assert!(!Path::new("node_modules/.parent.bun-wasm-tmp").exists());
 }
