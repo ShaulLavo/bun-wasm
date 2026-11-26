@@ -16,7 +16,7 @@ const then = Function.prototype.call.bind(Promise.prototype.then) as Then;
  * A host whose ES modules are hand-written records and whose CommonJS modules are `cjs`,
  * run once each as `require`'s cache would. `natives` counts calls into the host.
  */
-function host(modules: Record<string, ModuleRecord>, cjs: Record<string, () => unknown>, active = () => true) {
+function host(modules: Record<string, ModuleRecord>, cjs: Record<string, () => unknown>, active = () => true, overrides: Partial<RecordHost> = {}) {
   const ran: string[] = [];
   const natives: string[] = [];
   const cache = new Map<string, unknown>();
@@ -34,10 +34,40 @@ function host(modules: Record<string, ModuleRecord>, cjs: Record<string, () => u
       : [],
     initMeta() {},
     resolve: specifier => { natives.push(`resolve ${specifier}`); return specifier; },
+    generation: () => 0,
     active,
     track: operation => operation,
+    ...overrides,
   };
   return { records: createModuleRecords(recordHost, factory, then), ran, natives, cache };
+}
+
+/**
+ * A changeable file tree for `host`: `./name` resolves against the importer's directory
+ * through `files` (path -> module key), and a missing path throws like the runtime. `bump`
+ * stands for a path change made through this process's natives (`resolverGeneration`).
+ */
+function tree(entries: Record<string, string>) {
+  const files = new Map(Object.entries(entries));
+  const resolved: string[] = [];
+  let generation = 0;
+  const resolve = (specifier: string, referrer: string) => {
+    resolved.push(`${specifier} from ${referrer}`);
+    const path = specifier.startsWith("./") ? referrer.slice(0, referrer.lastIndexOf("/") + 1) + specifier.slice(2) : specifier;
+    const key = files.get(path);
+    if (key === undefined) throw new Error(`Cannot find module '${specifier}' from '${referrer}'`);
+    return key;
+  };
+  return { files, resolved, overrides: { resolve, generation: () => generation }, bump: () => { generation += 1; } };
+}
+
+/** A record exporting `value`. */
+const valued = (value: string, requests: string[] = []) => esm(requests, function* (api) { api.l({ value: () => value }); yield; yield; }, [], [["value", "value"]]);
+const empty = (requests: string[] = []) => esm(requests, function* (api) { api.l({}); yield; yield; });
+
+async function until(condition: () => boolean) {
+  for (let turn = 0; turn < 1000 && !condition(); turn++) await new Promise(resolve => setTimeout(resolve, 0));
+  expect(condition()).toBe(true);
 }
 
 const pending = <T>(promise: Promise<T>) => Promise.race([promise.then(() => "settled", () => "rejected"), new Promise(resolve => setTimeout(() => resolve("pending"), 20))]);
@@ -145,4 +175,104 @@ test("dynamic imports share module records, and an exited host starts nothing ne
   const late = await Promise.race([records.importFrom("/other.cjs", "/main.cjs").then(() => "settled", () => "rejected"), new Promise(resolve => setTimeout(() => resolve("pending"), 20))]);
   expect(late).toBe("pending");
   expect(ran).toEqual(["/lib.cjs"]);
+});
+
+/** A module whose body records the `value` export of its one request. */
+const reader = (seen: string[], name: string) => esm(["./dep.mjs"], function* (api) { api.l({}); yield; const dep = api.n[0]!; yield; seen.push(`${name} ${String(dep.value)}`); }, [[0, "value"]]);
+
+test("a graph resolves each specifier once per importer directory, and its link reuses that", async () => {
+  const files = tree({ "/app/main.mjs": "/app/main.mjs", "/app/a.mjs": "/app/a.mjs", "/app/b.mjs": "/app/b.mjs", "/app/shared.mjs": "/app/shared.mjs" });
+  const { records } = host({
+    "/app/main.mjs": empty(["./a.mjs", "./b.mjs"]),
+    "/app/a.mjs": empty(["./shared.mjs"]),
+    "/app/b.mjs": empty(["./shared.mjs"]),
+    "/app/shared.mjs": empty(),
+  }, {}, undefined, files.overrides);
+  await records.importKey("/app/main.mjs");
+  expect(files.resolved).toEqual(["./a.mjs from /app/main.mjs", "./b.mjs from /app/main.mjs", "./shared.mjs from /app/a.mjs"]);
+  // Nothing outlives the preparation: the next one resolves afresh.
+  await records.importKey("/app/main.mjs");
+  expect(files.resolved.length).toBe(6);
+});
+
+test("a path change while the graph is prepared empties its resolutions", async () => {
+  const seen: string[] = [];
+  const files = tree({ "/main.mjs": "/main.mjs", "/a.mjs": "/a.mjs", "/dep.mjs": "/old.mjs" });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const modules: Record<string, ModuleRecord> = {
+    "/main.mjs": esm(["./dep.mjs", "./a.mjs"], function* (api) { api.l({}); yield; const dep = api.n[0]!; yield; seen.push(`main ${String(dep.value)}`); }, [[0, "value"]]),
+    "/a.mjs": reader(seen, "a"), "/old.mjs": valued("old"), "/new.mjs": valued("new"),
+  };
+  const { records } = host(modules, {}, undefined, {
+    ...files.overrides,
+    evaluate: (code, key, done) => { void (key === "/a.mjs" ? gate : Promise.resolve()).then(() => done(modules[code]!)); },
+  });
+  const imported = records.importKey("/main.mjs");
+  await until(() => files.resolved.length === 2);
+  // While /a.mjs evaluates, this process renames a file: /a.mjs's own request must see it.
+  files.files.set("/dep.mjs", "/new.mjs");
+  files.bump();
+  release();
+  await imported;
+  expect(seen).toEqual(["a new", "main new"]);
+});
+
+test("a CommonJS module that changes a path during linking leaves later requests to the live resolver", async () => {
+  const files = tree({ "/main.mjs": "/main.mjs", "/mutate.cjs": "/mutate.cjs", "/dep.mjs": "/dep.mjs" });
+  const bodies: string[] = [];
+  // Intentionally omits `files.bump()` to mirror out-of-process mutation (e.g. `Bun.spawnSync`).
+  const { records } = host({
+    "/main.mjs": esm(["./mutate.cjs", "./dep.mjs"], function* (api) { api.l({}); yield; yield; bodies.push("main"); }),
+    "/dep.mjs": valued("dep"),
+  }, { "/mutate.cjs": () => { files.files.delete("/dep.mjs"); return {}; } }, undefined, files.overrides);
+  const error = await records.importKey("/main.mjs").catch((caught: Error) => caught);
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toBe("Cannot find module './dep.mjs' from '/main.mjs'");
+  expect(bodies).toEqual([]);
+});
+
+test("import() resolves its specifier live, never from an earlier graph's resolutions", async () => {
+  const files = tree({ "/main.mjs": "/main.mjs", "/dep.mjs": "/dep.mjs" });
+  const { records } = host({ "/main.mjs": empty(["./dep.mjs"]), "/dep.mjs": valued("original"), "/mock.mjs": valued("replacement") }, {}, undefined, files.overrides);
+  await records.importKey("/main.mjs");
+  // As mock.module() would: the same specifier now names another module.
+  files.files.set("/dep.mjs", "/mock.mjs");
+  expect(((await records.importFrom("./dep.mjs", "/main.mjs")) as { value: string }).value).toBe("replacement");
+  files.files.delete("/dep.mjs");
+  const error = await records.importFrom("./dep.mjs", "/main.mjs").catch((caught: Error) => caught);
+  expect((error as Error).message).toBe("Cannot find module './dep.mjs' from '/main.mjs'");
+});
+
+test("overlapping preparations each link with their own resolutions", async () => {
+  const seen: string[] = [];
+  const files = tree({ "/a.mjs": "/a.mjs", "/b.mjs": "/b.mjs", "/shared.mjs": "/shared.mjs", "/dep.mjs": "/old.mjs" });
+  const gates = new Map<string, { promise: Promise<void>; release: () => void }>();
+  for (const key of ["/old.mjs", "/new.mjs"]) {
+    let release!: () => void;
+    const promise = new Promise<void>(resolve => { release = resolve; });
+    gates.set(key, { promise, release });
+  }
+  const modules: Record<string, ModuleRecord> = {
+    "/a.mjs": empty(["./shared.mjs"]), "/b.mjs": empty(["./shared.mjs"]), "/shared.mjs": reader(seen, "shared"),
+    "/old.mjs": valued("old"), "/new.mjs": valued("new"),
+  };
+  const { records, natives } = host(modules, {}, undefined, {
+    ...files.overrides,
+    evaluate: (code, key, done) => { void (gates.get(key)?.promise ?? Promise.resolve()).then(() => done(modules[code]!)); },
+  });
+  // A reaches the shared module, finds /old.mjs and waits for its record.
+  const a = records.importKey("/a.mjs");
+  await until(() => natives.includes("record /old.mjs"));
+  // Another writer changes the target; B reaches the same module, finds /new.mjs and waits.
+  files.files.set("/dep.mjs", "/new.mjs");
+  const b = records.importKey("/b.mjs");
+  await until(() => natives.includes("record /new.mjs"));
+  files.files.set("/dep.mjs", "/old.mjs");
+  gates.get("/old.mjs")!.release();
+  await a;
+  expect(seen).toEqual(["shared old"]);
+  gates.get("/new.mjs")!.release();
+  await b;
+  expect(natives.filter(call => call.startsWith("handoff"))).toEqual([]);
 });

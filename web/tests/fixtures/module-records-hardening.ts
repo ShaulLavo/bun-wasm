@@ -24,6 +24,7 @@ const records = createModuleRecords({
   keys: value => Object.keys(value as object),
   initMeta() {},
   resolve: specifier => specifier,
+  generation: () => 0,
   active: () => true,
   track: operation => operation,
 }, factory, then);
@@ -31,8 +32,10 @@ const records = createModuleRecords({
 const saved = {
   map: Array.prototype.map, push: Array.prototype.push, get: Map.prototype.get, set: Map.prototype.set,
   has: Set.prototype.has, add: Set.prototype.add, then: Promise.prototype.then,
+  lastIndexOf: String.prototype.lastIndexOf, slice: String.prototype.slice,
 };
 function restore(): void {
+  Object.defineProperties(String.prototype, { lastIndexOf: { value: saved.lastIndexOf }, slice: { value: saved.slice } });
   Object.defineProperties(Array.prototype, { map: { value: saved.map }, push: { value: saved.push } });
   Object.defineProperties(Map.prototype, { get: { value: saved.get }, set: { value: saved.set } });
   Object.defineProperties(Set.prototype, { has: { value: saved.has }, add: { value: saved.add } });
@@ -50,6 +53,7 @@ const finish = (outcome: string): void => {
 // After this module finished evaluating: Bun settles its own module promises with objects,
 // which the thenable Object.prototype would capture.
 setTimeout(() => {
+  Object.defineProperties(String.prototype, { lastIndexOf: bomb("lastIndexOf"), slice: bomb("slice") });
   Object.defineProperties(Array.prototype, { map: bomb("map"), push: bomb("push") });
   Object.defineProperties(Map.prototype, { get: bomb("get"), set: bomb("set") });
   Object.defineProperties(Set.prototype, { has: bomb("has"), add: bomb("add") });

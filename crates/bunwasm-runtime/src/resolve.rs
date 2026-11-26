@@ -211,6 +211,9 @@ pub struct Resolver {
     notes: RefCell<Vec<ResolveNote>>,
     /// Found require() targets by importing directory and specifier (see `resolve`).
     required: RefCell<HashMap<String, String>>,
+    /// Moves on every `forget_required`: while it holds, this process changed no path, plugin
+    /// module or mock, so a host may reuse an import resolution it made (`resolverGeneration`).
+    generation: Cell<u64>,
 }
 
 #[derive(Clone)]
@@ -242,6 +245,7 @@ impl Resolver {
             package_errors: RefCell::new(HashMap::new()),
             notes: RefCell::new(Vec::new()),
             required: RefCell::new(HashMap::new()),
+            generation: Cell::new(0),
         }
     }
 
@@ -350,6 +354,12 @@ impl Resolver {
     /// plugin modules changed, so an earlier resolution may no longer be the one Bun would make.
     pub fn forget_required(&self) {
         self.required.borrow_mut().clear();
+        self.generation.set(self.generation.get() + 1);
+    }
+
+    /// See the `generation` field. It never wraps in practice: one bump per changing call.
+    pub fn generation(&self) -> u64 {
+        self.generation.get()
     }
 
     /// Resolve `spec` imported from the file `from` (or a directory path ending

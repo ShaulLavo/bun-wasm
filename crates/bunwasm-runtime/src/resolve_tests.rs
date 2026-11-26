@@ -588,6 +588,33 @@ fn require_keeps_found_targets_and_retries_failures() {
 }
 
 #[test]
+fn resolver_generation_moves_on_every_change_a_reused_import_could_miss() {
+    let fixture = Fixture::new();
+    fixture.file("a.js");
+    let resolver = Resolver::new();
+    let from = fixture.path("index.js");
+    let mut seen = resolver.generation();
+    let mut moved = |resolver: &Resolver| {
+        let now = resolver.generation();
+        let changed = now != seen;
+        seen = now;
+        changed
+    };
+    // Resolving, found or not, changes nothing.
+    let _ = resolver.resolve("./a", &from, Kind::Import);
+    let _ = resolver.resolve("./missing", &from, Kind::Import);
+    assert!(!moved(&resolver));
+    resolver.forget_required();
+    assert!(moved(&resolver), "a path change");
+    resolver.register_mock("./a", &from);
+    assert!(moved(&resolver), "mock.module");
+    resolver.register_object_module("virtual");
+    assert!(moved(&resolver), "a plugin module");
+    resolver.clear_object_modules();
+    assert!(moved(&resolver), "Bun.plugin.clearAll");
+}
+
+#[test]
 fn plugin_module_registration_overrides_a_remembered_imports_alias() {
     let fixture = Fixture::new();
     fixture.write("package.json", r##"{"imports":{"#alias":"virtual"}}"##);

@@ -67,6 +67,7 @@ test("actual createRecords uses import-only resolution for graph preparation and
         if (specifier !== token || referrer !== "/entry.mjs" || mode !== "inferred") throw new Error("Unexpected logical request");
         return logical;
       },
+      resolverGeneration: () => 0,
       hostModuleRecord(key: keyof typeof records) { return { format: "esm", record: records[key] }; },
     },
     internal: { mainPath: "/entry.mjs", initImportMeta() {} },
@@ -83,6 +84,25 @@ test("actual createRecords uses import-only resolution for graph preparation and
   try {
     const namespace = await loaded.importKey("/entry.mjs");
     expect(namespace.default).toBe("exact text");
-    expect(calls.filter(call => call.startsWith(token)).length).toBeGreaterThanOrEqual(2);
+    // Preparation resolves the edge once, and linking that graph reuses it.
+    expect(calls).toEqual([`${token}|/entry.mjs|inferred`]);
+    // The next preparation resolves afresh: nothing outlives the graph that made it.
+    expect(await loaded.importKey("/entry.mjs")).toBe(namespace);
+    expect(calls).toEqual([`${token}|/entry.mjs|inferred`, `${token}|/entry.mjs|inferred`]);
+    // Older published guests without `resolverGeneration` stay live without throwing.
+    const legacyCalls: string[] = [];
+    const legacy = Reflect.apply(method, {
+      ...host,
+      native: {
+        resolve: host.native.resolve,
+        resolveImport(specifier: string, referrer: string, mode: string) {
+          legacyCalls.push(`${specifier}|${referrer}|${mode}`);
+          return host.native.resolveImport(specifier, referrer, mode);
+        },
+        hostModuleRecord: host.native.hostModuleRecord,
+      },
+    }, []);
+    expect((await legacy.importKey("/entry.mjs")).default).toBe("exact text");
+    expect(legacyCalls).toEqual([`${token}|/entry.mjs|inferred`, `${token}|/entry.mjs|inferred`]);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 });
