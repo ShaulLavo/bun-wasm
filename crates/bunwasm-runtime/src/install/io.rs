@@ -285,8 +285,9 @@ fn cache_path(url: &str) -> PathBuf {
 }
 
 /// The install cache directory, created at most once per `Downloads`: each filesystem call
-/// is a host round trip in the browser. A write that finds the directory gone creates it
-/// again and retries once.
+/// is a host round trip in the browser. A write that fails because the directory has since
+/// disappeared creates it again and retries once; any other failure leaves the entry
+/// absent, as before.
 #[derive(Default)]
 pub(super) struct CacheWriter {
     created: bool,
@@ -295,15 +296,27 @@ pub(super) struct CacheWriter {
 impl CacheWriter {
     /// Writes `bytes` as the cache file for `url`.
     pub(super) fn store(&mut self, url: &str, bytes: &[u8]) {
+        self.store_with(url, bytes, write);
+    }
+
+    /// `store` with the atomic write it uses passed in, so tests can make it fail.
+    pub(super) fn store_with(
+        &mut self,
+        url: &str,
+        bytes: &[u8],
+        mut write: impl FnMut(&Path, &[u8]) -> Result<()>,
+    ) {
         if !self.created && fs::create_dir_all(cache_dir()).is_err() {
             return;
         }
         self.created = true;
         let path = cache_path(url);
-        if write(&path, bytes).is_ok() || fs::create_dir_all(cache_dir()).is_err() {
+        if write(&path, bytes).is_ok() || cache_dir().is_dir() {
             return;
         }
-        let _ = write(&path, bytes);
+        if fs::create_dir_all(cache_dir()).is_ok() {
+            let _ = write(&path, bytes);
+        }
     }
 }
 

@@ -176,6 +176,25 @@ fn the_cache_writer_recreates_a_removed_directory() {
         1,
         "the second write recreated it"
     );
+
+    // A write that fails while the directory is there is not retried: the entry stays absent.
+    let third = "https://registry.invalid/c/-/c-1.0.0.tgz";
+    let mut calls = 0;
+    writer.store_with(third, b"c", |_, _| {
+        calls += 1;
+        Err("Permission denied (os error 13)".into())
+    });
+    assert_eq!(calls, 1, "a permission error is not retried");
+    assert_eq!(fs::read_dir(io::cache_dir()).unwrap().count(), 1);
+    // The same writer, after the directory vanished: one retry, and the entry is written.
+    fs::remove_dir_all(io::cache_dir()).unwrap();
+    let mut calls = 0;
+    writer.store_with(third, b"c", |path, bytes| {
+        calls += 1;
+        io::write(path, bytes)
+    });
+    assert_eq!(calls, 2);
+    assert_eq!(fs::read_dir(io::cache_dir()).unwrap().count(), 1);
 }
 
 fn integrity(bytes: &[u8]) -> String {
