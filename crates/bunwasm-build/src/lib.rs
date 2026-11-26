@@ -13,6 +13,7 @@
 #![allow(incomplete_features)]
 
 pub mod dev_server;
+pub mod markdown;
 pub(crate) use dev_server::graph as bake;
 pub(crate) type Error = bun_bundler::Error;
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;

@@ -1,5 +1,5 @@
 use crate::Core;
-use crate::engine::{Engine, ModuleHost, ModuleSource, Val};
+use crate::engine::{Engine, ModuleHost, ModuleSource};
 
 impl<E: Engine> Core<E> {
     fn synthetic(&self, e: &E, name: &str, format: &str) -> Result<(E::Value, E::Value), E::Value> {
@@ -8,18 +8,8 @@ impl<E: Engine> Core<E> {
             let pair = self.call_internal(e, "importNonEsm", &args)?;
             return Ok((e.get(&pair, "0")?, e.get(&pair, "1")?));
         }
-        let exports = self.call_internal(e, "builtin", &[e.value_from(name.into())])?;
-        // Builtins marked __esModule name their own default export.
-        let flagged = e
-            .get(&exports, "__esModule")
-            .map(|v| e.to_val(&v) == Val::Bool(true))
-            .unwrap_or(false);
-        let default = if flagged {
-            e.get(&exports, "default")?
-        } else {
-            exports.clone()
-        };
-        Ok((exports, default))
+        let pair = self.call_internal(e, "builtinImport", &[e.value_from(name.into())])?;
+        Ok((e.get(&pair, "0")?, e.get(&pair, "1")?))
     }
 }
 

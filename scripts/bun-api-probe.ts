@@ -44,6 +44,8 @@ export function records(text: string): Map<string, { ok: boolean; body: string }
   let current: { name: string; ok: boolean; lines: string[] } | undefined;
   const flush = () => { if (current) out.set(current.name, { ok: current.ok, body: current.lines.join("\n").trimEnd() }); };
   for (const line of text.split("\n")) {
+    // Bun.serve in the playground announces its preview URL in the terminal.
+    if (line.startsWith("[preview] ")) continue;
     const match = /^(ok|FAIL) ([^:]+?)(?::(.*))?$/.exec(line);
     if (match) {
       flush();
@@ -88,8 +90,12 @@ function filesOf(directory: string): string[] {
   });
 }
 
-/** `exit` is the command's expected exit code (0 unless the fixture's expected_exit says otherwise). */
-type ProbeCase = { name: string; directory?: string; command: string; exit?: number; expected: (output: string) => CheckResult[] };
+/**
+ * A case runs in /home/user/probe/<name>, holding its fixture directory or `files` (written through
+ * the page, not the shell). `exit` is the command's expected exit code (0 unless the fixture's
+ * expected_exit says otherwise).
+ */
+type ProbeCase = { name: string; directory?: string; files?: Record<string, string>; command: string; exit?: number; expected: (output: string) => CheckResult[] };
 
 const CONTROL_FILES = new Set(["expected.txt", "expected_stderr.txt", "expected_exit", "cmd", "args", "host", "manual", "show"]);
 
@@ -117,13 +123,25 @@ function existsIn(directory: string, file: string): boolean {
 /** Probes that need the playground's programs (coreutils on PATH), not available to the native launcher. */
 const PLAYGROUND_CASES: ProbeCase[] = [
   {
+    name: "pg-terminal-redirect",
+    command: "echo typed > typed.txt && cat typed.txt",
+    expected: output => [{ name: "terminal echo > file, cat", ...verdictFor(/^typed$/m.test(output), output) }],
+  },
+  {
     name: "pg-shell-commands",
-    command: `mkdir -p /home/user/probe/shell && cd /home/user/probe/shell && bun -e 'import { $ } from "bun"; await $\`mkdir -p dir && touch dir/x.txt\`; const listed = (await $\`ls dir | tr a-z A-Z\`.text()).trim(); await $\`rm -rf dir\`; console.log("ok shell: " + listed + " " + (await Bun.file("dir/x.txt").exists()))'`,
+    command: `bun -e 'import { $ } from "bun"; await $\`mkdir -p dir && touch dir/x.txt\`; const listed = (await $\`ls dir | tr a-z A-Z\`.text()).trim(); await $\`rm -rf dir\`; console.log("ok shell: " + listed + " " + (await Bun.file("dir/x.txt").exists()))'`,
     expected: output => [{ name: "$ mkdir/touch/ls/tr/rm", ...verdictFor(/ok shell: X\.TXT false/.test(output), output) }],
   },
   {
     name: "pg-shell-redirects",
-    command: `cd /home/user/probe && bun -e 'import { $ } from "bun"; const text = (await $\`cat < \${new Response("from response")}\`.text()).trim(); const buffer = Buffer.alloc(5); await $\`echo hello > \${buffer}\`; await $\`echo to-file > redirected.txt\`; console.log("ok redirects: " + text + " " + buffer.toString() + " " + (await Bun.file("redirected.txt").text()).trim())'`,
+    files: { "redirects.ts": `import { $ } from "bun";
+const text = (await $\`cat < \${new Response("from response")}\`.text()).trim();
+const buffer = Buffer.alloc(5);
+await $\`echo hello > \${buffer}\`;
+await $\`echo to-file > redirected.txt\`;
+console.log("ok redirects: " + text + " " + buffer.toString() + " " + (await Bun.file("redirected.txt").text()).trim());
+` },
+    command: "bun redirects.ts",
     expected: output => [{ name: "$ Response input, Buffer and file output", ...verdictFor(/ok redirects: from response hello to-file/.test(output), output) }],
   },
 ];
@@ -131,21 +149,27 @@ const PLAYGROUND_CASES: ProbeCase[] = [
 /** Features that are not supported yet (docs/bun-api-probe.md); they leave the fixtures until they work. */
 const GAP_CASES: ProbeCase[] = [
   {
-    name: "gap-mock-module",
-    command: `mkdir -p /home/user/probe/mockmod && cd /home/user/probe/mockmod && echo 'export const value = () => "real";' > dep.ts && printf '%s\\n' 'import { test, expect, mock } from "bun:test";' 'test("mock.module", async () => { mock.module("./dep.ts", () => ({ value: () => "mocked" })); expect((await import("./dep.ts")).value()).toBe("mocked"); });' > mock.test.ts && bun test`,
-    expected: output => [{ name: "mock.module()", ...verdictFor(/1 pass/.test(output) && !/1 fail/.test(output), output) }],
-  },
-  {
     name: "gap-build-plugins",
-    command: `mkdir -p /home/user/probe/plugin && cd /home/user/probe/plugin && echo 'import c from "virtual:config"; console.log(c.mode);' > entry.ts && bun -e 'const r = await Bun.build({ entrypoints: ["./entry.ts"], plugins: [{ name: "v", setup(b) { b.onResolve({ filter: /^virtual:/ }, a => ({ path: a.path, namespace: "v" })); b.onLoad({ filter: /.*/, namespace: "v" }, () => ({ contents: "export default { mode: \\"plugin\\" }", loader: "js" })); } }] }); console.log("ok plugin: " + (await r.outputs[0].text()).includes("plugin"))'`,
+    files: {
+      "entry.ts": `import c from "virtual:config";\nconsole.log(c.mode);\n`,
+      "build.ts": `const result = await Bun.build({
+  entrypoints: ["./entry.ts"],
+  plugins: [{ name: "virtual", setup(build) {
+    build.onResolve({ filter: /^virtual:/ }, args => ({ path: args.path, namespace: "virtual" }));
+    build.onLoad({ filter: /.*/, namespace: "virtual" }, () => ({ contents: "export default { mode: 'plugin' }", loader: "js" }));
+  } }],
+});
+console.log("ok plugin: " + (await result.outputs[0].text()).includes("plugin"));
+`,
+    },
+    command: "bun build.ts",
     expected: output => [{ name: "Bun.build plugins", ...verdictFor(/ok plugin: true/.test(output), output) }],
   },
   {
     name: "gap-small-apis",
-    command: `cd /home/user && bun -e 'const t = (n, f) => { try { console.log("ok " + n + ": " + f()); } catch (e) { console.log("FAIL " + n + ": " + e.message); } }; t("Bun.markdown", () => Bun.markdown.html("# hi")); t("Bun.CSRF", () => Bun.CSRF.verify(Bun.CSRF.generate("s"), { secret: "s" })); t("Bun.color", () => Bun.color("red", "hex"));'`,
+    command: `bun -e 'const t = (n, f) => { try { console.log("ok " + n + ": " + f()); } catch (e) { console.log("FAIL " + n + ": " + e.message); } }; t("Bun.markdown.render", () => Bun.markdown.render("# hi", { heading: (c) => "H:" + c })); t("Bun.color", () => Bun.color("red", "hex"));'`,
     expected: output => [
-      { name: "Bun.markdown.html", ...verdictFor(/ok Bun\.markdown: <h1>hi<\/h1>/.test(output), output) },
-      { name: "Bun.CSRF", ...verdictFor(/ok Bun\.CSRF: true/.test(output), output) },
+      { name: "Bun.markdown.render", ...verdictFor(/ok Bun\.markdown\.render: H:hi/.test(output), output) },
       { name: "Bun.color", ...verdictFor(/ok Bun\.color: #ff0000/.test(output), output) },
     ],
   },
@@ -155,22 +179,30 @@ const GAP_CASES: ProbeCase[] = [
 const NETWORK_CASES: ProbeCase[] = [
   {
     name: "net-bun-add-react",
-    command: `mkdir -p /home/user/probe/react && cd /home/user/probe/react && echo '{"name":"r"}' > package.json && bun add react@19 react-dom@19 && printf '%s\\n' 'import { renderToString } from "react-dom/server";' 'const App = ({ name }: { name: string }) => <h1>hello {name}</h1>;' 'console.log("ok render: " + renderToString(<App name="bun" />));' > app.tsx && bun app.tsx`,
+    files: {
+      "package.json": `{ "name": "react-probe" }\n`,
+      "app.tsx": `import { renderToString } from "react-dom/server";
+const App = ({ name }: { name: string }) => <h1>hello {name}</h1>;
+console.log("ok render: " + renderToString(<App name="bun" />));
+`,
+    },
+    command: "bun add react@19 react-dom@19 && bun app.tsx",
     expected: output => [{ name: "bun add + react ssr", ...verdictFor(/ok render: <h1>hello <!-- -->bun<\/h1>/.test(output), output) }],
   },
   {
     name: "net-bun-init",
-    command: `mkdir -p /home/user/probe/fresh && cd /home/user/probe/fresh && bun init -y && bun run index.ts && bun pm ls`,
+    files: { ".keep": "" },
+    command: "bun init -y && bun run index.ts && bun pm ls",
     expected: output => [{ name: "bun init -y + run", ...verdictFor(/Hello via Bun!/.test(output), output) }],
   },
   {
     name: "net-bunx",
-    command: "cd /home/user && bunx cowsay@1.6.0 moo",
+    command: "bunx cowsay@1.6.0 moo",
     expected: output => [{ name: "bunx cowsay", ...verdictFor(/< moo >/.test(output), output) }],
   },
   {
     name: "net-fetch",
-    command: `cd /home/user && bun -e 'const r = await fetch("https://registry.npmjs.org/bun"); console.log("ok fetch: " + r.status)'`,
+    command: `bun -e 'const r = await fetch("https://registry.npmjs.org/bun"); console.log("ok fetch: " + r.status)'`,
     expected: output => [{ name: "fetch https", ...verdictFor(/ok fetch: 200/.test(output), output) }],
   },
 ];
@@ -180,12 +212,10 @@ function verdictFor(ok: boolean, output: string): { verdict: Verdict; detail?: s
 }
 
 async function writeCase(page: Page, probe: ProbeCase): Promise<void> {
-  if (!probe.directory) return;
-  for (const file of filesOf(probe.directory)) {
-    const path = relative(probe.directory, file);
-    if (CONTROL_FILES.has(path)) continue;
-    await writeFile(page, `/home/user/probe/${probe.name}/${path}`, readFileSync(file, "utf8"));
-  }
+  const base = `/home/user/probe/${probe.name}`;
+  const fixtureFiles = probe.directory ? filesOf(probe.directory).map(file => [relative(probe.directory!, file), readFileSync(file, "utf8")] as const) : [];
+  const listed = Object.entries(probe.files ?? { ".keep": "" });
+  for (const [path, text] of fixtureFiles.filter(([path]) => !CONTROL_FILES.has(path)).concat(listed)) await writeFile(page, `${base}/${path}`, text);
 }
 
 /** Fills `result` as cases finish, so a failure part-way keeps what already ran. */
@@ -205,8 +235,7 @@ async function runEngine(browser: Browser, url: string, result: EngineResult, ca
     for (let attempt = 0; attempt < 3; attempt++) result.helloMs.push(Math.round((await run(page, "bun /home/user/probe/hello.ts", timeout)).ms));
     for (const probe of cases) {
       await writeCase(page, probe);
-      const cd = probe.directory ? `cd /home/user/probe/${probe.name} && ` : "";
-      const ran = await run(page, `${cd}${probe.command}`, timeout);
+      const ran = await run(page, `cd /home/user/probe/${probe.name} && ${probe.command}`, timeout);
       const wanted = probe.exit ?? 0;
       const exit: CheckResult = ran.code === wanted ? { name: "exit code", verdict: "pass" } : { name: "exit code", verdict: "fail", detail: `expected ${wanted}, got ${ran.code ?? "timeout"}` };
       result.cases.push({ name: probe.name, code: ran.code, ms: Math.round(ran.ms), checks: probe.expected(ran.output).concat([exit]), output: ran.output });

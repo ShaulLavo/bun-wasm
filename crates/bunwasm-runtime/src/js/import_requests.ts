@@ -61,7 +61,11 @@
   internal.defineGlobal("__bunwasm_dynamicImport", (from: string) => (specifier: unknown, options?: unknown) =>
     imports.request(specifier, options, (text, selected, resolve, reject) => {
       const name = imports.resolve(text, from, selected);
-      apply(then, native.importModule(name), [resolve, reject]);
+      const load = () => apply(then, native.importModule(name), [resolve, reject]);
+      // An async mock.module() factory settles before its module loads (bun_test.js).
+      const mocked = internal.mockImportReady?.(name);
+      if (mocked) apply(then, mocked, [load, reject]);
+      else load();
     }));
   return imports;
 })

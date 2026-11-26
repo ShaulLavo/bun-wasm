@@ -116,6 +116,17 @@ fn password_error(err: crate::password::Error, verb: &str) -> NativeError {
     NativeError::error(format!("Password {verb} failed with error \"{name}\"")).prop("code", code)
 }
 
+fn csrf_error(err: crate::csrf::CsrfError) -> NativeError {
+    match err {
+        crate::csrf::CsrfError::NoSecret => NativeError::error(
+            "Failed to create the default CSRF secret: no secure random source".to_string(),
+        ),
+        crate::csrf::CsrfError::TokenCreationFailed => {
+            NativeError::error("Failed to create CSRF token".to_string())
+        }
+    }
+}
+
 fn errno_info(err: &io::Error) -> (&'static str, i32, &'static str) {
     use io::ErrorKind as K;
     match err.raw_os_error() {
@@ -1734,6 +1745,17 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         Ok(st.resolver.register_object_module(a.str(0)?).into())
     });
     let st = state.clone();
+    t.add("mockModule", move |a| {
+        Ok(st.resolver.register_mock(a.str(0)?, a.str(1)?).into())
+    });
+    let st = state.clone();
+    t.add("mockTarget", move |a| {
+        Ok(st
+            .resolver
+            .mock_target(a.str(0)?)
+            .map_or(Val::Undefined, Val::Str))
+    });
+    let st = state.clone();
     t.add("clearObjectModules", move |_| {
         st.resolver.clear_object_modules();
         Ok(Val::Undefined)
@@ -1863,6 +1885,41 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
             .set("outputs", Val::Array(outputs))
             .set("logs", result.logs)
             .into())
+    });
+    // `Bun.markdown.html`/`.ansi` (js/bun_markdown.ts reads the options): (mode, text, options JSON).
+    let st = state.clone();
+    t.add("markdown", move |a| {
+        let options: serde_json::Value = serde_json::from_str(a.str(2)?)
+            .map_err(|error| NativeError::type_error(error.to_string()))?;
+        let flag = |key: &str| options.get(key).and_then(serde_json::Value::as_bool);
+        let flags = options
+            .get("flags")
+            .and_then(serde_json::Value::as_object)
+            .map(|fields| {
+                fields
+                    .iter()
+                    .filter_map(|(name, value)| value.as_bool().map(|value| (name.clone(), value)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let request = crate::MarkdownRequest {
+            text: a.bytes(1)?,
+            ansi: a.str(0)? == "ansi",
+            flags,
+            colors: flag("colors"),
+            hyperlinks: flag("hyperlinks"),
+            kitty_graphics: flag("kittyGraphics"),
+            light: flag("light"),
+            columns: options
+                .get("columns")
+                .and_then(serde_json::Value::as_u64)
+                .map(|columns| columns.min(u64::from(u16::MAX)) as u16),
+        };
+        let out = st
+            .transpiler
+            .markdown(&request)
+            .map_err(NativeError::error)?;
+        Ok(Val::Str(String::from_utf8_lossy(&out).into_owned()))
     });
     let st = state.clone();
     t.add("devServerOpen", move |a| {
@@ -2075,6 +2132,35 @@ fn install_crypto(t: &mut Table) {
         verify(a.bytes(0)?, a.bytes(1)?, algorithm)
             .map(Val::Bool)
             .map_err(|err| password_error(err, "verification"))
+    });
+    // Bun.CSRF (js/bun_csrf.ts validates the options): (algorithm, format, expiresIn ms,
+    // secret?, sessionId?) and (token, algorithm, format, maxAge ms, secret?, sessionId?).
+    t.add("csrfGenerate", |a| {
+        let format = crate::csrf::TokenFormat::parse(a.str(1)?)
+            .ok_or_else(|| NativeError::type_error("Invalid format".to_string()))?;
+        crate::csrf::generate(
+            a.opt_bytes(3),
+            a.opt_bytes(4).unwrap_or(&[]),
+            a.num(2)? as u64,
+            a.str(0)?,
+            format,
+        )
+        .map(Val::Str)
+        .map_err(csrf_error)
+    });
+    t.add("csrfVerify", |a| {
+        let format = crate::csrf::TokenFormat::parse(a.str(2)?)
+            .ok_or_else(|| NativeError::type_error("Invalid format".to_string()))?;
+        crate::csrf::verify(
+            a.bytes(0)?,
+            a.opt_bytes(4),
+            a.opt_bytes(5).unwrap_or(&[]),
+            a.num(3)? as u64,
+            a.str(1)?,
+            format,
+        )
+        .map(Val::Bool)
+        .map_err(csrf_error)
     });
     // node:crypto pbkdf2: (canonical name, password, salt, iterations, keylen).
     t.add("nodePbkdf2", |a| {

@@ -68,6 +68,8 @@ function mainEntry(text: string, requested: string, mainArg: string, worker: boo
     require: () => ({ resolve(path: string) { calls.push("resolve"); return path; } }),
     workerError: worker ? () => assert.fail("entry lookup must not invoke the worker hook") : undefined,
     runMain: (_requested: string): unknown => undefined,
+    // bootstrap's importModule with no mocks registered: the native import.
+    importModule: (path: string): unknown => native.importModule(path),
   };
   const native = {
     runMode: () => "once",

@@ -824,8 +824,8 @@ class EngineHost {
   /** A non-ES module's exports, run (or reused) through require's cache, and its default. */
   handoff(key, format) {
     if (format === "builtin") {
-      const value = this.internal.builtin(key);
-      return { value, default: value && typeof value === "object" && value.__esModule ? value.default : value };
+      const [value, def] = this.internal.builtinImport(key);
+      return { value, default: def };
     }
     const [value, def] = this.internal.importNonEsm(key, format);
     return { value, default: def };
@@ -870,7 +870,9 @@ class EngineHost {
       ? host.records.importFrom(spec, from, options)
       : nativePromiseThen(host.track(host.internal.importRequests.request(spec, options, (text, mode, resolve, reject) => {
         const key = host.native.resolveImport(text, from, mode);
-        host.importReady(key).then(resolve, reject);
+        // An async mock.module() factory settles before its module loads (bun_test.js).
+        const mocked = host.internal.mockImportReady?.(key);
+        (mocked ? mocked.then(() => host.importReady(key)) : host.importReady(key)).then(resolve, reject);
       })), value => value),
     );
     hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));

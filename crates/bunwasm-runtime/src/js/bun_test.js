@@ -784,8 +784,171 @@
 
   mock.restore = () => forEachMock("mockRestore");
   mock.clearAllMocks = () => forEachMock("mockClear");
-  mock.module = () => {
-    throw new Error("mock.module() is not supported in bun-wasm yet");
+  // Every registered mock, by plugin module key (see mock.module below).
+  const moduleMocks = new Map();
+  const AsyncFunctionPrototype = Object.getPrototypeOf(async function () {});
+  let mockImportsInstalled = false;
+  // The mocks whose factories the running code descends from: a factory runs in a store naming
+  // its key and its callers', which travels through its awaits.
+  let factoryChain;
+  const chainStorage = () => (factoryChain ??= new (internal.builtin("node:async_hooks").AsyncLocalStorage)());
+
+  // Waits made inside factory chains: `from` is the chain's mocks, `to` the mock an import of
+  // it waits on. Created by the first such wait.
+  let chainWaits;
+
+  // Whether waiting on mock `key` from `chain` would wait on the chain itself: `key` is in it, or
+  // its factory's chain waits, directly or through other mocks, on one that is. A cycle.
+  function closesCycle(key, chain, seen = new Set()) {
+    if (chain.has(key)) return true;
+    seen.add(key);
+    for (const wait of chainWaits ?? []) {
+      if (wait.from.has(key) && !seen.has(wait.to) && closesCycle(wait.to, chain, seen)) return true;
+    }
+    return false;
+  }
+  const inCycle = (key) => {
+    const chain = factoryChain?.getStore();
+    return chain !== undefined && closesCycle(key, chain);
+  };
+
+  // A live mock's entry: Bun.plugin.clearAll() removes them all.
+  function liveMock(key) {
+    if (native.mockTarget(key) != null) return moduleMocks.get(key);
+    moduleMocks.delete(key);
+    return undefined;
+  }
+
+  // An import made inside a factory's chain waits only on a mock it imports directly, unless that
+  // closes a cycle, whose import then sees an empty module, as in Bun. A plain module's static
+  // imports of pending async mocks are not waited for (docs/bun-patches/bun-test-mock-module.md).
+  function chainImportReady(name, chain) {
+    const target = liveMock(name);
+    if (!target || closesCycle(name, chain)) return undefined;
+    const pending = target.settle();
+    if (!pending) return undefined;
+    const wait = { from: chain, to: name };
+    (chainWaits ??= new Set()).add(wait);
+    return Promise.allSettled([pending]).then(() => { chainWaits.delete(wait); });
+  }
+
+  // Before a module graph links (each test file, preload and dynamic import), settle async
+  // factories so static imports of them link with their values, as in Bun: every mock whose
+  // factory is an async function, plus `name` itself when it is a mock with a thenable result.
+  // Imports made inside a factory's chain go through chainImportReady.
+  // A rejected factory is reported where its module loads, not here.
+  function mockImportReady(name) {
+    const chain = factoryChain?.getStore();
+    return chain ? chainImportReady(name, chain) : settleAll(name, new Set());
+  }
+
+  // Settles the mocks whose targets are not in `seen`, then again for any a factory registered
+  // meanwhile. Each target settles once per link, so a factory that keeps replacing a mock does
+  // not start another round; a sync mock is not settled, so an async replacement still is.
+  function settleAll(name, seen) {
+    const waits = [];
+    for (const key of Array.from(moduleMocks.keys())) {
+      const entry = liveMock(key);
+      if (!entry || seen.has(entry.target) || (key !== name && !entry.async)) continue;
+      seen.add(entry.target);
+      const pending = entry.settle();
+      if (pending) waits.push(pending);
+    }
+    return waits.length ? Promise.allSettled(waits).then(() => settleAll(name, seen)) : undefined;
+  }
+
+  function installMockImports() {
+    if (mockImportsInstalled) return;
+    mockImportsInstalled = true;
+    internal.mockImportReady = mockImportReady;
+    internal.mockImport = (key) => (moduleMocks.get(key)?.importPending() ? {} : internal.builtin(key));
+    internal.defineGlobal("__bunwasm_mockImportReady", mockImportReady);
+  }
+
+  function mockExports(value) {
+    if (value === null || (typeof value !== "object" && typeof value !== "function")) throw new TypeError("mock(module, fn) requires a function that returns an object");
+    return value;
+  }
+
+  // mock.module(specifier, factory): later imports and requires of the module get the factory's
+  // exports (docs/bun-patches/bun-test-mock-module.md). The resolver maps the target, resolved
+  // from the calling file, to a plugin module key, so every spelling of it is covered and a
+  // second mock of the same target replaces the first. Unlike Bun, a module that was already
+  // imported keeps its original exports.
+  mock.module = function module(specifier, factory) {
+    // BunPlugin.cpp JSMock__jsModuleMock's argument errors.
+    if (arguments.length < 1) throw new TypeError("mock(module, fn) requires a module and function");
+    if (typeof specifier !== "string") throw new TypeError("mock(module, fn) requires a module name string");
+    if (!specifier) throw new TypeError("mock(module, fn) requires a module and function");
+    if (typeof factory !== "function") throw new TypeError("mock(module, fn) requires a function");
+    const { fileURLToPath } = internal.require("node_url");
+    const origin = internal.require("caller_origin")();
+    const from = origin && origin.startsWith("file:") ? fileURLToPath(origin) : `${globalThis.process.cwd()}/`;
+    const key = native.mockModule(specifier.startsWith("file:") ? fileURLToPath(specifier) : specifier, from);
+    const target = native.mockTarget(key) ?? specifier;
+    let result;
+    let evaluated = false;
+    let running = false;
+    let settled; // { value } once a thenable result has settled
+    let observed; // { state, value } once a promise result settles; the browser engine cannot peek
+    // The factory runs once, on first use. A factory that loads its own target gets an empty
+    // object, as in Bun, not a recursion.
+    const evaluate = () => {
+      if (evaluated) return result;
+      if (running) return {};
+      running = true;
+      try {
+        const chain = new Set(chainStorage().getStore());
+        result = mockExports(chainStorage().run(chain.add(key), factory));
+      } finally {
+        running = false;
+      }
+      evaluated = true;
+      if (native.isPromise(result)) {
+        native.promiseThen(result, value => { observed = { state: "fulfilled", value }; }, error => { observed = { state: "rejected", value: error }; });
+      }
+      return result;
+    };
+    const promiseState = (value) => (observed ?? { state: native.promiseState(value), value: native.promiseResult(value) });
+    // require() and module linking: a sync factory's value as it is (a thenable included); an
+    // async factory's settled value; a pending one is Bun's error, a rejected one its reason.
+    internal.builtinFactories[key] = () => {
+      const value = evaluate();
+      if (settled) return settled.value;
+      if (!native.isPromise(value)) return value;
+      const known = promiseState(value);
+      if (known.state === "fulfilled") return mockExports(known.value);
+      if (known.state === "rejected") throw known.value;
+      throw new TypeError(`require() async module "${target}" is unsupported. use "await import()" instead.`);
+    };
+    let settling; // the wait for a thenable result
+    const entry = {
+      target,
+      async: Object.getPrototypeOf(factory) === AsyncFunctionPrototype,
+      // import() of a thenable result uses what it settles to.
+      settle() {
+        if (settled) return undefined;
+        if (settling) return settling;
+        const value = evaluate();
+        if (!isThenable(value)) return undefined;
+        settling = Promise.resolve(value).then(resolved => {
+          settled = { value: mockExports(resolved) };
+          internal.forgetBuiltin(key);
+        });
+        return settling;
+      },
+      // An import of the mock, while it is pending, from a chain it waits on: Bun's empty
+      // module for the cycle.
+      importPending() {
+        return !settled && native.isPromise(result) && promiseState(result).state === "pending" && inCycle(key);
+      },
+    };
+    // A replaced mock's factory never runs.
+    for (const [other, { target: replaced }] of moduleMocks) if (replaced === target) moduleMocks.delete(other);
+    moduleMocks.set(key, entry);
+    internal.esmShapedBuiltins.add(key);
+    installMockImports();
+    return undefined;
   };
 
   const jest = {

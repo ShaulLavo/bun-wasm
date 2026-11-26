@@ -372,6 +372,24 @@ mod bun_transpiler {
         fn dev_server_close(&self, id: u32) {
             bunwasm_build::dev_server::close(id);
         }
+
+        #[cfg(feature = "bun-build")]
+        fn markdown(
+            &self,
+            request: &bunwasm_runtime::MarkdownRequest<'_>,
+        ) -> Result<Vec<u8>, String> {
+            if !request.ansi {
+                return bunwasm_build::markdown::html(request.text, &request.flags);
+            }
+            let options = bunwasm_build::markdown::AnsiOptions {
+                colors: request.colors,
+                hyperlinks: request.hyperlinks,
+                kitty_graphics: request.kitty_graphics,
+                light: request.light,
+                columns: request.columns,
+            };
+            bunwasm_build::markdown::ansi(request.text, &options)
+        }
     }
 
     #[cfg(feature = "bun-build")]

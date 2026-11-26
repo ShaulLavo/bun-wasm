@@ -989,6 +989,13 @@
     return args;
   }
 
+  // require.resolve and import.meta.resolve name what a mock.module() key replaces (its file
+  // path or builtin name), as Bun does, not the key that loading uses.
+  function mockedTarget(resolved) {
+    return typeof resolved === "string" && resolved.startsWith("bun:plugin:") ? native.mockTarget(resolved) ?? resolved : resolved;
+  }
+  internal.mockedTarget = mockedTarget;
+
   function resolveFrom(spec, parent, options) {
     if (typeof spec !== "string") {
       const err = new TypeError(`The "id" argument must be of type string. Received ${internal.describe(spec)}`);
@@ -1041,7 +1048,7 @@
     const parent = mod || new Module(fromPath, undefined);
     const require = requireFunction(parent);
     require.resolve = function resolve(spec, options) {
-      const resolved = resolveFrom(spec, parent, options);
+      const resolved = mockedTarget(resolveFrom(spec, parent, options));
       return resolved === "node:" + spec ? spec : resolved;
     };
     require.resolve.paths = function paths(spec) {
@@ -1093,11 +1100,11 @@
         return format === "esm" ? esmNamespaces.get(mod) ?? mod.exports : commonJsNamespace(mod.exports);
       },
       resolve(spec) {
-        const resolved = native.resolve(String(spec), path, false);
-        return isBuiltinId(resolved) ? resolved : pathToFileHref(resolved);
+        const resolved = mockedTarget(native.resolve(String(spec), path, false));
+        return isBuiltinId(resolved) || !resolved.startsWith("/") ? resolved : pathToFileHref(resolved);
       },
       resolveSync(spec) {
-        return native.resolve(String(spec), path, false);
+        return mockedTarget(native.resolve(String(spec), path, false));
       },
     });
     Object.defineProperty(meta, "env", {
@@ -1127,7 +1134,7 @@
     }
     const format = native.moduleFormat(path);
     if (format === "html") return internal.require("html_server").start(path);
-    if (format === "esm") return native.importModule(path);
+    if (format === "esm") return internal.importModule(path);
     mainModule = new Module(path, null);
     mainModule.id = ".";
     moduleCache[path] = mainModule;
@@ -1142,13 +1149,20 @@
     internal.exitReason = "test-complete";
     return internal.require("bun_test").run(args);
   };
-  internal.importModule = (path) => native.importModule(path);
+  // Pending async mock.module() factories settle before a module graph links.
+  internal.importModule = (path) => {
+    const ready = internal.mockImportReady?.(path);
+    return ready ? ready.then(() => native.importModule(path)) : native.importModule(path);
+  };
 
   // --- built-in modules -------------------------------------------------------
 
   const builtinCache = new Map();
   const builtinFactories = Object.create(null);
   internal.builtinFactories = builtinFactories;
+
+  // A mock.module() whose async factory settled replaces the value require() saw before.
+  internal.forgetBuiltin = (id) => builtinCache.delete(id);
 
   internal.builtin = function builtin(id) {
     if (builtinCache.has(id)) return builtinCache.get(id);
@@ -1157,6 +1171,20 @@
     const exports = factory();
     builtinCache.set(id, exports);
     return exports;
+  };
+
+  // Modules whose `default` key is their default export, as for an ES module,
+  // instead of the whole exports object: mock.module() results.
+  const esmShapedBuiltins = new Set();
+  internal.esmShapedBuiltins = esmShapedBuiltins;
+
+  // [exports, default] for importing a builtin. Builtins marked __esModule
+  // name their own default export.
+  internal.builtinImport = function builtinImport(id) {
+    const shaped = esmShapedBuiltins.has(id);
+    const exports = shaped ? internal.mockImport(id) : internal.builtin(id);
+    const named = shaped || (exports !== null && typeof exports === "object" && exports.__esModule === true);
+    return [exports, named ? exports.default : exports];
   };
 
   // --- uncaught errors --------------------------------------------------------
