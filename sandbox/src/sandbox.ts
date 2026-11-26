@@ -714,7 +714,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     if (this.refreshFilesThrottleTimer !== null) return;
     this.refreshFilesThrottleTimer = setTimeout(() => {
       this.refreshFilesThrottleTimer = null;
-      if (!this.deferListing()) void this.refreshFiles().catch(() => {});
+      void this.refreshFiles().catch(() => {});
     }, 200);
   }
 
@@ -761,18 +761,32 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
    * aborted install-to-dev handoff, the dev run starting to serve, and the change notification
    * each reset path sends after it clears its flags, whether the reset succeeded or gave up.
    */
-  private runDeferredListing(): void {
+  private runDeferredListing(retriedAfterReset = false): void {
     if (!this.listingDeferred || this.disposed || this.listingBlocked()) return;
     this.listingDeferred = false;
-    void this.refreshFiles().catch(() => {});
-    void this.editorInstance?.chooseFallbackFile().catch(() => {});
+    let rearmed = false;
+    const retryIfBlocked = (error: unknown) => {
+      if (this.disposed) return;
+      if (this.listingBlocked()) {
+        this.listingDeferred = true;
+      } else if (error instanceof ResetInProgressError) {
+        this.listingDeferred = true;
+        if (!retriedAfterReset && !rearmed) {
+          rearmed = true;
+          this.runDeferredListing(true);
+        }
+      }
+    };
+    void this.performRefreshFiles().catch(retryIfBlocked);
+    void this.editorInstance?.chooseFallbackFile().catch(retryIfBlocked);
   }
 
   private async handleWatchReconcile(reason: ReconcileReason | "ui-reconcile"): Promise<void> {
     if (this.disposed || this.resetting || this.localResetting || this.coordinator?.hasActiveResetIntent()) return;
     // Captured before any await: only this serving run may be restarted, never a later one.
     const target = reason === "ui-reconcile" ? null : this.restartableRun();
-    if (reason === "ui-reconcile" || !this.deferListing()) await this.refreshFiles().catch(() => {});
+    if (reason === "ui-reconcile") await this.performRefreshFiles().catch(() => {});
+    else await this.refreshFiles().catch(() => {});
     await this.editorInstance?.syncFromFs().catch(() => {});
     if (reason === "ui-reconcile") {
       if (this.serverState.state === "starting" && !this.run) {
@@ -966,7 +980,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         this.watch = null;
       },
       onRefreshAndSync: async (lease, sig) => {
-        await this.refreshFiles(lease, sig);
+        await this.performRefreshFiles(lease, sig);
         await this.editorInstance?.syncFromFs(lease, sig);
       },
       onEditorSuspendAutosave: () => { this.editorInstance?.suspendAutosaveForReset(); },
@@ -1047,7 +1061,22 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   }
 
   /** Lists the project again for the file tree and file menu. Dotfiles stay hidden. */
-  async refreshFiles(existingLease?: ResetGateLease, signal?: AbortSignal): Promise<void> {
+  async refreshFiles(): Promise<void> {
+    if (!this.workspace || this.disposed) return;
+    if (this.deferListing()) return;
+    try {
+      await this.performRefreshFiles();
+    } catch (error) {
+      if (!this.disposed && (this.listingBlocked() || error instanceof ResetInProgressError)) {
+        this.listingDeferred = true;
+        if (!this.listingBlocked()) this.runDeferredListing(true);
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async performRefreshFiles(existingLease?: ResetGateLease, signal?: AbortSignal): Promise<void> {
     if (!this.workspace || this.disposed) return;
     const revision = ++this.filesRevision;
     const paths = await this.listProjectFiles(existingLease, signal);
@@ -1216,7 +1245,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         this.resetting = false;
         if (this.workspace && !this.workspace.runtime.disposed) {
           this.editorInstance?.resumeAfterReset();
-          void this.refreshFiles().catch(() => {});
+          void this.performRefreshFiles().catch(() => {});
         }
         this.report(error);
         this.changed();
@@ -1233,7 +1262,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       this.resetting = false;
       this.editorInstance?.resumeAfterReset();
       this.changed();
-      await this.refreshFiles();
+      await this.performRefreshFiles();
       const startFile = this.project.editorFile;
       const openTarget = (await ws.fs.lookup(abs(startFile))) ? startFile : ((await ws.fs.listFiles(APP)).map(rel)[0] ?? startFile);
       await this.editorInstance?.open(openTarget);
@@ -1330,7 +1359,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     ]);
     this.storageError = "";
     if (this.resetting || this.disposed || signal.aborted) return;
-    await this.refreshFiles(undefined, signal);
+    await this.performRefreshFiles(undefined, signal);
     const startFile = this.project.editorFile;
     await this.editorInstance!.open(
       (await ws.fs.lookup(abs(startFile))) ? startFile : ((await ws.fs.listFiles(APP)).map(rel)[0] ?? startFile),
@@ -1473,7 +1502,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     engine: Promise<void>,
     signal: AbortSignal,
   ): Promise<void> {
-    await Promise.all([this.refreshFiles(bootLease, signal), engine]);
+    await Promise.all([this.performRefreshFiles(bootLease, signal), engine]);
     const startFile = this.project.editorFile;
     const openTarget = (await liveWs.fs.lookup(abs(startFile)))
       ? startFile

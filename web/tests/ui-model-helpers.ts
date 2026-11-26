@@ -266,6 +266,7 @@ export { Sandbox } from ${JSON.stringify(`${root}sandbox/src/sandbox.ts`)};
 export { Editor as PlaygroundEditor } from ${JSON.stringify(`${root}web/src/playground/editor.ts`)};
 export { Editor as SandboxEditor } from ${JSON.stringify(`${root}sandbox/src/editor.ts`)};
 export { loadTemplate } from ${JSON.stringify(`${root}sandbox/src/template.ts`)};
+export { ResetInProgressError } from ${JSON.stringify(`${root}sandbox/src/dev-server-coordinator.ts`)};
 export { runtimeSharedObjectRoute } from ${JSON.stringify(`${root}web/src/shared-objects/runtime.ts`)};`, loader: "ts", resolveDir: root }));
       build.onResolve({ filter: /.*/ }, args => {
         if (args.path.startsWith("@remix-run/component")) return { path: `${root}web/node_modules/@remix-run/component/dist/${(args.path.split("/")[2] ?? "index").replace("jsx-dev-runtime", "jsx-runtime")}.js` };
@@ -287,6 +288,7 @@ export { runtimeSharedObjectRoute } from ${JSON.stringify(`${root}web/src/shared
     PlaygroundEditor: typeof import("../src/playground/editor").Editor;
     SandboxEditor: typeof import("../../sandbox/src/editor").Editor;
     loadTemplate: typeof import("../../sandbox/src/template").loadTemplate;
+    ResetInProgressError: typeof import("../../sandbox/src/dev-server-coordinator").ResetInProgressError;
     runtimeSharedObjectRoute(runtime: Pick<Runtime, "filesystem" | "disposed">): ReturnType<typeof import("../src/shared-objects/runtime").runtimeSharedObjectRoute>;
   };
   return { ...exports, fixture, get runtime() { return runtime; }, listeners, loads, runs, promptCreates, sessionCreates, storageEvents, boundary, async cleanup() {

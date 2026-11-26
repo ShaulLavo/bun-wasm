@@ -492,6 +492,88 @@ test("deferred listing survives a Reset template or stopDevServer during the pos
   }
 });
 
+test("folder toggle refreshFiles defers during post-install flush and runs once dev listens", async () => {
+  const f = await fixture();
+  try {
+    const listings = trackListings(f);
+    const flush = deferred<void>();
+    f.page.fixture.checkpoints.push(flush);
+    f.install.done.resolve({ code: 0 });
+    await turn();
+
+    f.page.fixture.files.set("/home/user/app/toggled.txt", "1");
+    await f.sandbox.refreshFiles();
+    expect(listings.count()).toBe(0);
+    expect(f.sandbox.files).not.toContain("toggled.txt");
+
+    flush.resolve();
+    await turn();
+    const devRun = f.page.runs.at(-1)!;
+    expect(devRun.args).toEqual(["run", "dev"]);
+    expect(listings.count()).toBe(0);
+
+    await f.listen(devRun);
+    await turn();
+    expect(listings.count()).toBe(1);
+    expect(f.sandbox.files).toContain("toggled.txt");
+
+    f.page.fixture.files.set("/home/user/app/after.txt", "2");
+    await f.sandbox.refreshFiles();
+    expect(listings.count()).toBe(2);
+    expect(f.sandbox.files).toContain("after.txt");
+  } finally { await f.cleanup(); }
+});
+
+test("deferred listing retries after an aborted coordinated reset rejects enterResetGate", async () => {
+  for (const rejectAfterResetClears of [false, true]) {
+    const f = await fixture();
+    try {
+      let resetIntent = false;
+      let holdNextGate = false;
+      const firstGate = deferred<{ resetGeneration: number; release: () => void }>();
+      let gateCalls = 0;
+      Reflect.set(f.sandbox, "coordinator", {
+        role: "owner",
+        hasActiveResetIntent: () => resetIntent,
+        broadcastOwnerState() {},
+        enterResetGate: async () => {
+          if (!holdNextGate) return { resetGeneration: 1, release() {} };
+          gateCalls++;
+          if (gateCalls === 1) return firstGate.promise;
+          return { resetGeneration: 1, release() {} };
+        },
+        resetWorkspace: async () => {
+          resetIntent = true;
+          if (!rejectAfterResetClears) firstGate.reject(new f.page.ResetInProgressError());
+          await turn();
+          resetIntent = false;
+        },
+      });
+
+      const listings = trackListings(f);
+      await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+      f.page.fixture.files.set("/home/user/app/after-reset-abort.txt", "ok");
+
+      const devRun = await f.dev();
+      holdNextGate = true;
+      await f.listen(devRun);
+      expect(gateCalls).toBe(1);
+      expect(listings.count()).toBe(0);
+
+      await f.sandbox.reset();
+      if (rejectAfterResetClears) firstGate.reject(new f.page.ResetInProgressError());
+      await turn();
+
+      expect(gateCalls).toBe(2);
+      expect(listings.count()).toBe(1);
+      expect(f.sandbox.files).toContain("after-reset-abort.txt");
+    } finally {
+      Reflect.set(f.sandbox, "coordinator", null);
+      await f.cleanup();
+    }
+  }
+});
+
 test("deferred listing work survives a Reset template that stops the install and then aborts", async () => {
   const f = await fixture();
   try {
