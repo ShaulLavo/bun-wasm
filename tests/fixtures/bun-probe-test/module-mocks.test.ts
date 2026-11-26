@@ -8,10 +8,11 @@ mkdirSync(join(here, "mods/a"), { recursive: true });
 mkdirSync(join(here, "mods/b"), { recursive: true });
 mkdirSync(join(here, "node_modules/dual"), { recursive: true });
 writeFileSync(join(here, "mods/target.ts"), `export const name = "real";\n`);
-for (const name of ["async", "slow", "thenable", "defaults", "pending", "linked", "rejects"]) writeFileSync(join(here, `mods/${name}.ts`), `export const name = "real-${name}";\n`);
+for (const name of ["async", "slow", "thenable", "defaults", "pending", "linked", "rejects", "importer", "cycle-a", "cycle-b", "late", "shared"]) writeFileSync(join(here, `mods/${name}.ts`), `export const name = "real-${name}";\n`);
 writeFileSync(join(here, "mods/b/probe.ts"), `export const load = () => import("./missing.ts").then(m => m.name, () => "unresolved");\n`);
 const importer = (target: string) => `import value, { name } from "./${target}.ts";\nimport * as ns from "./${target}.ts";\nexport const seen = [value, name, ns.default].join(" ");\n`;
 for (const target of ["defaults", "linked", "rejects"]) writeFileSync(join(here, `mods/uses-${target}.ts`), importer(target));
+writeFileSync(join(here, "mods/fake.ts"), `export const value = 42;\n`);
 writeFileSync(join(here, "node_modules/dual/package.json"), JSON.stringify({ name: "dual", exports: { import: "./esm.mjs", require: "./cjs.cjs" } }));
 writeFileSync(join(here, "node_modules/dual/esm.mjs"), `export const kind = "esm";\n`);
 writeFileSync(join(here, "node_modules/dual/cjs.cjs"), `module.exports = { kind: "cjs" };\n`);
@@ -103,6 +104,42 @@ test("a rejected async factory fails the import that links it", async () => {
     throw new Error("factory boom");
   });
   await expect(import("./mods/uses-rejects.ts")).rejects.toThrow("factory boom");
+});
+
+test("an async factory's own imports do not wait for it", async () => {
+  mock.module("./mods/importer.ts", async () => ({ name: (await import("./mods/fake.ts")).value }));
+  expect((await import("./mods/importer.ts")).name).toBe(42);
+});
+
+test("async factories that import each other's targets do not deadlock", async () => {
+  let bSaw = "";
+  mock.module("./mods/cycle-a.ts", async () => ({ name: "a+" + (await import("./mods/cycle-b.ts")).name }));
+  mock.module("./mods/cycle-b.ts", async () => {
+    const a = await import("./mods/cycle-a.ts");
+    bSaw = String(a.name);
+    return { name: "b+" + a.name };
+  });
+  await import("./mods/cycle-a.ts");
+  expect(bSaw).toBe("undefined");
+  expect((await import("./mods/cycle-b.ts")).name).toBe("b+undefined");
+});
+
+test("a factory started by require() can import after awaiting", async () => {
+  mock.module("./mods/late.ts", async () => {
+    await Bun.sleep(5);
+    return { name: (await import("./mods/fake.ts")).value };
+  });
+  expect(() => require("./mods/late.ts")).toThrow("is unsupported");
+  expect((await import("./mods/late.ts")).name).toBe(42);
+});
+
+test("concurrent imports of a slow async factory both wait", async () => {
+  mock.module("./mods/shared.ts", async () => {
+    await Bun.sleep(20);
+    return { name: "shared-value" };
+  });
+  const both = await Promise.all([import("./mods/shared.ts"), import("./mods/shared.ts")]);
+  expect(both.map(mod => mod.name)).toEqual(["shared-value", "shared-value"]);
 });
 
 test("mock.module argument errors", () => {

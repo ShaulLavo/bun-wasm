@@ -788,29 +788,68 @@
   const moduleMocks = new Map();
   const AsyncFunctionPrototype = Object.getPrototypeOf(async function () {});
   let mockImportsInstalled = false;
+  // The mocks whose factories the running code descends from: a factory runs in a store naming
+  // its key and its callers', which travels through its awaits.
+  let factoryChain;
+  const chainStorage = () => (factoryChain ??= new (internal.builtin("node:async_hooks").AsyncLocalStorage)());
+
+  // Whether waiting on mock `key` from code in `chain` would wait on that chain itself: `key` is
+  // in it, or its factory's chain is waiting, directly or through other mocks, on one that is.
+  function closesCycle(key, chain, seen = new Set()) {
+    if (chain.has(key)) return true;
+    seen.add(key);
+    for (const other of moduleMocks.get(key)?.waitingOn ?? []) {
+      if (!seen.has(other) && closesCycle(other, chain, seen)) return true;
+    }
+    return false;
+  }
+  const inCycle = (key) => {
+    const chain = factoryChain?.getStore();
+    return chain !== undefined && closesCycle(key, chain);
+  };
+
+  // Records, while a factory's chain waits, which mocks it waits on.
+  function markWaiting(chain, keys, waiting) {
+    for (const key of chain) {
+      const entry = moduleMocks.get(key);
+      for (const other of keys) if (entry) entry.waitingOn[waiting ? "add" : "delete"](other);
+    }
+  }
 
   // Before a module graph links (each test file, preload and dynamic import), settle async
   // factories so static imports of them link with their values, as in Bun: every mock whose
   // factory is an async function, plus `name` itself when it is a mock with a thenable result.
+  // The imports a factory makes never wait on a mock that is waiting on that factory, so two
+  // factories that import each other's targets see an empty module, as in Bun, not a deadlock.
   // A rejected factory is reported where its module loads, not here.
   function mockImportReady(name) {
     const waits = [];
+    const keys = [];
     for (const [key, entry] of moduleMocks) {
       // Bun.plugin.clearAll() removed it.
       if (native.mockTarget(key) == null) {
         moduleMocks.delete(key);
         continue;
       }
+      if (inCycle(key)) continue;
       const pending = key === name || entry.async ? entry.settle() : undefined;
-      if (pending) waits.push(pending);
+      if (!pending) continue;
+      waits.push(pending);
+      keys.push(key);
     }
-    return waits.length ? Promise.allSettled(waits).then(() => undefined) : undefined;
+    if (!waits.length) return undefined;
+    const chain = factoryChain?.getStore();
+    if (chain) markWaiting(chain, keys, true);
+    return Promise.allSettled(waits).then(() => {
+      if (chain) markWaiting(chain, keys, false);
+    });
   }
 
   function installMockImports() {
     if (mockImportsInstalled) return;
     mockImportsInstalled = true;
     internal.mockImportReady = mockImportReady;
+    internal.mockImport = (key) => (moduleMocks.get(key)?.importPending() ? {} : internal.builtin(key));
     internal.defineGlobal("__bunwasm_mockImportReady", mockImportReady);
   }
 
@@ -847,7 +886,8 @@
       if (running) return {};
       running = true;
       try {
-        result = mockExports(factory());
+        const chain = new Set(chainStorage().getStore());
+        result = mockExports(chainStorage().run(chain.add(key), factory));
       } finally {
         running = false;
       }
@@ -857,29 +897,39 @@
       }
       return result;
     };
+    const promiseState = (value) => (observed ?? { state: native.promiseState(value), value: native.promiseResult(value) });
     // require() and module linking: a sync factory's value as it is (a thenable included); an
     // async factory's settled value; a pending one is Bun's error, a rejected one its reason.
     internal.builtinFactories[key] = () => {
       const value = evaluate();
       if (settled) return settled.value;
       if (!native.isPromise(value)) return value;
-      const known = observed ?? { state: native.promiseState(value), value: native.promiseResult(value) };
+      const known = promiseState(value);
       if (known.state === "fulfilled") return mockExports(known.value);
       if (known.state === "rejected") throw known.value;
       throw new TypeError(`require() async module "${target}" is unsupported. use "await import()" instead.`);
     };
+    let settling; // the wait for a thenable result
     const entry = {
       target,
+      waitingOn: new Set(),
       async: Object.getPrototypeOf(factory) === AsyncFunctionPrototype,
       // import() of a thenable result uses what it settles to.
       settle() {
         if (settled) return undefined;
+        if (settling) return settling;
         const value = evaluate();
         if (!isThenable(value)) return undefined;
-        return Promise.resolve(value).then(resolved => {
+        settling = Promise.resolve(value).then(resolved => {
           settled = { value: mockExports(resolved) };
           internal.forgetBuiltin(key);
         });
+        return settling;
+      },
+      // An import of the mock, while it is pending, from a chain it waits on: Bun's empty
+      // module for the cycle.
+      importPending() {
+        return !settled && native.isPromise(result) && promiseState(result).state === "pending" && inCycle(key);
       },
     };
     // A replaced mock's factory never runs.

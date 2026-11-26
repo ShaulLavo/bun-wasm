@@ -136,6 +136,8 @@ declare namespace BunWasm {
     readonly esmShapedBuiltins: Set<string>;
     /** A builtin's exports and default export, for import. */
     builtinImport(id: string): [unknown, unknown];
+    /** bun_test.js: a mock.module() key's exports for import. */
+    mockImport?: (id: string) => unknown;
     readonly realTimers: import("./immediate_queue-types").ImmediateTimers;
     require(name: "net_address"): {
       isIP(value: string): 0 | 4 | 6;
