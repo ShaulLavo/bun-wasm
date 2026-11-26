@@ -19,7 +19,7 @@ function project(scripts: Record<string, string>, check: (cwd: string) => Promis
   writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ scripts }));
   return Promise.resolve(check(cwd)).finally(() => rmSync(cwd, { recursive: true, force: true }));
 }
-function runtime(cwd: string, name: string, args: string[] = [], options: { exits?: Record<string, Exit>; execArgv?: string[]; handoff?: (plan: string) => number } = {}) {
+function runtime(cwd: string, name: string, args: string[] = [], options: { exits?: Record<string, Exit>; execArgv?: string[]; handoff?: (plan: string) => number; reads?: string[] } = {}) {
   const spawned: { argv: string[]; event: string | undefined; script: string | undefined }[] = [];
   const raised: string[] = [];
   let stderr = "";
@@ -33,7 +33,7 @@ function runtime(cwd: string, name: string, args: string[] = [], options: { exit
     native: {
       packageScriptsHandoff: options.handoff ?? (() => -58),
       platformInfo: { version: "1.4.4", arch: "wasm32" },
-      mainArg: () => name, setMainPath() {}, exists: existsSync, readFileUtf8: (file: string) => readFileSync(file, "utf8"),
+      mainArg: () => name, setMainPath() {}, exists: existsSync, readFileUtf8: (file: string) => { options.reads?.push(file); return readFileSync(file, "utf8"); },
       stat: (file: string, lstat: boolean) => lstat ? lstatSync(file) : statSync(file), readlink: readlinkSync,
       readdir: (file: string) => readdirSync(file, { withFileTypes: true }).map(entry => [entry.name, entry.isDirectory() ? "dir" : entry.isSymbolicLink() ? "symlink" : "file"]),
       resolve(file: string) {
@@ -243,4 +243,51 @@ for (const [name, original] of [
   expect({ code: child.exitCode, stdout: child.stdout.toString().trim(), stderr: child.stderr.toString() }).toEqual({ code: 0, stdout: "safe", stderr: "" });
   await f.scripts.run(command);
   expect(f.spawned[0]?.argv[2]).toBe(original);
+}));
+
+// A package-heavy tree where nothing links a `.bin` entry: the shape a cold Nuxt install has for a name like `bun`.
+function manyPackages(cwd: string, count: number) {
+  for (let index = 0; index < count; index++) {
+    const directory = path.join(cwd, "node_modules", `filler-${index}`);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: `filler-${index}`, version: "1.0.0" }));
+  }
+}
+const modulesReads = (reads: string[], cwd: string) => reads.filter(file => file.startsWith(cwd + "/node_modules/"));
+
+for (const command of ["bun run node_modules/nuxt/bin/nuxt.mjs dev --port 1", "bunx vite", "node server.js", "bun test"]) {
+  test(`the script "${command}" reads no package manifest in node_modules`,() => project({ dev: command }, async cwd => {
+    manyPackages(cwd, 40);
+    const reads: string[] = [];
+    const f = runtime(cwd, "dev", [], { reads });
+    f.guest.execPath = process.execPath;
+    const plan = f.scripts.continuationPlan(f.scripts.resolve(path.join(cwd, "dev")));
+    expect(plan.main.command).toBe(command);
+    expect(modulesReads(reads, cwd)).toEqual([]);
+    await f.scripts.run(f.scripts.resolve(path.join(cwd, "dev")));
+    expect(f.spawned[0]?.argv[2]).toBe(command);
+    expect(modulesReads(reads, cwd)).toEqual([]);
+  }));
+}
+
+test("a script starting with a missing package binary still scans manifests and leaves the script alone", () => project({ dev: "missing-tool --flag" }, async cwd => {
+  manyPackages(cwd, 5);
+  const reads: string[] = [];
+  const f = runtime(cwd, "dev", [], { reads });
+  f.guest.execPath = process.execPath;
+  const plan = f.scripts.continuationPlan(f.scripts.resolve(path.join(cwd, "dev")));
+  expect(plan.main.command).toBe("missing-tool --flag");
+  expect(modulesReads(reads, cwd)).toHaveLength(5);
+}));
+
+test("a binary linked in node_modules/.bin resolves without reading any manifest", () => project({ dev: "linked-tool --flag" }, async cwd => {
+  manyPackages(cwd, 5);
+  mkdirSync(path.join(cwd, "node_modules/.bin"), { recursive: true });
+  writeFileSync(path.join(cwd, "node_modules/.bin/linked-tool"), "#!/bin/sh\n");
+  const reads: string[] = [];
+  const f = runtime(cwd, "dev", [], { reads });
+  f.guest.execPath = process.execPath;
+  const plan = f.scripts.continuationPlan(f.scripts.resolve(path.join(cwd, "dev")));
+  expect(plan.main.command).toBe("linked-tool --flag");
+  expect(modulesReads(reads, cwd)).toEqual([]);
 }));

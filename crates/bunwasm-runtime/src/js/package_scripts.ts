@@ -52,9 +52,15 @@
     return packages.sort().reverse();
   }
 
+  // Commands Bun itself provides on a script's PATH (`bun`, `bunx`, and the `node` shim). A linked
+  // node_modules/.bin entry still wins, as in Bun, but no package manifest is searched for them:
+  // that search reads every package.json in node_modules and can only end in the built-in.
+  const builtinCommands = new Set(["bun", "bunx", "node"]);
+
   function moduleBinary(modules: string, name: string): string | undefined {
     const bin = path.resolve(modules, ".bin", name);
     if (native.exists(bin)) return bin;
+    if (builtinCommands.has(name)) return;
     for (const base of packageDirectories(modules)) {
       const file = manifestBinary(base, name);
       if (file) return file;
