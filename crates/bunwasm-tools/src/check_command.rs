@@ -96,26 +96,51 @@ fn long_or_short(
         flags.rest.push(arg.to_owned());
         return Ok(at);
     };
-    // A chain of `bun check`'s own letters: `-b`, `-h`, `-papp`, `-bp app`. Others, such as `-t`,
-    // are compiler options.
-    let Some(end) = shorts.find(|letter| letter != 'b' && letter != 'h') else {
-        flags.build |= shorts.contains('b');
-        flags.help |= shorts.contains('h');
-        return Ok(at);
-    };
-    if !shorts[end..].starts_with('p') {
+    // A compiler option with a short name stands alone, like `-t es2022`.
+    let is_compiler_short = bun_sema_driver::SHORT_OPTION_NAMES
+        .iter()
+        .any(|(short, _)| *short == arg.as_bytes() && !matches!(arg, "-b" | "-p"));
+    if is_compiler_short {
         flags.rest.push(arg.to_owned());
         return Ok(at);
     }
-    flags.build |= shorts[..end].contains('b');
-    flags.help |= shorts[..end].contains('h');
-    // `-papp` and `-p=app` carry the value; `-p=` carries an empty one, which is the default project.
-    let attached = &shorts[end + 1..];
+    short_chain(flags, args, at, shorts)
+}
+
+/// A chain of `bun check`'s own letters, as upstream's parser reads it: `-b`, `-h`, `-papp`,
+/// `-bp app`. Any other letter is an error, even after `-h`, as is a `-p` without a value. Help
+/// wins only over what is checked later: unknown long flags and compiler options.
+fn short_chain(
+    flags: &mut Flags,
+    args: &[String],
+    at: usize,
+    shorts: &str,
+) -> Result<usize, String> {
+    for (index, letter) in shorts.char_indices() {
+        match letter {
+            'b' => flags.build = true,
+            'h' => flags.help = true,
+            'p' => return project_value(flags, args, at, &shorts[index + 1..]),
+            _ => return Err(format!("Invalid Argument '-{letter}'")),
+        }
+    }
+    Ok(at)
+}
+
+/// `-papp` and `-p=app` carry the value, and `-p=` an empty one. Otherwise it is the next argument.
+fn project_value(
+    flags: &mut Flags,
+    args: &[String],
+    at: usize,
+    attached: &str,
+) -> Result<usize, String> {
     if !attached.is_empty() {
         set_project(flags, attached.strip_prefix('=').unwrap_or(attached));
         return Ok(at);
     }
-    let value = args.get(at).ok_or("-p needs a value")?;
+    let value = args
+        .get(at)
+        .ok_or("The argument '--project' requires a value but none was supplied.")?;
     set_project(flags, value);
     Ok(at + 1)
 }

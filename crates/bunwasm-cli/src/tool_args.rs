@@ -129,17 +129,38 @@ fn is_check_option(flag: &str) -> bool {
         || flag.starts_with("--threads=")
 }
 
-/// A chain like `-bhpapp` directly before `check`: Bun's `-b`, then the checker's `-h` and `-p app`,
-/// as upstream's check command parses the chain with its own table.
+/// Whether `arg`, directly before `check`, is a chain of short flags that upstream's check command
+/// parses: one that doesn't take `check` as Bun's own value (`-r check` preloads `check`) or
+/// evaluate code. `-p` is the exception, since the check command has `-p` too.
+fn is_chain_of_check(arg: &str) -> bool {
+    if arg.len() < 2 || arg.starts_with("--") || !arg.starts_with('-') {
+        return false;
+    }
+    match short_with_value(arg) {
+        Some((b'p', _)) => true,
+        Some((b'e', _)) | Some((_, true)) => false,
+        _ => true,
+    }
+}
+
+/// What the checker gets for a chain directly before `check`: the whole chain without Bun's `b`
+/// (`--bun` there, as upstream), for the checker's own parser to accept or reject, as upstream's
+/// parses the whole command line. A `p` that ends the chain takes `check` as its value, as there.
 fn check_chain(chain: &str) -> Vec<String> {
-    let (letters, value) = chain[1..].split_once('p').unwrap_or((&chain[1..], ""));
-    let help = letters.contains('h').then(|| "-h".to_owned());
-    let project = match value.strip_prefix('=') {
-        Some(value) => format!("--project={value}"),
-        None if value.is_empty() => "-p".to_owned(),
-        None => format!("--project={value}"),
+    let letters = &chain[1..];
+    let (flags, value) = match letters.find('p') {
+        Some(at) => letters.split_at(at),
+        None => (letters, ""),
     };
-    help.into_iter().chain([project]).collect()
+    let flags: String = flags.chars().filter(|letter| *letter != 'b').collect();
+    if flags.is_empty() && value.is_empty() {
+        return Vec::new();
+    }
+    let forwarded = format!("-{flags}{value}");
+    match value {
+        "p" => vec![forwarded, "check".to_owned()],
+        _ => vec![forwarded],
+    }
 }
 
 pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGlobals)> {
@@ -149,8 +170,8 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         let next = args.get(at + 1).map(String::as_str);
-        // `bun -ptsconfig.json check`: before `check`, `-p` is its `--project`, as upstream.
-        let is_of_check = next == Some("check") && matches!(short_with_value(arg), Some((b'p', _)));
+        // `bun -ptsconfig.json check`, `bun -h check`: the check command parses the chain.
+        let is_of_check = next == Some("check") && is_chain_of_check(arg);
         match arg.as_str() {
             word if is_tool(word) => {
                 return Some(command(word, &args[at + 1..], unknown, for_check, globals));
@@ -254,11 +275,16 @@ mod tests {
         for (args, expected) in [
             (
                 &["-papp", "check", "--no-pretty"][..],
-                &["--project=app", "--no-pretty"][..],
+                &["-papp", "--no-pretty"][..],
             ),
-            (&["-bpapp", "check", "app"], &["--project=app", "app"]),
-            (&["-bhpmissing", "check"], &["-h", "--project=missing"]),
-            (&["-p=app", "check"], &["--project=app"]),
+            (&["-bpapp", "check", "app"], &["-papp", "app"]),
+            (&["-p=app", "check"], &["-p=app"]),
+            (&["-bhpmissing", "check"], &["-hpmissing"]),
+            (&["-bvhpx", "check"], &["-vhpx"]),
+            (&["-hb", "check"], &["-h"]),
+            (&["-bhp", "check"], &["-hp", "check"]),
+            (&["-bp", "check"], &["-p", "check"]),
+            (&["-x", "check"], &["-x"]),
             (&["--project=app", "check"], &["--project=app"]),
             (&["--help", "check"], &["--help"]),
             (&["-h", "check"], &["-h"]),

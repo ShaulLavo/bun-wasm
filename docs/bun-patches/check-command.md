@@ -19,8 +19,9 @@ that `-p…` directly before `check` is its `--project`; and an executable named
 to run, so `bun -- --entry.ts check` runs `--entry.ts`. A bare `-` runs standard input, so `bun - check` passes it
 `check`; the CLI now does this for `bun -` as it did for `bun run -`. Of the flags
 before `check`, the checker gets the options that upstream's check command parses
-anywhere on the command line, when they fit in one argument: `-p…` directly before
-it (`-bpapp` is Bun's `-b` and the checker's `--project=app`), `--project=…`,
+anywhere on the command line, when they fit in one argument: a short-flag chain directly before
+it, without Bun's `b` (`-bhpapp` reaches the checker as `-hpapp`), so the checker's
+parser accepts or rejects it as upstream's parses the whole command line, `--project=…`,
 `--tsconfig-override` in either form, `--threads=…`, `--no-pretty`, `--all`,
 `--timing`, `--no-script`, `--no-emit`, `-h` and `--help`. Bun's other flags there,
 such as `--title=check` or `--no-warnings`, stay Bun's, and `-b`/`--build` there are
@@ -36,6 +37,9 @@ and passes it to the launchers, as the playground does.
 - `Request`, `Provided { ends_the_process: true }`, `print_report` and `style_for`
   follow upstream. Diagnostics go to stdout and the summary to stderr, and the
   exit code is 1 when the report has errors.
+- Short-flag chains follow clap's precedence: an invalid letter or a `-p` without
+  a value is an error even after `-h`, and `-h` wins over unknown long flags and
+  compiler options, which are checked later.
 - Arguments are parsed by hand instead of with `bun_clap`'s compile-time tables,
   in two steps like upstream: first `bun check`'s own options (`-p`/`--project`
   and its alias `--tsconfig-override`, with the last one winning, attached forms
