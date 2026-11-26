@@ -23,6 +23,8 @@ interface Options {
   /** Answers this archive's request number `failAt` (from 1) with a 503. */
   failArchive?: string;
   failAt?: number;
+  /** Delays every archive response by this many milliseconds. */
+  archiveDelay?: number;
   packages?: Fixture[];
 }
 
@@ -42,7 +44,7 @@ async function registry(options: Options): Promise<Registry> {
     if (archive) {
       const failing = name === options.failArchive && requests.filter(seen => seen === path).length === (options.failAt ?? 1);
       if (failing) { response.writeHead(503).end(); return; }
-      response.end(fixture.archive);
+      setTimeout(() => response.end(fixture.archive), options.archiveDelay ?? 0);
       return;
     }
     const metadata = () => {
@@ -189,20 +191,21 @@ for (const target of installFixtureTargets()) {
   test(`${target.engine}: two aliases of one large archive share one fetch without a cache`, async () => {
     // Incompressible, so the archive itself is large; a second request would get a 503.
     const big = packageFixture("big", "1.0.0", {}, undefined, [tarEntry("package/blob", randomBytes(17 << 20))]);
-    const manifest = { dependencies: { first: "npm:big@1.0.0", second: "npm:big@1.0.0", "b-delayed": "1.0.0" } };
+    const manifest = { dependencies: { "a-first": "npm:big@1.0.0", "a-second": "npm:big@1.0.0", "b-delayed": "1.0.0" } };
     await bothArms(manifest, directory => writeFileSync(join(directory, "cache"), "not a directory"), directory => withRegistry({ delayed: 1500, failArchive: "big", failAt: 2, packages: [big] }, async server => {
       await install(directory, server.base, 0);
       assert.equal(archiveRequests(server, "big"), 1, "the shared archive was fetched again");
-      for (const alias of ["first", "second"]) assert.ok(existsSync(join(directory, `node_modules/${alias}/blob`)), `${alias} is missing`);
+      for (const alias of ["a-first", "a-second"]) assert.ok(existsSync(join(directory, `node_modules/${alias}/blob`)), `${alias} is missing`);
     }));
   }, 240_000);
 
   test(`${target.engine}: a long early extraction never times out the response it waited on`, async () => {
-    // One 240 MiB entry: extraction can't pause inside it and outlasts the 1 s idle timeout,
-    // while the awaited metadata arrives after 650 ms.
-    const long = packageFixture("a-known", "1.0.0", {}, undefined, [tarEntry("package/zeros", Buffer.alloc(240 << 20))]);
+    // The archive arrives after 700 ms and the awaited metadata after 800 ms, during the
+    // extraction of one 250 MiB entry (packages are capped at 256 MiB), which can't pause and
+    // runs past the 1 s idle timeout.
+    const long = packageFixture("a-known", "1.0.0", {}, undefined, [tarEntry("package/zeros", Buffer.alloc(250 << 20))]);
     const manifest = { dependencies: { "a-known": "1.0.0", "b-delayed": "1.0.0" } };
-    await bothArms(manifest, () => {}, directory => withRegistry({ delayed: 650, packages: [long] }, async server => {
+    await bothArms(manifest, () => {}, directory => withRegistry({ delayed: 800, archiveDelay: 700, packages: [long] }, async server => {
       await install(directory, server.base, 0, true, ["BUN_CONFIG_HTTP_IDLE_TIMEOUT=1"]);
       assert.ok(existsSync(join(directory, "node_modules/b-delayed/package.json")));
     }));
