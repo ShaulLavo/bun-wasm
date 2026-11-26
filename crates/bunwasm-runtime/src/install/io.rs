@@ -305,9 +305,15 @@ impl Default for CacheWriter {
     fn default() -> Self {
         Self {
             created: false,
-            off: std::env::var_os("BUN_WASM_INSTALL_CACHE").is_some_and(|value| value == "off"),
+            off: !install_cache_enabled(),
         }
     }
+}
+
+/// Whether the host keeps an install cache: every host does unless it sets
+/// `BUN_WASM_INSTALL_CACHE=off`.
+pub fn install_cache_enabled() -> bool {
+    std::env::var_os("BUN_WASM_INSTALL_CACHE").is_none_or(|value| value != "off")
 }
 
 impl CacheWriter {
@@ -345,6 +351,11 @@ impl CacheWriter {
             let _ = write(&path, bytes);
         }
     }
+}
+
+/// Whether `cache` is a cache file still fresh enough to use.
+fn fresh_file(cache: &Path, tarball: bool) -> bool {
+    fresh_cache(cache, tarball) && cache.is_file()
 }
 
 /// Tarballs are immutable; metadata stays fresh for five minutes.
@@ -446,9 +457,9 @@ impl Downloads {
         if self.is_full() || self.contains(url) {
             return;
         }
+        let use_cache = !refresh && self.cache.enabled();
         let request = request_url(url).and_then(|url| {
-            let cache = cache_path(url.as_str());
-            if !refresh && self.cache.enabled() && fresh_cache(&cache, tarball) && cache.is_file() {
+            if use_cache && fresh_file(&cache_path(url.as_str()), tarball) {
                 return Ok(None);
             }
             Download::start(&url, tarball, refresh, registry).map(Some)

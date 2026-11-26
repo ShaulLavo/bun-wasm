@@ -213,7 +213,12 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
           error instanceof RuntimeWorkerSignal || isProcessExecutionTerminated(error) || observedProcessExit(error) !== null,
         onWasmCallTrap: telemetry ? (_error, index) => publishBrowserCallTrap(instance, index, telemetry, message => host.postMessage(message)) : undefined,
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
-        sharedObjects, net, terminal, processWake: runtimeState?.wake, onExit: code => finish({ code }),
+        sharedObjects, net, terminal, processWake: runtimeState?.wake,
+        // The guest removes what it registered for removal at exit, such as a `bun x` install.
+        onExit: code => {
+          try { (instance.exports.bunwasm_exit_cleanup as (() => void) | undefined)?.(); }
+          finally { finish({ code }); }
+        },
       });
     },
   };

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createRegistry, packageFixture, tarEntry } from "./registry.mjs";
 
@@ -28,11 +28,13 @@ function project(name: string, files: Record<string, string>) {
   }
   return cwd;
 }
+// Extra guest environment for the guest engines, such as a host setting.
+let guestEnv: string[] = [];
 async function run(cwd: string, ...args: string[]) {
   const engine = process.env.INSTALL_ENGINE;
   const env = { ...process.env, HOME: cwd, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(cwd, "cache") };
   const options = ["--wasm", resolve(root, process.env.BUN_WASM || "dist/bun.wasm"), "--dir", `${cwd}::/`,
-    "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache", "--"];
+    "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache"].concat(guestEnv.flatMap(value => ["--env", value]), ["--"]);
   const executable = engine === "native" ? process.env.NATIVE_BUN || "bun" : engine === "browser" ? process.execPath : process.env.BUN_WASM_LAUNCHER!;
   const nativeArgs = args[0] === "x" ? ["x", "--bun"].concat(args.slice(1)) : args;
   // Package scripts run in bash-web's shell guest (scripts/build-bash-web-shell.sh).
@@ -133,6 +135,35 @@ const cases: Record<string, () => Promise<void>> = {
     registry.setOffline(true);
     try { assert.match(await success(cwd, "x", "--no-install", "@fixture/string@1.0.0"), /string-bin/); }
     finally { registry.setOffline(false); }
+  },
+  async cacheOff() {
+    // A host without an install cache: `bun x` installs into a temporary directory each run,
+    // runs from it, removes it when the process ends, and never reuses an earlier run.
+    if (process.env.INSTALL_ENGINE === "native") return;
+    const cwd = project("cache-off", { "package.json": "{}" });
+    guestEnv = ["BUN_WASM_INSTALL_CACHE=off"];
+    try {
+      assert.match(await success(cwd, "x", "@fixture/string@1.0.0"), /string-bin/);
+      assert.ok(!existsSync(join(cwd, "cache")), "bun x wrote the install cache");
+      assert.deepEqual(readdirSync(join(cwd, "tmp")).filter(name => name.startsWith("bun-wasm-bunx-")), [], "the temporary install outlived the process");
+      registry.setOffline(true);
+      try { assert.notEqual((await run(cwd, "x", "@fixture/string@1.0.0")).code, 0, "an earlier run was reused offline"); }
+      finally { registry.setOffline(false); }
+    } finally { guestEnv = []; }
+  },
+  async cacheOffIgnoresPreseeded() {
+    if (process.env.INSTALL_ENGINE === "native") return;
+    const cwd = project("cache-off-seeded", { "package.json": "{}" });
+    // A cache written while the host kept one is neither used nor changed once it doesn't.
+    assert.match(await success(cwd, "x", "@fixture/string@1.0.0"), /string-bin/);
+    const seeded = readdirSync(join(cwd, "cache", "bunx")).sort();
+    guestEnv = ["BUN_WASM_INSTALL_CACHE=off"];
+    registry.setOffline(true);
+    try {
+      assert.notEqual((await run(cwd, "x", "--no-install", "@fixture/string@1.0.0")).code, 0, "the cached bun x install was used");
+      assert.notEqual((await run(cwd, "x", "@fixture/string@1.0.0")).code, 0, "the cached bun x install was used");
+    } finally { registry.setOffline(false); guestEnv = []; }
+    assert.deepEqual(readdirSync(join(cwd, "cache", "bunx")).sort(), seeded);
   },
 };
 try {
