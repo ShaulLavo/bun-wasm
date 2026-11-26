@@ -155,7 +155,7 @@ test("cold source sync refuses a broken checked-in patch", () => {
 
 // A full sync (source, vendored dependencies, codegen) against a tiny stand-in for Bun's
 // repository: two pins, each with its own dependency pins and our one patch on top.
-function upgradeFixture(run: (f: { vendor: string; oldTip: string; newTip: string; git: (cwd: string, ...args: string[]) => string; pin: (which: "old" | "new") => void; sync: (args?: string[], env?: Record<string, string>) => { exitCode: number; stderr: string } }) => void) {
+function upgradeFixture(run: (f: { vendor: string; oldTip: string; newTip: string; git: (cwd: string, ...args: string[]) => string; pin: (which: "old" | "new") => void; sync: (args?: string[], env?: Record<string, string>, umask?: string) => { exitCode: number; stderr: string } }) => void) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-source-upgrade-"));
   try {
     const repository = join(root, "upstream"), vendor = join(root, "vendor", "bun");
@@ -238,8 +238,8 @@ for (const name of ["json_byte_class.rs", "xml_byte_class.rs"]) writeFileSync("b
         .replace("https://github.com/$repo/archive/", `file://${root}/archives/$repo/`);
       writeFileSync(join(root, "scripts", "sync-bun.sh"), script);
     };
-    const sync = (args: string[] = [], env: Record<string, string> = {}) => {
-      const result = Bun.spawnSync(["bash", join(root, "scripts", "sync-bun.sh")].concat(args), { env: { ...process.env, ...env, BUN_WASM_TEST_TMP: root }, stdout: "pipe", stderr: "pipe" });
+    const sync = (args: string[] = [], env: Record<string, string> = {}, umask = "022") => {
+      const result = Bun.spawnSync(["bash", "-c", `umask ${umask}; exec bash "$0" "$@"`, join(root, "scripts", "sync-bun.sh")].concat(args), { env: { ...process.env, ...env, BUN_WASM_TEST_TMP: root }, stdout: "pipe", stderr: "pipe" });
       return { exitCode: result.exitCode, stderr: result.stderr.toString() };
     };
     run({ vendor, oldTip, newTip, git, pin, sync });
@@ -408,5 +408,51 @@ test("a tree is recognized under another locale", () => {
     const result = sync([], { LC_ALL: "en_US.UTF-8", LANG: "en_US.UTF-8" });
     expect(result.exitCode, result.stderr).toBe(0);
     expect(statSync(tree).ino).toBe(inode);
+  });
+});
+
+test("a file where the script parks an old tree is refused, not removed", () => {
+  upgradeFixture(({ vendor, pin, sync }) => {
+    const parked = join(vendor, "vendor/.bun-wasm-lolhtml.old");
+    pin("old");
+    expect(sync().exitCode).toBe(0);
+    writeFileSync(parked, "my notes\n");
+    for (const which of ["old", "new"] as const) {
+      pin(which);
+      const refused = sync();
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr).toContain(`${parked} has content this script did not put there`);
+      expect(readFileSync(parked, "utf8")).toBe("my notes\n");
+    }
+  });
+});
+
+test("a replaced tree keeps the mode of its root", () => {
+  upgradeFixture(({ vendor, pin, sync }) => {
+    const tree = join(vendor, "vendor/lolhtml");
+    pin("old");
+    expect(sync().exitCode).toBe(0);
+    chmodSync(tree, 0o711);
+    expect(sync().exitCode).toBe(0);
+    pin("new");
+    const upgraded = sync();
+    expect(upgraded.exitCode, upgraded.stderr).toBe(0);
+    expect(readFileSync(join(tree, "lib.txt"), "utf8")).toBe("new html\n");
+    expect(statSync(tree).mode & 0o777).toBe(0o711);
+  });
+});
+
+test("an unmarked tree unpacked under another umask is recognized", () => {
+  upgradeFixture(({ vendor, pin, sync }) => {
+    pin("old");
+    expect(sync([], {}, "077").exitCode).toBe(0);
+    expect(statSync(join(vendor, "vendor/rust-argon2/lib.txt")).mode & 0o077).toBe(0);
+    for (const name of ["lolhtml", "rust-argon2"]) rmSync(join(vendor, "vendor", `.bun-wasm-${name}.source`));
+    // lol-html's commit differs at the new pin, so only rust-argon2 is the pinned archive here.
+    rmSync(join(vendor, "vendor/lolhtml"), { recursive: true });
+    pin("new");
+    const upgraded = sync([], {}, "022");
+    expect(upgraded.exitCode, upgraded.stderr).toBe(0);
+    expect(readFileSync(join(vendor, "vendor/rust-argon2/lib.txt"), "utf8")).toBe("one patched\ntwo patched\nthree\n");
   });
 });

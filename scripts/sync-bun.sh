@@ -118,16 +118,23 @@ fi
 staging=""
 trap '[[ -z "$staging" ]] || rm -rf "$staging"' EXIT
 trap 'exit 130' INT TERM
-# One digest over a tree: the type, mode and path of every entry, the content of every
-# file and the target of every link. The C locale keeps the order the same everywhere.
+# One digest over a tree: the type and path of every entry, the root included, which files
+# are executable, the content of every file and the target of every link. Other mode bits
+# follow the umask of whoever unpacked the tree, so they are left out. The C locale keeps
+# the order the same everywhere.
 tree_digest() { # <dir>
   (
     export LC_ALL=C
     cd "$1"
-    find . -mindepth 1 -printf '%y %m %P\n' | sort
+    find . -printf '%y %P\n' | sort
+    find . -type f -perm -u+x -printf 'x %P\n' | sort
     find . -type f -print0 | sort -z | xargs -0 -r sha256sum
     find . -type l -printf '%P -> %l\n' | sort
   ) | sha256sum | cut -d' ' -f1
+}
+remove_tree() { # <dir>: a tree whose root may have lost its write bit
+  [[ ! -d "$1" ]] || chmod -R u+rwX "$1"
+  rm -rf "$1"
 }
 refuse_dependency() { # <path>
   echo "error: $1 has content this script did not put there, and git does not track it; refusing to replace it" >&2
@@ -138,8 +145,8 @@ fetch() { # <dir> <repo> <commit> [patch, relative to vendor/bun]...
   local name=$1 repo=$2 commit=$3
   shift 3
   local dir=$bun_dir/vendor/$name stamp=$bun_dir/vendor/.bun-wasm-$name.source
-  # Where a known old tree goes before it is removed. Only this script puts a tree there,
-  # so what an interrupted run left behind is removed here.
+  # Where a known old tree goes before it is removed. Only this script puts a directory
+  # there, so one that an interrupted run left behind is removed below.
   local old=$bun_dir/vendor/.bun-wasm-$name.old
   local want file current="" recorded="" stage known=0
   want=$(
@@ -148,7 +155,10 @@ fetch() { # <dir> <repo> <commit> [patch, relative to vendor/bun]...
       printf '%s %s\n' "$(sha256sum < "$bun_dir/$file" | cut -d' ' -f1)" "$file"
     done
   )
-  rm -rf "$old"
+  if [[ -L "$old" || ( -e "$old" && ! -d "$old" ) ]]; then
+    refuse_dependency "$old"
+  fi
+  remove_tree "$old"
   if [[ -L "$dir" || ( -e "$dir" && ! -d "$dir" ) ]]; then
     refuse_dependency "$dir"
   fi
@@ -190,14 +200,17 @@ fetch() { # <dir> <repo> <commit> [patch, relative to vendor/bun]...
   fi
   # An interrupted removal then leaves only the .old directory, never half of the tree.
   if [[ -n "$current" ]]; then
+    # The digest does not hold directory modes, so the new root keeps the old root's.
+    chmod --reference="$dir" "$staging/tree"
     mv "$dir" "$old"
   elif [[ -d "$dir" ]]; then
     rmdir "$dir"
   fi
   mv "$staging/tree" "$dir"
   printf '%s\ntree %s\n' "$want" "${stages[-1]}" > "$stamp"
-  rm -rf "$staging" "$old"
+  rm -rf "$staging"
   staging=""
+  remove_tree "$old"
 }
 lolhtml=$(grep -oP 'LOLHTML_COMMIT = "\K[0-9a-f]+' "$bun_dir/scripts/build/deps/lolhtml.ts")
 argon2=$(grep -oP 'RUST_ARGON2_COMMIT = "\K[0-9a-f]+' "$bun_dir/scripts/build/deps/rust-argon2.ts")
