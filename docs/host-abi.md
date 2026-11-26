@@ -604,6 +604,24 @@ How hosts implement the underlying WASI calls:
   `fsWatchWord` and `fsWatchReady` wired directly to the session's shared watch cell and
   table readiness.
 
+## Module resolution path probe
+
+The module resolver (`crates/bunwasm-runtime/src/resolve.rs`) checks its candidate lists
+through Waffle's `runtime_fs.path_probe(dirfd, paths_ptr, paths_len, kind, found_ptr)`
+(Waffle `docs/host-abi.md`, "Path probe"): a file and its extensions in Bun's order, `main`
+then `main/index.*`, `dir/index.*`, and `node_modules/<name>` in every ancestor directory. One
+call takes up to 64 NUL-terminated pathnames and returns the index of the first that names a
+regular file (`kind` 1) or a directory (`kind` 2), every link followed, or `0xffffffff`. The
+answer is the one a following stat per path would give; the resolver only saves round trips.
+`host::probe` sends absolute paths below one preopen as one batch and stats any other path one
+at a time.
+
+- The browser host serves it through Waffle's WASI layer, in one filesystem request.
+- The native launcher walks each pathname in the guest namespace
+  (`crates/bunwasm-host/src/process/wasi/links.rs`, `Roots::names`).
+- The Node test host (`web/scripts/node-probe.ts`) calls its own `path_filestat_get` with the
+  follow flag once per pathname.
+
 ## Hosts
 
 - `crates/bunwasm-host` (`bun-wasm` binary): native launcher on wasmtime,
