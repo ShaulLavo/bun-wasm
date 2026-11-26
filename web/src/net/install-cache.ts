@@ -161,9 +161,15 @@ function invalidateSession(session: CacheSession | undefined): void {
 /** Delete the tarball download cache and discard any queued background writes. */
 export async function clearInstallCache(): Promise<boolean> {
   if (typeof caches === "undefined") return false;
-  invalidateSession(sessions.get(caches));
+  const storage = caches;
+  invalidateSession(sessions.get(storage));
   broadcastClear();
-  return typeof caches.delete === "function" ? caches.delete(CACHE) : false;
+  try {
+    return typeof storage.delete === "function" ? await storage.delete(CACHE) : false;
+  } finally {
+    invalidateSession(sessions.get(storage));
+    broadcastClear();
+  }
 }
 
 function shouldRefreshSession(session: CacheSession, now: number): boolean {

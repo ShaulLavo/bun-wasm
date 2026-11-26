@@ -954,6 +954,32 @@ test("clearInstallCache broadcasts invalidation so another tab drops its cached 
       expect(tabB.opens).toHaveLength(2);
       expect(tabB.matchCalls).toHaveLength(1);
     });
+
+    // Second-tab fetch arriving while caches.delete is still pending must still be invalidated after delete resolves.
+    const deleteGate = deferred<void>();
+    const tabC = indexedCacheStorage({ "https://registry.invalid/pending.tgz": new Response("pre-delete") });
+    const pendingStorage = {
+      open: tabA.storage.open,
+      async delete(name: string) {
+        await deleteGate.promise;
+        tabC.stored.clear();
+        return tabA.storage.delete(name);
+      },
+    };
+    const clearPromise = withStorage(pendingStorage, async () => new Response("unused"), () => clearInstallCache());
+    // Tab C fetches while delete is still pending, opening the pre-delete cache handle.
+    await withStorage(tabC.storage, async () => new Response("unexpected"), async () => {
+      expect(await (await installFetch("https://registry.invalid/pending.tgz", requestOptions())).text()).toBe("pre-delete");
+      expect(tabC.opens).toHaveLength(1);
+    });
+    deleteGate.resolve();
+    expect(await clearPromise).toBe(true);
+    // Post-delete broadcast must have dropped Tab C's handle so the next fetch reopens and misses cleanly.
+    await withStorage(tabC.storage, async () => new Response("post-delete"), async () => {
+      expect(await (await installFetch("https://registry.invalid/pending.tgz", requestOptions())).text()).toBe("post-delete");
+      expect(tabC.opens).toHaveLength(2);
+      expect(tabC.matchCalls).toHaveLength(1);
+    });
   } finally {
     if (originalBC) Object.defineProperty(globalThis, "BroadcastChannel", originalBC);
     else Reflect.deleteProperty(globalThis, "BroadcastChannel");
