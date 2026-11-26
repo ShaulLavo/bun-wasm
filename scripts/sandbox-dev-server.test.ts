@@ -3,7 +3,7 @@ import { NetNamespace } from "waffle/browser/net/helper";
 import { NetHelper } from "../web/src/net/helper";
 import { createRing } from "../web/src/net/ring";
 import type { RunResult } from "../web/src/runner";
-import { method, models, turn } from "../web/tests/ui-model-helpers";
+import { deferred, method, models, turn } from "../web/tests/ui-model-helpers";
 
 const sources = { "package.json": JSON.stringify({ scripts: { dev: "vite", build: "vite build" } }), "src/App.tsx": "app" };
 
@@ -155,6 +155,235 @@ test("installation failures keep their exit diagnostic without a dev startup err
     expect(f.page.runs).toHaveLength(1);
     expect(f.output()).toContain("[install exited with code 1]");
     expect(f.output()).not.toContain("stopped before it was ready");
+  } finally { await f.cleanup(); }
+});
+
+// The page's workspace watch overflows while `bun install` extracts thousands of files. A
+// reconcile then must not kill and rerun the install (it used to, silently, 2 of 8 cold Nuxt runs).
+const restartReasons = ["fs-overflow", "recovered", "rebound"] as const;
+type Reconcile = (reason: (typeof restartReasons)[number]) => Promise<void>;
+
+test("a watch reconcile during installation leaves the install running", async () => {
+  const f = await fixture();
+  try {
+    const reconcile = method<Reconcile>(f.sandbox, "handleWatchReconcile");
+    for (const reason of restartReasons) await reconcile(reason);
+    await turn();
+    expect(f.install.kills).toEqual([]);
+    expect(f.page.runs).toHaveLength(1);
+    await f.dev();
+  } finally { await f.cleanup(); }
+});
+
+test("a watch reconcile during installation lists the workspace once the install exits", async () => {
+  const f = await fixture();
+  try {
+    const fs = f.page.fixture.fs;
+    const listFiles = fs.listFiles.bind(fs);
+    let lists = 0;
+    fs.listFiles = (root) => { lists++; return listFiles(root); };
+    const reconcile = method<Reconcile>(f.sandbox, "handleWatchReconcile");
+    for (const reason of restartReasons) await reconcile(reason);
+    expect(lists).toBe(0);
+    await f.dev();
+    expect(lists).toBe(1);
+  } finally { await f.cleanup(); }
+});
+
+test("a watch reconcile during a serving dev server restarts it and says why the old one ended", async () => {
+  const f = await fixture();
+  try {
+    const run = await f.dev();
+    await f.listen(run);
+    await method<Reconcile>(f.sandbox, "handleWatchReconcile")("rebound");
+    expect(run.kills).toEqual([9]);
+    run.done.resolve({ code: 137 });
+    await turn();
+    expect(f.output().match(/\[dev stopped: [^\]]*\]/g)).toEqual(["[dev stopped: restarting]"]);
+    const install = f.page.runs.at(-1)!;
+    expect(install).not.toBe(f.install);
+    expect(install.args).toEqual(["install"]);
+  } finally { await f.cleanup(); }
+});
+
+test("a dev script installs before it serves: a reconcile restarts it only once it listens", async () => {
+  const f = await fixture();
+  try {
+    // `"dev": "bun install && bunx vite"` is still installing until it opens a listener.
+    const run = await f.dev();
+    const reconcile = method<Reconcile>(f.sandbox, "handleWatchReconcile");
+    for (const reason of restartReasons) await reconcile(reason);
+    expect(run.kills).toEqual([]);
+    expect(f.page.runs.at(-1)).toBe(run);
+    await f.listen(run);
+    await reconcile("fs-overflow");
+    expect(run.kills).toEqual([9]);
+  } finally { await f.cleanup(); }
+});
+
+test("a reconcile that began during installation never restarts the dev run that follows", async () => {
+  const f = await fixture();
+  try {
+    // Hold the reconcile inside its editor sync while the install exits and dev starts serving.
+    const held = Object.keys(sources).map((path) => {
+      const read = deferred<Uint8Array | undefined>();
+      f.page.fixture.reads.set(`/home/user/app/${path}`, read);
+      return read;
+    });
+    const reconcile = method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+    const run = await f.dev();
+    await f.listen(run);
+    for (const read of held) read.resolve(new TextEncoder().encode("app"));
+    f.page.fixture.reads.clear();
+    await reconcile;
+    await turn();
+    expect(run.kills).toEqual([]);
+    expect(f.page.runs.at(-1)).toBe(run);
+  } finally { await f.cleanup(); }
+});
+
+test("an owner tab's watch reconcile restarts only its serving dev server, and only that run", async () => {
+  const f = await fixture();
+  try {
+    const guards: (() => boolean)[] = [];
+    Reflect.set(f.sandbox, "coordinator", {
+      role: "owner",
+      hasActiveResetIntent: () => false,
+      broadcastOwnerState() {},
+      restartOwnedDevServer: async (stillWanted: () => boolean) => { guards.push(stillWanted); return { ok: true }; },
+    });
+    const reconcile = method<Reconcile>(f.sandbox, "handleWatchReconcile");
+    for (const reason of restartReasons) await reconcile(reason);
+    expect(guards).toHaveLength(0);
+    const run = await f.dev();
+    await reconcile("fs-overflow");
+    expect(guards).toHaveLength(0);
+    await f.listen(run);
+    await reconcile("fs-overflow");
+    expect(guards).toHaveLength(1);
+    expect(guards[0]!()).toBe(true);
+    // Once that run ends, the queued restart it asked for is no longer wanted.
+    method<(reason: string) => void>(f.sandbox, "stopDevServer")("restarting");
+    expect(guards[0]!()).toBe(false);
+  } finally {
+    Reflect.set(f.sandbox, "coordinator", null);
+    await f.cleanup();
+  }
+});
+
+test("lockfile changes and the editor's fallback list the workspace only after the install exits", async () => {
+  const f = await fixture();
+  try {
+    const fs = f.page.fixture.fs;
+    const listFiles = fs.listFiles.bind(fs);
+    let lists = 0;
+    fs.listFiles = (root) => { lists++; return listFiles(root); };
+    const editor = f.sandbox.editor!;
+    const active = editor.path;
+    expect(active).not.toBe("");
+    // The open file disappears mid-install: the editor needs a listing to pick another one.
+    f.page.fixture.files.delete(`/home/user/app/${active}`);
+    method<(paths: readonly string[]) => void>(f.sandbox, "handleWatchedPaths")(["bun.lock", active]);
+    await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+    await Bun.sleep(250);
+    expect(lists).toBe(0);
+    expect(editor.path).toBe("");
+    await f.dev();
+    await turn();
+    expect(lists).toBeGreaterThanOrEqual(1);
+    expect(editor.path).not.toBe("");
+    expect(editor.path).not.toBe(active);
+  } finally { await f.cleanup(); }
+});
+
+test("deferred listing work survives a Reset template that stops the install and then aborts", async () => {
+  const f = await fixture();
+  try {
+    const fs = f.page.fixture.fs;
+    const listFiles = fs.listFiles.bind(fs);
+    let lists = 0;
+    fs.listFiles = (root) => { lists++; return listFiles(root); };
+    const editor = f.sandbox.editor!;
+    const active = editor.path;
+    f.page.fixture.files.delete(`/home/user/app/${active}`);
+    await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+    expect(editor.path).toBe("");
+    // The reset stops the install, which exits while the reset still blocks listing; then the
+    // template download fails and the reset gives up.
+    const fetch = f.page.boundary.fetch;
+    f.page.boundary.fetch = async () => { throw new Error("template download failed"); };
+    const reset = f.sandbox.reset();
+    expect(f.install.kills).toEqual([9]);
+    f.install.done.resolve({ code: 137 });
+    await reset;
+    f.page.boundary.fetch = fetch;
+    await turn();
+    expect(f.output().match(/\[install stopped: [^\]]*\]/g)).toEqual(["[install stopped: resetting the template]"]);
+    // One listing for the file tree and one for the editor's fallback, once each.
+    expect(lists).toBe(2);
+    expect(editor.path).not.toBe("");
+    expect(editor.path).not.toBe(active);
+    method<() => void>(f.sandbox, "changed")();
+    await turn();
+    expect(lists).toBe(2);
+  } finally { await f.cleanup(); }
+});
+
+test("a deferred file-tree refresh waits for the workspace a retirement reopens", async () => {
+  const f = await fixture();
+  try {
+    await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+    // The install wrote this; the tree may show it only after a listing that ran on a usable workspace.
+    f.page.fixture.files.set("/home/user/app/installed.txt", "x");
+    // Hold disposal so the stopped install exits while the retirement has no workspace.
+    const disposing = deferred<void>();
+    const hold = deferred<void>();
+    const runtime = f.page.runtime;
+    runtime.dispose = async () => { disposing.resolve(); await hold.promise; };
+    const retired = method<(options: { mode: "reopen"; stopReason: string; timeoutMs: number }) => Promise<unknown>>(f.sandbox, "retireRuntime")({
+      mode: "reopen",
+      stopReason: "restarting",
+      timeoutMs: 5_000,
+    });
+    await Promise.race([disposing.promise, Bun.sleep(2_000)]);
+    expect(Reflect.get(f.sandbox, "workspace")).toBeNull();
+    f.install.done.resolve({ code: 137 });
+    for (let i = 0; i < 5; i++) await turn();
+    hold.resolve();
+    await retired;
+    for (let i = 0; i < 5; i++) await turn();
+    expect(f.sandbox.files).toContain("installed.txt");
+  } finally { await f.cleanup(); }
+});
+
+test("a retirement says the cause it was given, once", async () => {
+  const f = await fixture();
+  try {
+    const retired = method<(options: { mode: "reopen"; stopReason: string; timeoutMs: number }) => Promise<unknown>>(f.sandbox, "retireRuntime")({
+      mode: "reopen",
+      stopReason: "resetting the template",
+      timeoutMs: 1_000,
+    });
+    await turn();
+    expect(f.install.kills).toEqual([9]);
+    f.install.done.resolve({ code: 137 });
+    await retired;
+    await turn();
+    expect(f.output().match(/\[install stopped: [^\]]*\]/g)).toEqual(["[install stopped: resetting the template]"]);
+  } finally { await f.cleanup(); }
+});
+
+test("an install stopped by Restart says why it ended", async () => {
+  const f = await fixture();
+  try {
+    f.sandbox.restart();
+    await turn();
+    expect(f.install.kills).toEqual([9]);
+    f.install.done.resolve({ code: 137 });
+    await turn();
+    expect(f.output()).toContain("[install stopped: restarting]");
+    expect(f.page.runs.at(-1)!.args).toEqual(["install"]);
+    expect(f.page.runs).toHaveLength(2);
   } finally { await f.cleanup(); }
 });
 
