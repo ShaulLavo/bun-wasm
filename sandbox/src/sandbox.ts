@@ -731,13 +731,25 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
    * the command's own calls, so it waits for runDeferredListing().
    */
   private deferListing(): boolean {
-    if (this.run === null || this.restartableRun() !== null) return false;
+    if (!this.listingBlocked()) return false;
     this.listingDeferred = true;
     return true;
   }
 
+  /** A command is installing or starting, or a reset is replacing the workspace. */
+  private listingBlocked(): boolean {
+    if (this.resetting || this.localResetting || this.coordinator?.hasActiveResetIntent()) return true;
+    return this.run !== null && this.restartableRun() === null;
+  }
+
+  /**
+   * Runs the deferred file-list refresh and editor fallback once, as soon as nothing blocks
+   * them. Every end of a block reaches it: the command's exit (success, failure or stop), the
+   * dev run starting to serve, and the change notification each reset path sends after it
+   * clears its flags, whether the reset succeeded or gave up.
+   */
   private runDeferredListing(): void {
-    if (!this.listingDeferred) return;
+    if (!this.listingDeferred || this.disposed || this.listingBlocked()) return;
     this.listingDeferred = false;
     void this.refreshFiles().catch(() => {});
     void this.editorInstance?.chooseFallbackFile().catch(() => {});
@@ -1234,6 +1246,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   };
 
   private changed(): void {
+    this.runDeferredListing();
     this.dispatchEvent(new Event("change"));
   }
 

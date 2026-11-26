@@ -296,6 +296,39 @@ test("lockfile changes and the editor's fallback list the workspace only after t
   } finally { await f.cleanup(); }
 });
 
+test("deferred listing work survives a Reset template that stops the install and then aborts", async () => {
+  const f = await fixture();
+  try {
+    const fs = f.page.fixture.fs;
+    const listFiles = fs.listFiles.bind(fs);
+    let lists = 0;
+    fs.listFiles = (root) => { lists++; return listFiles(root); };
+    const editor = f.sandbox.editor!;
+    const active = editor.path;
+    f.page.fixture.files.delete(`/home/user/app/${active}`);
+    await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+    expect(editor.path).toBe("");
+    // The reset stops the install, which exits while the reset still blocks listing; then the
+    // template download fails and the reset gives up.
+    const fetch = f.page.boundary.fetch;
+    f.page.boundary.fetch = async () => { throw new Error("template download failed"); };
+    const reset = f.sandbox.reset();
+    expect(f.install.kills).toEqual([9]);
+    f.install.done.resolve({ code: 137 });
+    await reset;
+    f.page.boundary.fetch = fetch;
+    await turn();
+    expect(f.output().match(/\[install stopped: [^\]]*\]/g)).toEqual(["[install stopped: resetting the template]"]);
+    // One listing for the file tree and one for the editor's fallback, once each.
+    expect(lists).toBe(2);
+    expect(editor.path).not.toBe("");
+    expect(editor.path).not.toBe(active);
+    method<() => void>(f.sandbox, "changed")();
+    await turn();
+    expect(lists).toBe(2);
+  } finally { await f.cleanup(); }
+});
+
 test("a retirement says the cause it was given, once", async () => {
   const f = await fixture();
   try {
