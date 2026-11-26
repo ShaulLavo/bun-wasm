@@ -19,7 +19,7 @@ The browser engine runs user code and the runtime's JS polyfills (`crates/bunwas
 
 Isolation isn't a goal: user code shares the worker's global object with the host glue.
 
-Build it with `scripts/build-bun-browser.sh`, which compiles `bunwasm-cli` with `--no-default-features --features engine-host,bun-transpiler,bun-build` and then runs wasm-opt `-O2`. For current split-profile, shared-group and Brotli sizes across all four engines, see [Compatibility](compatibility.md#engines).
+Build it with `scripts/build-bun-browser.sh`, which compiles `bunwasm-cli` with `--no-default-features --features engine-host,bun-transpiler,bun-build` and then runs wasm-opt `-O2`. For the 2026-11-23 split-profile and Brotli sizes across all four engines, plus shared-group sizes for the three in-Wasm engines, see [Compatibility](compatibility.md#engines).
 
 The host side is one plain-JS ES module, `web/src/engine-host.js`, used both by the playground worker (`web/src/worker.ts`) and by the headless runner (`web/scripts/node-host.mjs`).
 

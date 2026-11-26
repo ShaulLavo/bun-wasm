@@ -196,10 +196,9 @@ BUN_WASM_RUNTIME_PROC_ARTIFACT="$PWD/dist/bun-browser.wasm" \
   bun web/tests/bun-runtime-proc-browser.ts chromium firefox webkit
 ```
 
-Setting `BUN_WASM_RUNTIME_PROC_PUBLISHED_DEFAULT=1` additionally checks that each scenario fetches
-the published immutable guest from `BUN_WASM_ASSET` and verifies that its byte count and SHA-256
-match the local artifact receipt, so the local artifact must come from the same revision as
-`BUN_WASM_ASSET`.
+Setting `BUN_WASM_RUNTIME_PROC_PUBLISHED_DEFAULT=1` checks that the local artifact receipt matches
+`BUN_WASM_ASSET` by byte count and SHA-256, that real guest scenarios fetch `BUN_WASM_ASSET`, and
+that `generic-control` and `start-failed` make zero guest requests.
 
 ### Required full-build interruption acceptance
 

@@ -34,7 +34,7 @@ flowchart TB
   rt --> trait
   trait --> qjs & jsc & sm
   rt -.->|"browser-engine build"| hostjs
-  guest -->|"WASI preview1: files, clocks, stdio"| fs
+  guest -->|"WASI preview1: file operations"| fs
   guest -->|"runtime_proc imports: spawn, wait, kill"| procs
   guest -->|"bun_wasm slots"| exec
   exec --> net
