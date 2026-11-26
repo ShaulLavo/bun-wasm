@@ -199,19 +199,19 @@ function requestedDirectArchiveChange(name: string, after: unknown, root: Record
   return false;
 }
 
+function recordRootPin(result: Map<string, Map<string, string>>, name: string, field: string, value: string): void {
+  const fields = result.get(name) ?? new Map<string, string>();
+  fields.set(field, value);
+  result.set(name, fields);
+}
+
 function collectRootPins(obj: Record<string, unknown>): Map<string, Map<string, string>> {
   const result = new Map<string, Map<string, string>>();
   for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "overrides"]) {
     const section = obj[field];
     if (!section || typeof section !== "object" || Array.isArray(section)) continue;
     for (const [k, v] of Object.entries(section)) {
-      if (typeof v !== "string") continue;
-      let fields = result.get(k);
-      if (!fields) {
-        fields = new Map<string, string>();
-        result.set(k, fields);
-      }
-      fields.set(field, v);
+      if (typeof v === "string") recordRootPin(result, k, field, v);
     }
   }
   return result;

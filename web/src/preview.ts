@@ -345,28 +345,30 @@ export class Previews extends PreviewRouter {
     }
   }
 
+  private observePendingWorker(registration: ServiceWorkerRegistration, worker: ServiceWorker): void {
+    const onStateChange = () => {
+      const state = worker.state;
+      if (isObservablePending(registration, worker)) return;
+      cleanup();
+      this.updateObservers.delete(worker);
+      if (state !== "redundant") this.reconcileActiveWorker();
+    };
+    const cleanup = () => {
+      worker.removeEventListener("statechange", onStateChange);
+    };
+    worker.addEventListener("statechange", onStateChange);
+    this.updateObservers.set(worker, cleanup);
+  }
+
   private observePendingUpdates(registration: ServiceWorkerRegistration): void {
     for (const [worker, cleanup] of Array.from(this.updateObservers)) {
-      if (!isObservablePending(registration, worker)) {
-        cleanup();
-        this.updateObservers.delete(worker);
-      }
+      if (isObservablePending(registration, worker)) continue;
+      cleanup();
+      this.updateObservers.delete(worker);
     }
     for (const worker of [registration.installing, registration.waiting]) {
       if (!isObservablePending(registration, worker) || this.updateObservers.has(worker)) continue;
-      const onStateChange = () => {
-        const state = worker.state;
-        if (!isObservablePending(registration, worker)) {
-          cleanup();
-          this.updateObservers.delete(worker);
-          if (state !== "redundant") this.reconcileActiveWorker();
-        }
-      };
-      const cleanup = () => {
-        worker.removeEventListener("statechange", onStateChange);
-      };
-      worker.addEventListener("statechange", onStateChange);
-      this.updateObservers.set(worker, cleanup);
+      this.observePendingWorker(registration, worker);
     }
   }
 
