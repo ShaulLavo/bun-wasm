@@ -666,16 +666,54 @@ thread_local! {
     static WATCH_BUFFER: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0; 64 * 1024]);
 }
 
-/// Opens `path` (following a final symlink), watches that node and closes the temporary
-/// descriptor; the watch follows the node's identity. Returns the id or the positive errno.
-pub fn fs_watch_open(path: &str, recursive: bool) -> Result<u32, i32> {
-    use std::os::fd::AsRawFd;
+/// Opens `path` (following a final symlink) and derives its full-width 64-bit `(dev, ino)`
+/// identity from that open descriptor before returning `(fd, identity)`. The caller owns `fd`
+/// and must release it with [`fs_watch_drop_fd`].
+pub fn fs_watch_resolve(path: &str) -> Result<(i32, Option<String>), i32> {
+    use std::os::fd::IntoRawFd;
     let file =
         std::fs::File::open(path).map_err(|error| error.raw_os_error().unwrap_or(WATCH_IO))?;
+    let identity = watch_fd_identity(&file);
+    Ok((file.into_raw_fd(), identity))
+}
+
+#[cfg(target_os = "wasi")]
+fn watch_fd_identity(file: &std::fs::File) -> Option<String> {
+    use std::os::wasi::fs::MetadataExt;
+    let meta = file.metadata().ok()?;
+    let ino = meta.ino();
+    if ino == 0 {
+        return None;
+    }
+    Some(format!("{}:{ino}", meta.dev()))
+}
+
+#[cfg(all(unix, not(target_os = "wasi")))]
+fn watch_fd_identity(file: &std::fs::File) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = file.metadata().ok()?;
+    let ino = meta.ino();
+    if ino == 0 {
+        return None;
+    }
+    let required = if meta.is_dir() { 0o500 } else { 0o400 };
+    if (meta.mode() & required) != required {
+        return None;
+    }
+    Some(format!("{}:{ino}", meta.dev()))
+}
+
+#[cfg(not(any(unix, target_os = "wasi")))]
+fn watch_fd_identity(_file: &std::fs::File) -> Option<String> {
+    None
+}
+
+/// Registers a watch on an already-opened descriptor from [`fs_watch_resolve`].
+pub fn fs_watch_open_fd(fd: i32, recursive: bool) -> Result<u32, i32> {
     let flags = if recursive { WATCH_RECURSIVE } else { 0 };
     let mut id = 0u32;
     let errno = proc_call!(runtime_fs::watch_open(
-        file.as_raw_fd(),
+        fd,
         flags,
         ptr_mut(std::slice::from_mut(&mut id))
     ));
@@ -685,15 +723,47 @@ pub fn fs_watch_open(path: &str, recursive: bool) -> Result<u32, i32> {
     Ok(id)
 }
 
+/// Closes a temporary descriptor returned by [`fs_watch_resolve`].
+pub fn fs_watch_drop_fd(fd: i32) {
+    use std::os::fd::FromRawFd;
+    if fd >= 0 {
+        unsafe {
+            let _ = std::fs::File::from_raw_fd(fd);
+        }
+    }
+}
+
+/// Opens `path` (following a final symlink), watches that node and closes the temporary
+/// descriptor; the watch follows the node's identity. Returns the id or the positive errno.
+pub fn fs_watch_open(path: &str, recursive: bool) -> Result<u32, i32> {
+    let (fd, _) = fs_watch_resolve(path)?;
+    let result = fs_watch_open_fd(fd, recursive);
+    fs_watch_drop_fd(fd);
+    result
+}
+
 /// Non-consuming readiness for all process-local watches, including terminal records.
 pub fn fs_watch_ready() -> bool {
     proc_call!(runtime_fs::watch_ready()) != 0
 }
 
 /// One `watch_read`: whole records (empty at end of stream), or the positive errno
-/// (6 when nothing is pending). A record that doesn't fit grows the buffer and retries.
-pub fn fs_watch_read(id: u32) -> Result<Vec<u8>, i32> {
+/// (6 when nothing is pending). When `max_bytes` is `None`, a record that doesn't fit grows
+/// the buffer and retries; when `Some(limit)`, reads at most `limit` bytes and returns
+/// `ENOBUFS` (42) without consuming if the next record exceeds `limit`.
+pub fn fs_watch_read(id: u32, max_bytes: Option<usize>) -> Result<Vec<u8>, i32> {
     WATCH_BUFFER.with_borrow_mut(|buf| {
+        if let Some(limit) = max_bytes {
+            if limit == 0 {
+                return Err(WATCH_NOBUFS);
+            }
+            if buf.len() < limit {
+                buf.resize(limit, 0);
+            }
+            return watch_read_into(id, &mut buf[..limit])
+                .map(|len| buf[..len].to_vec())
+                .map_err(|(errno, _)| errno);
+        }
         let mut read = watch_read_into(id, buf);
         while let Err((WATCH_NOBUFS, needed)) = read {
             if needed <= buf.len() {
@@ -865,7 +935,9 @@ mod signal_tests {
     #[test]
     fn filesystem_watches_report_enosys_without_the_runtime_fs_imports() {
         assert_eq!(fs_watch_open(env!("CARGO_MANIFEST_DIR"), true), Err(52));
-        assert_eq!(fs_watch_read(1), Err(52));
+        assert_eq!(fs_watch_read(1, None), Err(52));
+        assert_eq!(fs_watch_read(1, Some(64)), Err(52));
+        assert_eq!(fs_watch_read(1, Some(0)), Err(WATCH_NOBUFS));
         assert_eq!(fs_watch_close(1), 52);
     }
 

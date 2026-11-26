@@ -211,7 +211,9 @@ function productionBackend() {
   const factory = runInNewContext(backendSource, { AbortSignal });
   const backend = factory({
     native: {
-      fsWatchOpen() { open.add(7); return 7; },
+      fsWatchResolve(): [number, string] { return [7, ""]; },
+      fsWatchOpenFd() { open.add(7); return 7; },
+      fsWatchDropFd() {},
       fsWatchRead: () => reads.shift() ?? -6,
       fsWatchClose(id: number) { expect(open.delete(id)).toBe(true); return 0; },
     },
