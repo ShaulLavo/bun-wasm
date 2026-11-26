@@ -794,15 +794,15 @@
   const chainStorage = () => (factoryChain ??= new (internal.builtin("node:async_hooks").AsyncLocalStorage)());
 
   // Waits made inside factory chains: `from` is the chain's mocks, `to` the mock an import of
-  // it waits on.
-  const chainWaits = new Set();
+  // it waits on. Created by the first such wait.
+  let chainWaits;
 
   // Whether waiting on mock `key` from `chain` would wait on the chain itself: `key` is in it, or
   // its factory's chain waits, directly or through other mocks, on one that is. A cycle.
   function closesCycle(key, chain, seen = new Set()) {
     if (chain.has(key)) return true;
     seen.add(key);
-    for (const wait of chainWaits) {
+    for (const wait of chainWaits ?? []) {
       if (wait.from.has(key) && !seen.has(wait.to) && closesCycle(wait.to, chain, seen)) return true;
     }
     return false;
@@ -828,7 +828,7 @@
     const pending = target.settle();
     if (!pending) return undefined;
     const wait = { from: chain, to: name };
-    chainWaits.add(wait);
+    (chainWaits ??= new Set()).add(wait);
     return Promise.allSettled([pending]).then(() => { chainWaits.delete(wait); });
   }
 
@@ -839,14 +839,20 @@
   // A rejected factory is reported where its module loads, not here.
   function mockImportReady(name) {
     const chain = factoryChain?.getStore();
-    if (chain) return chainImportReady(name, chain);
+    return chain ? chainImportReady(name, chain) : settleAll(name, new Set());
+  }
+
+  // Settles the mocks not in `seen`, then again for any a factory registered meanwhile.
+  function settleAll(name, seen) {
     const waits = [];
     for (const key of Array.from(moduleMocks.keys())) {
+      if (seen.has(key)) continue;
+      seen.add(key);
       const entry = liveMock(key);
       const pending = entry && (key === name || entry.async) ? entry.settle() : undefined;
       if (pending) waits.push(pending);
     }
-    return waits.length ? Promise.allSettled(waits).then(() => undefined) : undefined;
+    return waits.length ? Promise.allSettled(waits).then(() => settleAll(name, seen)) : undefined;
   }
 
   function installMockImports() {
