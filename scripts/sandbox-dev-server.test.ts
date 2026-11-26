@@ -529,44 +529,57 @@ test("deferred listing retries after an aborted coordinated reset rejects enterR
     const f = await fixture();
     try {
       let resetIntent = false;
-      let holdNextGate = false;
-      const firstGate = deferred<{ resetGeneration: number; release: () => void }>();
+      let holdNextGates = false;
+      const heldGates: ReturnType<typeof deferred<{ resetGeneration: number; release: () => void }>>[] = [];
       let gateCalls = 0;
+      const rejectHeld = () => {
+        for (const gate of heldGates.splice(0)) gate.reject(new f.page.ResetInProgressError());
+      };
       Reflect.set(f.sandbox, "coordinator", {
         role: "owner",
         hasActiveResetIntent: () => resetIntent,
         broadcastOwnerState() {},
         enterResetGate: async () => {
-          if (!holdNextGate) return { resetGeneration: 1, release() {} };
+          if (!holdNextGates) return { resetGeneration: 1, release() {} };
           gateCalls++;
-          if (gateCalls === 1) return firstGate.promise;
+          if (gateCalls <= 2) {
+            const gate = deferred<{ resetGeneration: number; release: () => void }>();
+            heldGates.push(gate);
+            return gate.promise;
+          }
           return { resetGeneration: 1, release() {} };
         },
         resetWorkspace: async () => {
           resetIntent = true;
-          if (!rejectAfterResetClears) firstGate.reject(new f.page.ResetInProgressError());
+          if (!rejectAfterResetClears) rejectHeld();
           await turn();
           resetIntent = false;
         },
       });
 
       const listings = trackListings(f);
+      const editor = f.sandbox.editor!;
+      const active = editor.path;
+      f.page.fixture.files.delete(`/home/user/app/${active}`);
       await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+      expect(editor.path).toBe("");
       f.page.fixture.files.set("/home/user/app/after-reset-abort.txt", "ok");
 
       const devRun = await f.dev();
-      holdNextGate = true;
+      holdNextGates = true;
       await f.listen(devRun);
-      expect(gateCalls).toBe(1);
+      expect(gateCalls).toBe(2);
       expect(listings.count()).toBe(0);
 
       await f.sandbox.reset();
-      if (rejectAfterResetClears) firstGate.reject(new f.page.ResetInProgressError());
+      if (rejectAfterResetClears) rejectHeld();
       await turn();
 
-      expect(gateCalls).toBe(2);
-      expect(listings.count()).toBe(1);
+      // One retry for refreshFiles and one for editor fallback — no duplicate third listing.
+      expect(listings.count()).toBe(2);
       expect(f.sandbox.files).toContain("after-reset-abort.txt");
+      expect(editor.path).not.toBe("");
+      expect(editor.path).not.toBe(active);
     } finally {
       Reflect.set(f.sandbox, "coordinator", null);
       await f.cleanup();

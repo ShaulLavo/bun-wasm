@@ -766,15 +766,14 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.listingDeferred = false;
     let rearmed = false;
     const retryIfBlocked = (error: unknown) => {
-      if (this.disposed) return;
+      if (this.disposed || rearmed) return;
       if (this.listingBlocked()) {
+        rearmed = true;
         this.listingDeferred = true;
       } else if (error instanceof ResetInProgressError) {
+        rearmed = true;
         this.listingDeferred = true;
-        if (!retriedAfterReset && !rearmed) {
-          rearmed = true;
-          this.runDeferredListing(true);
-        }
+        if (!retriedAfterReset) this.runDeferredListing(true);
       }
     };
     void this.performRefreshFiles().catch(retryIfBlocked);
