@@ -38,6 +38,7 @@ for (const browserName of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webki
   test(`${browserName}: Restart belongs to the launch's own process, and a failed preview stops spinning`, () => withBrowser(browserName, attributionAndFailure));
   test(`${browserName}: a second Stop kills a server that ignores Ctrl-C, and Stop at any moment leaves Run usable`, () => withBrowser(browserName, forcedStop));
   test(`${browserName}: a demo switch leaves nothing of the old launch, not even a detached child spawned during it`, () => withBrowser(browserName, detachedChildOnSwitch));
+  test(`${browserName}: a command typed after a force-stopped demo carries no launch id and runs normally`, () => withBrowser(browserName, typedAfterForcedDemo));
 }
 
 type Shell = { shell: { submit(command: string): Promise<void> }; editor: { open(path: string): Promise<void> } };
@@ -137,26 +138,30 @@ async function idleRun(page: Page): Promise<void> {
   }, undefined, { timeout: HANG_MS });
 }
 
-/** Bytes of a file, or -1 when it does not exist. */
-async function fileSize(page: Page, path: string): Promise<number> {
-  return page.evaluate(async path => {
-    const bytes = await (Reflect.get(globalThis, "playground") as unknown as PageApi).fs.readFile(path).catch(() => undefined);
-    return bytes ? bytes.length : -1;
-  }, path);
+/** Live processes in the page's runtime, from Waffle's own table. */
+type ProcessTable = { runtime: { processes(): Promise<{ startStates(): readonly { pid: number }[] }> } };
+
+/** Waits (with only the hang cap) until `pid` is no longer a live process of the page. */
+async function processGone(page: Page, pid: number): Promise<void> {
+  await page.waitForFunction(async pid => {
+    const processes = await (Reflect.get(globalThis, "playground") as unknown as ProcessTable).runtime.processes();
+    return processes.startStates().every(state => state.pid !== pid);
+  }, pid, { timeout: HANG_MS });
 }
 
 /**
  * A demo switch stops the running launch: Ctrl-C first, SIGKILL after it is ignored. Here the
  * running server answers Ctrl-C by spawning a detached Bun child (a job of its own) during the
- * switch. Nothing of the old launch may survive: the child is attributed to it and killed too.
+ * switch and records its pid. Nothing of the old launch may survive: the child is attributed to
+ * it and killed too, so its pid leaves the process table.
  */
 async function detachedChildOnSwitch(browser: Browser, url: string): Promise<void> {
   const context = await browser.newContext();
   try {
     const page = await open(context, url);
     await writeHome(page, {
-      "heartbeat.ts": "import { appendFileSync } from 'node:fs';\nappendFileSync('/home/user/heartbeat.txt', '.');\nsetInterval(() => appendFileSync('/home/user/heartbeat.txt', '.'), 100);\n",
-      "spawner.ts": "process.on('SIGINT', () => {\n  Bun.spawn([process.execPath, 'run', `${import.meta.dir}/heartbeat.ts`], { detached: true, stdio: ['ignore', 'ignore', 'ignore'] });\n  console.log('SPAWNED' + '_CHILD');\n});\nBun.serve({ port: 3005, fetch: () => new Response('<h1>spawner</h1>', { headers: { 'content-type': 'text/html' } }) });\nconsole.log('SPAWNER' + '_UP');\n",
+      "linger.ts": "setInterval(() => {}, 1000);\n",
+      "spawner.ts": "process.on('SIGINT', async () => {\n  const child = Bun.spawn([process.execPath, 'run', `${import.meta.dir}/linger.ts`], { detached: true, stdio: ['ignore', 'ignore', 'ignore'] });\n  await Bun.write(`${import.meta.dir}/child.pid`, String(child.pid));\n});\nBun.serve({ port: 3005, fetch: () => new Response('<h1>spawner</h1>', { headers: { 'content-type': 'text/html' } }) });\nconsole.log('SPAWNER' + '_UP');\n",
     });
     await page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as Shell).editor.open("/home/user/spawner.ts"));
     await page.locator("#run").click();
@@ -164,14 +169,39 @@ async function detachedChildOnSwitch(browser: Browser, url: string): Promise<voi
 
     // Switching to a demo interrupts the server (which spawns the child), then kills it.
     expect(await runDemo(page, "test", OUTPUT.test!)).toContain("5 pass");
-    // The child ran (its first write landed) and then stopped writing.
-    await page.waitForFunction(async () => {
-      const bytes = await (Reflect.get(globalThis, "playground") as unknown as PageApi).fs.readFile("/home/user/heartbeat.txt").catch(() => undefined);
-      return bytes !== undefined;
-    }, undefined, { timeout: HANG_MS });
-    const settled = await fileSize(page, "/home/user/heartbeat.txt");
-    await page.waitForTimeout(1500);
-    expect(await fileSize(page, "/home/user/heartbeat.txt")).toBe(settled);
+    const pid = Number(await readText(page, "/home/user/child.pid"));
+    expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+    await processGone(page, pid);
+  } finally {
+    await context.close();
+  }
+}
+
+/**
+ * The id that ties processes to a demo is scoped to the demo's own command. After a demo is
+ * force-stopped, a command typed in the terminal runs normally: it carries no launch id, and the
+ * shell keeps no helper function.
+ */
+async function typedAfterForcedDemo(browser: Browser, url: string): Promise<void> {
+  const context = await browser.newContext();
+  try {
+    const page = await open(context, url);
+    // The demo's own file, edited to ignore Ctrl-C, so the second Stop has to kill it.
+    await writeHome(page, { "serve.ts": "process.on('SIGINT', () => console.log('IGNORED' + '_SIGINT'));\nBun.serve({ port: 3000, fetch: () => new Response('<h1>edited</h1>', { headers: { 'content-type': 'text/html' } }) });\nconsole.log('EDITED' + '_UP');\n" });
+    await page.locator('.demo[data-demo="serve"]').click();
+    await terminalIncludes(page, "EDITED_UP");
+    await page.locator(".preview-dock iframe").waitFor({ timeout: HANG_MS });
+    await page.locator("#run").click();
+    await terminalIncludes(page, "IGNORED_SIGINT");
+    await page.locator("#run").click();
+    await idleRun(page);
+
+    const typed = await run(page, "bun -e \"await Bun.sleep(1500); console.log('TYPED_' + process.env.BUNWASM_LAUNCH_ID)\"", 60_000);
+    expect(typed.code, typed.output).toBe(0);
+    expect(typed.output).toContain("TYPED_undefined");
+    const shell = await run(page, "env | grep -c BUNWASM_LAUNCH_ID; type bun", 30_000);
+    expect(shell.output).toMatch(/^0$/m);
+    expect(shell.output).toContain("bun is /bin/bun");
   } finally {
     await context.close();
   }

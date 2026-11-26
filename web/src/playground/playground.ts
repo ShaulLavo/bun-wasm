@@ -73,6 +73,10 @@ export type Launch = {
   interrupted: boolean;
   /** Stop killed its jobs; any of its processes that starts later is killed too. */
   forced: boolean;
+  /** Its submitted command has finished (or never ran). */
+  ended: boolean;
+  /** Its processes that have started and not yet exited. */
+  processes: number;
 };
 type Phase =
   | { readonly kind: "idle" }
@@ -84,8 +88,9 @@ const LAUNCH_ENV = "BUNWASM_LAUNCH_ID";
 const SIGKILL = 9;
 
 function newLaunch(path: string, demo?: Demo): Launch {
-  const id = crypto.randomUUID().slice(0, 8);
-  return { id, path, argument: demo ? path.slice(HOME.length + 1) : path, demo, jobs: new Set(), sent: false, interrupted: false, forced: false };
+  // A full random UUID: ids of a page's launches never collide.
+  const id = crypto.randomUUID();
+  return { id, path, argument: demo ? path.slice(HOME.length + 1) : path, demo, jobs: new Set(), sent: false, interrupted: false, forced: false, ended: false, processes: 0 };
 }
 
 function launchSubcommand(path: string): string {
@@ -386,6 +391,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     try {
       await editor.save();
     } catch (error) {
+      launch.ended = true;
+      this.retireIfDone(launch);
       this.settle(launch);
       throw error;
     }
@@ -441,7 +448,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   /** Every phase change re-renders, since Run, Stop and the demo buttons all read it. */
   private setPhase(phase: Phase): void {
     // A launch stays in liveLaunches after it loses the phase: its processes (a detached child
-    // still starting during a demo switch) must stay attributable until its submission ends.
+    // still starting during a demo switch) stay attributable until it retires (retireIfDone()).
     if (phase.kind === "launched") {
       this.liveLaunches.set(phase.launch.id, phase.launch);
       this.lastLaunch = phase.launch;
@@ -458,7 +465,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
 
   /**
    * Submits `launch` tagged with its id in BUNWASM_LAUNCH_ID, which its processes inherit (see
-   * attribute()). A demo first runs `cd ~` and exports the id, then clears the screen, so it
+   * attribute()), scoped to that one command so the shell never keeps it. A demo first runs
+   * `cd ~` and defines a one-shot `bun` function carrying the id, then clears the screen, so it
    * echoes a short `bun run serve.ts` and its prompt starts from a zero exit status. Run puts
    * the id on its own command line.
    */
@@ -469,7 +477,9 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       if (!shell) return;
       const command = `bun ${launchSubcommand(launch.path)} ${shellWord(launch.argument)}`;
       if (launch.demo) {
-        await shell.submit(`cd ~ && export ${LAUNCH_ENV}=${launch.id}`);
+        // A one-shot `bun` function scopes the id to the demo's own command: it removes itself
+        // before running, so the shell keeps neither the function nor the variable.
+        await shell.submit(`cd ~ && bun() { unset -f bun; ${LAUNCH_ENV}=${launch.id} command bun "$@"; }`);
         await this.clearTerminal();
       }
       if (this.phase.kind !== "launched" || this.phase.launch !== launch) return;
@@ -477,9 +487,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       await shell.submit(launch.demo ? command : `${LAUNCH_ENV}=${launch.id} ${command}`);
     } finally {
       this.submitting--;
-      // Its command ended. A force-stopped launch stays known, so a straggler of it is still
-      // killed when it starts; any other launch is no longer attributable.
-      if (!launch.forced) this.liveLaunches.delete(launch.id);
+      launch.ended = true;
+      this.retireIfDone(launch);
       if (this.lastLaunch === launch) this.lastLaunch = undefined;
       this.settle(launch);
       // canRun also depends on `submitting`, which settle() does not cover when Stop already
@@ -579,7 +588,24 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     if (!launch) return;
     this.helperLaunches.set(helper, launch);
     launch.jobs.add(process.job);
+    launch.processes++;
     if (launch.forced) void this.killLateJob(process.job).catch(this.report);
+  }
+
+  /** One of a launch's processes ended; the launch may now be retired. */
+  private detach(helper: RuntimeNetworkHelper): void {
+    const launch = this.helperLaunches.get(helper);
+    if (!launch) return;
+    launch.processes--;
+    this.retireIfDone(launch);
+  }
+
+  /**
+   * A launch stops being attributable once its command has ended and every process it started
+   * has exited: nothing left can spawn a process carrying its id.
+   */
+  private retireIfDone(launch: Launch): void {
+    if (launch.ended && launch.processes <= 0) this.liveLaunches.delete(launch.id);
   }
 
   /** Phones show one pane at a time in the examples workspace. */
@@ -1080,6 +1106,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
 
     const network: BunNetworkOptions = {
       started: (helper, process) => this.attribute(helper, process),
+      exited: (helper) => this.detach(helper),
       listening: (port, helper) => {
         const token = previews.registerListener(port, helper);
         previewPorts.add(port);

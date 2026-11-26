@@ -33,6 +33,8 @@ export interface BunNetworkOptions {
   readonly pathScope?: Parameters<RuntimeNetwork["createHelper"]>[0]["pathScope"];
   /** A Bun process got its network helper, before it runs any guest code. */
   started?(helper: RuntimeNetworkHelper, process: BunProcessStart): void;
+  /** The process `started` reported has ended and been cleaned up; it can spawn nothing more. */
+  exited?(helper: RuntimeNetworkHelper): void;
   listening?(port: number, helper: RuntimeNetworkHelper): void;
   stopped?(port: number, helper: RuntimeNetworkHelper): void;
 }

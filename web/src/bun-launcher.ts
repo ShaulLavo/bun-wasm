@@ -63,6 +63,8 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   registerMemoryProcess(engine, memoryTelemetryId, options.runtime, context, service);
   let revoked = false;
   let helper: RuntimeNetworkHelper | undefined;
+  /** The helper reported to `network.started`, until cleanup reports it to `network.exited`. */
+  let reportedHelper: RuntimeNetworkHelper | undefined;
   let relay: Awaited<ReturnType<typeof runtimeRelay>>;
   let socketRoot: Awaited<ReturnType<ProcessRuntime["filesystem"]["directoryHandle"]>> | undefined;
   let lookupChannel: BroadcastChannel | undefined;
@@ -91,6 +93,11 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     endMemorySnapshot(memoryTelemetryId, () => readOutcome(context.outcome));
     unregister();
     const failures: unknown[] = [];
+    // Pairs with the `started` report: the host learns this process can no longer spawn anything.
+    const startedHelper = reportedHelper;
+    reportedHelper = undefined;
+    try { if (startedHelper) options.network?.exited?.(startedHelper); }
+    catch (error) { failures.push(error); }
     try { releaseNetwork(); }
     catch (error) { failures.push(error); }
     try { socketRoot?.release(); }
@@ -129,6 +136,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     relay = await runtimeRelay(options.runtime, options.network?.relay);
     if (!active()) throw new Error("Bun process launch was revoked");
     helper = createBunNetworkHelper(network, ring, { ...options.network, connect: options.network?.connect ?? relay?.connect, pathScope });
+    reportedHelper = helper;
     options.network?.started?.(helper, { argv: context.request.argv, env: context.request.env, pid: context.pid, job: context.job });
     if (engine === "browser" && typeof BroadcastChannel === "function") {
       lookupChannel = new BroadcastChannel(`bun-wasm-dns-${crypto.randomUUID()}`);
