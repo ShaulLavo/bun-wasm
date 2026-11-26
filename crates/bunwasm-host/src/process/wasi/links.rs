@@ -270,6 +270,28 @@ impl Roots {
     }
 }
 
+impl Roots {
+    /// Whether `path` from the directory at guest path `start`, every link followed, names a
+    /// directory (`directory`) or a regular file, as a stat with the follow flag would answer
+    /// (`runtime_fs.path_probe`). A path that does not resolve names neither.
+    pub fn names(&mut self, start: &str, path: &str, directory: bool) -> bool {
+        if path.is_empty() || path.starts_with('/') {
+            return false;
+        }
+        let Ok(resolved) = self.resolve(start, path, true) else {
+            return false;
+        };
+        if directory {
+            return matches!(self.kind(&resolved.guest), Kind::Directory);
+        }
+        let Some(dir) = self.dir(resolved.root) else {
+            return false;
+        };
+        dir.metadata(&resolved.relative)
+            .is_ok_and(|metadata| metadata.is_file())
+    }
+}
+
 /// The non-empty components of a path other than `.`.
 fn parts(path: &str) -> impl DoubleEndedIterator<Item = String> + '_ {
     path.split('/')
@@ -587,7 +609,77 @@ pub(super) fn install(
         )?;
     }
     install_readlink(linker, store, namespace)?;
+    install_probe(linker, namespace)?;
     install_symlink(linker, store, namespace)
+}
+
+/// Most pathnames one `runtime_fs.path_probe` call takes, as in Waffle.
+const PROBE_LIMIT: usize = 64;
+
+/// A `path_probe` list: one to [`PROBE_LIMIT`] UTF-8 pathnames, each ended by a NUL.
+fn probe_names(bytes: &[u8]) -> Option<Vec<String>> {
+    let (last, body) = bytes.split_last()?;
+    if *last != 0 {
+        return None;
+    }
+    let names: Vec<String> = std::str::from_utf8(body)
+        .ok()?
+        .split('\0')
+        .map(str::to_owned)
+        .collect();
+    (names.len() <= PROBE_LIMIT).then_some(names)
+}
+
+/// Waffle's `runtime_fs.path_probe`: the index of the first pathname that names a regular file
+/// (`kind` 1) or a directory (`kind` 2), or `0xffffffff`, at `found` (Waffle docs/host-abi.md).
+fn install_probe(
+    linker: &mut Linker<Host>,
+    namespace: &std::sync::Arc<std::sync::Mutex<Namespace>>,
+) -> Result<()> {
+    const INVAL: i32 = 28;
+    let state = namespace.clone();
+    linker.func_wrap(
+        "runtime_fs",
+        "path_probe",
+        move |mut caller: Caller<'_, Host>,
+              fd: i32,
+              paths: i32,
+              length: i32,
+              kind: i32,
+              found: i32|
+              -> Result<i32> {
+            let memory = memory(&mut caller)?;
+            let size = memory.len(&caller);
+            let (Some(list), Some(output)) =
+                (span(size, paths, length as u32 as usize), span(size, found, 4))
+            else {
+                return Ok(FAULT);
+            };
+            let bytes = memory.read(&caller, list).unwrap_or_default();
+            let Some(names) = probe_names(&bytes) else {
+                return Ok(INVAL);
+            };
+            let directory = match kind {
+                1 => false,
+                2 => true,
+                _ => return Ok(INVAL),
+            };
+            let mut state = state.lock().unwrap();
+            state.initialize(&mut caller)?;
+            let start = state.paths.get(&fd).cloned();
+            let Some(start) = start.filter(|_| state.files.contains_key(&fd)) else {
+                return Ok(BADF);
+            };
+            let index = names
+                .iter()
+                .position(|name| state.roots.names(&start, name, directory));
+            drop(state);
+            let word = index.map_or(u32::MAX, |index| index as u32);
+            super::store_word(&memory, &mut caller, output.start, word)?;
+            Ok(0)
+        },
+    )?;
+    Ok(())
 }
 
 fn install_readlink(
@@ -697,4 +789,76 @@ fn install_symlink(
         },
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A host directory mounted at guest `/`, removed on drop.
+    struct Mount(PathBuf);
+
+    impl Mount {
+        fn new() -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!("bunwasm-probe-{nanos}"));
+            std::fs::create_dir_all(root.join("app/node_modules/vue")).unwrap();
+            std::fs::create_dir_all(root.join("real/pkg")).unwrap();
+            std::fs::write(root.join("real/pkg/index.js"), "x").unwrap();
+            let link = |target: &str, at: &str| {
+                std::os::unix::fs::symlink(target, root.join(at)).unwrap();
+            };
+            link("/real/pkg", "app/node_modules/abs");
+            link("../../real/pkg", "app/node_modules/rel");
+            link("missing", "app/node_modules/dangling");
+            link("loop", "app/loop");
+            Self(root)
+        }
+    }
+
+    impl Drop for Mount {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn names_answers_as_a_following_stat() {
+        let mount = Mount::new();
+        let mut roots = Roots::new(vec![(mount.0.clone(), "/".to_owned())]);
+        let cases = [
+            ("/", "app/node_modules/vue", true, true),
+            ("/", "app/node_modules/vue", false, false),
+            ("/", "real/pkg/index.js", false, true),
+            ("/", "real/pkg/index.js", true, false),
+            ("/", "app/node_modules/abs/index.js", false, true),
+            ("/", "app/node_modules/rel", true, true),
+            ("/app", "../real/pkg/index.js", false, true),
+            ("/", "app/node_modules/dangling", true, false),
+            ("/", "app/loop", false, false),
+            ("/", "real/pkg/index.js/", false, false),
+            ("/", "real/pkg/index.js/x", false, false),
+            ("/", "app/missing/x", true, false),
+            ("/", "/real/pkg", true, false),
+            ("/", "", true, false),
+            ("/", ".", true, true),
+        ];
+        for (start, path, directory, expected) in cases {
+            assert_eq!(roots.names(start, path, directory), expected, "{start} {path} {directory}");
+        }
+    }
+
+    #[test]
+    fn probe_lists_end_in_a_nul_and_hold_at_most_the_limit() {
+        assert_eq!(probe_names(b"a\0b/c\0"), Some(vec!["a".into(), "b/c".into()]));
+        assert_eq!(probe_names(b"\0"), Some(vec![String::new()]));
+        assert_eq!(probe_names(b""), None);
+        assert_eq!(probe_names(b"a"), None);
+        assert_eq!(probe_names(b"\xff\0"), None);
+        assert!(probe_names(&b"a\0".repeat(PROBE_LIMIT)).is_some());
+        assert_eq!(probe_names(&b"a\0".repeat(PROBE_LIMIT + 1)), None);
+    }
 }
