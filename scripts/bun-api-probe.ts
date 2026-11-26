@@ -20,9 +20,11 @@ const fixtures = join(root, "tests/fixtures");
 type Verdict = "pass" | "fail" | "differs";
 type CheckResult = { name: string; verdict: Verdict; detail?: string };
 type CaseResult = { name: string; code: number | null; ms: number; checks: CheckResult[]; output: string };
-type EngineResult = { engine: string; bootMs: number; status: string; helloMs: number[]; cases: CaseResult[] };
+export type EngineResult = { engine: string; bootMs: number; status: string; helloMs: number[]; cases: CaseResult[] };
 
+// Imported by its unit test, it reads no arguments.
 const { values } = parseArgs({
+  args: import.meta.main ? process.argv.slice(2) : [],
   options: {
     url: { type: "string" },
     // SpiderMonkey is staged only when the site was built with SPIDERMONKEY_WASM; name it to include it.
@@ -216,17 +218,22 @@ async function runEngine(browser: Browser, url: string, result: EngineResult, ca
   }
 }
 
-function table(results: EngineResult[]): string {
+/** A Markdown table cell: a literal `|` would end the cell, and a newline the row. */
+export function cell(text: string): string {
+  return text.replaceAll("|", "\\|").replace(/\r?\n/g, " ");
+}
+
+export function table(results: EngineResult[]): string {
   const engines = results.map(result => result.engine);
   const rows = new Map<string, Map<string, CheckResult>>();
-  const cells = results.flatMap(result => result.cases.flatMap(probe => probe.checks.map(check => ({ engine: result.engine, key: `${probe.name.replace(/^bun-probe-/, "")} | ${check.name}`, check }))));
+  const cells = results.flatMap(result => result.cases.flatMap(probe => probe.checks.map(check => ({ engine: result.engine, key: `${cell(probe.name.replace(/^bun-probe-/, ""))} | ${cell(check.name)}`, check }))));
   for (const { engine, key, check } of cells) {
     if (!rows.has(key)) rows.set(key, new Map());
     rows.get(key)!.set(engine, check);
   }
   const mark = (check?: CheckResult) => check === undefined ? "–" : check.verdict === "pass" ? "pass" : check.verdict === "differs" ? "**differs**" : "**FAIL**";
   const lines = [
-    `| Area | Check | ${engines.join(" | ")} |`,
+    `| Area | Check | ${engines.map(cell).join(" | ")} |`,
     `| --- | --- | ${engines.map(() => "---").join(" | ")} |`,
     ...Array.from(rows, ([key, byEngine]) => `| ${key} | ${engines.map(engine => mark(byEngine.get(engine))).join(" | ")} |`),
     "",
@@ -238,7 +245,7 @@ function table(results: EngineResult[]): string {
       // An engine that stopped early shows why next to what it finished.
       const stopped = result.status.startsWith("failed") || result.status.startsWith("not ready");
       const passing = !checks.length ? result.status : stopped ? `${count} (${result.status})` : count;
-      return `| ${result.engine} | ${result.bootMs} | ${result.helloMs.join(", ")} | ${passing} |`;
+      return `| ${cell(result.engine)} | ${result.bootMs} | ${result.helloMs.join(", ")} | ${cell(passing)} |`;
     }),
   ];
   const failures = results.flatMap(result => result.cases.flatMap(probe => probe.checks.filter(check => check.verdict !== "pass").map(check => `- ${result.engine} ${probe.name} ${check.name}: ${check.detail ?? ""}`.slice(0, 400))));
