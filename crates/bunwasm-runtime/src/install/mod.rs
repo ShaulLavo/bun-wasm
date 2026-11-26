@@ -163,13 +163,15 @@ fn execute(
             );
         }
         let mut resolver = Resolver::new(registry, resolution_lock, opts.refresh);
-        // Staging an interrupted run left behind is never used.
-        early::discard_staging();
-        // A frozen or lockfile-only run must leave node_modules alone when it fails.
+        // Frozen and lockfile-only runs never stage anything.
+        let mut _staging = None;
         if !opts.frozen && !opts.lockfile_only && no_modules() {
-            resolver.early = Some(early::Early::new(opts.refresh));
+            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+            if let Some((early, guard)) = early::Early::start(&cwd, opts.refresh) {
+                resolver.early = Some(early);
+                _staging = Some(guard);
+            }
         }
-        let _staging = resolver.early.is_some().then_some(early::StagingGuard);
         if command == "update" && member.is_some() {
             resolver.member_update = Some(resolve::MemberUpdate {
                 member: manifest["name"]
@@ -720,14 +722,17 @@ fn install_prepared(
             bins,
             bytes,
         } => {
-            let published = publish_staged(&staging, package);
-            match bytes {
-                Some(bytes) if published.is_ok() && !bypass => {
-                    archives.release(&package.tarball, bytes)
-                }
-                _ => archives.skip(package),
+            // A staging that cannot be moved into place (another filesystem, say) is
+            // extracted again from its archive, as without early work.
+            if publish_staged(&staging, package).is_err() {
+                return install_bytes(package, bytes, bypass, downloads, registry, archives);
             }
-            published.map(|()| Some(bins))
+            if bypass {
+                archives.skip(package);
+            } else {
+                archives.release(&package.tarball, bytes);
+            }
+            Ok(Some(bins))
         }
     }
 }

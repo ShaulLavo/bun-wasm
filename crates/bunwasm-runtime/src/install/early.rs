@@ -3,10 +3,11 @@
 //! A cold resolution spends most of its time waiting for metadata, and the install phase
 //! after it spends most of its time extracting archives. When an install starts without
 //! `node_modules`, the archives of packages resolution has placed are fetched and extracted
-//! during those waits, into private staging at `STAGING` in the project root. Workspace
-//! globs never match a dot directory, and nothing else that resolution reads refers to it.
-//! Nothing touches `node_modules` until the install phase, which runs after the final graph
-//! and lockfile exist and publishes each staged package by rename, in install order.
+//! during those waits, into staging that this install owns under the temporary directory,
+//! outside the project. Nothing touches the project until the install phase, which runs
+//! after the final graph and lockfile exist and publishes each staged package by rename, in
+//! install order; where a rename cannot move it, the package is extracted again from its
+//! archive, which staging keeps for that and for later packages with the same archive.
 //!
 //! Every fetch made here is the fetch for that package: its outcome, failure included, is
 //! handed to the install phase, which never fetches again to replace it. When a fetch
@@ -26,8 +27,8 @@ use super::{
     trace,
 };
 
-/// Where early work stages packages, relative to the project root.
-pub const STAGING: &str = ".bun-wasm-early";
+/// Names of staging directories, followed by the project's hash and the install's own suffix.
+pub const STAGING: &str = "bun-wasm-early-";
 /// Archives requested ahead while metadata is still loading. Metadata decides when
 /// resolution ends, so archives take a small share of the connection.
 const EARLY_TARBALLS: usize = 8;
@@ -37,31 +38,63 @@ const EARLY_FILES: u64 = 2048;
 const EARLY_BYTES: u64 = 32 * 1024 * 1024;
 /// After this many pauses an extraction runs to its end, bounding the inflation it repeats.
 const MAX_PAUSES: u32 = 8;
-/// Memory that staged packages' archives may keep for later packages with the same archive.
-const KEPT_ARCHIVES: usize = 16 * 1024 * 1024;
+/// Archive memory that prepared packages may hold. Past it, the rest wait for the install
+/// phase.
+const PREPARED_BYTES: usize = 64 * 1024 * 1024;
 
-/// Removes staging left by an interrupted run. Every install calls it before resolving.
-pub fn discard_staging() {
-    let _ = fs::remove_dir_all(STAGING);
-}
-
-/// Removes the staging directory when the install ends, however it ends.
-pub struct StagingGuard;
+/// Removes this install's staging when the install ends, however it ends.
+pub struct StagingGuard(PathBuf);
 
 impl Drop for StagingGuard {
     fn drop(&mut self) {
-        discard_staging();
+        let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+/// The temporary directory, as an absolute path (`std::env::temp_dir` is missing on WASI).
+fn temp_dir(cwd: &Path) -> PathBuf {
+    let temp = std::env::var_os("TMPDIR").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    cwd.join(temp)
+}
+
+/// Staging names for the project in `cwd`: a hash of its path, so reaping stays within it.
+fn project_prefix(cwd: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(cwd.to_string_lossy().as_bytes());
+    format!(
+        "{STAGING}{:x}-",
+        u64::from_be_bytes(hash[..8].try_into().unwrap())
+    )
+}
+
+/// Creates this install's staging after removing what an interrupted install of the same
+/// project left. Two installs of one project at once are unsupported anyway: each replaces
+/// the other's node_modules.
+fn create_staging(cwd: &Path) -> Option<PathBuf> {
+    let temp = temp_dir(cwd);
+    let prefix = project_prefix(cwd);
+    if let Ok(entries) = fs::read_dir(&temp) {
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).ok()?;
+    let root = temp.join(format!("{prefix}{:x}", u128::from_le_bytes(random)));
+    fs::create_dir_all(&root).ok()?;
+    Some(root)
 }
 
 /// What early work did for one package, keyed by its source record.
 pub enum Outcome {
-    /// Extracted and validated in `staging`; the install phase publishes it by rename.
+    /// Extracted and validated in `staging`; the install phase publishes it by rename. The
+    /// archive goes to the install's archive reuse, or is extracted again if the rename fails.
     Staged {
         staging: PathBuf,
         bins: Value,
-        /// The archive, kept while it fits, for later packages with the same archive.
-        bytes: Option<Vec<u8>>,
+        bytes: Vec<u8>,
     },
     /// The archive arrived but staging did not finish; install from these bytes.
     Fetched(Vec<u8>),
@@ -71,6 +104,7 @@ pub enum Outcome {
 
 pub struct Early {
     pub downloads: Downloads,
+    root: PathBuf,
     refresh: bool,
     /// Keys whose packages the final graph is expected to keep: reachable from the root
     /// through packages compatible with this platform.
@@ -81,7 +115,8 @@ pub struct Early {
     current: Option<Job>,
     outcomes: Vec<(Vec<u8>, Outcome)>,
     jobs: usize,
-    kept_bytes: usize,
+    /// Archive bytes the outcomes hold.
+    held: usize,
 }
 
 /// The package being extracted, between the pauses that let resolution go on.
@@ -94,9 +129,17 @@ struct Job {
 }
 
 impl Early {
-    pub fn new(refresh: bool) -> Self {
+    /// Early work for an install in `cwd`, with the guard that removes its staging, or
+    /// `None` when no staging can be made.
+    pub fn start(cwd: &Path, refresh: bool) -> Option<(Self, StagingGuard)> {
+        let root = create_staging(cwd)?;
+        Some((Self::new(root.clone(), refresh), StagingGuard(root)))
+    }
+
+    fn new(root: PathBuf, refresh: bool) -> Self {
         Self {
             downloads: Downloads::new(EARLY_TARBALLS),
+            root,
             refresh,
             active: BTreeSet::new(),
             queue: VecDeque::new(),
@@ -104,7 +147,7 @@ impl Early {
             current: None,
             outcomes: Vec::new(),
             jobs: 0,
-            kept_bytes: 0,
+            held: 0,
         }
     }
 
@@ -148,7 +191,7 @@ impl Early {
         arrived: &mut dyn FnMut() -> bool,
     ) -> bool {
         self.prefetch(registry);
-        if self.current.is_none() && !self.start(registry) {
+        if self.current.is_none() && !self.begin(registry) {
             return false;
         }
         trace::time("early-install", || self.resume(metadata, registry, arrived));
@@ -168,7 +211,10 @@ impl Early {
     }
 
     /// Fetches the next ready package and stages it. Returns whether it did anything.
-    fn start(&mut self, registry: &Registry) -> bool {
+    fn begin(&mut self, registry: &Registry) -> bool {
+        if self.held >= PREPARED_BYTES {
+            return false;
+        }
         let Some(index) = self.next(registry) else {
             return false;
         };
@@ -184,7 +230,8 @@ impl Early {
             }
         };
         self.jobs += 1;
-        let staging = Path::new(STAGING).join(self.jobs.to_string());
+        self.held += bytes.capacity();
+        let staging = self.root.join(self.jobs.to_string());
         if super::stage_at(&package, &bytes, &staging).is_err() {
             let _ = fs::remove_dir_all(&staging);
             self.record(&package, Outcome::Fetched(bytes));
@@ -236,14 +283,10 @@ impl Early {
             self.record(&job.package, Outcome::Fetched(job.bytes));
             return;
         };
-        let bytes = (self.kept_bytes + job.bytes.capacity() <= KEPT_ARCHIVES).then(|| {
-            self.kept_bytes += job.bytes.capacity();
-            job.bytes
-        });
         let outcome = Outcome::Staged {
             staging: job.staging,
             bins,
-            bytes,
+            bytes: job.bytes,
         };
         self.record(&job.package, outcome);
     }
@@ -294,6 +337,11 @@ fn small(meta: &Value) -> bool {
 
 #[cfg(test)]
 impl Early {
+    /// This install's staging directory.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// The kind of each prepared outcome, in the order they were prepared.
     pub fn kinds(&self) -> Vec<&'static str> {
         self.outcomes

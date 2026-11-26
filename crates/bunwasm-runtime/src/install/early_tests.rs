@@ -48,6 +48,7 @@ fn in_child(name: &str) {
         .env("BUN_INSTALL_CACHE_DIR", directory.join("cache"))
         .env("BUN_WASM_INSTALL_TRACE", "1")
         .env("BUN_WASM_EARLY_CHILD", "1")
+        .env("TMPDIR", directory.join("tmp"))
         .output();
     fs::remove_dir_all(&directory).unwrap();
     let output = output.unwrap();
@@ -61,6 +62,16 @@ fn in_child(name: &str) {
 
 fn child() -> bool {
     std::env::var_os("BUN_WASM_EARLY_CHILD").is_some()
+}
+
+/// Early work for an install in the current directory, with its staging guard.
+fn start() -> (Early, early::StagingGuard) {
+    Early::start(&std::env::current_dir().unwrap(), false).unwrap()
+}
+
+/// The jobs staged under `early`'s staging directory.
+fn staged(early: &Early) -> usize {
+    fs::read_dir(early.root()).unwrap().count()
 }
 
 fn registry() -> io::Registry {
@@ -78,14 +89,14 @@ fn drain(early: &mut Early) -> usize {
 }
 
 #[test]
-fn early_work_stages_outside_node_modules() {
+fn early_work_stages_outside_the_project() {
     if !child() {
-        return in_child("early_work_stages_outside_node_modules");
+        return in_child("early_work_stages_outside_the_project");
     }
     let outer = plain("outer", &["outer"]);
     let nested = plain("inner", &["outer", "inner"]);
     seed_cache(&[&outer, &nested]);
-    let mut early = Early::new(false);
+    let (mut early, _guard) = start();
     early.added(&outer, None, &registry());
     early.added(&nested, Some("outer"), &registry());
     assert_eq!(drain(&mut early), 2);
@@ -94,14 +105,29 @@ fn early_work_stages_outside_node_modules() {
         !Path::new("node_modules").exists(),
         "early work wrote into node_modules"
     );
-    assert_eq!(fs::read_dir(early::STAGING).unwrap().count(), 2);
+    assert_eq!(staged(&early), 2);
+    assert!(
+        early.root().starts_with(std::env::var("TMPDIR").unwrap()),
+        "staging is not under TMPDIR"
+    );
+    // The test's own install cache and temporary directory, nothing else.
+    let mut project: Vec<_> = fs::read_dir(".")
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    project.sort();
+    assert_eq!(
+        project,
+        ["cache", "tmp"],
+        "early work wrote into the project"
+    );
     assert!(early.prepared(&outer) && early.prepared(&nested));
 }
 
 #[test]
 fn incompatible_and_large_packages_are_left_to_the_install_phase() {
     let registry = registry();
-    let mut early = Early::new(false);
+    let (mut early, _guard) = start();
     let foreign = package("foreign", &["foreign"], json!({"os": ["darwin"]}));
     let below = plain("below", &["foreign", "below"]);
     let large = package("large", &["large"], json!({"dist": {"fileCount": 100_000}}));
@@ -129,9 +155,10 @@ fn the_install_phase_publishes_staged_packages_and_counts_them() {
     let first = package("first", &["first"], json!({"bin": "cli.js"}));
     let second = plain("second", &["second"]);
     seed_cache(&[&first, &second]);
-    let mut early = Early::new(false);
+    let (mut early, _guard) = start();
     early.added(&first, None, &registry());
     assert_eq!(drain(&mut early), 1);
+    let root = early.root().to_path_buf();
     trace::start();
     let mut resolver = resolver_with(early, &[&first, &second]);
     let (installed, manifests) = install_packages(&mut resolver).unwrap();
@@ -150,7 +177,7 @@ fn the_install_phase_publishes_staged_packages_and_counts_them() {
         );
     }
     assert_eq!(
-        fs::read_dir(early::STAGING).unwrap().count(),
+        fs::read_dir(root).unwrap().count(),
         0,
         "staged packages were moved"
     );
@@ -166,7 +193,7 @@ fn packages_the_final_graph_dropped_or_changed_are_never_published() {
     let changed = versioned("changed", "1.0.0", &["changed"]);
     let replaced = versioned("changed", "2.0.0", &["changed"]);
     seed_cache(&[&kept, &dropped, &changed, &replaced]);
-    let mut early = Early::new(false);
+    let (mut early, _guard) = start();
     for package in [&kept, &dropped, &changed] {
         early.added(package, None, &registry());
     }
@@ -176,8 +203,14 @@ fn packages_the_final_graph_dropped_or_changed_are_never_published() {
     assert_eq!(installed, 2);
     assert!(!dropped.path().exists());
     assert_eq!(installed_version(&replaced), "2.0.0");
-    early::discard_staging();
-    assert!(!Path::new(early::STAGING).exists());
+    let root = std::fs::read_dir(std::env::var("TMPDIR").unwrap())
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    drop(_guard);
+    assert!(!root.exists(), "the guard left staging behind");
 }
 
 #[test]
@@ -189,7 +222,7 @@ fn a_fetch_that_failed_early_is_the_package_result() {
     let required = plain("required", &["required"]);
     let mut optional = plain("optional", &["optional"]);
     optional.optional = true;
-    let mut early = Early::new(false);
+    let (mut early, _guard) = start();
     early.added(&required, None, &registry());
     early.added(&optional, None, &registry());
     assert_eq!(drain(&mut early), 2);
@@ -232,7 +265,7 @@ fn a_final_graph_that_hoists_differently_still_uses_what_was_staged() {
     let inside = versioned("shared", "1.0.0", &["user", "shared"]);
     let final_root = versioned("shared", "2.0.0", &["shared"]);
     seed_cache(&[&early_root, &user, &final_root]);
-    let mut early = Early::new(false);
+    let (mut early, _guard) = start();
     early.added(&early_root, None, &registry());
     early.added(&user, None, &registry());
     assert_eq!(drain(&mut early), 2);
@@ -258,32 +291,61 @@ fn a_final_graph_that_hoists_differently_still_uses_what_was_staged() {
 }
 
 #[test]
-fn staging_an_interrupted_run_left_is_never_published() {
+fn staging_an_interrupted_run_left_is_reaped_and_never_published() {
     if !child() {
-        return in_child("staging_an_interrupted_run_left_is_never_published");
+        return in_child("staging_an_interrupted_run_left_is_reaped_and_never_published");
     }
     // An earlier run was killed with `left` staged; the next run resolves a different graph.
     let left = plain("left", &["left"]);
     let other = plain("other", &["other"]);
     seed_cache(&[&left, &other]);
-    let mut killed = Early::new(false);
+    let (mut killed, killed_guard) = start();
     killed.added(&left, None, &registry());
     assert_eq!(drain(&mut killed), 1);
+    let abandoned = killed.root().to_path_buf();
+    std::mem::forget(killed_guard);
     drop(killed);
-    assert_eq!(fs::read_dir(early::STAGING).unwrap().count(), 1);
-    early::discard_staging();
-    let mut early = Early::new(false);
+    // Another project's staging in the same temporary directory is left alone.
+    let foreign =
+        Path::new(&std::env::var("TMPDIR").unwrap()).join(format!("{}0-other", early::STAGING));
+    fs::create_dir_all(&foreign).unwrap();
+    let (mut early, _guard) = start();
+    assert!(
+        !abandoned.exists(),
+        "the killed run's staging was not reaped"
+    );
+    assert!(foreign.exists(), "another project's staging was reaped");
     early.added(&other, None, &registry());
     assert_eq!(drain(&mut early), 1);
     let mut resolver = resolver_with(early, &[&other]);
     let (installed, _) = install_packages(&mut resolver).unwrap();
     assert_eq!(installed, 1);
     assert!(!left.path().exists());
+}
+
+#[test]
+fn a_staging_that_cannot_be_moved_is_extracted_again_from_its_archive() {
+    if !child() {
+        return in_child("a_staging_that_cannot_be_moved_is_extracted_again_from_its_archive");
+    }
+    let tool = plain("tool", &["tool"]);
+    seed_cache(&[&tool]);
+    let (mut early, _guard) = start();
+    early.added(&tool, None, &registry());
+    assert_eq!(drain(&mut early), 1);
+    // As if the staging sat on a filesystem the project cannot be renamed into.
+    fs::remove_dir_all(early.root().join("1")).unwrap();
+    trace::start();
+    let mut resolver = resolver_with(early, &[&tool]);
+    let (installed, _) = install_packages(&mut resolver).unwrap();
+    assert_eq!(installed, 1);
+    assert_eq!(trace::calls("extract"), 1, "the kept archive was extracted");
     assert_eq!(
-        fs::read_dir("node_modules").unwrap().count(),
-        2,
-        "only other and its record"
+        trace::calls("cache-read"),
+        0,
+        "the archive was fetched again"
     );
+    assert!(tool.path().join("package.json").is_file());
 }
 
 #[test]
@@ -305,7 +367,7 @@ fn extraction_pauses_whenever_resolution_has_its_response() {
     ];
     cache_archive(&parent.tarball, &archive_entries(&entries));
     seed_cache(&[&child]);
-    let mut early = Early::new(false);
+    let (mut early, _guard) = start();
     early.added(&parent, None, &registry());
     early.added(&child, Some("parent"), &registry());
     let mut metadata = io::Downloads::new(0);
@@ -340,7 +402,7 @@ fn settling_finishes_a_paused_extraction() {
         ("package/a.js".into(), b"a".to_vec()),
     ];
     cache_archive(&parent.tarball, &archive_entries(&entries));
-    let mut early = Early::new(false);
+    let (mut early, _guard) = start();
     early.added(&parent, None, &registry());
     assert!(early.work(&mut io::Downloads::new(0), &registry(), &mut || true));
     assert!(early.kinds().is_empty(), "paused after the first entry");

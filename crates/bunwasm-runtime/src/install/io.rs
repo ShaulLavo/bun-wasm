@@ -666,15 +666,17 @@ impl Download {
                 Body::Failed(error) => return Err(error.clone()),
                 Body::Head | Body::Reading => {}
             }
+            // Checked only after the read above, so a response that arrived during idle work
+            // is taken, and idle work never extends a stalled response's deadline.
+            if pending.expired(Instant::now()) {
+                return Err(format!("Timeout downloading {}", self.url));
+            }
             let (worked, moved) = self.idle(others, registry, idle);
             if moved {
                 pending.progressed(Instant::now());
             }
             if !worked {
                 wait(&mut pending, &self.url)?;
-            } else if pending.expired(Instant::now()) {
-                // Idle work never extends a stalled response's deadline.
-                return Err(format!("Timeout downloading {}", self.url));
             }
         }
     }
