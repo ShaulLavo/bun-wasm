@@ -221,7 +221,7 @@ function poolOf(page: Awaited<ReturnType<typeof newPage>>) {
 }
 async function newPage(browser: Awaited<ReturnType<typeof chromium.launch>>, url: string) {
   const page = await (await browser.newContext()).newPage();
-  await navigateTestPage(page, `${url}?engine=browser&prompt=off&mode=memory`);
+  await navigateTestPage(page, `${url}?engine=browser&prompt=off`);
   assert.match(await ready(page), /ready/);
   return page;
 }

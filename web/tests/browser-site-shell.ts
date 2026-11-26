@@ -54,7 +54,7 @@ async function runButtonReady(page: Page): Promise<void> {
 }
 async function exercise(page: Page, engine: string) {
   const base = `http://127.0.0.1:${port}/playground/`;
-  await page.goto(`http://127.0.0.1:${port}/playground/?mode=memory&engine=${engine}`);
+  await page.goto(`http://127.0.0.1:${port}/playground/?engine=${engine}`);
   await page.waitForFunction(() => !!Reflect.get(globalThis, "playground"));
   await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
   await ready(page);
@@ -139,7 +139,7 @@ async function exercise(page: Page, engine: string) {
   assert.equal(await checkDelayedStop(page, base, "chromium", engine), true);
   await checkRootSignals(page, base, "chromium", engine);
   await checkPipelineReader(page, base, "chromium", engine);
-  await page.goto(`${base}?mode=memory&engine=${engine}`);
+  await page.goto(`${base}?engine=${engine}`);
   await page.waitForFunction(() => !!Reflect.get(globalThis, "playground"));
   await ready(page);
   await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
