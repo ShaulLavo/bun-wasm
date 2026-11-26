@@ -218,9 +218,10 @@ async function runEngine(browser: Browser, url: string, result: EngineResult, ca
   }
 }
 
-/** A Markdown table cell: a literal `|` would end the cell, and a newline the row. */
+/** A Markdown table cell: a literal `|` would end the cell, and a line break the row. Backslashes
+ * are escaped first, so a value's own `\|` cannot turn into `\\|` and end the cell. */
 export function cell(text: string): string {
-  return text.replaceAll("|", "\\|").replace(/\r?\n/g, " ");
+  return text.replaceAll("\\", "\\\\").replaceAll("|", "\\|").replace(/\r\n|\r|\n/g, " ");
 }
 
 export function table(results: EngineResult[]): string {

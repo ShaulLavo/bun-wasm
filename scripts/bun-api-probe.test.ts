@@ -5,6 +5,8 @@ import { cell, table, type EngineResult } from "./bun-api-probe.ts";
 test("table cells escape a literal pipe and newlines", () => {
   expect(cell("expected a | b")).toBe("expected a \\| b");
   expect(cell("one\ntwo")).toBe("one two");
+  expect(cell("one\r\ntwo\rthree")).toBe("one two three");
+  expect(cell("already \\| escaped")).toBe("already \\\\\\| escaped");
 });
 
 test("a stop reason with a pipe stays in its cell", () => {
