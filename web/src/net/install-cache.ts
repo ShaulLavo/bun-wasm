@@ -5,6 +5,10 @@ const TARBALL = "application/vnd.bun.install-tarball";
 const CACHE = "bun-wasm-install-v1";
 const CACHE_METADATA_HEADER = "x-bun-wasm-cache-metadata";
 const CACHE_CAPTURE_LIMIT = 4 * 1024 * 1024;
+const PUT_QUEUE_BYTE_LIMIT = 8 * 1024 * 1024;
+const PUT_QUEUE_ENTRY_LIMIT = 512;
+const SESSION_IDLE_REFRESH_MS = 2_000;
+const INVALIDATION_CHANNEL = "bun-wasm-install-cache-v1";
 const BODY_FORBIDDEN_STATUS = new Set([204, 205, 304]);
 
 type CaptureState =
@@ -12,6 +16,206 @@ type CaptureState =
   | { kind: "completed" }
   | { kind: "cancelled" }
   | { kind: "over-budget" };
+
+interface OpenedCache {
+  cache: Cache;
+  knownKeys: Set<string> | undefined;
+  generation: number;
+}
+
+interface QueuedPut {
+  key: string;
+  url: string;
+  bytes: number;
+  response: Response;
+  chunks: Uint8Array[] | null;
+  opened: OpenedCache;
+}
+
+interface CacheSession {
+  generation: number;
+  opened?: Promise<OpenedCache | undefined>;
+  currentOpened?: OpenedCache;
+  idleTimer?: ReturnType<typeof setTimeout>;
+  invalidationChannel?: BroadcastChannel;
+  lastActivity: number;
+  activeFetches: number;
+  activePut: boolean;
+  activePutBytes: number;
+  queuedBytes: number;
+  queue: QueuedPut[];
+  queuedByKey: Map<string, QueuedPut>;
+  drainScheduled: boolean;
+}
+
+const sessions = new WeakMap<CacheStorage, CacheSession>();
+
+function getSession(storage: CacheStorage): CacheSession {
+  let session = sessions.get(storage);
+  if (!session) {
+    session = {
+      generation: 0,
+      lastActivity: 0,
+      activeFetches: 0,
+      activePut: false,
+      activePutBytes: 0,
+      queuedBytes: 0,
+      queue: [],
+      queuedByKey: new Map(),
+      drainScheduled: false,
+    };
+    sessions.set(storage, session);
+  }
+  return session;
+}
+
+function cacheKey(url: string): string {
+  try {
+    const base = typeof location === "object" && typeof location?.href === "string" ? location.href : undefined;
+    return new URL(url, base).href;
+  } catch {
+    return url;
+  }
+}
+
+function isSessionIdle(session: CacheSession): boolean {
+  return session.activeFetches === 0 && !session.activePut && session.queue.length === 0;
+}
+
+function clearIdleTimer(session: CacheSession): void {
+  if (session.idleTimer === undefined) return;
+  clearTimeout(session.idleTimer);
+  session.idleTimer = undefined;
+}
+
+function closeInvalidationChannel(session: CacheSession): void {
+  if (!session.invalidationChannel) return;
+  try {
+    session.invalidationChannel.close();
+  } catch {
+    // Closing an already-closed channel is a no-op.
+  }
+  session.invalidationChannel = undefined;
+}
+
+function ensureInvalidationChannel(session: CacheSession): void {
+  if (session.invalidationChannel || typeof BroadcastChannel !== "function") return;
+  try {
+    const channel = new BroadcastChannel(INVALIDATION_CHANNEL);
+    channel.onmessage = () => invalidateSession(session);
+    session.invalidationChannel = channel;
+  } catch {
+    // Contexts without BroadcastChannel still release idle handles on the timer.
+  }
+}
+
+function broadcastClear(): void {
+  if (typeof BroadcastChannel !== "function") return;
+  try {
+    const channel = new BroadcastChannel(INVALIDATION_CHANNEL);
+    channel.postMessage("clear");
+    channel.close();
+  } catch {
+    // Best-effort cross-tab cache release.
+  }
+}
+
+function releaseIdleSession(session: CacheSession): void {
+  session.idleTimer = undefined;
+  if (!isSessionIdle(session)) return;
+  if (Date.now() - session.lastActivity < SESSION_IDLE_REFRESH_MS) {
+    scheduleIdleRelease(session);
+    return;
+  }
+  session.generation++;
+  session.opened = undefined;
+  session.currentOpened = undefined;
+  closeInvalidationChannel(session);
+}
+
+function scheduleIdleRelease(session: CacheSession): void {
+  clearIdleTimer(session);
+  if (!session.opened || !isSessionIdle(session) || typeof setTimeout !== "function") return;
+  const timer = setTimeout(() => releaseIdleSession(session), SESSION_IDLE_REFRESH_MS);
+  if (typeof timer === "object" && timer !== null && "unref" in timer && typeof timer.unref === "function") {
+    timer.unref();
+  }
+  session.idleTimer = timer;
+}
+
+function invalidateSession(session: CacheSession | undefined): void {
+  if (!session) return;
+  clearIdleTimer(session);
+  closeInvalidationChannel(session);
+  session.generation++;
+  session.opened = undefined;
+  session.currentOpened = undefined;
+  for (const entry of session.queue) {
+    if (entry.chunks) entry.chunks.length = 0;
+  }
+  session.queue.length = 0;
+  session.queuedByKey.clear();
+  session.queuedBytes = 0;
+}
+
+/** Delete the tarball download cache and discard any queued background writes. */
+export async function clearInstallCache(): Promise<boolean> {
+  if (typeof caches === "undefined") return false;
+  const storage = caches;
+  invalidateSession(sessions.get(storage));
+  broadcastClear();
+  try {
+    return typeof storage.delete === "function" ? await storage.delete(CACHE) : false;
+  } finally {
+    invalidateSession(sessions.get(storage));
+    broadcastClear();
+  }
+}
+
+function shouldRefreshSession(session: CacheSession, now: number): boolean {
+  if (!session.opened) return true;
+  if (!isSessionIdle(session)) return false;
+  return now - session.lastActivity >= SESSION_IDLE_REFRESH_MS;
+}
+
+async function loadKnownKeys(cache: Cache): Promise<Set<string> | undefined> {
+  if (typeof cache.keys !== "function") return undefined;
+  try {
+    const requests = await cache.keys();
+    return new Set(requests.map(request => cacheKey(request.url)));
+  } catch {
+    // Fall back to cache.match() when key enumeration is unavailable or fails.
+    return undefined;
+  }
+}
+
+function getOpenedCache(storage: CacheStorage, session: CacheSession, now: number): Promise<OpenedCache | undefined> {
+  clearIdleTimer(session);
+  if (!shouldRefreshSession(session, now)) return session.opened!;
+  const generation = session.generation;
+  session.currentOpened = undefined;
+  ensureInvalidationChannel(session);
+  let opening: Promise<OpenedCache | undefined> | undefined;
+  opening = (async (): Promise<OpenedCache | undefined> => {
+    try {
+      const cache = await storage.open(CACHE);
+      const knownKeys = await loadKnownKeys(cache);
+      if (session.generation !== generation) return undefined;
+      const result: OpenedCache = { cache, knownKeys, generation };
+      if (session.opened === opening) session.currentOpened = result;
+      return result;
+    } catch {
+      if (session.opened === opening) {
+        session.opened = undefined;
+        session.currentOpened = undefined;
+        closeInvalidationChannel(session);
+      }
+      return undefined;
+    }
+  })();
+  session.opened = opening;
+  return opening;
+}
 
 /** Cache npm downloads across playground runs, without caching ordinary user fetches. */
 export async function installFetch(url: string, options: RequestInit): Promise<Response> {
@@ -26,30 +230,67 @@ export async function installFetch(url: string, options: RequestInit): Promise<R
   }
   const directives = headers.get("cache-control")?.match(/(?:[^,"]|"(?:[^"\\]|\\.)*")+/g);
   const refresh = header.includes("; no-cache") || (directives?.some(value => value.trim().toLowerCase() === "no-cache") ?? false);
-  let cache: Cache | undefined;
+  const storage = caches;
+  const session = getSession(storage);
+  const key = cacheKey(url);
+  const now = Date.now();
+  const opening = getOpenedCache(storage, session, now);
+  session.activeFetches++;
+  session.lastActivity = now;
   try {
-    cache = await caches.open(CACHE);
-    const cached = await cache.match(url);
-    if (cached && !refresh) return restoreCachedResponse(cached);
+    const opened = await opening;
+    const activeOpened = opened && opened.generation === session.generation ? opened : undefined;
+    if (activeOpened && !refresh) {
+      const cached = await matchKnownEntry(activeOpened, key, url);
+      if (cached) return restoreCachedResponse(cached);
+    }
+    const response = await packageFetch(url, options);
+    if (!response.ok || !activeOpened || activeOpened.generation !== session.generation) return response;
+    return prepareCachedResponse(response, session, activeOpened, key, url, options.signal);
+  } finally {
+    session.activeFetches--;
+    session.lastActivity = Date.now();
+    scheduleIdleRelease(session);
+  }
+}
+
+async function matchKnownEntry(opened: OpenedCache, key: string, url: string): Promise<Response | undefined> {
+  if (opened.knownKeys !== undefined && !opened.knownKeys.has(key)) return undefined;
+  try {
+    const cached = await opened.cache.match(url);
+    if (cached) return cached;
+    opened.knownKeys?.delete(key);
   } catch {
     // Private browsing and exhausted quotas must not prevent an install.
   }
-  const response = await packageFetch(url, options);
-  if (!response.ok || !cache) return response;
-  return prepareCachedResponse(response, cache, url, options.signal);
+  return undefined;
 }
 
-function prepareCachedResponse(response: Response, cache: Cache, url: string, signal: AbortSignal | null | undefined): Response {
+function prepareCachedResponse(
+  response: Response,
+  session: CacheSession,
+  opened: OpenedCache,
+  key: string,
+  url: string,
+  signal: AbortSignal | null | undefined,
+): Response {
   if (!response.body) {
-    publishEmptyResponse(cache, url, response);
+    enqueuePut(session, opened, key, url, response, null, 0);
     return response;
   }
   if (BODY_FORBIDDEN_STATUS.has(response.status)) return response;
-  const body = createForwardingBody(response, cache, url, signal);
+  const body = createForwardingBody(response, session, opened, key, url, signal);
   return createResponseWithBody(response, body);
 }
 
-function createForwardingBody(response: Response, cache: Cache, url: string, signal: AbortSignal | null | undefined): ReadableStream<Uint8Array> {
+function createForwardingBody(
+  response: Response,
+  session: CacheSession,
+  opened: OpenedCache,
+  key: string,
+  url: string,
+  signal: AbortSignal | null | undefined,
+): ReadableStream<Uint8Array> {
   const source = response.body!;
   let reader: ReadableStreamDefaultReader<Uint8Array>;
   let state: CaptureState = { kind: "active", chunks: [], bytes: 0 };
@@ -99,11 +340,11 @@ function createForwardingBody(response: Response, cache: Cache, url: string, sig
     controller?.error(error);
   };
   const finish = () => {
-    const chunks = state.kind === "active" ? state.chunks : undefined;
+    const captured = state.kind === "active" ? { chunks: state.chunks, bytes: state.bytes } : undefined;
     state = { kind: "completed" };
     release();
     controller?.close();
-    if (chunks) publishCapturedResponse(cache, url, response, chunks);
+    if (captured) enqueuePut(session, opened, key, url, response, captured.chunks, captured.bytes);
   };
   const read = async () => {
     if (!isForwardingState(state)) return;
@@ -111,6 +352,7 @@ function createForwardingBody(response: Response, cache: Cache, url: string, sig
       const result = await reader.read();
       if (!isForwardingState(state)) return;
       if (result.done) return finish();
+      session.lastActivity = Date.now();
       state = captureChunk(state, result.value);
       controller?.enqueue(result.value);
     } catch (error) {
@@ -217,10 +459,105 @@ function restoreCachedResponse(response: Response): Response {
   return withResponseMetadata(restored, metadata);
 }
 
-function publishEmptyResponse(cache: Cache, url: string, response: Response): void {
-  void Promise.resolve().then(() => cache.put(url, createCachedResponse(response, null))).catch(() => {});
+function removeQueued(session: CacheSession, entry: QueuedPut): void {
+  const index = session.queue.indexOf(entry);
+  if (index !== -1) session.queue.splice(index, 1);
+  session.queuedByKey.delete(entry.key);
+  session.queuedBytes -= entry.bytes;
+  if (entry.chunks) entry.chunks.length = 0;
 }
 
-function publishCapturedResponse(cache: Cache, url: string, response: Response, chunks: Uint8Array[]): void {
-  void Promise.resolve().then(() => cache.put(url, createCachedResponse(response, capturedBody(chunks)))).catch(() => {});
+function enqueuePut(
+  session: CacheSession,
+  opened: OpenedCache,
+  key: string,
+  url: string,
+  response: Response,
+  chunks: Uint8Array[] | null,
+  bytes: number,
+): void {
+  if (opened.generation !== session.generation) {
+    if (chunks) chunks.length = 0;
+    return;
+  }
+  clearIdleTimer(session);
+  session.lastActivity = Date.now();
+  const target = session.currentOpened?.generation === session.generation ? session.currentOpened : opened;
+  const existing = session.queuedByKey.get(key);
+  if (existing) removeQueued(session, existing);
+  if (
+    session.queue.length >= PUT_QUEUE_ENTRY_LIMIT
+    || session.activePutBytes + session.queuedBytes + bytes > PUT_QUEUE_BYTE_LIMIT
+  ) {
+    if (chunks) chunks.length = 0;
+    scheduleIdleRelease(session);
+    return;
+  }
+  const entry: QueuedPut = { key, url, bytes, response, chunks, opened: target };
+  session.queue.push(entry);
+  session.queuedByKey.set(key, entry);
+  session.queuedBytes += bytes;
+  scheduleDrain(session, false);
+}
+
+function recordKnownKey(session: CacheSession, entry: QueuedPut, putGeneration: number): void {
+  if (putGeneration !== session.generation) return;
+  entry.opened.knownKeys?.add(entry.key);
+  if (session.currentOpened?.generation === putGeneration) {
+    session.currentOpened.knownKeys?.add(entry.key);
+    return;
+  }
+  const pending = session.opened;
+  if (!pending) return;
+  void pending.then(active => {
+    if (active && active.generation === putGeneration && session.generation === putGeneration) {
+      active.knownKeys?.add(entry.key);
+    }
+  });
+}
+
+function scheduleDrain(session: CacheSession, yieldMacrotask: boolean): void {
+  if (session.activePut || session.drainScheduled || session.queue.length === 0) return;
+  session.drainScheduled = true;
+  if (yieldMacrotask && typeof setTimeout === "function") {
+    setTimeout(() => drainPutQueue(session), 0);
+    return;
+  }
+  void Promise.resolve().then(() => drainPutQueue(session));
+}
+
+function drainPutQueue(session: CacheSession): void {
+  session.drainScheduled = false;
+  if (session.activePut) return;
+  const entry = session.queue.shift();
+  if (!entry) {
+    scheduleIdleRelease(session);
+    return;
+  }
+  session.queuedByKey.delete(entry.key);
+  session.queuedBytes -= entry.bytes;
+  if (entry.opened.generation !== session.generation) {
+    if (entry.chunks) entry.chunks.length = 0;
+    scheduleDrain(session, false);
+    scheduleIdleRelease(session);
+    return;
+  }
+  clearIdleTimer(session);
+  session.activePut = true;
+  session.activePutBytes = entry.bytes;
+  session.lastActivity = Date.now();
+  const body = entry.chunks ? capturedBody(entry.chunks) : null;
+  const putGeneration = entry.opened.generation;
+  void Promise.resolve()
+    .then(() => entry.opened.cache.put(entry.url, createCachedResponse(entry.response, body)))
+    .then(() => recordKnownKey(session, entry, putGeneration))
+    .catch(() => {})
+    .finally(() => {
+      if (entry.chunks) entry.chunks.length = 0;
+      session.activePut = false;
+      session.activePutBytes = 0;
+      session.lastActivity = Date.now();
+      scheduleDrain(session, true);
+      scheduleIdleRelease(session);
+    });
 }

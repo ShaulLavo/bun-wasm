@@ -6,12 +6,12 @@ import { restoreSource, type RestoreSourceOptions } from "./workspace-restore";
 import { templateFiles, templateUrl } from "./template";
 import { templates } from "./template-catalog";
 import { measureStartup } from "../../web/src/startup";
+import { clearInstallCache } from "../../web/src/net/install-cache";
 
 export type StoredWorkspaces = Pick<EvictionDependencies, "stored" | "openIdle">;
 type Filesystem = Runtime["filesystem"];
 const EVICT_LOCK = "bun-wasm-sandbox-evict";
 const templateLockName = (template: string) => `bun-wasm-sandbox-template:${template}`;
-const DOWNLOAD_CACHE = "bun-wasm-install-v1";
 
 export class WorkspaceStorage {
   readonly recovery: StorageRecovery;
@@ -69,7 +69,7 @@ export class WorkspaceStorage {
       if (!lock) return;
       const started = performance.now();
       let cleared: Promise<boolean> | undefined;
-      const clearDownloadCache = () => cleared ??= caches.delete(DOWNLOAD_CACHE);
+      const clearDownloadCache = () => cleared ??= clearInstallCache();
       const report = await evictIdle(
         { index: this.index, ...this.workspaces, policy: preservationPolicy, clearDownloadCache },
         templates.map(template => template.id),
@@ -96,7 +96,7 @@ export class WorkspaceStorage {
 async function openIndex(): Promise<WorkspaceIndex> {
   try { return await WorkspaceIndex.open(); } catch (error) {
     if (!isStorageFull(error)) throw error;
-    await caches.delete(DOWNLOAD_CACHE);
+    await clearInstallCache();
     return WorkspaceIndex.open();
   }
 }
