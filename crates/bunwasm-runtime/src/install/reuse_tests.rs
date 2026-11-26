@@ -2,11 +2,12 @@
 use std::{fs, path::Path, process::Command};
 
 use serde_json::json;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 
 use super::{
     Archives, Package, Resolver, install_packages, installed_source_path, io,
-    resolve::test_support::archive, trace,
+    resolve::test_support::{cache_file, seed_cache},
+    trace,
 };
 
 fn package(name: &str, chain: &[&str]) -> Package {
@@ -53,16 +54,6 @@ fn in_child_with(name: &str, variables: &[(&str, &str)]) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-fn seed_cache(packages: &[&Package]) {
-    fs::create_dir_all(io::cache_dir()).unwrap();
-    for package in packages {
-        let meta = json!({"name": package.name, "version": package.version});
-        let cache =
-            io::cache_dir().join(format!("{:x}", Sha256::digest(package.tarball.as_bytes())));
-        fs::write(cache, archive(&meta)).unwrap();
-    }
 }
 
 fn resolver(packages: &[&Package]) -> Resolver {
@@ -114,6 +105,34 @@ fn a_shared_archive_is_read_once_per_install() {
     assert_eq!(trace::calls("cache-read"), 1);
     assert!(trace::calls("present-check") >= 3);
     assert!(Path::new(&nested.path()).join("package.json").is_file());
+}
+
+#[test]
+fn a_shared_archive_that_overgrew_while_downloading_is_kept_for_its_second_use() {
+    // Two aliases of one 17 MiB archive. Its download grew past 32 MiB of capacity, which
+    // depends on how its chunks arrived; counted as is, the second alias fetched it again.
+    let (first, second) = (package("big", &["a-first"]), package("big", &["a-second"]));
+    let overgrown = || {
+        let mut bytes = Vec::with_capacity((32 << 20) + 1);
+        bytes.resize(17 << 20, 7);
+        bytes
+    };
+    let mut archives = Archives::new([&first, &second]);
+    archives.release(&first.tarball, overgrown());
+    assert!(
+        !archives.holds(&first.tarball),
+        "the budget counts the whole allocation"
+    );
+    let mut archives = Archives::new([&first, &second]);
+    archives.release(&first.tarball, io::finished_body(overgrown()));
+    assert!(
+        archives.holds(&first.tarball),
+        "a finished download is budgeted by its size"
+    );
+    assert_eq!(
+        archives.take(&second.tarball).map(|bytes| bytes.len()),
+        Some(17 << 20)
+    );
 }
 
 #[test]
@@ -233,8 +252,7 @@ fn an_archive_that_failed_is_not_reused() {
     let mut optional = package("tool", &["a-optional"]);
     let mut required = package("tool", &["b-required"]);
     seed_cache(&[&required]);
-    let cached = io::cache_dir().join(format!("{:x}", Sha256::digest(required.tarball.as_bytes())));
-    let bytes = fs::read(cached).unwrap();
+    let bytes = fs::read(cache_file(&required.tarball)).unwrap();
     optional.optional = true;
     optional.integrity = integrity(b"other bytes");
     required.integrity = integrity(&bytes);

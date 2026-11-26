@@ -63,7 +63,11 @@ function hostContext(native: boolean): Context {
       fsWatchDropFd: () => {},
       fsWatchReady: () => state.watches.some(records => records.length > 0),
       fsWatchRead: id => state.watches[id - 40].shift() ?? -6,
-      fsWatchClose: id => { state.closed.push(id); return 0; },
+      fsWatchNext: () => {
+        const index = state.watches.findIndex(records => records.length > 0);
+        return index < 0 ? -6 : [40 + index, state.watches[index].shift()];
+      },
+      fsWatchClose: id => { state.closed.push(id); state.watches[id - 40]?.splice(0); return 0; },
       procRead: () => { const next = state.reads.shift() ?? -6; if (next instanceof Error) throw next; return next; },
       procWrite: (_fd, bytes) => state.writable ? bytes.length : -6,
       procClose: fd => { state.closed.push(fd); return 0; }, procPoll: () => new Uint8Array(),
@@ -112,7 +116,7 @@ function hostContext(native: boolean): Context {
   }
   runInContext(`modules.stream = modules.node_stream_core.Stream;
     const files = { statSync() {}, toPath: path => path, absolute: path => path };
-    const watch = (...args) => modules.fs_watch(files).watch(...args);
+    const { watch } = modules.fs_watch(files);
     const record = new Uint8Array([1, 0, 0, 0, 0xff, 0xff, 0xff, 0xff]);`, context);
   return context;
 }

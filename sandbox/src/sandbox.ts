@@ -5,6 +5,7 @@ import { createRuntime, openIdleWorkspace, storedWorkspaces, type Runtime } from
 import { FilesystemClient } from "waffle/fs/client";
 import { memoryGroupPolicy } from "../../web/src/host-memory-policy";
 import { PAGE_INSTALL_ENV } from "../../web/src/install-cache";
+import { clearEarlyStaging } from "../../web/src/install-staging";
 import { parseMemoryProfile, type ProgramMemoryProfile } from "../../web/src/program-profile";
 import { templateProfile } from "../../web/src/playground/program-profile";
 import { installBunSharedObjects } from "../../src/shared-objects";
@@ -1307,6 +1308,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
     // Uncoordinated local boot (mode=memory OR single-tab persistent fallback).
     await this.retryStorage(() => ws.fs.mkdirp("/tmp"));
+    await this.retryStorage(() => clearEarlyStaging(ws.fs));
     stage("filesystem-open");
     const seed = () => loadTemplate(ws.fs, APP, this.project.file, false, { signal }).then(() => {});
     const initialize = this.storage ? () => this.storage!.initialize(ws.fs, seed, { signal }) : seed;
@@ -1398,6 +1400,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
                   identity,
                   this.ownClaimIds,
                   async () => {
+                    // No guest runs in any tab while live writers are excluded.
+                    await this.retryStorage(() => clearEarlyStaging(liveWs.fs));
                     const seed = () => loadTemplate(liveWs.fs, APP, this.project.file, false, { signal }).then(() => {});
                     const initialize = this.storage
                       ? () => this.storage!.initialize(liveWs.fs, seed, { signal })

@@ -217,6 +217,11 @@ fn io(
     Ok(0)
 }
 
+/// Whether two guest spans share a byte; an empty span overlaps nothing.
+fn overlaps(a: &std::ops::Range<usize>, b: &std::ops::Range<usize>) -> bool {
+    !a.is_empty() && !b.is_empty() && a.start < b.end && b.start < a.end
+}
+
 /// Store one little-endian word at an already validated guest offset.
 fn store_word(
     memory: &GuestMemory,
@@ -1009,7 +1014,7 @@ fn install_watches(
     stat: Delegated,
     scratch: wasmtime::Memory,
 ) -> Result<()> {
-    use crate::fs_watch::{BADF, FAULT, INVAL, NOBUFS, Read};
+    use crate::fs_watch::{AGAIN, BADF, FAULT, INVAL, NOBUFS, Read};
     let state = namespace.clone();
     linker.func_wrap(
         "runtime_fs",
@@ -1061,6 +1066,9 @@ fn install_watches(
             else {
                 return Ok(FAULT);
             };
+            if overlaps(&buffer, &output) {
+                return Ok(INVAL);
+            }
             let (errno, written) = match caller.data_mut().watches.read(id as u32, buffer.len()) {
                 Read::Records(bytes) => {
                     memory
@@ -1070,6 +1078,44 @@ fn install_watches(
                 }
                 Read::Short(needed) => (NOBUFS, needed),
                 Read::Errno(errno) => return Ok(errno),
+            };
+            store_word(&memory, &mut caller, output.start, written)?;
+            Ok(errno)
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_fs",
+        "watch_next",
+        |mut caller: Caller<'_, Host>, out_id: i32, buf: i32, len: i32, out: i32| -> Result<i32> {
+            let memory = memory(&mut caller)?;
+            let size = memory.len(&caller);
+            let (Some(id_word), Some(buffer), Some(output)) = (
+                span(size, out_id, 4),
+                span(size, buf, len as u32 as usize),
+                span(size, out, 4),
+            ) else {
+                return Ok(FAULT);
+            };
+            if overlaps(&id_word, &output)
+                || overlaps(&buffer, &id_word)
+                || overlaps(&buffer, &output)
+            {
+                return Ok(INVAL);
+            }
+            store_word(&memory, &mut caller, id_word.start, 0)?;
+            let Some((id, read)) = caller.data_mut().watches.next(buffer.len()) else {
+                return Ok(AGAIN);
+            };
+            store_word(&memory, &mut caller, id_word.start, id)?;
+            let (errno, written) = match read {
+                Read::Records(bytes) => {
+                    memory
+                        .write(&mut caller, buffer.start, &bytes)
+                        .context("validated watch buffer")?;
+                    (0, bytes.len() as u32)
+                }
+                Read::Short(needed) => (NOBUFS, needed),
+                Read::Errno(errno) => (errno, 0),
             };
             store_word(&memory, &mut caller, output.start, written)?;
             Ok(errno)

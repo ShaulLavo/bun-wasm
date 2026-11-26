@@ -32,6 +32,11 @@ impl Pending {
         self.poll = FIRST_POLL;
     }
 
+    /// Whether the progress deadline has passed.
+    pub fn expired(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.progress) >= self.timeout
+    }
+
     /// The next `poll` timeout, clipped to the remaining progress time with a 1 ms minimum.
     /// A sub-millisecond remainder rounds up; `None` means the progress deadline has expired.
     pub fn next_poll_ms(&mut self, now: Instant) -> Option<i32> {

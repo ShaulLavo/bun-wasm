@@ -198,6 +198,8 @@ pub struct Resolver {
     production: bool,
     pub member_update: Option<MemberUpdate>,
     pub(super) overrides: Overrides,
+    /// Installs placed packages while metadata loads (cold installs only).
+    pub(super) early: Option<super::early::Early>,
 }
 
 impl Resolver {
@@ -218,12 +220,18 @@ impl Resolver {
             production: false,
             member_update: None,
             overrides: Overrides::default(),
+            early: None,
         }
     }
 
     pub fn resolve(&mut self, manifest: &Value, production: bool) -> Result<()> {
         let result = self.resolve_graph(manifest, production);
         self.downloads.clear();
+        if result.is_ok()
+            && let Some(early) = &mut self.early
+        {
+            early.settle(&self.registry);
+        }
         result
     }
 
@@ -232,7 +240,7 @@ impl Resolver {
         self.overrides = Overrides::new(manifest, &self.locked)?;
         let members: Vec<_> = self.workspaces.keys().cloned().collect();
         for name in members {
-            self.add(&name, "workspace:*", vec![name.clone()], false)?;
+            self.add(&name, "workspace:*", vec![name.clone()], false, None)?;
         }
         let dependencies: Vec<_> = dependencies(manifest, production, true)
             .into_iter()
@@ -241,7 +249,7 @@ impl Resolver {
         for (index, (name, (range, optional, _))) in dependencies.iter().enumerate() {
             self.prefetch_dependencies(&mut lookahead, index);
             let range = self.overrides.target(name, range).to_owned();
-            self.add(name, &range, vec![name.clone()], *optional)?;
+            self.add(name, &range, vec![name.clone()], *optional, None)?;
         }
         self.downloads.clear();
         let mut pending_peers = VecDeque::new();
@@ -376,7 +384,14 @@ impl Resolver {
             let Some(chain) = chain else {
                 continue;
             };
-            self.add(name, &target, chain, *optional || parent.optional)?;
+            let parent_key = parent.key();
+            self.add(
+                name,
+                &target,
+                chain,
+                *optional || parent.optional,
+                Some(&parent_key),
+            )?;
         }
         Ok(())
     }
@@ -672,7 +687,14 @@ impl Resolver {
         self.pending.push_back(key.into());
     }
 
-    fn add(&mut self, name: &str, range: &str, chain: Vec<String>, optional: bool) -> Result<()> {
+    fn add(
+        &mut self,
+        name: &str,
+        range: &str,
+        chain: Vec<String>,
+        optional: bool,
+        parent: Option<&str>,
+    ) -> Result<()> {
         if chain.len() > 128 || self.packages.len() >= 10000 {
             return Err("Dependency graph exceeds install limit".into());
         }
@@ -695,6 +717,9 @@ impl Resolver {
             Err(error) => return Err(error),
         };
         let key = package.key();
+        if let Some(early) = &mut self.early {
+            early.added(&package, parent, &self.registry);
+        }
         self.packages.insert(key.clone(), package);
         self.pending.push_back(key);
         Ok(())
@@ -793,12 +818,16 @@ impl Resolver {
             return Ok(());
         }
         if !self.responses.contains_key(name) {
-            let bytes = self.downloads.fetch(
-                &self.metadata_url(name),
-                false,
-                self.refresh,
-                &self.registry,
-            )?;
+            let url = self.metadata_url(name);
+            let (early, registry) = (&mut self.early, &self.registry);
+            let mut idle = |metadata: &mut io::Downloads, arrived: &mut dyn FnMut() -> bool| {
+                early
+                    .as_mut()
+                    .is_some_and(|early| early.work(metadata, registry, arrived))
+            };
+            let bytes =
+                self.downloads
+                    .fetch_with(&url, false, self.refresh, &self.registry, &mut idle)?;
             self.responses.insert(name.into(), bytes);
         }
         Ok(())
@@ -1029,7 +1058,7 @@ fn package_integrity(meta: &Value) -> Result<String> {
     ))
 }
 
-fn compatible(meta: &Value) -> bool {
+pub(super) fn compatible(meta: &Value) -> bool {
     compatible_field(&meta["os"], "linux") && compatible_field(&meta["cpu"], "wasm32")
 }
 

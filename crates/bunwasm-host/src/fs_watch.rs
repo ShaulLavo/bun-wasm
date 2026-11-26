@@ -71,6 +71,8 @@ pub struct Watches {
     notify: Arc<Notify>,
     next: u32,
     open: HashMap<u32, Watch>,
+    /// The id `watch_next` reported last.
+    cursor: u32,
 }
 
 impl Watches {
@@ -79,6 +81,7 @@ impl Watches {
             notify,
             next: 1,
             open: HashMap::new(),
+            cursor: 0,
         }
     }
 
@@ -131,6 +134,24 @@ impl Watches {
             return Read::Errno(BADF);
         };
         watch.read(capacity)
+    }
+
+    /// `watch_next`: the first watch with something to report (records, a short first record or
+    /// its end), in id order starting after the last one reported, so a busy watch can't starve
+    /// the rest. `None` when no watch has anything (EAGAIN).
+    pub fn next(&mut self, capacity: usize) -> Option<(u32, Read)> {
+        let mut ids: Vec<u32> = self.open.keys().copied().collect();
+        ids.sort_unstable();
+        let after = ids.partition_point(|&id| id <= self.cursor);
+        ids.rotate_left(after);
+        for id in ids {
+            let read = self.open.get_mut(&id)?.read(capacity);
+            if read != Read::Errno(AGAIN) {
+                self.cursor = id;
+                return Some((id, read));
+            }
+        }
+        None
     }
 
     pub fn close(&mut self, id: u32) -> i32 {

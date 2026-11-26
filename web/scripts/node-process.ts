@@ -250,8 +250,10 @@ function allowUnstartedWasiClose(close: (fd: number) => number) {
  * watch id ever exists for read or close. */
 function watchImports(memory: () => WebAssembly.Memory, descriptors: DescriptorTable,
   guard: (fn: (...args: number[]) => number) => (...args: number[]) => number): WebAssembly.ModuleImports {
-  const EBADF = 8, EFAULT = 21, EINVAL = 28, ENOTSUP = 58;
+  const EAGAIN = 6, EBADF = 8, EFAULT = 21, EINVAL = 28, ENOTSUP = 58;
   const fits = (...ranges: [number, number][]) => ranges.every(([at, length]) => (at >>> 0) + length <= memory().buffer.byteLength);
+  const overlap = ([a, aLength]: [number, number], [b, bLength]: [number, number]) =>
+    aLength > 0 && bLength > 0 && (a >>> 0) < (b >>> 0) + bLength && (b >>> 0) < (a >>> 0) + aLength;
   return {
     watch_open: guard((fd, flags, out) => {
       if (!fits([out!, 4])) return EFAULT;
@@ -260,7 +262,17 @@ function watchImports(memory: () => WebAssembly.Memory, descriptors: DescriptorT
       if (!entry) return EBADF;
       return entry.resource.kind === "file" || entry.resource.kind === "directory" ? ENOTSUP : EINVAL;
     }),
-    watch_read: guard((_id, buf, len, out) => fits([buf!, len! >>> 0], [out!, 4]) ? EBADF : EFAULT),
+    watch_read: guard((_id, buf, len, out) => {
+      if (!fits([buf!, len! >>> 0], [out!, 4])) return EFAULT;
+      return overlap([buf!, len! >>> 0], [out!, 4]) ? EINVAL : EBADF;
+    }),
+    // No id ever exists, so nothing is ready: EAGAIN with out_id 0 once the spans are valid.
+    watch_next: guard((outId, buf, len, out) => {
+      if (!fits([outId!, 4], [buf!, len! >>> 0], [out!, 4])) return EFAULT;
+      if (overlap([outId!, 4], [out!, 4]) || overlap([buf!, len! >>> 0], [outId!, 4]) || overlap([buf!, len! >>> 0], [out!, 4])) return EINVAL;
+      new DataView(memory().buffer).setUint32(outId! >>> 0, 0, true);
+      return EAGAIN;
+    }),
     watch_ready: guard(() => 0),
     watch_close: guard(() => EBADF),
   };

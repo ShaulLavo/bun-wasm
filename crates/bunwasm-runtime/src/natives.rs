@@ -2444,6 +2444,16 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
             Err(errno) => (-errno).into(),
         })
     });
+    // `[id, records | 0 at end | -errno]` for the next ready watch, or a bare -errno (-6 EAGAIN).
+    t.add("fsWatchNext", |_| {
+        let (id, payload) = match host::fs_watch_next() {
+            host::WatchNext::Records(id, bytes) if bytes.is_empty() => (id, 0.into()),
+            host::WatchNext::Records(id, bytes) => (id, Val::Bytes(bytes)),
+            host::WatchNext::WatchError(id, errno) => (id, (-errno).into()),
+            host::WatchNext::Error(errno) => return Ok((-errno).into()),
+        };
+        Ok(Val::Array(vec![Val::Num(id as f64), payload]))
+    });
     t.add("fsWatchClose", |a| {
         Ok((-host::fs_watch_close(a.u32(0)?)).into())
     });
