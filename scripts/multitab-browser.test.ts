@@ -1,9 +1,10 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
-import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
+import { chromium, firefox, webkit, type Browser, type BrowserContext, type Page } from "playwright";
 import { join, resolve } from "node:path";
 import { verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
 import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
+import { installHmrConnection } from "../sandbox/tests/hmr-connection.ts";
 import { isCancelledLoadingStatusPoll } from "./preview-loading-noise";
 
 // Tests here start real processes and browsers. The limit only catches a hang.
@@ -179,20 +180,100 @@ async function waitForPlaygroundReady(page: Page, peers: Record<string, Page>, t
   }
 }
 
+function readPreviewDiagnostics() {
+  const api = Reflect.get(globalThis, "sandbox");
+  const frame = document.querySelector<HTMLIFrameElement>("#preview");
+  let previewUrl: string | null = null;
+  let previewText: string | null = null;
+  let hmrConnected: boolean | null = null;
+  try {
+    previewUrl = frame?.contentDocument?.URL ?? null;
+    previewText = (frame?.contentDocument?.body?.textContent ?? "").slice(0, 200);
+    hmrConnected = frame?.contentWindow ? Reflect.get(frame.contentWindow, "__testHmrConnected") === true : null;
+  } catch {
+    previewUrl = "inaccessible";
+  }
+  return {
+    role: api?.role?.() ?? null,
+    serverDot: document.querySelector("#server-dot")?.getAttribute("data-state") ?? null,
+    status: document.querySelector("#status")?.textContent ?? null,
+    previewLoaded: Boolean(api?.preview?.()?.loaded),
+    previewSrc: frame?.getAttribute("src") ?? null,
+    previewUrl,
+    hmrConnected,
+    previewText,
+  };
+}
+
+async function previewDiagnostics(page: Page): Promise<unknown> {
+  if (page.isClosed()) return "closed";
+  return page.evaluate(readPreviewDiagnostics).catch((error: unknown) => `unavailable: ${String(error)}`);
+}
+
+function hasPreviewText(needle: string): boolean {
+  const frame = document.querySelector<HTMLIFrameElement>("#preview");
+  try {
+    return (frame?.contentDocument?.body?.textContent ?? "").includes(needle);
+  } catch {
+    return false;
+  }
+}
+
+function isPreviewReadyForHmr(needle: string): boolean {
+  const api = Reflect.get(globalThis, "sandbox");
+  if (!api?.preview?.()?.loaded) return false;
+  const frame = document.querySelector<HTMLIFrameElement>("#preview");
+  try {
+    const win = frame?.contentWindow;
+    const text = frame?.contentDocument?.body?.textContent ?? "";
+    return Boolean(win && Reflect.get(win, "__testHmrConnected") === true && text.includes(needle));
+  } catch {
+    return false;
+  }
+}
+
+function matchIsolatedPreviewText(target: { want: string; forbid: string }): string | false {
+  const frame = document.querySelector<HTMLIFrameElement>("#preview");
+  try {
+    const text = frame?.contentDocument?.body?.textContent ?? "";
+    return text.includes(target.want) && !text.includes(target.forbid) ? text : false;
+  } catch {
+    return false;
+  }
+}
+
 async function waitForPreviewText(page: Page, expected: string, timeout = 60_000): Promise<void> {
-  await page.waitForFunction(
-    (needle) => {
-      const frame = document.querySelector<HTMLIFrameElement>("#preview");
-      try {
-        const text = frame?.contentDocument?.body?.textContent ?? "";
-        return text.includes(needle);
-      } catch {
-        return false;
-      }
-    },
-    expected,
-    { timeout },
-  );
+  try {
+    await page.waitForFunction(hasPreviewText, expected, { timeout });
+  } catch (error) {
+    throw new Error(`${String(error)} | waiting for preview text ${JSON.stringify(expected)} | ${JSON.stringify(await previewDiagnostics(page))}`);
+  }
+}
+
+/** Waits until the current preview navigation has finished loading, rendered `expected`, and connected Vite HMR. */
+async function waitForPreviewReadyForHmr(page: Page, expected: string, timeout = 60_000): Promise<void> {
+  try {
+    await page.waitForFunction(isPreviewReadyForHmr, expected, { timeout });
+  } catch (error) {
+    throw new Error(`${String(error)} | waiting for HMR-ready preview ${JSON.stringify(expected)} | ${JSON.stringify(await previewDiagnostics(page))}`);
+  }
+}
+
+/** Waits in one check until the preview renders `expected` without `forbidden`, returning the matched body text. */
+async function waitForIsolatedPreviewText(
+  page: Page,
+  expected: string,
+  forbidden: string,
+  timeout = 60_000,
+): Promise<string> {
+  try {
+    const handle = await page.waitForFunction(matchIsolatedPreviewText, { want: expected, forbid: forbidden }, { timeout });
+    const matched = await handle.jsonValue();
+    if (typeof matched !== "string") throw new Error("waitForFunction returned non-string preview body");
+    return matched;
+  } catch (error) {
+    throw new Error(`${String(error)} | waiting for isolated preview ${JSON.stringify(expected)} (without ${JSON.stringify(forbidden)}) | ${JSON.stringify(await previewDiagnostics(page))}`);
+  }
 }
 
 async function editSandboxFile(page: Page, marker: string): Promise<void> {
@@ -290,11 +371,44 @@ async function runPlaygroundServer(page: Page, marker: string): Promise<string> 
   return url;
 }
 
+async function verifyMemoryModePreviewIsolation(context: BrowserContext, origin: string): Promise<void> {
+  // Verify true response-body isolation: two mode=memory tabs on the same port 5173 serve distinct bodies!
+  const mem1 = await context.newPage();
+  const mem2 = await context.newPage();
+  await Promise.all([
+    navigateTestPage(mem1, `${origin}/sandbox/?template=vanilla&mode=memory`),
+    navigateTestPage(mem2, `${origin}/sandbox/?template=vanilla&mode=memory`),
+  ]);
+  await Promise.all([waitForSandboxReady(mem1), waitForSandboxReady(mem2)]);
+  await Promise.all([
+    waitForPreviewReadyForHmr(mem1, "Hello from vanilla TypeScript"),
+    waitForPreviewReadyForHmr(mem2, "Hello from vanilla TypeScript"),
+  ]);
+  const memSrc1 = await mem1.locator("#preview").getAttribute("src");
+  const memSrc2 = await mem2.locator("#preview").getAttribute("src");
+  expect(memSrc1).toContain("/__preview/r/mem-");
+  expect(memSrc2).toContain("/__preview/r/mem-");
+  expect(memSrc1).not.toBe(memSrc2);
+
+  const memMarker1 = `mem-one-${Date.now()}`;
+  const memMarker2 = `mem-two-${Date.now()}`;
+  await Promise.all([editSandboxFile(mem1, memMarker1), editSandboxFile(mem2, memMarker2)]);
+  const [body1, body2] = await Promise.all([
+    waitForIsolatedPreviewText(mem1, memMarker1, memMarker2),
+    waitForIsolatedPreviewText(mem2, memMarker2, memMarker1),
+  ]);
+  expect(body1).toContain(memMarker1);
+  expect(body1).not.toContain(memMarker2);
+  expect(body2).toContain(memMarker2);
+  expect(body2).not.toContain(memMarker1);
+}
+
 for (const browserName of browsers) {
   test(`${browserName}: two persistent Sandbox tabs attach, live-HMR both frames, fail over on owner reload/close, and isolate memory routes`, async () => {
     await withSite(browserName, async (browser, origin) => {
       const context = await browser.newContext();
       cleanups.push(() => context.close());
+      await installHmrConnection(context);
 
       const errors: string[] = [];
       const tab1 = await context.newPage();
@@ -329,6 +443,13 @@ for (const browserName of browsers) {
       expect(await tab1.evaluate(() => Reflect.get(globalThis, "sandbox").fs.ownershipLost)).toBe(false);
       expect(await tab2.evaluate(() => Reflect.get(globalThis, "sandbox").fs.ownershipLost)).toBe(false);
       expect(await tab2.evaluate(() => Reflect.get(globalThis, "sandbox").role())).toBe("follower");
+
+      // Wait until both previews finish initial load and connect Vite HMR before clicking counters,
+      // so neither click lands on a document that startup replaces and resets to "count is 0".
+      await Promise.all([
+        waitForPreviewReadyForHmr(tab1, "Hello from vanilla TypeScript"),
+        waitForPreviewReadyForHmr(tab2, "Hello from vanilla TypeScript"),
+      ]);
 
       // Increment the vanilla HMR counter in BOTH frames BEFORE editing to prove true live HMR (not a full reload).
       await Promise.all([
@@ -367,37 +488,12 @@ for (const browserName of browsers) {
       // Close the current owner -> the surviving tab must become owner and serve a fresh edit!
       await owner.close();
       await waitForSandboxRole(follower, "owner", { follower });
-      await waitForPreviewText(follower, marker1);
+      await waitForPreviewReadyForHmr(follower, marker1);
       const marker2 = `post-failover-${browserName}-${Date.now()}`;
       await editSandboxFile(follower, marker2);
       await waitForPreviewText(follower, marker2);
 
-      // Verify true response-body isolation: two mode=memory tabs on the same port 5173 serve distinct bodies!
-      const mem1 = await context.newPage();
-      const mem2 = await context.newPage();
-      await Promise.all([
-        navigateTestPage(mem1, `${origin}/sandbox/?template=vanilla&mode=memory`),
-        navigateTestPage(mem2, `${origin}/sandbox/?template=vanilla&mode=memory`),
-      ]);
-      await Promise.all([waitForSandboxReady(mem1), waitForSandboxReady(mem2)]);
-      const memSrc1 = await mem1.locator("#preview").getAttribute("src");
-      const memSrc2 = await mem2.locator("#preview").getAttribute("src");
-      expect(memSrc1).toContain("/__preview/r/mem-");
-      expect(memSrc2).toContain("/__preview/r/mem-");
-      expect(memSrc1).not.toBe(memSrc2);
-
-      const memMarker1 = `mem-one-${Date.now()}`;
-      const memMarker2 = `mem-two-${Date.now()}`;
-      await Promise.all([editSandboxFile(mem1, memMarker1), editSandboxFile(mem2, memMarker2)]);
-      await Promise.all([waitForPreviewText(mem1, memMarker1), waitForPreviewText(mem2, memMarker2)]);
-      const [body1, body2] = await Promise.all([
-        mem1.evaluate(() => document.querySelector<HTMLIFrameElement>("#preview")?.contentDocument?.body?.textContent ?? ""),
-        mem2.evaluate(() => document.querySelector<HTMLIFrameElement>("#preview")?.contentDocument?.body?.textContent ?? ""),
-      ]);
-      expect(body1).toContain(memMarker1);
-      expect(body1).not.toContain(memMarker2);
-      expect(body2).toContain(memMarker2);
-      expect(body2).not.toContain(memMarker1);
+      await verifyMemoryModePreviewIsolation(context, origin);
 
       expect(errors).toEqual([]);
     });

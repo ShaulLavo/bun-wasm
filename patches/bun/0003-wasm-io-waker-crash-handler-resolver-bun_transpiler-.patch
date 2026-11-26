@@ -1,7 +1,7 @@
-From da641311cbb96dd2e43444f4de85976f6a0007b0 Mon Sep 17 00:00:00 2001
+From 6c849cd881ac80197fde1db4b97349bc613ceff2 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 01:39:19 +0300
-Subject: [PATCH 03/14] wasm: io waker, crash handler, resolver: bun_transpiler
+Subject: [PATCH 03/28] wasm: io waker, crash handler, resolver: bun_transpiler
  closure type-checks on wasm32-wasip1
 
 ---
@@ -64,7 +64,7 @@ index 5736ea90..7baae5d0 100644
  const NAMED_FLAGS: &[(&str, Flags)] = &[
      ("neon", Flags::NEON),
 diff --git a/src/crash_handler/lib.rs b/src/crash_handler/lib.rs
-index affe2f6f..53a97a12 100644
+index a13612f9..be74f5c4 100644
 --- a/src/crash_handler/lib.rs
 +++ b/src/crash_handler/lib.rs
 @@ -1494,7 +1494,7 @@ mod draft {
@@ -117,10 +117,10 @@ index affe2f6f..53a97a12 100644
      }
  
 diff --git a/src/io/lib.rs b/src/io/lib.rs
-index 545f2918..68ed490b 100644
+index 7257edbd..7d3d466b 100644
 --- a/src/io/lib.rs
 +++ b/src/io/lib.rs
-@@ -1963,6 +1963,39 @@ pub mod waker {
+@@ -2013,6 +2013,39 @@ pub mod waker {
      pub type Waker = LinuxWaker;
      #[cfg(windows)]
      pub type Waker = WindowsWaker;
@@ -187,10 +187,10 @@ index 5e675e8c..a9ad5b72 100644
      {
          Timespec {
 diff --git a/src/resolver/lib.rs b/src/resolver/lib.rs
-index 26fa8e13..706501ce 100644
+index 11a7f3da..182261e0 100644
 --- a/src/resolver/lib.rs
 +++ b/src/resolver/lib.rs
-@@ -1640,8 +1640,10 @@ pub mod fs {
+@@ -1629,8 +1629,10 @@ pub mod fs {
              // `st_mtime_nsec` (ns). The `libc` crate flattens BSD/Darwin
              // `st_mtimespec` into `st_mtime`/`st_mtime_nsec`, so the access is
              // uniform on all `unix`.

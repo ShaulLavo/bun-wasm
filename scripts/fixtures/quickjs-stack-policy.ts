@@ -48,7 +48,7 @@ async function navigate(url: string, options: { waitUntil: string; timeout: numb
   assert.ok(matches(new URL(url)), "the WebKit pass-through route must match the navigation");
   assert.equal(matches(new URL("/bun.wasm", url)), false);
   target.searchParams.delete(navigationParameter);
-  assert.equal(target.href, "https://stack.test/?engine=quickjs&prompt=off&mode=memory");
+  assert.equal(target.href, "https://stack.test/?engine=quickjs&prompt=off");
   assert.deepEqual(options, { waitUntil: "domcontentloaded", timeout: 30_000 });
 }
 

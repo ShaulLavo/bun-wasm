@@ -24,16 +24,26 @@
     write(groupIndent + text + "\n");
   }
 
-  function formatOptions(level?: "warn") {
-    return { indent: groupIndent.length / 2, level };
+  // Bun colours log, info and debug when stdout gets colours, and warn and error when stderr does.
+  function colors() {
+    return internal.require("pretty_output");
+  }
+
+  function formatOptions(level: "log" | "warn" | "error", enabled: boolean) {
+    return { indent: groupIndent.length / 2, level, colors: enabled };
   }
 
   function out(args: readonly unknown[]) {
-    emitFormatted(native.writeStdout, inspector().formatArgs(args, formatOptions()));
+    emitFormatted(native.writeStdout, inspector().formatArgs(args, formatOptions("log", colors().stdout)));
   }
 
-  function err(args: readonly unknown[], level?: "warn") {
-    emitFormatted(native.writeStderr, inspector().formatArgs(args, formatOptions(level)));
+  // ConsoleObject.rs format2: with colours, console.error wraps its line in red unless it
+  // prints a single value that is not a string.
+  function err(args: readonly unknown[], level: "warn" | "error" = "error") {
+    const enabled = colors().stderr;
+    const text = inspector().formatArgs(args, formatOptions(level, enabled));
+    const red = enabled && level === "error" && (args.length > 1 || typeof args[0] === "string");
+    emitFormatted(native.writeStderr, red ? "\u001b[0m\u001b[31m" + text + "\u001b[0m" : text);
   }
 
   // console.dir reads only `depth` and `colors` (ConsoleObject.rs, message_type == Dir). A depth
@@ -76,19 +86,12 @@
     },
     assert(condition: unknown, ...args: unknown[]) {
       if (condition) return;
-      if (args.length === 0) {
-        err(["Assertion failed"]);
-        return;
-      }
-      if (typeof args[0] === "string") {
-        err(([`Assertion failed: ${args[0]}`] as unknown[]).concat(args.slice(1)));
-        return;
-      }
-      err((["Assertion failed:"] as unknown[]).concat(args));
+      // Bun prints only the arguments; "Assertion failed" stands in when there are none.
+      err(args.length === 0 ? ["Assertion failed"] : args);
     },
     dir(value: unknown, options?: BunWasm.ConsoleInspectOptions) {
-      const { depth, colors } = dirOptions(options);
-      emitFormatted(native.writeStdout, inspector().formatArgs([value], { depth, colors, indent: groupIndent.length / 2 }));
+      const { depth, colors: enabled = colors().stdout } = dirOptions(options);
+      emitFormatted(native.writeStdout, inspector().formatArgs([value], { depth, colors: enabled, indent: groupIndent.length / 2 }));
     },
     dirxml: (...args: unknown[]) => out(args),
     count(label: unknown = "default") {
@@ -131,7 +134,7 @@
         out([data]);
         return;
       }
-      emit(native.writeStdout, renderTable(data, columns));
+      emit(native.writeStdout, renderTable(data, columns, colors().stdout));
     },
     clear() {},
     profile() {},
@@ -144,10 +147,16 @@
 
   // --- console.table: Bun's box-drawing layout ------------------------------
 
-  function cellText(value: unknown) {
+  function cellText(value: unknown, enabled: boolean) {
     if (value === undefined) return "";
     if (typeof value === "string") return value;
-    return inspector().bunInspect(value, { depth: 0, compact: true }).replace(/\s*\n\s*/g, " ");
+    return inspector().bunInspect(value, { depth: 0, compact: true, colors: enabled }).replace(/\s*\n\s*/g, " ");
+  }
+
+  // Cell widths leave out colour escapes.
+  function visibleWidth(text: string) {
+    // oxlint-disable-next-line no-control-regex -- Strips ANSI colour sequences.
+    return globalThis.Bun ? Bun.stringWidth(text) : text.replace(/\u001b\[[0-9;]*m/g, "").length;
   }
 
   function rowsOf(data: object): [unknown, unknown][] {
@@ -156,7 +165,7 @@
     return Object.keys(data).map((k) => [Array.isArray(data) ? Number(k) : k, (data as Record<string, unknown>)[k]]);
   }
 
-  function renderTable(data: object, columns?: readonly unknown[]) {
+  function renderTable(data: object, columns: readonly unknown[] | undefined, enabled: boolean) {
     const rows = rowsOf(data);
     const keys: string[] = [];
     let hasValues = false;
@@ -168,25 +177,25 @@
       for (const k of Object.keys(value)) if (!keys.includes(k)) keys.push(k);
     }
     const cols = Array.isArray(columns) ? columns.map(String) : keys;
-    const header = [""].concat(cols, hasValues ? ["Values"] : []);
+    const header = [" "].concat(cols, hasValues ? ["Values"] : []);
     const body = rows.map(([index, value]) => {
       const isObj = value !== null && typeof value === "object";
-      const cells = cols.map((c) => (isObj && c in value ? cellText((value as Record<string, unknown>)[c]) : ""));
-      return [String(index)].concat(cells, hasValues ? [isObj ? "" : cellText(value)] : []);
+      const cells = cols.map((c) => (isObj && c in value ? cellText((value as Record<string, unknown>)[c], enabled) : ""));
+      return [String(index)].concat(cells, hasValues ? [isObj ? "" : cellText(value, enabled)] : []);
     });
-    const width = (s: string) => (globalThis.Bun ? Bun.stringWidth(s) : s.length);
-    const widths = header.map((h, i) => Math.max(width(h), ...body.map((r) => width(r[i]))) + 2);
+    const widths = header.map((h, i) => Math.max(visibleWidth(h), ...body.map((r) => visibleWidth(r[i]))) + 2);
     const line = (l: string, m: string, r: string) => l + widths.map((w) => "─".repeat(w)).join(m) + r;
-    const fmtRow = (cells: string[]) => "│" + cells.map((c, i) => center(c, widths[i], width)).join("│") + "│";
-    const lines = [line("┌", "┬", "┐"), fmtRow(header), line("├", "┼", "┤")]
-      .concat(body.map(fmtRow))
+    const fmtRow = (cells: string[], bold = false) => "│" + cells.map((c, i) => center(c, widths[i], bold && enabled)).join("│") + "│";
+    const lines = [line("┌", "┬", "┐"), fmtRow(header, true), line("├", "┼", "┤")]
+      .concat(body.map((row) => fmtRow(row)))
       .concat([line("└", "┴", "┘")]);
     return lines.join("\n");
   }
 
-  // Bun left-aligns cells after one space of padding.
-  function center(text: string, w: number, width: (text: string) => number) {
-    return " " + text + " ".repeat(w - width(text) - 1);
+  // Bun left-aligns cells after one space of padding; column names are `<r><b>name<r>`.
+  function center(text: string, w: number, bold: boolean) {
+    const shown = bold ? "\u001b[0m\u001b[1m" + text + "\u001b[0m" : text;
+    return " " + shown + " ".repeat(w - visibleWidth(text) - 1);
   }
 
   for (const key of Object.keys(console)) {

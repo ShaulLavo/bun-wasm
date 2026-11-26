@@ -584,10 +584,9 @@
     },
   };
 
-  const forceColor = globalThis.process.env.FORCE_COLOR;
-  const enableANSIColors = forceColor !== undefined
-    ? forceColor !== "0"
-    : globalThis.process.env.NO_COLOR === undefined && native.isatty(2);
+  // BunObject.rs: true when either stream gets colours.
+  const colors = internal.require("pretty_output");
+  const enableANSIColors = colors.stdout || colors.stderr;
 
   const dns = internal.require("dns");
 

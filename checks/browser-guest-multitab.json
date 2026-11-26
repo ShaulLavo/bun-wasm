@@ -46,6 +46,7 @@
     "scripts/browser-build.ts",
     "scripts/multitab-browser.test.ts",
     "scripts/preview-loading-noise.ts",
+    "sandbox/tests/hmr-connection.ts",
     ".github/actions/native-setup/action.yml",
     ".github/actions/native-seed/action.yml",
     ".github/actions/native-production/action.yml"

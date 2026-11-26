@@ -1,75 +1,75 @@
 {
-  "bun_revision": "4ceda2c2868d3a7703c7737ddd9de7244ec384df",
-  "semver_source_sha256": "5c659d399c03eaedd95e2f4f4c44ffb1f2e682d1fc1d4feebb8c17b693b046a9",
+  "bun_revision": "2b7d8ba665744fa92e79a3039fc7bf32eed8d4a8",
+  "semver_source_sha256": "2f1bbf41711310b90860e61140253b90d701ef40152bacd12b247b0c1ed4872a",
   "method": "Lexical imports and identifier references outside use declarations; comments and strings excluded. Not method resolution; aliases may be shadowed. Wildcard and extension-trait calls are not attributable.",
   "scopes": [
     {
       "scope": "src/runtime",
-      "rust_files": 440,
-      "files_using_bun_jsc": 287,
-      "import_bindings": 1611,
-      "references": 17684,
-      "wildcard_imports": 5,
+      "rust_files": 470,
+      "files_using_bun_jsc": 299,
+      "import_bindings": 1663,
+      "references": 16242,
+      "wildcard_imports": 4,
       "symbols": [
         {
           "api": "JSValue",
-          "imports": 207,
-          "references": 5308
+          "imports": 205,
+          "references": 4694
         },
         {
           "api": "JSGlobalObject",
-          "imports": 213,
-          "references": 2589
+          "imports": 207,
+          "references": 2187
         },
         {
           "api": "JsResult",
-          "imports": 186,
-          "references": 2047
-        },
-        {
-          "api": "CallFrame",
-          "imports": 139,
-          "references": 893
+          "imports": 184,
+          "references": 1795
         },
         {
           "api": "JsCell",
           "imports": 52,
-          "references": 772
+          "references": 766
+        },
+        {
+          "api": "CallFrame",
+          "imports": 117,
+          "references": 684
         },
         {
           "api": "host_fn",
-          "imports": 4,
-          "references": 723
+          "imports": 2,
+          "references": 541
         },
         {
           "api": "virtual_machine::VirtualMachine",
-          "imports": 63,
-          "references": 363
+          "imports": 68,
+          "references": 384
         },
         {
           "api": "JSType",
           "imports": 13,
-          "references": 305
+          "references": 285
         },
         {
           "api": "ErrorCode",
-          "imports": 11,
-          "references": 238
+          "imports": 12,
+          "references": 232
         },
         {
           "api": "JsError",
-          "imports": 26,
+          "imports": 23,
           "references": 196
         },
         {
           "api": "JsThread",
-          "imports": 3,
+          "imports": 4,
           "references": 192
         },
         {
           "api": "webcore_types::Blob",
           "imports": 1,
-          "references": 177
+          "references": 175
         },
         {
           "api": "resolved_source::Tag",
@@ -78,38 +78,48 @@
         },
         {
           "api": "bun_string_jsc",
-          "imports": 51,
-          "references": 163
+          "imports": 47,
+          "references": 141
         },
         {
-          "api": "JSPromiseStrong",
-          "imports": 7,
-          "references": 116
-        },
-        {
-          "api": "mark_binding",
-          "imports": 0,
-          "references": 113
+          "api": "bindgen::JsLocal",
+          "imports": 27,
+          "references": 107
         },
         {
           "api": "JSPromise",
           "imports": 17,
-          "references": 108
+          "references": 105
+        },
+        {
+          "api": "JSPromiseStrong",
+          "imports": 7,
+          "references": 105
+        },
+        {
+          "api": "mark_binding",
+          "imports": 0,
+          "references": 105
+        },
+        {
+          "api": "bindgen",
+          "imports": 12,
+          "references": 89
         },
         {
           "api": "AbortHandle",
           "imports": 0,
-          "references": 82
+          "references": 85
         },
         {
-          "api": "JsClass",
-          "imports": 23,
-          "references": 81
-        },
-        {
-          "api": "ArrayBuffer",
+          "api": "bindgen::JsHeap",
           "imports": 15,
-          "references": 80
+          "references": 85
+        },
+        {
+          "api": "bindgen::JsScope",
+          "imports": 27,
+          "references": 85
         },
         {
           "api": "JsRef",
@@ -118,13 +128,13 @@
         },
         {
           "api": "StrongOptional",
-          "imports": 10,
+          "imports": 11,
           "references": 76
         },
         {
           "api": "virtual_machine",
           "imports": 0,
-          "references": 69
+          "references": 72
         },
         {
           "api": "ContextId",
@@ -132,24 +142,24 @@
           "references": 68
         },
         {
-          "api": "JSFunction",
+          "api": "ArrayBuffer",
           "imports": 13,
-          "references": 65
+          "references": 67
         },
         {
           "api": "SystemError",
           "imports": 10,
-          "references": 61
+          "references": 62
         },
         {
           "api": "GlobalRef",
           "imports": 17,
-          "references": 60
+          "references": 58
         },
         {
-          "api": "HTTPHeaderName",
-          "imports": 7,
-          "references": 58
+          "api": "JsClass",
+          "imports": 19,
+          "references": 55
         },
         {
           "api": "Strong",
@@ -162,14 +172,14 @@
           "references": 50
         },
         {
+          "api": "JSFunction",
+          "imports": 9,
+          "references": 50
+        },
+        {
           "api": "ConsoleObject",
           "imports": 2,
           "references": 49
-        },
-        {
-          "api": "BuiltinName",
-          "imports": 0,
-          "references": 48
         },
         {
           "api": "EventLoopHandle",
@@ -177,29 +187,24 @@
           "references": 47
         },
         {
-          "api": "JSObject",
-          "imports": 9,
-          "references": 46
+          "api": "BuiltinName",
+          "imports": 0,
+          "references": 45
         },
         {
           "api": "js_promise",
           "imports": 1,
-          "references": 44
+          "references": 45
         },
         {
-          "api": "ArgumentsSlice",
-          "imports": 5,
-          "references": 43
+          "api": "Completion",
+          "imports": 1,
+          "references": 41
         },
         {
           "api": "ResolvedSource",
           "imports": 1,
-          "references": 40
-        },
-        {
-          "api": "Completion",
-          "imports": 0,
-          "references": 39
+          "references": 41
         },
         {
           "api": "RangeErrorOptions",
@@ -207,9 +212,24 @@
           "references": 35
         },
         {
+          "api": "bindgen::JsWrapper",
+          "imports": 9,
+          "references": 34
+        },
+        {
           "api": "webcore_types::store::Store",
           "imports": 3,
           "references": 34
+        },
+        {
+          "api": "ArgumentsSlice",
+          "imports": 3,
+          "references": 31
+        },
+        {
+          "api": "JSObject",
+          "imports": 7,
+          "references": 30
         },
         {
           "api": "JSPropertyIterator",
@@ -217,13 +237,13 @@
           "references": 30
         },
         {
-          "api": "strong",
+          "api": "ScriptExecutionContext",
           "imports": 0,
           "references": 30
         },
         {
-          "api": "ScriptExecutionContext",
-          "imports": 0,
+          "api": "MarkedArgumentBuffer",
+          "imports": 7,
           "references": 29
         },
         {
@@ -232,9 +252,19 @@
           "references": 29
         },
         {
-          "api": "MarkedArgumentBuffer",
-          "imports": 6,
-          "references": 27
+          "api": "strong",
+          "imports": 0,
+          "references": 29
+        },
+        {
+          "api": "HTTPHeaderName",
+          "imports": 4,
+          "references": 28
+        },
+        {
+          "api": "VirtualMachine",
+          "imports": 2,
+          "references": 28
         },
         {
           "api": "webcore_types::SizeType",
@@ -242,9 +272,19 @@
           "references": 27
         },
         {
-          "api": "VirtualMachine",
-          "imports": 2,
+          "api": "PinnedArrayBuffer",
+          "imports": 5,
           "references": 26
+        },
+        {
+          "api": "from_js_host_call",
+          "imports": 0,
+          "references": 26
+        },
+        {
+          "api": "EnsureStillAlive",
+          "imports": 0,
+          "references": 25
         },
         {
           "api": "TemporalType",
@@ -252,18 +292,13 @@
           "references": 25
         },
         {
-          "api": "codegen_cached_accessors",
+          "api": "impl_abort_handle_owner",
           "imports": 0,
           "references": 25
         },
         {
-          "api": "call_frame::ArgumentsSlice",
-          "imports": 4,
-          "references": 24
-        },
-        {
-          "api": "impl_abort_handle_owner",
-          "imports": 0,
+          "api": "Error",
+          "imports": 1,
           "references": 24
         },
         {
@@ -272,12 +307,12 @@
           "references": 24
         },
         {
-          "api": "from_js_host_call",
-          "imports": 0,
+          "api": "bindgen::StringOrJsBytes",
+          "imports": 5,
           "references": 23
         },
         {
-          "api": "generated",
+          "api": "cpp",
           "imports": 0,
           "references": 23
         },
@@ -287,27 +322,12 @@
           "references": 23
         },
         {
-          "api": "Error",
-          "imports": 1,
-          "references": 22
-        },
-        {
-          "api": "PinnedArrayBuffer",
-          "imports": 5,
-          "references": 22
-        },
-        {
           "api": "Ticket",
           "imports": 0,
           "references": 22
         },
         {
-          "api": "generated::JSTimeout",
-          "imports": 2,
-          "references": 22
-        },
-        {
-          "api": "jsc_host_abi",
+          "api": "codegen_cached_accessors",
           "imports": 0,
           "references": 22
         },
@@ -322,19 +342,24 @@
           "references": 21
         },
         {
-          "api": "EnsureStillAlive",
-          "imports": 0,
+          "api": "MarkedArrayBuffer",
+          "imports": 2,
           "references": 20
+        },
+        {
+          "api": "Job",
+          "imports": 4,
+          "references": 19
+        },
+        {
+          "api": "JobContext",
+          "imports": 4,
+          "references": 19
         },
         {
           "api": "event_loop::EventLoop",
           "imports": 7,
-          "references": 20
-        },
-        {
-          "api": "js_promise::Status",
-          "imports": 4,
-          "references": 20
+          "references": 19
         },
         {
           "api": "JSHostFn",
@@ -342,19 +367,14 @@
           "references": 18
         },
         {
-          "api": "Job",
-          "imports": 3,
-          "references": 18
-        },
-        {
-          "api": "JobContext",
-          "imports": 3,
-          "references": 18
-        },
-        {
           "api": "Task",
           "imports": 2,
-          "references": 17
+          "references": 18
+        },
+        {
+          "api": "js_promise::Status",
+          "imports": 4,
+          "references": 18
         },
         {
           "api": "debugger::DebuggerId",
@@ -372,28 +392,18 @@
           "references": 17
         },
         {
-          "api": "to_js_host_call",
+          "api": "jsc_host_abi",
           "imports": 0,
-          "references": 17
-        },
-        {
-          "api": "MarkedArrayBuffer",
-          "imports": 2,
           "references": 16
-        },
-        {
-          "api": "VirtualMachineRef",
-          "imports": 2,
-          "references": 16
-        },
-        {
-          "api": "AnyPromise",
-          "imports": 4,
-          "references": 15
         },
         {
           "api": "ScriptExecutionStatus",
           "imports": 1,
+          "references": 15
+        },
+        {
+          "api": "VirtualMachineRef",
+          "imports": 2,
           "references": 15
         },
         {
@@ -402,12 +412,12 @@
           "references": 15
         },
         {
-          "api": "codegen",
-          "imports": 0,
+          "api": "host_fn::DomCall",
+          "imports": 1,
           "references": 15
         },
         {
-          "api": "host_fn::DomCall",
+          "api": "uuid",
           "imports": 1,
           "references": 15
         },
@@ -427,8 +437,8 @@
           "references": 14
         },
         {
-          "api": "IntegerRange",
-          "imports": 1,
+          "api": "JsPtr",
+          "imports": 2,
           "references": 14
         },
         {
@@ -437,8 +447,8 @@
           "references": 14
         },
         {
-          "api": "cpp",
-          "imports": 0,
+          "api": "call_frame::ArgumentsSlice",
+          "imports": 4,
           "references": 14
         },
         {
@@ -452,19 +462,19 @@
           "references": 14
         },
         {
-          "api": "jsc_abi_extern",
-          "imports": 0,
-          "references": 14
-        },
-        {
           "api": "to_js_host_fn_result",
           "imports": 0,
           "references": 14
         },
         {
-          "api": "uuid",
+          "api": "AnyPromise",
+          "imports": 4,
+          "references": 13
+        },
+        {
+          "api": "CommonString",
           "imports": 1,
-          "references": 14
+          "references": 13
         },
         {
           "api": "debugger::AsyncTaskTracker",
@@ -477,7 +487,7 @@
           "references": 13
         },
         {
-          "api": "CommonString",
+          "api": "AbortCause",
           "imports": 0,
           "references": 12
         },
@@ -487,17 +497,17 @@
           "references": 12
         },
         {
-          "api": "CrateError",
-          "imports": 0,
-          "references": 12
-        },
-        {
           "api": "ErrorableResolvedSource",
           "imports": 1,
           "references": 12
         },
         {
-          "api": "JsPtr",
+          "api": "IntegerRange",
+          "imports": 0,
+          "references": 12
+        },
+        {
+          "api": "JSInternalPromise",
           "imports": 2,
           "references": 12
         },
@@ -512,18 +522,13 @@
           "references": 12
         },
         {
-          "api": "AbortCause",
-          "imports": 0,
-          "references": 11
-        },
-        {
           "api": "AbortSignalRef",
           "imports": 5,
           "references": 11
         },
         {
-          "api": "JSInternalPromise",
-          "imports": 2,
+          "api": "CrateError",
+          "imports": 0,
           "references": 11
         },
         {
@@ -537,18 +542,28 @@
           "references": 11
         },
         {
+          "api": "codegen",
+          "imports": 0,
+          "references": 11
+        },
+        {
           "api": "node_compile_cache",
           "imports": 0,
           "references": 11
         },
         {
-          "api": "ref_string::RefString",
-          "imports": 1,
+          "api": "to_js_host_call",
+          "imports": 0,
           "references": 11
         },
         {
           "api": "Debugger",
           "imports": 2,
+          "references": 10
+        },
+        {
+          "api": "JSString",
+          "imports": 5,
           "references": 10
         },
         {
@@ -572,6 +587,11 @@
           "references": 9
         },
         {
+          "api": "MAX_SAFE_INTEGER",
+          "imports": 0,
+          "references": 9
+        },
+        {
           "api": "abort_signal::Timeout",
           "imports": 2,
           "references": 9
@@ -587,13 +607,13 @@
           "references": 9
         },
         {
-          "api": "host_call",
-          "imports": 0,
+          "api": "event_loop::ConcurrentTaskItem",
+          "imports": 2,
           "references": 9
         },
         {
-          "api": "js_promise::Unwrapped",
-          "imports": 1,
+          "api": "host_call",
+          "imports": 0,
           "references": 9
         },
         {
@@ -607,16 +627,6 @@
           "references": 9
         },
         {
-          "api": "JSString",
-          "imports": 3,
-          "references": 8
-        },
-        {
-          "api": "MAX_SAFE_INTEGER",
-          "imports": 0,
-          "references": 8
-        },
-        {
           "api": "SysErrorJsc",
           "imports": 21,
           "references": 8
@@ -627,13 +637,13 @@
           "references": 8
         },
         {
-          "api": "job",
-          "imports": 0,
+          "api": "js_string::Iterator",
+          "imports": 1,
           "references": 8
         },
         {
-          "api": "js_string::Iterator",
-          "imports": 1,
+          "api": "jsc_abi_extern",
+          "imports": 0,
           "references": 8
         },
         {
@@ -662,18 +672,18 @@
           "references": 7
         },
         {
-          "api": "ErrCode",
-          "imports": 0,
-          "references": 7
-        },
-        {
-          "api": "JSArray",
-          "imports": 3,
-          "references": 7
-        },
-        {
           "api": "JSMap",
           "imports": 2,
+          "references": 7
+        },
+        {
+          "api": "JSStringView",
+          "imports": 1,
+          "references": 7
+        },
+        {
+          "api": "LoopKind",
+          "imports": 1,
           "references": 7
         },
         {
@@ -682,18 +692,18 @@
           "references": 7
         },
         {
-          "api": "Stopped",
+          "api": "StopReason",
           "imports": 0,
           "references": 7
         },
         {
-          "api": "console_object",
-          "imports": 0,
+          "api": "VmHandle",
+          "imports": 1,
           "references": 7
         },
         {
-          "api": "create_host_function_object",
-          "imports": 0,
+          "api": "bindgen::to_js",
+          "imports": 1,
           "references": 7
         },
         {
@@ -702,8 +712,18 @@
           "references": 7
         },
         {
+          "api": "job",
+          "imports": 0,
+          "references": 7
+        },
+        {
           "api": "module_loader",
           "imports": 0,
+          "references": 7
+        },
+        {
+          "api": "module_loader::TranspileArgs",
+          "imports": 1,
           "references": 7
         },
         {
@@ -727,6 +747,11 @@
           "references": 6
         },
         {
+          "api": "JSArray",
+          "imports": 2,
+          "references": 6
+        },
+        {
           "api": "JSArrayIterator",
           "imports": 2,
           "references": 6
@@ -747,7 +772,7 @@
           "references": 6
         },
         {
-          "api": "StopReason",
+          "api": "Stopped",
           "imports": 0,
           "references": 6
         },
@@ -767,13 +792,18 @@
           "references": 6
         },
         {
-          "api": "from_js_host_call_generic",
+          "api": "bindgen::BufferSource",
+          "imports": 2,
+          "references": 6
+        },
+        {
+          "api": "console_object",
           "imports": 0,
           "references": 6
         },
         {
-          "api": "generated::JSImmediate",
-          "imports": 1,
+          "api": "from_js_host_call_generic",
+          "imports": 0,
           "references": 6
         },
         {
@@ -792,6 +822,16 @@
           "references": 6
         },
         {
+          "api": "js_promise::Unwrapped",
+          "imports": 1,
+          "references": 6
+        },
+        {
+          "api": "task",
+          "imports": 0,
+          "references": 6
+        },
+        {
           "api": "ComparisonResult",
           "imports": 1,
           "references": 5
@@ -799,16 +839,6 @@
         {
           "api": "FromAny",
           "imports": 1,
-          "references": 5
-        },
-        {
-          "api": "JSStringView",
-          "imports": 1,
-          "references": 5
-        },
-        {
-          "api": "LoopKind",
-          "imports": 0,
           "references": 5
         },
         {
@@ -822,13 +852,8 @@
           "references": 5
         },
         {
-          "api": "VmHandle",
+          "api": "generated",
           "imports": 0,
-          "references": 5
-        },
-        {
-          "api": "event_loop::ConcurrentTaskItem",
-          "imports": 1,
           "references": 5
         },
         {
@@ -847,8 +872,8 @@
           "references": 5
         },
         {
-          "api": "module_loader::TranspileArgs",
-          "imports": 1,
+          "api": "posix_signal_handle",
+          "imports": 0,
           "references": 5
         },
         {
@@ -862,6 +887,16 @@
           "references": 4
         },
         {
+          "api": "ErrCode",
+          "imports": 0,
+          "references": 4
+        },
+        {
+          "api": "Protected",
+          "imports": 1,
+          "references": 4
+        },
+        {
           "api": "Ref",
           "imports": 0,
           "references": 4
@@ -872,8 +907,23 @@
           "references": 4
         },
         {
+          "api": "ThreadIsolated",
+          "imports": 1,
+          "references": 4
+        },
+        {
           "api": "WorkPool",
           "imports": 2,
+          "references": 4
+        },
+        {
+          "api": "bindgen::Callable",
+          "imports": 2,
+          "references": 4
+        },
+        {
+          "api": "bindgen::PinnedBytes",
+          "imports": 1,
           "references": 4
         },
         {
@@ -902,27 +952,12 @@
           "references": 4
         },
         {
-          "api": "generated::SocketConfigHandlers",
-          "imports": 1,
-          "references": 4
-        },
-        {
-          "api": "generated::SocketConfigHandlersBinaryType",
-          "imports": 1,
-          "references": 4
-        },
-        {
           "api": "http_server_agent::RouteType",
           "imports": 1,
           "references": 4
         },
         {
           "api": "js_value",
-          "imports": 0,
-          "references": 4
-        },
-        {
-          "api": "jsc_promise_handler",
           "imports": 0,
           "references": 4
         },
@@ -943,11 +978,6 @@
         },
         {
           "api": "rare_data",
-          "imports": 0,
-          "references": 4
-        },
-        {
-          "api": "task",
           "imports": 0,
           "references": 4
         },
@@ -973,11 +1003,6 @@
         },
         {
           "api": "ContextTimer",
-          "imports": 0,
-          "references": 3
-        },
-        {
-          "api": "DOMExceptionCode",
           "imports": 0,
           "references": 3
         },
@@ -1052,11 +1077,6 @@
           "references": 3
         },
         {
-          "api": "generated::SocketConfigTls",
-          "imports": 1,
-          "references": 3
-        },
-        {
           "api": "http_server_agent::HTTPServerAgent",
           "imports": 1,
           "references": 3
@@ -1067,18 +1087,8 @@
           "references": 3
         },
         {
-          "api": "js_promise::UnwrapMode",
-          "imports": 1,
-          "references": 3
-        },
-        {
           "api": "js_value::Protected",
           "imports": 1,
-          "references": 3
-        },
-        {
-          "api": "posix_signal_handle",
-          "imports": 0,
           "references": 3
         },
         {
@@ -1087,7 +1097,17 @@
           "references": 3
         },
         {
+          "api": "virtual_machine::CancelHotRunTimers",
+          "imports": 1,
+          "references": 3
+        },
+        {
           "api": "virtual_machine::GCLevel",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "virtual_machine::MainEntryPoint",
           "imports": 1,
           "references": 3
         },
@@ -1142,7 +1162,7 @@
           "references": 2
         },
         {
-          "api": "Protected",
+          "api": "Posted",
           "imports": 1,
           "references": 2
         },
@@ -1172,11 +1192,6 @@
           "references": 2
         },
         {
-          "api": "bindgen_test",
-          "imports": 0,
-          "references": 2
-        },
-        {
           "api": "counters",
           "imports": 0,
           "references": 2
@@ -1187,18 +1202,8 @@
           "references": 2
         },
         {
-          "api": "debugger::TestReporterHandle",
-          "imports": 1,
-          "references": 2
-        },
-        {
           "api": "event_loop::Stopped",
           "imports": 1,
-          "references": 2
-        },
-        {
-          "api": "fmt_jsc",
-          "imports": 0,
           "references": 2
         },
         {
@@ -1207,13 +1212,18 @@
           "references": 2
         },
         {
-          "api": "generated::SocketConfig",
+          "api": "js_global_object::SysErrOptions",
           "imports": 1,
           "references": 2
         },
         {
-          "api": "js_global_object::SysErrOptions",
+          "api": "js_promise::UnwrapMode",
           "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "jsc_promise_handler",
+          "imports": 0,
           "references": 2
         },
         {
@@ -1302,6 +1312,11 @@
           "references": 1
         },
         {
+          "api": "DOMExceptionCode",
+          "imports": 0,
+          "references": 1
+        },
+        {
           "api": "Debugger::DebuggerId",
           "imports": 1,
           "references": 1
@@ -1362,6 +1377,11 @@
           "references": 1
         },
         {
+          "api": "ThreadIsolatedArg",
+          "imports": 1,
+          "references": 1
+        },
+        {
           "api": "TypedArrayType",
           "imports": 0,
           "references": 1
@@ -1397,7 +1417,22 @@
           "references": 1
         },
         {
+          "api": "bindgen::IntoError",
+          "imports": 3,
+          "references": 1
+        },
+        {
+          "api": "bindgen::JsBytes",
+          "imports": 1,
+          "references": 1
+        },
+        {
           "api": "bun_heap_profiler",
+          "imports": 0,
+          "references": 1
+        },
+        {
+          "api": "create_host_function_object",
           "imports": 0,
           "references": 1
         },
@@ -1432,11 +1467,6 @@
           "references": 1
         },
         {
-          "api": "generated::bun_object::BracesOptions",
-          "imports": 1,
-          "references": 1
-        },
-        {
           "api": "is_one_shot_eval_invocation",
           "imports": 0,
           "references": 1
@@ -1444,11 +1474,6 @@
         {
           "api": "js_object",
           "imports": 0,
-          "references": 1
-        },
-        {
-          "api": "js_object::ObjectInitializer",
-          "imports": 1,
           "references": 1
         },
         {
@@ -1462,12 +1487,17 @@
           "references": 1
         },
         {
-          "api": "node_module_module",
-          "imports": 0,
+          "api": "rare_data::HotMapEntry",
+          "imports": 1,
           "references": 1
         },
         {
-          "api": "rare_data::HotMapEntry",
+          "api": "ref_string::RefString",
+          "imports": 1,
+          "references": 1
+        },
+        {
+          "api": "ref_string::StringTooLong",
           "imports": 1,
           "references": 1
         },
@@ -1533,12 +1563,12 @@
         },
         {
           "api": "ComptimeStringMapExt",
-          "imports": 8,
+          "imports": 5,
           "references": 0
         },
         {
           "api": "EncodedSliceJsc",
-          "imports": 24,
+          "imports": 22,
           "references": 0
         },
         {
@@ -1553,7 +1583,7 @@
         },
         {
           "api": "StringJsc",
-          "imports": 56,
+          "imports": 52,
           "references": 0
         },
         {
@@ -1567,8 +1597,8 @@
           "references": 0
         },
         {
-          "api": "bindgen_test::get_bindgen_test_functions",
-          "imports": 1,
+          "api": "bindgen::JsPayload",
+          "imports": 5,
           "references": 0
         },
         {
@@ -1613,7 +1643,7 @@
         },
         {
           "api": "self",
-          "imports": 58,
+          "imports": 56,
           "references": 0
         },
         {
@@ -1681,16 +1711,11 @@
     {
       "scope": "src/bundler_jsc",
       "rust_files": 4,
-      "files_using_bun_jsc": 2,
-      "import_bindings": 7,
+      "files_using_bun_jsc": 1,
+      "import_bindings": 6,
       "references": 0,
       "wildcard_imports": 0,
       "symbols": [
-        {
-          "api": "ComptimeStringMapExt",
-          "imports": 1,
-          "references": 0
-        },
         {
           "api": "ErrorableString",
           "imports": 1,
@@ -1787,14 +1812,14 @@
       "scope": "src/http_jsc",
       "rust_files": 11,
       "files_using_bun_jsc": 6,
-      "import_bindings": 23,
-      "references": 118,
+      "import_bindings": 25,
+      "references": 124,
       "wildcard_imports": 0,
       "symbols": [
         {
           "api": "JSGlobalObject",
           "imports": 6,
-          "references": 34
+          "references": 37
         },
         {
           "api": "JSValue",
@@ -1802,9 +1827,14 @@
           "references": 27
         },
         {
+          "api": "virtual_machine::VirtualMachine",
+          "imports": 2,
+          "references": 16
+        },
+        {
           "api": "mark_binding",
           "imports": 0,
-          "references": 15
+          "references": 10
         },
         {
           "api": "JsResult",
@@ -1812,14 +1842,9 @@
           "references": 7
         },
         {
-          "api": "virtual_machine::VirtualMachine",
-          "imports": 1,
-          "references": 7
-        },
-        {
-          "api": "FetchHeaders",
-          "imports": 1,
-          "references": 5
+          "api": "VirtualMachineRef",
+          "imports": 2,
+          "references": 6
         },
         {
           "api": "CallFrame",
@@ -1827,14 +1852,14 @@
           "references": 4
         },
         {
-          "api": "VirtualMachineRef",
-          "imports": 2,
-          "references": 4
-        },
-        {
           "api": "ContextId",
           "imports": 1,
           "references": 3
+        },
+        {
+          "api": "FetchHeaders",
+          "imports": 1,
+          "references": 2
         },
         {
           "api": "GlobalRef",
@@ -1857,8 +1882,8 @@
           "references": 1
         },
         {
-          "api": "MicrotaskCallback",
-          "imports": 0,
+          "api": "JsError",
+          "imports": 1,
           "references": 1
         },
         {
@@ -1982,14 +2007,14 @@
       "scope": "src/js_parser_jsc",
       "rust_files": 4,
       "files_using_bun_jsc": 3,
-      "import_bindings": 20,
-      "references": 116,
+      "import_bindings": 21,
+      "references": 122,
       "wildcard_imports": 0,
       "symbols": [
         {
           "api": "JSValue",
           "imports": 2,
-          "references": 44
+          "references": 47
         },
         {
           "api": "JSGlobalObject",
@@ -2008,6 +2033,11 @@
         },
         {
           "api": "ConsoleObject",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "MarkedArgumentBuffer",
           "imports": 1,
           "references": 3
         },
@@ -2195,39 +2225,44 @@
     },
     {
       "scope": "src/semver_jsc",
-      "rust_files": 2,
+      "rust_files": 4,
       "files_using_bun_jsc": 1,
-      "import_bindings": 4,
-      "references": 29,
+      "import_bindings": 6,
+      "references": 9,
       "wildcard_imports": 0,
       "symbols": [
         {
           "api": "JSValue",
           "imports": 1,
-          "references": 15
+          "references": 2
         },
         {
-          "api": "JSGlobalObject",
+          "api": "bindgen",
           "imports": 1,
-          "references": 4
+          "references": 2
         },
         {
           "api": "CallFrame",
           "imports": 1,
-          "references": 3
+          "references": 1
+        },
+        {
+          "api": "JSGlobalObject",
+          "imports": 1,
+          "references": 1
         },
         {
           "api": "JsResult",
           "imports": 1,
-          "references": 3
+          "references": 1
+        },
+        {
+          "api": "bindgen::JsHeap",
+          "imports": 1,
+          "references": 1
         },
         {
           "api": "host_fn",
-          "imports": 0,
-          "references": 3
-        },
-        {
-          "api": "create_host_function_object",
           "imports": 0,
           "references": 1
         }
@@ -2238,7 +2273,7 @@
       "rust_files": 4,
       "files_using_bun_jsc": 3,
       "import_bindings": 16,
-      "references": 127,
+      "references": 129,
       "wildcard_imports": 0,
       "symbols": [
         {
@@ -2262,6 +2297,11 @@
           "references": 11
         },
         {
+          "api": "VirtualMachine",
+          "imports": 0,
+          "references": 3
+        },
+        {
           "api": "bun_string_jsc",
           "imports": 3,
           "references": 3
@@ -2274,11 +2314,6 @@
         {
           "api": "VM",
           "imports": 1,
-          "references": 1
-        },
-        {
-          "api": "VirtualMachine",
-          "imports": 0,
           "references": 1
         },
         {
@@ -2305,80 +2340,65 @@
     },
     {
       "scope": "src/sql_jsc",
-      "rust_files": 39,
-      "files_using_bun_jsc": 36,
-      "import_bindings": 190,
-      "references": 803,
+      "rust_files": 43,
+      "files_using_bun_jsc": 37,
+      "import_bindings": 214,
+      "references": 796,
       "wildcard_imports": 1,
       "symbols": [
         {
           "api": "JSValue",
           "imports": 33,
-          "references": 265
+          "references": 273
         },
         {
           "api": "JSGlobalObject",
           "imports": 33,
-          "references": 120
-        },
-        {
-          "api": "JsCell",
-          "imports": 6,
-          "references": 48
+          "references": 128
         },
         {
           "api": "JsResult",
-          "imports": 17,
-          "references": 45
+          "imports": 21,
+          "references": 61
+        },
+        {
+          "api": "JsCell",
+          "imports": 7,
+          "references": 50
         },
         {
           "api": "CallFrame",
-          "imports": 8,
+          "imports": 9,
           "references": 32
         },
         {
           "api": "JsError",
-          "imports": 5,
-          "references": 22
-        },
-        {
-          "api": "VirtualMachine",
-          "imports": 4,
+          "imports": 6,
           "references": 19
         },
         {
-          "api": "js_error_to_mysql",
-          "imports": 3,
+          "api": "VirtualMachine",
+          "imports": 7,
           "references": 18
-        },
-        {
-          "api": "codegen::JSPostgresSQLQuery",
-          "imports": 1,
-          "references": 17
-        },
-        {
-          "api": "js_error_to_postgres",
-          "imports": 2,
-          "references": 17
-        },
-        {
-          "api": "EventLoopTimerState",
-          "imports": 2,
-          "references": 14
         },
         {
           "api": "JSType",
           "imports": 5,
-          "references": 14
+          "references": 15
         },
         {
-          "api": "EventLoopTimer",
-          "imports": 2,
+          "api": "codegen::JSPostgresSQLQuery",
+          "imports": 1,
+          "references": 15
+        },
+        {
+          "api": "ErrorCode",
+          "imports": 3,
           "references": 12
         },
         {
-          "api": "virtual_machine::VirtualMachine",
-          "imports": 1,
+          "api": "api::server_config::SSLConfig",
+          "imports": 4,
           "references": 11
         },
         {
@@ -2392,14 +2412,9 @@
           "references": 10
         },
         {
-          "api": "ErrorCode",
-          "imports": 1,
-          "references": 9
-        },
-        {
           "api": "bun_string_jsc",
-          "imports": 7,
-          "references": 9
+          "imports": 9,
+          "references": 10
         },
         {
           "api": "codegen::js_mysql_query",
@@ -2407,18 +2422,8 @@
           "references": 9
         },
         {
-          "api": "codegen::js_mysql_connection",
-          "imports": 2,
-          "references": 8
-        },
-        {
-          "api": "webcore::AutoFlusher",
-          "imports": 2,
-          "references": 8
-        },
-        {
-          "api": "api::server_config::SSLConfig",
-          "imports": 2,
+          "api": "MarkedArgumentBuffer",
+          "imports": 5,
           "references": 7
         },
         {
@@ -2427,23 +2432,48 @@
           "references": 7
         },
         {
-          "api": "JSObject",
+          "api": "js_error_to_postgres",
+          "imports": 2,
+          "references": 7
+        },
+        {
+          "api": "run_callback",
+          "imports": 2,
+          "references": 7
+        },
+        {
+          "api": "EventLoopTimer",
+          "imports": 1,
+          "references": 6
+        },
+        {
+          "api": "EventLoopTimerTag",
           "imports": 3,
-          "references": 5
+          "references": 6
         },
         {
           "api": "StrongOptional",
           "imports": 4,
+          "references": 6
+        },
+        {
+          "api": "virtual_machine::VirtualMachine",
+          "imports": 1,
+          "references": 6
+        },
+        {
+          "api": "JSArrayIterator",
+          "imports": 4,
           "references": 5
         },
         {
-          "api": "EventLoopTimerTag",
-          "imports": 2,
-          "references": 4
+          "api": "rare_data::SocketGroups",
+          "imports": 3,
+          "references": 5
         },
         {
-          "api": "MarkedArgumentBuffer",
-          "imports": 3,
+          "api": "EventLoopTimerState",
+          "imports": 1,
           "references": 4
         },
         {
@@ -2452,28 +2482,43 @@
           "references": 4
         },
         {
+          "api": "Strong",
+          "imports": 3,
+          "references": 4
+        },
+        {
+          "api": "js_error_to_mysql",
+          "imports": 2,
+          "references": 4
+        },
+        {
+          "api": "MAX_SAFE_INTEGER",
+          "imports": 0,
+          "references": 3
+        },
+        {
+          "api": "Weak",
+          "imports": 1,
+          "references": 3
+        },
+        {
+          "api": "host_fn",
+          "imports": 0,
+          "references": 3
+        },
+        {
           "api": "js_class_module",
           "imports": 0,
-          "references": 4
+          "references": 3
         },
         {
           "api": "verify_error_to_js",
           "imports": 1,
-          "references": 4
-        },
-        {
-          "api": "EventLoop",
-          "imports": 0,
           "references": 3
         },
         {
-          "api": "codegen",
-          "imports": 0,
-          "references": 3
-        },
-        {
-          "api": "CrateError",
-          "imports": 0,
+          "api": "AutoFlush",
+          "imports": 3,
           "references": 2
         },
         {
@@ -2482,28 +2527,18 @@
           "references": 2
         },
         {
+          "api": "EventLoop",
+          "imports": 0,
+          "references": 2
+        },
+        {
           "api": "GlobalRef",
           "imports": 2,
           "references": 2
         },
         {
-          "api": "HasAutoFlush",
+          "api": "JSObject",
           "imports": 2,
-          "references": 2
-        },
-        {
-          "api": "IntegerRange",
-          "imports": 2,
-          "references": 2
-        },
-        {
-          "api": "JSArrayIterator",
-          "imports": 2,
-          "references": 2
-        },
-        {
-          "api": "JsClass",
-          "imports": 1,
           "references": 2
         },
         {
@@ -2512,13 +2547,18 @@
           "references": 2
         },
         {
-          "api": "Strong",
+          "api": "SQLErrorClass",
           "imports": 2,
           "references": 2
         },
         {
-          "api": "cached_prop_hostfns",
-          "imports": 0,
+          "api": "bindgen::JsScope",
+          "imports": 1,
+          "references": 2
+        },
+        {
+          "api": "create_sql_error",
+          "imports": 2,
           "references": 2
         },
         {
@@ -2532,9 +2572,9 @@
           "references": 2
         },
         {
-          "api": "rare_data",
+          "api": "DOMURL",
           "imports": 0,
-          "references": 2
+          "references": 1
         },
         {
           "api": "JSFunction",
@@ -2542,13 +2582,8 @@
           "references": 1
         },
         {
-          "api": "api",
-          "imports": 0,
-          "references": 1
-        },
-        {
-          "api": "call_frame",
-          "imports": 0,
+          "api": "JSUint8Array",
+          "imports": 1,
           "references": 1
         },
         {
@@ -2557,22 +2592,17 @@
           "references": 1
         },
         {
-          "api": "host_fn",
+          "api": "event_loop",
           "imports": 0,
           "references": 1
         },
         {
-          "api": "impl_js_class_via_generated",
+          "api": "from_js_host_call",
           "imports": 0,
           "references": 1
         },
         {
-          "api": "jsc_abi_extern",
-          "imports": 0,
-          "references": 1
-        },
-        {
-          "api": "poll_ref_hostfns",
+          "api": "rare_data",
           "imports": 0,
           "references": 1
         },
@@ -2582,18 +2612,18 @@
           "references": 1
         },
         {
-          "api": "webcore::Blob",
-          "imports": 1,
-          "references": 1
+          "api": "EventLoopSqlExt",
+          "imports": 2,
+          "references": 0
         },
         {
-          "api": "EventLoopSqlExt",
+          "api": "IntegerRange",
           "imports": 1,
           "references": 0
         },
         {
           "api": "JSGlobalObjectSqlExt",
-          "imports": 3,
+          "imports": 1,
           "references": 0
         },
         {
@@ -2603,12 +2633,12 @@
         },
         {
           "api": "VirtualMachineSqlExt",
-          "imports": 7,
+          "imports": 9,
           "references": 0
         },
         {
           "api": "self",
-          "imports": 2,
+          "imports": 1,
           "references": 0
         },
         {

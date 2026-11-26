@@ -1,9 +1,14 @@
 # A portable backend for Bun's Rust host functions
 
-The first slice compiles Bun's 126-line [SemverObject.rs](https://github.com/oven-sh/bun/blob/9510e74152073d850a18758ca41114d8f214ffa6/src/semver_jsc/SemverObject.rs) unchanged against a small
+The first slice compiles Bun's 71-line [SemverObject.rs](https://github.com/oven-sh/bun/blob/a7733435cf40429e3b35c36072769df2052b80f1/src/semver_jsc/SemverObject.rs) unchanged against a small
 `bun_jsc` facade. Its public `Bun.semver.order` and `Bun.semver.satisfies` functions
 come from that module. The same module also supplies
 `bun:internal-for-testing.semverIntersects`.
+
+Since Bun 1.4.5, `order` and `satisfies` are plain functions over UTF-8 bytes. Bun
+generates their JavaScript entry points from `SemverObject.bind.ts`. Here
+`crates/bunwasm-semver/src/lib.rs` holds that glue: it reads two string arguments
+and returns the boolean or int32. `intersects_for_testing` is still a host function.
 
 This is a source-compatible subset for one module. It is not a drop-in replacement
 for the whole `bun_jsc` crate. In particular, it does not expose an engine heap or
@@ -19,7 +24,8 @@ Bun.semver JavaScript wrapper
   -> native.semverOrder / semverSatisfies / semverIntersects
   -> Val strings
   -> our call-scoped JSGlobalObject and CallFrame
-  -> unchanged Bun SemverObject.rs host function
+  -> UTF-8 bytes (and a JsHeap for `order`'s error)
+  -> unchanged Bun SemverObject.rs function
   -> boolean or int32, or JsError
   -> Val / NativeError
   -> JavaScript result or exception
@@ -40,17 +46,22 @@ The original `bun_semver_jsc` manifest and the rest of `bun_runtime` stay outsid
 this selected dependency graph.
 
 The facade's `JSValue` is a `Copy` enum containing an immediate boolean, an int32,
-undefined, or a slot index. A `JSGlobalObject` owns that call's string and function
-table slots. Slot values never leave the adapter call. There is no pointer tagging,
+undefined, or a slot index. A `JSGlobalObject` owns that call's string slots.
+Slot values never leave the adapter call. There is no pointer tagging,
 transmute, engine heap address, C++ ABI, or garbage collector integration.
-Strings and views own their bytes. This makes the original borrowing calls safe
+Byte views own their bytes. This makes the original borrowing calls safe
 for this slice, at the cost of extra allocations.
+
+The facade's `bindgen` module has the two names the plain functions use.
+`JsHeap` stands in for the engine heap Bun passes to a function that creates an
+error; its `error` builds the message. `bindgen::Error` carries that error or an
+allocation failure back to the glue, which turns it into a `JsError`.
 
 The free-function `host_fn` macro keeps the function body and emits the
 `__jsc_host_*` function pointer that Bun's source expects. It does not generate a
 native JSC thunk. Methods and getter attributes fail compilation instead of
-silently producing an invalid ABI. `create_host_function_object` records the
-original function table, which the runtime adapter uses to register natives.
+silently producing an invalid ABI. `bunwasm_semver::functions` lists the three
+functions, which the runtime adapter uses to register natives.
 
 JavaScript retains the argument-count checks and template-string coercion, with
 an explicit canonical TypeError for Symbol primitives. Custom `toString` methods and their exceptions run in the
@@ -67,8 +78,8 @@ host collection remains available only when the host exposes a GC function.
 
 ## API inventory and coverage
 
-The pinned upstream revision is `9510e74152073d850a18758ca41114d8f214ffa6`.
-The locally patched vendor HEAD is `4ceda2c2868d3a7703c7737ddd9de7244ec384df`.
+The pinned upstream revision is `a7733435cf40429e3b35c36072769df2052b80f1` (Bun 1.4.5).
+The locally patched vendor HEAD is `2b7d8ba665744fa92e79a3039fc7bf32eed8d4a8`.
 The selected semver file is identical at both revisions.
 
 [bun-jsc-inventory.json](bun-jsc-inventory.json) records the complete lexical
@@ -85,50 +96,47 @@ new commits even when the selected source bytes are identical.
 
 | Scope | Rust files | Files using `bun_jsc` | Import bindings | Lexical references |
 | --- | ---: | ---: | ---: | ---: |
-| `src/runtime` | 440 | 287 | 1,611 | 17,684 |
-| Runtime plus 11 sibling crates | 519 | 350 | 1,931 | 19,094 |
-| `src/semver_jsc` | 2 | 1 | 4 | 29 |
+| `src/runtime` | 470 | 299 | 1,663 | 16,242 |
+| Runtime plus 11 sibling crates | 555 | 362 | 2,011 | 17,639 |
+| `src/semver_jsc` | 4 | 1 | 6 | 9 |
 
-The runtime inventory has 326 distinct imported or directly qualified names.
+The runtime inventory has 332 distinct imported or directly qualified names.
 The most common are shown below. Different import paths for the same export can
 remain separate rows.
 
 | API name | Import bindings | Lexical references |
 | --- | ---: | ---: |
-| `JSValue` | 207 | 5,308 |
-| `JSGlobalObject` | 213 | 2,589 |
-| `JsResult` | 186 | 2,047 |
-| `CallFrame` | 139 | 893 |
-| `JsCell` | 52 | 772 |
-| `host_fn` | 4 | 723 |
-| `virtual_machine::VirtualMachine` | 63 | 363 |
-| `JSType` | 13 | 305 |
-| `ErrorCode` | 11 | 238 |
-| `JsError` | 26 | 196 |
-| `JsThread` | 3 | 192 |
-| `bun_string_jsc` | 51 | 163 |
-| `JSPromiseStrong` | 7 | 116 |
-| `JSPromise` | 17 | 108 |
-| `JsClass` | 23 | 81 |
-| `ArrayBuffer` | 15 | 80 |
-| `JsRef` | 19 | 77 |
+| `JSValue` | 205 | 4,694 |
+| `JSGlobalObject` | 207 | 2,187 |
+| `JsResult` | 184 | 1,795 |
+| `JsCell` | 52 | 766 |
+| `CallFrame` | 117 | 684 |
+| `host_fn` | 2 | 541 |
+| `virtual_machine::VirtualMachine` | 68 | 384 |
+| `JSType` | 13 | 285 |
+| `ErrorCode` | 12 | 232 |
+| `JsError` | 23 | 196 |
+| `JsThread` | 4 | 192 |
+| `webcore_types::Blob` | 1 | 175 |
+| `resolved_source::Tag` | 10 | 166 |
+| `bun_string_jsc` | 47 | 141 |
+| `bindgen::JsLocal` | 27 | 107 |
+| `JSPromise` | 17 | 105 |
+| `JSPromiseStrong` | 7 | 105 |
 
 The selected module needs the following subset. Occurrences are direct calls or
 attributes in the unchanged file, not expanded code.
 
 | Supported API | Occurrences | Implementation |
 | --- | ---: | --- |
-| `host_fn` | 3 | Safe Rust function-pointer aliases |
-| `create_host_function_object` | 1 | Function table owned by the call context |
-| `CallFrame::arguments`, `argument` | 2 each | Borrowed argument slice, undefined for a missing argument |
-| `JSValue::to_js_string_view` | 4 | Owned view of a pre-coerced string slot |
+| `host_fn` | 1 | Safe Rust function-pointer alias |
+| `bindgen::JsHeap`, `JsHeap::error` | 1 each | Stand-in heap that builds an error message |
+| `bindgen::Result`, `bindgen::Error` | 2 return types | Error message or allocation failure, converted to `JsError` |
+| `CallFrame::argument` | 2 | Undefined for a missing argument |
 | `JSValue::to_utf8` | 2 | Owned UTF-8 bytes |
-| `JSStringView::to_utf8` | 4 | Owned UTF-8 bytes |
-| `Utf8Bytes::slice`, deref | 19 slice calls | Byte slice access |
-| `JSValue::FALSE`, `js_boolean` | 3 each | Immediate boolean |
-| `JSValue::js_number_from_int32` | 5 | Immediate int32 |
-| `JSGlobalObject::throw` | 4 | Error message returned through `NativeError` |
-| `JSGlobalObject::throw_out_of_memory` | 2 | Explicit error, with no claimed recovery from Rust allocation abort |
+| `Utf8Bytes` deref | 6 | Byte slice access |
+| `JSValue::js_boolean` | 1 | Immediate boolean |
+| `JSGlobalObject::throw_out_of_memory` | 1 | Explicit error, with no claimed recovery from Rust allocation abort |
 
 ## What the remaining runtime needs
 

@@ -5,7 +5,7 @@
 | Host feature | `web/src/native-direct-stream.ts`, constructor dispatch in `native-stream-state.ts` | Bun direct streams and ReactDOM 19.1.1's Bun renderer | Original adapter from measured native behavior. No upstream implementation copied. |
 | Host feature | Runtime module `direct_stream`, generated from `web/src/native-direct-stream.ts` by `scripts/generate-direct-stream.ts` | Same | The same `directSource` behind the portable engines' streams polyfill. |
 
-Bun is pinned to `9510e74152073d850a18758ca41114d8f214ffa6`.
+Bun is pinned to `a7733435cf40429e3b35c36072769df2052b80f1`.
 Its direct controller lives in `src/jsc/bindings/webcore/streams/JSDirectStreamController.cpp`
 and `.h`, with its contract described in `src/jsc/STREAMS.md`.
 Those JSC bindings cannot run in the browser host.

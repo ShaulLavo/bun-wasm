@@ -1,581 +1,471 @@
-// Generated from Bun 9510e74152073d850a18758ca41114d8f214ffa6, src/js/internal/streams/iter/pull.ts.
+// Generated from Bun a7733435cf40429e3b35c36072769df2052b80f1, src/js/internal/streams/iter/broadcast.ts.
 (function (intrinsics) {
 "use strict";
-var $, { validateAbortSignal } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 122) || intrinsics.createInternalModuleById(122), { isAnyArrayBuffer, isPromise, isUint8Array } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 205) || intrinsics.createInternalModuleById(205), { arrayBufferViewToUint8Array, from, fromSync, isSyncIterable, isAsyncIterable, isPrimitiveChunk, isUint8ArrayBatch, normalizeAsyncValue } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 90) || intrinsics.createInternalModuleById(90), { isPullOptions, isTransform, isTransformObject, parsePullArgs, toUint8Array, wrapError } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 97) || intrinsics.createInternalModuleById(97), { drainableProtocol, kSyncWriteAcceptedOnFalse, kValidatedSource, kValidatedTransform, toAsyncStreamable, toStreamable } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 96) || intrinsics.createInternalModuleById(96);
-function hasMethod(value, name) {
-    return typeof value?.[name] === "function";
-}
-function parsePipeToArgs(args, requiredMethod) {
-    if (args.length === 0)
-        throw intrinsics.makeErrorWithCode(113, "args", args, "pipeTo requires a writer argument");
-    let options, writerIndex = args.length - 1, last = args[args.length - 1];
-    if (isPullOptions(last) && !hasMethod(last, requiredMethod))
-        options = last, writerIndex = args.length - 2;
-    if (writerIndex < 0)
-        throw intrinsics.makeErrorWithCode(113, "args", args, "pipeTo requires a writer argument");
-    let writer = args[writerIndex];
-    if (!hasMethod(writer, requiredMethod))
-        throw intrinsics.makeErrorWithCode(112, "writer", `object with a ${requiredMethod} method`, writer);
-    let transforms = args.slice(0, writerIndex);
-    for (let i = 0; i < transforms.length; i++)
-        if (!isTransform(transforms[i]))
-            throw intrinsics.makeErrorWithCode(112, `transforms[${i}]`, ["Function", "Object with transform()"], transforms[i]);
-    return {
-        __proto__: null,
-        transforms,
-        writer,
-        options
-    };
-}
-function canUseSyncIterablePipeToFastPath(source, transforms, signal) {
-    if (signal !== intrinsics.undefined || transforms.length !== 0 || isPrimitiveChunk(source) || intrinsics.Array.isArray(source) || source?.[kValidatedSource] || !isSyncIterable(source) || isAsyncIterable(source))
-        return !1;
-    return typeof source[toAsyncStreamable] !== "function" && typeof source[toStreamable] !== "function";
-}
-function* flattenTransformYieldSync(value) {
-    if (isUint8Array(value)) {
-        yield value;
-        return;
+var $, { validateAbortSignal, validateInteger, validateObject } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 127) || intrinsics.createInternalModuleById(127), { broadcastProtocol, drainableProtocol } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 101) || intrinsics.createInternalModuleById(101), { isAsyncIterable, isSyncIterable } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 95) || intrinsics.createInternalModuleById(95), { pull: pullWithTransforms } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 96) || intrinsics.createInternalModuleById(96), { kMultiConsumerDefaultHWM, kResolvedPromise, clampHWM, convertChunks, getMinCursor, hasProtocol, onSignalAbort, parsePullArgs, wrapError, toUint8Array, validateBackpressure } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 102) || intrinsics.createInternalModuleById(102), { RingBuffer } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 98) || intrinsics.createInternalModuleById(98), PromiseWithResolvers = intrinsics.Promise.withResolvers.bind(intrinsics.Promise), { asyncDispose: SymbolAsyncDispose, asyncIterator: SymbolAsyncIterator, dispose: SymbolDispose } = Symbol, kCancelWriter = Symbol("kCancelWriter"), kWrite = Symbol("kWrite"), kEnd = Symbol("kEnd"), kAbort = Symbol("kAbort"), kGetDesiredSize = Symbol("kGetDesiredSize"), kCanWrite = Symbol("kCanWrite"), kOnBufferDrained = Symbol("kOnBufferDrained");
+class BroadcastImpl {
+    #buffer = new RingBuffer;
+    #bufferStart = 0;
+    #consumers = new Set;
+    #waiters = [];
+    #ended = !1;
+    #error = null;
+    #cancelled = !1;
+    #options;
+    #writer = null;
+    #cachedMinCursor = 0;
+    #cachedMinCursorConsumers = 0;
+    constructor(options) {
+        this.#options = options, this[kOnBufferDrained] = null;
     }
-    if (typeof value === "string") {
-        yield toUint8Array(value);
-        return;
+    setWriter(writer) {
+        this.#writer = writer;
     }
-    if (isAnyArrayBuffer(value)) {
-        yield new intrinsics.Uint8Array(value);
-        return;
+    get backpressurePolicy() {
+        return this.#options.backpressure;
     }
-    if (intrinsics.ArrayBuffer.isView(value)) {
-        yield arrayBufferViewToUint8Array(value);
-        return;
+    get highWaterMark() {
+        return this.#options.highWaterMark;
     }
-    if (isSyncIterable(value)) {
-        for (let item of value)
-            yield* flattenTransformYieldSync(item);
-        return;
+    get consumerCount() {
+        return this.#consumers.size;
     }
-    throw intrinsics.makeErrorWithCode(112, "value", ["Uint8Array", "string", "ArrayBuffer", "ArrayBufferView", "Iterable"], value);
-}
-async function* flattenTransformYieldAsync(value) {
-    if (isUint8Array(value)) {
-        yield value;
-        return;
+    get bufferSize() {
+        return this.#buffer.length;
     }
-    if (typeof value === "string") {
-        yield toUint8Array(value);
-        return;
-    }
-    if (isAnyArrayBuffer(value)) {
-        yield new intrinsics.Uint8Array(value);
-        return;
-    }
-    if (intrinsics.ArrayBuffer.isView(value)) {
-        yield arrayBufferViewToUint8Array(value);
-        return;
-    }
-    if (isAsyncIterable(value)) {
-        for await (let item of value)
-            yield* flattenTransformYieldAsync(item);
-        return;
-    }
-    if (isSyncIterable(value)) {
-        for (let item of value)
-            yield* flattenTransformYieldSync(item);
-        return;
-    }
-    throw intrinsics.makeErrorWithCode(112, "value", ["Uint8Array", "string", "ArrayBuffer", "ArrayBufferView", "Iterable", "AsyncIterable"], value);
-}
-function* processTransformResultSync(result) {
-    if (result === null)
-        return;
-    if (isUint8Array(result)) {
-        yield [result];
-        return;
-    }
-    if (typeof result === "string") {
-        yield [toUint8Array(result)];
-        return;
-    }
-    if (isAnyArrayBuffer(result)) {
-        yield [new intrinsics.Uint8Array(result)];
-        return;
-    }
-    if (intrinsics.ArrayBuffer.isView(result)) {
-        yield [arrayBufferViewToUint8Array(result)];
-        return;
-    }
-    if (isUint8ArrayBatch(result)) {
-        if (result.length > 0)
-            yield result;
-        return;
-    }
-    if (isSyncIterable(result)) {
-        let batch = [];
-        for (let item of result)
-            for (let chunk of flattenTransformYieldSync(item))
-                batch.push(chunk);
-        if (batch.length > 0)
-            yield batch;
-        return;
-    }
-    throw intrinsics.makeErrorWithCode(112, "result", ["null", "Uint8Array", "string", "ArrayBuffer", "ArrayBufferView", "Array", "Iterable"], result);
-}
-function appendTransformResultSync(target, result) {
-    for (let batch of processTransformResultSync(result))
-        target.push(batch);
-}
-async function* processTransformResultAsync(result) {
-    if (isPromise(result)) {
-        let resolved = await result;
-        yield* processTransformResultAsync(resolved);
-        return;
-    }
-    if (result === null)
-        return;
-    if (isUint8Array(result)) {
-        yield [result];
-        return;
-    }
-    if (typeof result === "string") {
-        yield [toUint8Array(result)];
-        return;
-    }
-    if (isAnyArrayBuffer(result)) {
-        yield [new intrinsics.Uint8Array(result)];
-        return;
-    }
-    if (intrinsics.ArrayBuffer.isView(result)) {
-        yield [arrayBufferViewToUint8Array(result)];
-        return;
-    }
-    if (isUint8ArrayBatch(result)) {
-        if (result.length > 0)
-            yield result;
-        return;
-    }
-    if (isAsyncIterable(result)) {
-        let batch = [];
-        for await (let item of result) {
-            if (isUint8Array(item)) {
-                batch.push(item);
-                continue;
-            }
-            for await (let chunk of flattenTransformYieldAsync(item))
-                batch.push(chunk);
+    push(...args) {
+        let { transforms, options } = parsePullArgs(args), rawConsumer = this.#createRawConsumer();
+        if (transforms.length > 0) {
+            let pullArgs = [...transforms];
+            if (options?.signal)
+                pullArgs.push({ __proto__: null, signal: options.signal });
+            return pullWithTransforms(rawConsumer, ...pullArgs);
         }
-        if (batch.length > 0)
-            yield batch;
-        return;
+        return rawConsumer;
     }
-    if (isSyncIterable(result)) {
-        let batch = [];
-        for (let item of result) {
-            if (isUint8Array(item)) {
-                batch.push(item);
-                continue;
-            }
-            for (let chunk of flattenTransformYieldSync(item))
-                batch.push(chunk);
-        }
-        if (batch.length > 0)
-            yield batch;
-        return;
-    }
-    throw intrinsics.makeErrorWithCode(112, "result", ["null", "Uint8Array", "string", "ArrayBuffer", "ArrayBufferView", "Array", "Iterable", "AsyncIterable", "Promise"], result);
-}
-async function appendTransformResultAsync(target, result) {
-    for await (let batch of processTransformResultAsync(result))
-        target.push(batch);
-}
-function* applyFusedStatelessSyncTransforms(source, run) {
-    for (let chunks of source) {
-        let current = chunks;
-        for (let i = 0; i < run.length; i++) {
-            let result = run[i](current);
-            if (result === null) {
-                current = null;
-                break;
-            }
-            current = result;
-        }
-        if (current === null)
-            continue;
-        if (isUint8ArrayBatch(current)) {
-            if (current.length > 0)
-                yield current;
-        }
-        else if (isUint8Array(current))
-            yield [current];
-        else if (typeof current === "string")
-            yield [toUint8Array(current)];
-        else if (isAnyArrayBuffer(current))
-            yield [new intrinsics.Uint8Array(current)];
-        else if (intrinsics.ArrayBuffer.isView(current))
-            yield [arrayBufferViewToUint8Array(current)];
-        else
-            yield* processTransformResultSync(current);
-    }
-    let pending = [];
-    for (let i = 0; i < run.length; i++) {
-        let next = [];
-        for (let j = 0; j < pending.length; j++)
-            appendTransformResultSync(next, run[i](pending[j]));
-        appendTransformResultSync(next, run[i](null)), pending = next;
-    }
-    for (let i = 0; i < pending.length; i++)
-        yield pending[i];
-}
-function* withFlushSync(source) {
-    yield* source, yield null;
-}
-function* applyStatefulSyncTransform(source, transform) {
-    let output = transform(withFlushSync(source));
-    for (let item of output) {
-        let batch = [];
-        for (let chunk of flattenTransformYieldSync(item))
-            batch.push(chunk);
-        if (batch.length > 0)
-            yield batch;
-    }
-}
-function* createSyncPipeline(source, transforms) {
-    let current = source, statelessRun = [];
-    for (let i = 0; i < transforms.length; i++) {
-        let transform = transforms[i];
-        if (isTransformObject(transform)) {
-            if (statelessRun.length > 0)
-                current = applyFusedStatelessSyncTransforms(current, statelessRun), statelessRun = [];
-            current = applyStatefulSyncTransform(current, transform.transform);
-        }
-        else
-            statelessRun.push(transform);
-    }
-    if (statelessRun.length > 0)
-        current = applyFusedStatelessSyncTransforms(current, statelessRun);
-    yield* current;
-}
-async function* applyFusedStatelessAsyncTransforms(source, run, signal) {
-    for await (let chunks of source) {
-        let current = chunks;
-        for (let i = 0; i < run.length; i++) {
-            let result = run[i](current, { __proto__: null, signal });
-            if (result === null) {
-                current = null;
-                break;
-            }
-            if (isPromise(result)) {
-                let resolved = await result;
-                if (resolved === null) {
-                    current = null;
-                    break;
-                }
-                current = resolved;
-            }
-            else
-                current = result;
-        }
-        if (current === null)
-            continue;
-        if (isUint8ArrayBatch(current)) {
-            if (current.length > 0)
-                yield current;
-        }
-        else if (isUint8Array(current))
-            yield [current];
-        else if (typeof current === "string")
-            yield [toUint8Array(current)];
-        else if (isAnyArrayBuffer(current))
-            yield [new intrinsics.Uint8Array(current)];
-        else if (intrinsics.ArrayBuffer.isView(current))
-            yield [arrayBufferViewToUint8Array(current)];
-        else
-            yield* processTransformResultAsync(current);
-    }
-    let pending = [];
-    for (let i = 0; i < run.length; i++) {
-        let next = [];
-        for (let j = 0; j < pending.length; j++)
-            await appendTransformResultAsync(next, run[i](pending[j], { __proto__: null, signal }));
-        await appendTransformResultAsync(next, run[i](null, { __proto__: null, signal })), pending = next;
-    }
-    for (let i = 0; i < pending.length; i++)
-        yield pending[i];
-}
-async function* withFlushAsync(source) {
-    yield* source, yield null;
-}
-async function* applyStatefulAsyncTransform(source, transform, options) {
-    let output = transform(withFlushAsync(source), options);
-    for await (let item of output) {
-        if (isUint8ArrayBatch(item)) {
-            if (item.length > 0)
-                yield item;
-            continue;
-        }
-        if (isUint8Array(item)) {
-            yield [item];
-            continue;
-        }
-        let batch = [];
-        for await (let chunk of flattenTransformYieldAsync(item))
-            batch.push(chunk);
-        if (batch.length > 0)
-            yield batch;
-    }
-}
-async function* applyValidatedStatefulAsyncTransform(source, transform, options) {
-    let output = transform(source, options);
-    for await (let batch of output)
-        if (batch.length > 0)
-            yield batch;
-    options.signal?.throwIfAborted();
-}
-async function* createAsyncPipeline(source, transforms, signal) {
-    signal?.throwIfAborted();
-    let normalized = source;
-    if (transforms.length === 0) {
-        for await (let batch of normalized)
-            signal?.throwIfAborted(), yield batch;
-        return;
-    }
-    let controller = new AbortController, abortHandler;
-    if (signal)
-        abortHandler = () => {
-            controller.abort(signal.reason ?? intrinsics.makeAbortError());
-        }, signal.addEventListener("abort", abortHandler, {
+    #createRawConsumer() {
+        let state = {
             __proto__: null,
-            once: !0
-        });
-    let current = normalized, transformSignal = controller.signal, statelessRun = [];
-    for (let i = 0; i < transforms.length; i++) {
-        let transform = transforms[i];
-        if (isTransformObject(transform)) {
-            if (statelessRun.length > 0)
-                current = applyFusedStatelessAsyncTransforms(current, statelessRun, transformSignal), statelessRun = [];
-            let opts = { __proto__: null, signal: transformSignal };
-            if (transform[kValidatedTransform])
-                current = applyValidatedStatefulAsyncTransform(current, transform.transform, opts);
-            else
-                current = applyStatefulAsyncTransform(current, transform.transform, opts);
-        }
+            cursor: this.#bufferStart,
+            resolve: null,
+            reject: null,
+            detached: !1
+        };
+        if (this.#consumers.add(state), this.#consumers.size === 1)
+            this.#cachedMinCursor = state.cursor, this.#cachedMinCursorConsumers = 1;
+        else if (state.cursor === this.#cachedMinCursor)
+            this.#cachedMinCursorConsumers++;
         else
-            statelessRun.push(transform);
-    }
-    if (statelessRun.length > 0)
-        current = applyFusedStatelessAsyncTransforms(current, statelessRun, transformSignal);
-    let completed = !1;
-    try {
-        for await (let batch of current)
-            controller.signal.throwIfAborted(), yield batch;
-        completed = !0;
-    }
-    catch (error) {
-        if (!controller.signal.aborted)
-            controller.abort(wrapError(error));
-        throw error;
-    }
-    finally {
-        if (!completed && !controller.signal.aborted)
-            controller.abort(intrinsics.makeAbortError());
-        if (signal && abortHandler)
-            signal.removeEventListener("abort", abortHandler);
-    }
-}
-function pullSync(source, ...transforms) {
-    for (let i = 0; i < transforms.length; i++)
-        if (!isTransform(transforms[i]))
-            throw intrinsics.makeErrorWithCode(112, `transforms[${i}]`, ["Function", "Object with transform()"], transforms[i]);
-    return {
-        __proto__: null,
-        *[Symbol.iterator]() {
-            yield* createSyncPipeline(fromSync(source), transforms);
+            this.#recomputeMinCursor();
+        let self = this, kDone = intrinsics.Promise.resolve({ __proto__: null, done: !0, value: intrinsics.undefined });
+        function detach() {
+            if (state.detached = !0, state.resolve = null, state.reject = null, self.#deleteConsumer(state))
+                self.#tryTrimBuffer();
         }
-    };
-}
-function pull(source, ...args) {
-    let { transforms, options } = parsePullArgs(args), signal = options?.signal;
-    if (signal !== intrinsics.undefined) {
-        if (validateAbortSignal(signal, "options.signal"), signal.aborted)
-            return {
-                __proto__: null,
-                async *[Symbol.asyncIterator]() {
-                    throw signal.reason;
+        return {
+            __proto__: null,
+            [SymbolAsyncIterator]() {
+                return {
+                    __proto__: null,
+                    next() {
+                        if (state.detached) {
+                            if (self.#error)
+                                return intrinsics.Promise.reject(self.#error);
+                            return kDone;
+                        }
+                        let bufferIndex = state.cursor - self.#bufferStart;
+                        if (bufferIndex < self.#buffer.length) {
+                            let chunk = self.#buffer.get(bufferIndex), cursor = state.cursor;
+                            if (state.cursor++, cursor === self.#cachedMinCursor && --self.#cachedMinCursorConsumers === 0)
+                                self.#tryTrimBuffer();
+                            return intrinsics.Promise.resolve({ __proto__: null, done: !1, value: chunk });
+                        }
+                        if (self.#error)
+                            return state.detached = !0, self.#deleteConsumer(state), intrinsics.Promise.reject(self.#error);
+                        if (self.#ended || self.#cancelled)
+                            return detach(), kDone;
+                        let { promise, resolve, reject } = PromiseWithResolvers();
+                        return state.resolve = resolve, state.reject = reject, self.#waiters.push(state), promise;
+                    },
+                    return() {
+                        return detach(), kDone;
+                    },
+                    throw() {
+                        return detach(), kDone;
+                    }
+                };
+            }
+        };
+    }
+    cancel(reason) {
+        if (this.#cancelled)
+            return;
+        if (this.#cancelled = !0, this.#ended = !0, reason !== intrinsics.undefined)
+            this.#error = reason;
+        this.#writer?.[kCancelWriter]();
+        for (let consumer of this.#consumers) {
+            if (consumer.resolve) {
+                if (reason !== intrinsics.undefined)
+                    consumer.reject?.(reason);
+                else
+                    consumer.resolve({ __proto__: null, done: !0, value: intrinsics.undefined });
+                consumer.resolve = null, consumer.reject = null;
+            }
+            consumer.detached = !0;
+        }
+        this.#consumers.clear(), this.#cachedMinCursorConsumers = 0;
+    }
+    [SymbolDispose]() {
+        this.cancel();
+    }
+    [kWrite](chunk) {
+        if (this.#ended || this.#cancelled)
+            return !1;
+        if (this.#buffer.length >= this.#options.highWaterMark)
+            switch (this.#options.backpressure) {
+                case "strict":
+                case "block":
+                    return !1;
+                case "drop-oldest":
+                    this.#buffer.shift(), this.#bufferStart++;
+                    for (let consumer of this.#consumers)
+                        if (consumer.cursor < this.#bufferStart)
+                            this.#deleteConsumerFromMin(consumer), consumer.cursor = this.#bufferStart;
+                    this.#recomputeMinCursor();
+                    break;
+                case "drop-newest":
+                    return !0;
+            }
+        return this.#buffer.push(chunk), this.#notifyConsumers(), !0;
+    }
+    [kEnd]() {
+        if (this.#ended)
+            return;
+        this.#ended = !0;
+        for (let consumer of this.#consumers)
+            if (consumer.resolve) {
+                let bufferIndex = consumer.cursor - this.#bufferStart;
+                if (bufferIndex < this.#buffer.length) {
+                    let chunk = this.#buffer.get(bufferIndex), cursor = consumer.cursor;
+                    if (consumer.cursor++, cursor === this.#cachedMinCursor && --this.#cachedMinCursorConsumers === 0)
+                        this.#tryTrimBuffer();
+                    consumer.resolve({ __proto__: null, done: !1, value: chunk });
                 }
-            };
-    }
-    return {
-        __proto__: null,
-        async *[Symbol.asyncIterator]() {
-            yield* createAsyncPipeline(from(source), transforms, signal);
-        }
-    };
-}
-function pipeToSync(source, ...args) {
-    let { transforms, writer, options } = parsePipeToArgs(args, "writeSync");
-    if (isTransformObject(writer))
-        transforms.push(writer);
-    let normalized = fromSync(source), pipeline = transforms.length > 0 ? createSyncPipeline(normalized, transforms) : normalized, totalBytes = 0, hasWritevSync = typeof writer.writevSync === "function", hasEndSync = typeof writer.endSync === "function";
-    try {
-        for (let batch of pipeline) {
-            let batchLength;
-            if (hasWritevSync && (batchLength = batch.length) > 1) {
-                writer.writevSync(batch);
-                for (let i = 0; i < batchLength; i++)
-                    totalBytes += batch[i].byteLength;
+                else
+                    consumer.resolve({ __proto__: null, done: !0, value: intrinsics.undefined });
+                consumer.resolve = null, consumer.reject = null;
             }
-            else
-                for (let i = 0; i < (batchLength ??= batch.length); i++) {
-                    let chunk = batch[i];
-                    writer.writeSync(chunk), totalBytes += chunk.byteLength;
+    }
+    [kAbort](reason) {
+        if (this.#ended || this.#error)
+            return;
+        this.#error = reason, this.#ended = !0;
+        for (let consumer of this.#consumers) {
+            if (consumer.reject)
+                consumer.reject(reason), consumer.resolve = null, consumer.reject = null;
+            consumer.detached = !0;
+        }
+        this.#consumers.clear(), this.#cachedMinCursorConsumers = 0;
+    }
+    [kGetDesiredSize]() {
+        if (this.#ended || this.#cancelled)
+            return null;
+        return Math.max(0, this.#options.highWaterMark - this.#buffer.length);
+    }
+    [kCanWrite]() {
+        if (this.#ended || this.#cancelled)
+            return !1;
+        if ((this.#options.backpressure === "strict" || this.#options.backpressure === "block") && this.#buffer.length >= this.#options.highWaterMark)
+            return !1;
+        return !0;
+    }
+    #recomputeMinCursor() {
+        let { minCursor, minCursorConsumers } = getMinCursor(this.#consumers, this.#bufferStart + this.#buffer.length);
+        this.#cachedMinCursor = minCursor, this.#cachedMinCursorConsumers = minCursorConsumers;
+    }
+    #tryTrimBuffer() {
+        if (this.#cachedMinCursorConsumers === 0)
+            this.#recomputeMinCursor();
+        let trimCount = this.#cachedMinCursor - this.#bufferStart;
+        if (trimCount > 0) {
+            if (this.#buffer.trimFront(trimCount), this.#bufferStart = this.#cachedMinCursor, this[kOnBufferDrained] && this.#buffer.length < this.#options.highWaterMark)
+                this[kOnBufferDrained]();
+        }
+    }
+    #notifyConsumers() {
+        let waiters = this.#waiters;
+        if (waiters.length === 0)
+            return;
+        this.#waiters = [];
+        for (let i = 0; i < waiters.length; i++) {
+            let consumer = waiters[i];
+            if (consumer.resolve) {
+                let bufferIndex = consumer.cursor - this.#bufferStart;
+                if (bufferIndex < this.#buffer.length) {
+                    let chunk = this.#buffer.get(bufferIndex), cursor = consumer.cursor;
+                    if (consumer.cursor++, cursor === this.#cachedMinCursor && --this.#cachedMinCursorConsumers === 0)
+                        this.#tryTrimBuffer();
+                    let resolve = consumer.resolve;
+                    consumer.resolve = null, consumer.reject = null, resolve({ __proto__: null, done: !1, value: chunk });
                 }
-        }
-        if (!options?.preventClose) {
-            if (!hasEndSync || writer.endSync() < 0)
-                writer.end?.();
+                else
+                    this.#waiters.push(consumer);
+            }
         }
     }
-    catch (error) {
-        if (!options?.preventFail)
-            writer.fail?.(wrapError(error));
-        throw error;
+    #deleteConsumerFromMin(consumer) {
+        if (consumer.cursor === this.#cachedMinCursor)
+            return this.#cachedMinCursorConsumers--, this.#cachedMinCursorConsumers === 0;
+        return !1;
     }
-    return totalBytes;
+    #deleteConsumer(consumer) {
+        if (this.#consumers.delete(consumer))
+            return this.#deleteConsumerFromMin(consumer);
+        return !1;
+    }
 }
-async function pipeTo(source, ...args) {
-    let { transforms, writer, options } = parsePipeToArgs(args, "write");
-    if (options?.signal !== intrinsics.undefined)
-        validateAbortSignal(options.signal, "options.signal");
-    if (isTransformObject(writer))
-        transforms.push(writer);
-    let signal = options?.signal;
-    signal?.throwIfAborted();
-    let hasWriteSync = typeof writer.writeSync === "function", useSyncIterableFastPath = hasWriteSync && canUseSyncIterablePipeToFastPath(source, transforms, signal), normalized = useSyncIterableFastPath ? intrinsics.undefined : from(source), totalBytes = 0, hasWritev = typeof writer.writev === "function", hasWritevSync = typeof writer.writevSync === "function", hasEndSync = typeof writer.endSync === "function", syncFalseCanBeAccepted = writer[kSyncWriteAcceptedOnFalse] === !0;
-    function syncFalseWasAccepted() {
-        return syncFalseCanBeAccepted && writer.desiredSize === 0;
+var getBroadcastPendingWrites;
+class BroadcastWriter {
+    #broadcast;
+    #totalBytes = 0;
+    #closed;
+    #aborted = !1;
+    #pendingWrites = new RingBuffer;
+    #pendingDrains = [];
+    static {
+        getBroadcastPendingWrites = (obj) => obj.#pendingWrites;
     }
-    function waitForSyncBackpressure() {
-        return intrinsics.uncurry(writer[drainableProtocol], "call")(writer);
+    constructor(broadcastImpl) {
+        this.#broadcast = broadcastImpl, this.#broadcast[kOnBufferDrained] = () => {
+            this.#resolvePendingWrites(), this.#resolvePendingDrains(!0);
+        };
     }
-    async function writeBatchAfterAcceptedBackpressure(batch, startIndex) {
-        await waitForSyncBackpressure(), await writeBatchAsyncFallback(batch, startIndex);
+    [drainableProtocol]() {
+        let desired = this.desiredSize;
+        if (desired === null)
+            return null;
+        if (desired > 0)
+            return intrinsics.Promise.resolve(!0);
+        let { promise, resolve, reject } = PromiseWithResolvers();
+        return this.#pendingDrains.push({ __proto__: null, resolve, reject }), promise;
     }
-    async function writeBatchAsyncFallback(batch, startIndex) {
-        for (let i = startIndex; i < batch.length; i++) {
-            let chunk = batch[i];
-            if (hasWriteSync && writer.writeSync(chunk))
-                ;
-            else if (syncFalseWasAccepted()) {
-                totalBytes += chunk.byteLength, await waitForSyncBackpressure();
-                continue;
-            }
-            else {
-                let result = writer.write(chunk, signal ? { __proto__: null, signal } : intrinsics.undefined);
-                if (result !== intrinsics.undefined)
-                    await result;
-            }
-            totalBytes += chunk.byteLength;
+    #isClosed() {
+        return this.#closed !== intrinsics.undefined;
+    }
+    #isClosedOrAborted() {
+        return this.#isClosed() || this.#aborted;
+    }
+    get desiredSize() {
+        return this.#isClosedOrAborted() ? null : this.#broadcast[kGetDesiredSize]();
+    }
+    #canUseWriteFastPath(options) {
+        return !options?.signal && !this.#isClosed() && !this.#aborted && this.#broadcast[kCanWrite]();
+    }
+    write(chunk, options) {
+        if (this.#canUseWriteFastPath(options)) {
+            let converted = toUint8Array(chunk);
+            return this.#broadcast[kWrite]([converted]), this.#totalBytes += converted.byteLength, kResolvedPromise;
         }
+        return this.#writevSlow([chunk], options);
     }
-    function writeBatch(batch) {
-        let batchLength;
-        if (hasWritev && (batchLength = batch.length) > 1) {
-            if (!hasWritevSync || !writer.writevSync(batch)) {
-                if (hasWritevSync && syncFalseWasAccepted()) {
-                    for (let i = 0; i < batchLength; i++)
-                        totalBytes += batch[i].byteLength;
-                    return waitForSyncBackpressure();
-                }
-                let opts = signal ? { __proto__: null, signal } : intrinsics.undefined;
-                return writer.writev(batch, opts).then(() => {
-                    for (let i = 0; i < batch.length; i++)
-                        totalBytes += batch[i].byteLength;
-                });
-            }
-            for (let i = 0; i < batch.length; i++)
-                totalBytes += batch[i].byteLength;
+    writev(chunks, options) {
+        if (!intrinsics.Array.isArray(chunks))
+            throw intrinsics.makeErrorWithCode(112, "chunks", "Array", chunks);
+        if (this.#canUseWriteFastPath(options)) {
+            let converted = convertChunks(chunks);
+            this.#broadcast[kWrite](converted);
+            for (let i = 0; i < converted.length; i++)
+                this.#totalBytes += converted[i].byteLength;
+            return kResolvedPromise;
+        }
+        return this.#writevSlow(chunks, options);
+    }
+    async #writevSlow(chunks, options) {
+        let signal = options?.signal;
+        if (signal?.throwIfAborted(), this.#isClosedOrAborted())
+            throw intrinsics.makeErrorWithCode(130, "Writer is closed");
+        let converted = convertChunks(chunks);
+        if (this.#broadcast[kWrite](converted)) {
+            for (let i = 0; i < converted.length; i++)
+                this.#totalBytes += converted[i].byteLength;
             return;
         }
-        for (let i = 0; i < batch.length; i++) {
-            let chunk = batch[i];
-            if (!hasWriteSync || !writer.writeSync(chunk)) {
-                if (hasWriteSync && syncFalseWasAccepted())
-                    return totalBytes += chunk.byteLength, writeBatchAfterAcceptedBackpressure(batch, i + 1);
-                return writeBatchAsyncFallback(batch, i);
+        let policy = this.#broadcast.backpressurePolicy, hwm = this.#broadcast.highWaterMark;
+        if (policy === "strict") {
+            if (this.#pendingWrites.length >= hwm)
+                throw intrinsics.makeErrorWithCode(130, "Backpressure violation: too many pending writes. Await each write() call to respect backpressure.");
+            return this.#createPendingWrite(converted, signal);
+        }
+        return this.#createPendingWrite(converted, signal);
+    }
+    writeSync(chunk) {
+        if (this.#isClosedOrAborted())
+            return !1;
+        if (!this.#broadcast[kCanWrite]())
+            return !1;
+        let converted = toUint8Array(chunk);
+        if (this.#broadcast[kWrite]([converted]))
+            return this.#totalBytes += converted.byteLength, !0;
+        return !1;
+    }
+    writevSync(chunks) {
+        if (!intrinsics.Array.isArray(chunks))
+            throw intrinsics.makeErrorWithCode(112, "chunks", "Array", chunks);
+        if (this.#isClosedOrAborted())
+            return !1;
+        if (!this.#broadcast[kCanWrite]())
+            return !1;
+        let converted = convertChunks(chunks);
+        if (this.#broadcast[kWrite](converted)) {
+            for (let i = 0; i < converted.length; i++)
+                this.#totalBytes += converted[i].byteLength;
+            return !0;
+        }
+        return !1;
+    }
+    end(_options) {
+        if (this.#isClosed())
+            return this.#closed;
+        return this.#closed = intrinsics.Promise.resolve(this.#totalBytes), this.#broadcast[kEnd](), this.#resolvePendingDrains(!1), this.#closed;
+    }
+    endSync() {
+        if (this.#closed)
+            return this.#totalBytes;
+        return this.#closed = intrinsics.Promise.resolve(this.#totalBytes), this.#broadcast[kEnd](), this.#resolvePendingDrains(!1), this.#totalBytes;
+    }
+    fail(reason) {
+        if (this.#isClosedOrAborted())
+            return;
+        this.#aborted = !0, this.#closed = intrinsics.Promise.resolve(this.#totalBytes);
+        let error = reason ?? intrinsics.makeErrorWithCode(130, "Failed");
+        this.#rejectPendingWrites(error), this.#rejectPendingDrains(error), this.#broadcast[kAbort](error);
+    }
+    [SymbolAsyncDispose]() {
+        return this.fail(), intrinsics.Promise.resolve();
+    }
+    [SymbolDispose]() {
+        this.fail();
+    }
+    [kCancelWriter]() {
+        if (this.#isClosed())
+            return;
+        this.#closed = intrinsics.Promise.resolve(this.#totalBytes), this.#rejectPendingWrites(intrinsics.makeAbortError("Broadcast cancelled")), this.#resolvePendingDrains(!1);
+    }
+    #createPendingWrite(chunk, signal) {
+        let { promise, resolve, reject } = PromiseWithResolvers(), entry = { __proto__: null, chunk, resolve, reject };
+        if (this.#pendingWrites.push(entry), signal)
+            wireBroadcastWriteSignal(entry, signal, resolve, reject, this);
+        return promise;
+    }
+    #resolvePendingWrites() {
+        while (this.#pendingWrites.length > 0 && this.#broadcast[kCanWrite]()) {
+            let pending = this.#pendingWrites.shift(), chunk = pending.chunk;
+            if (this.#broadcast[kWrite](chunk)) {
+                for (let i = 0; i < chunk.length; i++)
+                    this.#totalBytes += chunk[i].byteLength;
+                pending.resolve();
             }
-            totalBytes += chunk.byteLength;
-        }
-    }
-    try {
-        if (useSyncIterableFastPath)
-            for (let value of source) {
-                if (isUint8ArrayBatch(value)) {
-                    if (value.length > 0) {
-                        let p = writeBatch(value);
-                        if (p)
-                            await p;
-                    }
-                    continue;
-                }
-                if (isUint8Array(value)) {
-                    let p = writeBatch([value]);
-                    if (p)
-                        await p;
-                    continue;
-                }
-                let batch = await intrinsics.Array.fromAsync(normalizeAsyncValue(value));
-                if (batch.length > 0) {
-                    let p = writeBatch(batch);
-                    if (p)
-                        await p;
-                }
+            else {
+                this.#pendingWrites.unshift(pending);
+                break;
             }
-        else if (transforms.length === 0)
-            if (signal)
-                for await (let batch of normalized) {
-                    signal.throwIfAborted();
-                    let p = writeBatch(batch);
-                    if (p)
-                        await p;
-                }
-            else
-                for await (let batch of normalized) {
-                    let p = writeBatch(batch);
-                    if (p)
-                        await p;
-                }
-        else {
-            let pipeline = createAsyncPipeline(normalized, transforms, signal);
-            if (signal)
-                for await (let batch of pipeline) {
-                    signal.throwIfAborted();
-                    let p = writeBatch(batch);
-                    if (p)
-                        await p;
-                }
-            else
-                for await (let batch of pipeline) {
-                    let p = writeBatch(batch);
-                    if (p)
-                        await p;
-                }
-        }
-        if (!options?.preventClose) {
-            if (!hasEndSync || writer.endSync() < 0)
-                await writer.end?.(signal ? { __proto__: null, signal } : intrinsics.undefined);
         }
     }
-    catch (error) {
-        if (!options?.preventFail)
-            writer.fail?.(wrapError(error));
-        throw error;
+    #rejectPendingWrites(error) {
+        while (this.#pendingWrites.length > 0)
+            this.#pendingWrites.shift().reject(error);
     }
-    return totalBytes;
+    #resolvePendingDrains(canWrite) {
+        let drains = this.#pendingDrains;
+        this.#pendingDrains = [];
+        for (let i = 0; i < drains.length; i++)
+            drains[i].resolve(canWrite);
+    }
+    #rejectPendingDrains(error) {
+        let drains = this.#pendingDrains;
+        this.#pendingDrains = [];
+        for (let i = 0; i < drains.length; i++)
+            drains[i].reject(error);
+    }
 }
+function wireBroadcastWriteSignal(entry, signal, resolve, reject, self) {
+    let onAbort = () => {
+        let pendingWrites = getBroadcastPendingWrites(self), idx = pendingWrites.indexOf(entry);
+        if (idx !== -1)
+            pendingWrites.removeAt(idx);
+        entry.chunk = null, reject(signal.reason ?? intrinsics.makeAbortError("Aborted"));
+    };
+    entry.resolve = function () {
+        signal.removeEventListener("abort", onAbort), entry.chunk = null, resolve();
+    }, entry.reject = function (reason) {
+        signal.removeEventListener("abort", onAbort), entry.chunk = null, reject(reason);
+    }, signal.addEventListener("abort", onAbort, { __proto__: null, once: !0 });
+}
+function onBroadcastCancel(broadcastImpl, signal) {
+    onSignalAbort(signal, () => broadcastImpl.cancel(signal.reason));
+}
+function broadcast(options = { __proto__: null }) {
+    validateObject(options, "options");
+    let { highWaterMark = kMultiConsumerDefaultHWM, backpressure = "strict", signal } = options;
+    if (validateInteger(highWaterMark, "options.highWaterMark"), validateBackpressure(backpressure), signal !== intrinsics.undefined)
+        validateAbortSignal(signal, "options.signal");
+    let opts = {
+        __proto__: null,
+        highWaterMark: clampHWM(highWaterMark),
+        backpressure,
+        signal
+    }, broadcastImpl = new BroadcastImpl(opts), writer = new BroadcastWriter(broadcastImpl);
+    if (broadcastImpl.setWriter(writer), signal)
+        onBroadcastCancel(broadcastImpl, signal);
+    return { __proto__: null, writer, broadcast: broadcastImpl };
+}
+function isBroadcastable(value) {
+    return hasProtocol(value, broadcastProtocol);
+}
+var Broadcast = {
+    __proto__: null,
+    from(input, options) {
+        if (isBroadcastable(input)) {
+            let bc = input[broadcastProtocol](options);
+            if (bc === null || typeof bc !== "object")
+                throw intrinsics.makeErrorWithCode(128, "an object", "[Symbol.for('Stream.broadcastProtocol')]", bc);
+            return { __proto__: null, writer: { __proto__: null }, broadcast: bc };
+        }
+        if (!isAsyncIterable(input) && !isSyncIterable(input))
+            throw intrinsics.makeErrorWithCode(112, "input", ["Broadcastable", "AsyncIterable", "Iterable"], input);
+        let result = broadcast(options), signal = options?.signal;
+        return (async () => {
+            let w = result.writer;
+            try {
+                if (isAsyncIterable(input)) {
+                    for await (let chunks of input)
+                        if (signal?.throwIfAborted(), intrinsics.Array.isArray(chunks)) {
+                            if (!w.writevSync(chunks))
+                                await w.writev(chunks, signal ? { signal } : intrinsics.undefined);
+                        }
+                        else if (!w.writeSync(chunks))
+                            await w.write(chunks, signal ? { signal } : intrinsics.undefined);
+                }
+                else if (isSyncIterable(input)) {
+                    for (let chunks of input)
+                        if (signal?.throwIfAborted(), intrinsics.Array.isArray(chunks)) {
+                            if (!w.writevSync(chunks))
+                                await w.writev(chunks, signal ? { signal } : intrinsics.undefined);
+                        }
+                        else if (!w.writeSync(chunks))
+                            await w.write(chunks, signal ? { signal } : intrinsics.undefined);
+                }
+                if (w.endSync() < 0)
+                    await w.end(signal ? { signal } : intrinsics.undefined);
+            }
+            catch (error) {
+                w.fail(wrapError(error));
+            }
+        })().then(intrinsics.undefined, () => { }), result;
+    }
+};
 $ = {
-    pipeTo,
-    pipeToSync,
-    pull,
-    pullSync
+    Broadcast,
+    broadcast
 };
 return $;
 })

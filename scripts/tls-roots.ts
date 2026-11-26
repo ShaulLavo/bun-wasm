@@ -6,11 +6,11 @@ import { fileURLToPath } from "node:url";
 
 export const rootPin = {
   repository: "https://github.com/oven-sh/bun",
-  commit: "9510e74152073d850a18758ca41114d8f214ffa6",
+  commit: "a7733435cf40429e3b35c36072769df2052b80f1",
   path: "packages/bun-usockets/root_certs.der",
-  sha256: "9c211f519356eff61365ff890856135b1b8ee298775b144ce6089782ae603f90",
-  count: 121,
-  bytes: 129635,
+  sha256: "8f6217fc19d21cbc22c06064283f59a2a1004408813e919d2ceac8987d404ea3",
+  count: 118,
+  bytes: 127583,
 };
 
 function sha256(bytes: Uint8Array) {
@@ -86,7 +86,7 @@ export function verifyRootBundle(input: Uint8Array, source: unknown) {
     if (provenance[key] !== value) throw new Error(`TLS root provenance has an incorrect ${key}`);
   }
   if (input.byteLength !== rootPin.bytes || sha256(input) !== rootPin.sha256) throw new Error("TLS root bundle does not match the reviewed pin");
-  if (provenance.schema !== 1 || provenance.nssRelease !== null || provenance.importedAt !== "2026-11-01") {
+  if (provenance.schema !== 1 || provenance.nssRelease !== null || provenance.importedAt !== "2026-11-25") {
     throw new Error("TLS root provenance schema, import date or NSS claim changed");
   }
   if (provenance.origin !== "Mozilla NSS certdata.txt, filtered for SERVER_AUTH:TRUSTED_DELEGATOR") throw new Error("Invalid TLS root origin");

@@ -234,8 +234,8 @@ try {
   assert.equal(invoke("fd_close", input), 0);
   assert.equal(invoke("fd_read", input, 128, 1, 96), 8);
   assert.equal(invoke("fd_close", 3), 0);
-  assert.deepEqual(evaluated, [188]);
-  console.log("PASS Bun WASI through real host WebAssembly: args, UTF-8 env, random, preopen, path_open, fd_write/read/close, EBADF; generated modules=[188]");
+  assert.deepEqual(evaluated, [native.bunBuiltinNames().indexOf("node:wasi")]);
+  console.log("PASS Bun WASI through real host WebAssembly: args, UTF-8 env, random, preopen, path_open, fd_write/read/close, EBADF; generated modules=[node:wasi]");
 } finally {
   handles.forEach(closeWasi);
   fs.rmSync(scratch, { recursive: true, force: true });

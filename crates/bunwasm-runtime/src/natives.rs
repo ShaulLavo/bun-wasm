@@ -780,6 +780,7 @@ pub fn table(state: &Rc<State>) -> Table {
     });
     crate::glob::install(&mut t);
     crate::semver::install(&mut t);
+    crate::test_diff::install(&mut t);
     t.add("bunStringRoundTrip", |a| {
         bun_string_round_trip(a.bytes(0)?, a.str(1)?)
     });
@@ -826,12 +827,13 @@ fn bun_string_round_trip(bytes: &[u8], encoding: &str) -> NativeResult {
             .collect(),
         _ => Vec::new(),
     };
-    let string = match encoding {
-        "latin1" => bun_core::String::ascii(&owned),
-        "utf8" => bun_core::String::borrow_utf8(&owned),
-        "utf16le" => bun_core::String::borrow_utf16(&words),
+    let encoded = match encoding {
+        "latin1" => bun_core::EncodedSlice::latin1(&owned),
+        "utf8" => bun_core::EncodedSlice::utf8(&owned),
+        "utf16le" => bun_core::EncodedSlice::utf16(&words),
         _ => return Err(NativeError::type_error("unsupported encoding")),
     };
+    let string = bun_core::StringView::from_encoded(encoded);
     let decoded = string.byte_slice();
     Ok(Val::Object(vec![
         ("address".into(), Val::Num(decoded.as_ptr() as usize as f64)),

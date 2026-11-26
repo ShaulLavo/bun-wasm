@@ -3,6 +3,7 @@
 // source env.sh && BUN_WASM_PROFILE_PROGRAM=<group>/bun.wasm bun web/tests/shared-wasm-memory-browser.ts chromium
 import { strict as assert } from "node:assert";
 import { navigateTestPage } from "./navigate-test-page.ts";
+import { withoutColors } from "./terminal-text.ts";
 import { sharedBrowserClocks, verifySpiderMonkeyStackWitness } from "../../scripts/spidermonkey-native-qualification";
 import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
@@ -117,7 +118,9 @@ async function result(page: Page, entry: string, initialCheckpoint?: unknown): P
   const progress = setInterval(report, 20_000);
   try {
     await page.waitForFunction(() => Reflect.get(globalThis, "sharedWasmMemoryResult"), undefined, { timeout: oxcTree === undefined ? sharedBrowserClocks(selectedSpiderMonkey ? "spidermonkey" : "quickjs", entry).pageMs : 90_000 });
-    return await page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryResult"));
+    const value: Result = await page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryResult"));
+    // The page's stdout hooks are a terminal to the guest, which colours console values.
+    return { ...value, stdout: value.stdout === undefined ? undefined : withoutColors(value.stdout), stderr: value.stderr === undefined ? undefined : withoutColors(value.stderr) };
   } catch (error) {
     console.error(JSON.stringify({ sharedWasmFailure: { entry, stack: error instanceof Error ? error.stack : String(error) }, checkpoint }));
     try { console.error(JSON.stringify({ failureCapture: await page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryProgress")?.()) })); }

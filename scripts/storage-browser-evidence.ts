@@ -231,20 +231,24 @@ export class StorageLifetime {
     page.on("pageerror", error => this.event("pageerror", { page: id, ...errorObject(error) }));
     page.on("request", request => {
       const detail = requestDetail(request, true);
-      this.routing.request({ kind: "request", page: id, request: detail.request, url: detail.url });
+      this.routing.request({ kind: "request", page: id, request: detail.request, url: detail.url, navigation: detail.navigation, frame: frameOf(detail) });
       this.event("request", detail);
     });
     page.on("response", response => {
       const detail = { ...requestDetail(response.request()), status: response.status(), fromServiceWorker: response.fromServiceWorker() };
-      this.routing.request({ kind: "response", page: id, request: detail.request, url: detail.url, status: detail.status, fromServiceWorker: detail.fromServiceWorker, loadingNavigation: loadingNavigation(response) });
+      this.routing.request({ kind: "response", page: id, request: detail.request, url: detail.url, status: detail.status, fromServiceWorker: detail.fromServiceWorker, loadingNavigation: loadingNavigation(response), navigation: detail.navigation, frame: frameOf(detail) });
       this.event("response", detail);
     });
     page.on("requestfinished", request => {
       const detail = requestDetail(request);
-      this.routing.request({ kind: "requestfinished", page: id, request: detail.request, url: detail.url });
+      this.routing.request({ kind: "requestfinished", page: id, request: detail.request, url: detail.url, navigation: detail.navigation, frame: frameOf(detail) });
       this.event("requestfinished", detail);
     });
-    page.on("requestfailed", request => this.event("requestfailed", { ...requestDetail(request), failure: request.failure() }));
+    page.on("requestfailed", request => {
+      const detail = requestDetail(request);
+      this.routing.request({ kind: "requestfailed", page: id, request: detail.request, url: detail.url, navigation: detail.navigation, frame: frameOf(detail), errorText: request.failure()?.errorText ?? null });
+      this.event("requestfailed", { ...detail, failure: request.failure() });
+    });
     page.on("framenavigated", frame => this.event("navigation", { page: id, ...frameDetail(frame) }));
     page.on("crash", () => this.event("page-crash", { page: id }));
     page.on("close", () => this.event("page-close", { page: id }));
@@ -254,6 +258,9 @@ export class StorageLifetime {
     });
   }
 }
+
+// The request's frame number within its page, or null when Playwright could not name the frame.
+function frameOf(detail: { frame: { frame: number } | null }): number | null { return detail.frame?.frame ?? null; }
 
 function requestFrame<T>(request: Request, detail: (frame: Frame) => T): { frame: T } | { frame: null; frameUnavailable: string } {
   try { return { frame: detail(request.frame()) }; }

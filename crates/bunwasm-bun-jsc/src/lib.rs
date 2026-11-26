@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::fmt;
 use std::ops::Deref;
 
 pub use bunwasm_bun_jsc_macros::host_fn;
@@ -15,6 +14,39 @@ pub enum JsError {
     OutOfMemory,
 }
 
+/// The part of Bun's bindgen runtime that plain-data functions name in their signatures.
+pub mod bindgen {
+    use std::fmt;
+    use std::marker::PhantomData;
+
+    use super::JsError;
+
+    /// Stands in for the engine heap that Bun hands to functions which create errors.
+    #[derive(Default)]
+    pub struct JsHeap<'a>(PhantomData<&'a ()>);
+
+    impl<'a> JsHeap<'a> {
+        pub fn error(&self, message: fmt::Arguments<'_>) -> Error<'a> {
+            Error(JsError::Error(message.to_string()), PhantomData)
+        }
+    }
+
+    pub struct Error<'a>(JsError, PhantomData<&'a ()>);
+    pub type Result<'a, T> = core::result::Result<T, Error<'a>>;
+
+    impl From<bun_alloc::AllocError> for Error<'_> {
+        fn from(_: bun_alloc::AllocError) -> Self {
+            Self(JsError::OutOfMemory, PhantomData)
+        }
+    }
+
+    impl From<Error<'_>> for JsError {
+        fn from(error: Error<'_>) -> Self {
+            error.0
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Value {
     Undefined,
@@ -26,41 +58,17 @@ enum Value {
 #[derive(Clone, Copy)]
 pub struct JSValue(Value);
 
-enum StoredValue {
-    String(String),
-    HostObject(Vec<HostFunction>),
-}
-
 #[derive(Default)]
 pub struct JSGlobalObject {
-    values: RefCell<Vec<StoredValue>>,
+    strings: RefCell<Vec<String>>,
 }
 
 impl JSGlobalObject {
-    fn store(&self, value: StoredValue) -> JSValue {
-        let mut values = self.values.borrow_mut();
-        let slot = values.len();
-        values.push(value);
-        JSValue(Value::Slot(slot))
-    }
-
     pub fn string(&self, value: &str) -> JSValue {
-        self.store(StoredValue::String(value.to_owned()))
-    }
-
-    pub fn host_functions(&self, value: JSValue) -> Vec<HostFunction> {
-        let Value::Slot(slot) = value.0 else {
-            panic!("expected a host function object");
-        };
-        let values = self.values.borrow();
-        let StoredValue::HostObject(functions) = &values[slot] else {
-            panic!("expected a host function object");
-        };
-        functions.clone()
-    }
-
-    pub fn throw(&self, message: fmt::Arguments<'_>) -> JsError {
-        JsError::Error(message.to_string())
+        let mut strings = self.strings.borrow_mut();
+        let slot = strings.len();
+        strings.push(value.to_owned());
+        JSValue(Value::Slot(slot))
     }
 
     pub fn throw_out_of_memory(&self) -> JsError {
@@ -69,7 +77,6 @@ impl JSGlobalObject {
 }
 
 impl JSValue {
-    pub const FALSE: Self = Self(Value::Boolean(false));
     pub const UNDEFINED: Self = Self(Value::Undefined);
 
     pub fn js_number_from_int32(value: i32) -> Self {
@@ -94,43 +101,21 @@ impl JSValue {
         }
     }
 
-    pub fn to_js_string_view(self, global: &JSGlobalObject) -> JsResult<JSStringView> {
+    pub fn to_utf8(self, global: &JSGlobalObject) -> JsResult<Utf8Bytes> {
         let Value::Slot(slot) = self.0 else {
             return Err(JsError::TypeError("expected a string argument".to_owned()));
         };
-        let values = global.values.borrow();
-        match &values[slot] {
-            StoredValue::String(value) => Ok(JSStringView(value.clone())),
-            _ => Err(JsError::TypeError("expected a string argument".to_owned())),
-        }
-    }
-
-    pub fn to_utf8(self, global: &JSGlobalObject) -> JsResult<Utf8Bytes> {
-        Ok(self.to_js_string_view(global)?.to_utf8())
-    }
-}
-
-pub struct JSStringView(String);
-
-impl JSStringView {
-    pub fn to_utf8(&self) -> Utf8Bytes {
-        Utf8Bytes(self.0.as_bytes().into())
+        Ok(Utf8Bytes(global.strings.borrow()[slot].as_bytes().into()))
     }
 }
 
 pub struct Utf8Bytes(Box<[u8]>);
 
-impl Utf8Bytes {
-    pub fn slice(&self) -> &[u8] {
-        &self.0
-    }
-}
-
 impl Deref for Utf8Bytes {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
-        self.slice()
+        &self.0
     }
 }
 
@@ -141,15 +126,7 @@ impl CallFrame {
         Self(arguments)
     }
 
-    pub fn arguments(&self) -> &[JSValue] {
-        &self.0
-    }
-
     pub fn argument(&self, index: usize) -> JSValue {
         self.0.get(index).copied().unwrap_or(JSValue::UNDEFINED)
     }
-}
-
-pub fn create_host_function_object(global: &JSGlobalObject, functions: &[HostFunction]) -> JSValue {
-    global.store(StoredValue::HostObject(functions.to_vec()))
 }
