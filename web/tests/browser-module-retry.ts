@@ -37,6 +37,7 @@ writeFileSync("cjs-retry/graph.mjs", "import bad from './bad.cjs'; import other 
 try { await import("./cjs-retry/graph.mjs"); throw new Error("old code unexpectedly loaded"); }
 catch (error) { console.log("cjs first", error.message); }
 while (!existsSync("cjs-retry/go")) await new Promise((resolve) => setTimeout(resolve, 20));
+console.log("cjs file", JSON.stringify(require("node:fs").readFileSync("cjs-retry/bad.cjs", "utf8")));
 console.log("cjs retry", (await import("./cjs-retry/graph.mjs")).default);
 `;
 
