@@ -180,6 +180,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private runListenerRevision = 0;
   /** A file listing waited for a busy command; it runs once that command exits or serves. */
   private listingDeferred = false;
+  /** `serverRevision` currently handing off from a successful install through flush into `dev`. */
+  private devHandoffRevision: number | null = null;
   private readonly stopping = new Set<StoppingRun>();
   private server: Server | null = null;
   private preview: PreviewNavigation | null = null;
@@ -738,19 +740,26 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     return true;
   }
 
-  /** A command is installing or starting, a reset is replacing the workspace, or a retirement
-   * has none usable yet. */
+  /** A command is installing or starting, a successful install is handing off to dev, a reset is
+   * replacing the workspace, or a retirement has none usable yet. */
   private listingBlocked(): boolean {
     if (this.resetting || this.localResetting || this.coordinator?.hasActiveResetIntent()) return true;
     if (this.runtimeRecycling !== null || !this.isWorkspaceUsable(this.workspace)) return true;
+    if (this.devHandoffRevision !== null && this.devHandoffRevision === this.serverRevision) return true;
     return this.run !== null && this.restartableRun() === null;
+  }
+
+  private clearDevHandoff(revision: number): void {
+    if (this.devHandoffRevision !== revision) return;
+    this.devHandoffRevision = null;
+    this.runDeferredListing();
   }
 
   /**
    * Runs the deferred file-list refresh and editor fallback once, as soon as nothing blocks
-   * them. Every end of a block reaches it: the command's exit (success, failure or stop), the
-   * dev run starting to serve, and the change notification each reset path sends after it
-   * clears its flags, whether the reset succeeded or gave up.
+   * them. Every end of a block reaches it: the command's exit (success, failure or stop), an
+   * aborted install-to-dev handoff, the dev run starting to serve, and the change notification
+   * each reset path sends after it clears its flags, whether the reset succeeded or gave up.
    */
   private runDeferredListing(): void {
     if (!this.listingDeferred || this.disposed || this.listingBlocked()) return;
@@ -1900,12 +1909,16 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       if (revision !== this.serverRevision || this.workspace !== ws) return;
       const env = this.buildDevEnv(programs.path, term);
       const options = { engine: this.engine, profile: this.profile, module: this.wasm.module, env, runtime, moduleScope: scoped, network: this.network };
-      const result = await this.retryStorage(() => this.command("install", options, visibleStart, revision));
-      if (!result || result.code !== 0 || result.error || revision !== this.serverRevision || this.workspace !== ws) return;
-      await this.retryStorage(() => fs.flush());
-      this.storageError = "";
-      if (revision !== this.serverRevision || this.workspace !== ws) return;
-      await this.command("dev", options, visibleStart, revision);
+      try {
+        const result = await this.retryStorage(() => this.command("install", options, visibleStart, revision, true));
+        if (!result || result.code !== 0 || result.error || revision !== this.serverRevision || this.workspace !== ws) return;
+        await this.retryStorage(() => fs.flush());
+        this.storageError = "";
+        if (revision !== this.serverRevision || this.workspace !== ws) return;
+        await this.command("dev", options, visibleStart, revision);
+      } finally {
+        this.clearDevHandoff(revision);
+      }
     } catch (error) {
       if (revision !== this.serverRevision || this.disposed || error instanceof ProvisionAbortedError) return;
       this.report(error);
@@ -1979,20 +1992,24 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
     const env = this.buildDevEnv(prepared.programs.path, term);
     const options = { engine: this.engine, profile: this.profile, module: this.wasm.module, env, runtime, moduleScope: prepared.scoped, network: this.network };
-    const result = await this.retryStorage(async () => {
-      if (revision !== this.serverRevision || this.localResetting || this.disposed) return undefined;
-      return this.command("install", options, prepared.visibleStart, revision);
-    });
-    if (!result || result.code !== 0 || result.error || revision !== this.serverRevision || this.localResetting) return;
+    try {
+      const result = await this.retryStorage(async () => {
+        if (revision !== this.serverRevision || this.localResetting || this.disposed) return undefined;
+        return this.command("install", options, prepared.visibleStart, revision, true);
+      });
+      if (!result || result.code !== 0 || result.error || revision !== this.serverRevision || this.localResetting) return;
 
-    const flushed = await this.withLocalLaunchPhase(revision, async (sig) => {
-      await this.retryStorage(() => fs.flush());
-      if (revision !== this.serverRevision || this.localResetting || sig.aborted) return false;
-      this.storageError = "";
-      return true;
-    });
-    if (!flushed || revision !== this.serverRevision || this.localResetting) return;
-    await this.command("dev", options, prepared.visibleStart, revision);
+      const flushed = await this.withLocalLaunchPhase(revision, async (sig) => {
+        await this.retryStorage(() => fs.flush());
+        if (revision !== this.serverRevision || this.localResetting || sig.aborted) return false;
+        this.storageError = "";
+        return true;
+      });
+      if (!flushed || revision !== this.serverRevision || this.localResetting) return;
+      await this.command("dev", options, prepared.visibleStart, revision);
+    } finally {
+      this.clearDevHandoff(revision);
+    }
   }
 
   private buildDevEnv(programsPath: string, term: Terminal): Record<string, string> {
@@ -2014,7 +2031,13 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     };
   }
 
-  private async command(script: "install" | "dev", options: Omit<RunOptions, "args">, visibleStart: number, revision: number): Promise<RunResult | undefined> {
+  private async command(
+    script: "install" | "dev",
+    options: Omit<RunOptions, "args">,
+    visibleStart: number,
+    revision: number,
+    handoffToDev = false,
+  ): Promise<RunResult | undefined> {
     const { startRun } = await import("../../web/src/runner");
     stage(`${script}-start`);
     if (revision !== this.serverRevision || this.disposed) return;
@@ -2039,6 +2062,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.run = current;
     this.runScript = script;
     this.runListenerRevision = listenerRevision;
+    if (script === "dev" && this.devHandoffRevision === revision) {
+      this.devHandoffRevision = null;
+      this.runDeferredListing();
+    }
     const result = await current.done;
     stage(`${script}-done`);
     output.flush();
@@ -2052,11 +2079,19 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     }
     this.run = null;
     this.runScript = null;
-    this.runDeferredListing();
     if (script === "install" && (storageFailed || isStorageFull(result.error))) {
+      this.runDeferredListing();
       throw new Error("Dependency installation ran out of storage", { cause: `ENOSPC\n${result.error ?? ""}\n${diagnostic}` });
     }
-    if (script === "install" && result.code === 0 && !result.error) return result;
+    if (script === "install" && result.code === 0 && !result.error) {
+      if (handoffToDev && revision === this.serverRevision) {
+        this.devHandoffRevision = revision;
+      } else {
+        this.runDeferredListing();
+      }
+      return result;
+    }
+    this.runDeferredListing();
     const missingServer = script === "dev" && this.listenerRevision === listenerRevision;
     if (missingServer) {
       const text = `Dev server stopped before it was ready (exit ${result.code}). Check the terminal output, then press Restart.`;
@@ -2093,10 +2128,15 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private stopDevServer(reason: string): void {
     this.serverRevision++;
     const current = this.run;
+    const hadHandoff = this.devHandoffRevision !== null;
     this.run = null;
     this.runScript = null;
+    this.devHandoffRevision = null;
     this.server = null;
-    if (!current) return;
+    if (!current) {
+      if (hadHandoff) this.runDeferredListing();
+      return;
+    }
     this.stopReasons.set(current, reason);
     current.kill(9);
     const stopping = stoppingRun(current.done, STOP_WAIT_MS);
