@@ -174,7 +174,7 @@ export function instrumentRoutedWorker(source: string): string {
 }
 
 
-const sources: Record<string, string> = {"browser/service-worker.ts": "11141b1fc8b8ffd0d7810d46bfa599e8923c84d6e719a597c70afa72f47ddce2", "browser/preview.ts": "a5522ece8cc7aaf740089285e1a79b3b25f5b775e09fdbaa1cdb5422b53d6fae", "browser/net/helper.ts": "9b50338211f802b4de82ecba361b42836893d945a3af621fa64f2685cb0ef5aa", "browser/net/runtime.ts": "adc3b3c9055f952994fc82b6257faab20a568a57a096f8edc22ff9bbdecd04db"};
+const sources: Record<string, string> = {"browser/service-worker.ts": "11141b1fc8b8ffd0d7810d46bfa599e8923c84d6e719a597c70afa72f47ddce2", "browser/preview.ts": "482a5f1678f4ed22f9bf1c932097d4c98388216ad2547b530c1c15e0f5c2bb42", "browser/net/helper.ts": "e64e1a736c40fa916b986cedbb0c87d6b2099312df4402d2a2a90d4cf583cf27", "browser/net/runtime.ts": "269d7b68e9e693bc9d0645740ebabb33fd6412844600cb239424426efc015bfe"};
 export function verifySource(path: string, source: string): void {
   if (sources[path] !== sha(source)) throw Error(`Storage routing source differs from the qualified Waffle source: ${path}`);
 }
@@ -188,15 +188,17 @@ export function instrumentHelper(source: string): string {
   verifySource("browser/net/helper.ts", source);
   return applyEdits(source, [
     [
-      "    return this.requestConnection(port, req, sink) !== null;",
-      `    __trace("helper-request", { helper: __id(this), request: __id(req), port, target: req.target });
-    try {
-      const connection = this.requestConnection(port, req, sink);
-      __trace("helper-request-return", { helper: __id(this), request: __id(req), port, target: req.target, accepted: connection !== null });
-      return connection !== null;
-    } catch (error) {
-      __trace("helper-request-error", { helper: __id(this), request: __id(req), port, target: req.target, error: __error(error) });
-      throw error;
+      "    if (!signal) return this.requestConnection(port, req, sink) !== null;",
+      `    if (!signal) {
+      __trace("helper-request", { helper: __id(this), request: __id(req), port, target: req.target });
+      try {
+        const connection = this.requestConnection(port, req, sink);
+        __trace("helper-request-return", { helper: __id(this), request: __id(req), port, target: req.target, accepted: connection !== null });
+        return connection !== null;
+      } catch (error) {
+        __trace("helper-request-error", { helper: __id(this), request: __id(req), port, target: req.target, error: __error(error) });
+        throw error;
+      }
     }`,
     ],
     [

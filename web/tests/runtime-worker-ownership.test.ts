@@ -8,7 +8,7 @@ import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } f
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { startRun } from "../src/runner";
-import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
+import { answerNotificationRelayDrop, isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { RunRequest, WorkerMessage } from "../src/worker";
 
@@ -292,6 +292,7 @@ for (const early of [false, true]) test(`explicit generic runner roots preserve 
     readonly relay: boolean;
     constructor(url: string | URL) { this.relay = isNotificationWorkerUrl(url); }
     postMessage(request: unknown) {
+      if (answerNotificationRelayDrop(this, request)) return;
       if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
       sent = request as RunRequest; posted();
     }

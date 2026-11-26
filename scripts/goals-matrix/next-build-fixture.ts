@@ -17,7 +17,6 @@ export function nextBuildFilesystem() {
   const connections: ReturnType<typeof createFilesystemConnection>[] = [];
   const operations: { operation: string; args: unknown[]; at: number }[] = [];
   const reads: { ino: number; length: unknown; offset: unknown }[] = [];
-  const held = new Map<number, Set<number>>();
   const original = backend.execute.bind(backend);
   let replaceAfter: { path: string; operation: "resolve" | "stat" } | undefined;
   let lastName = "";
@@ -54,16 +53,20 @@ export function nextBuildFilesystem() {
      */
     readsSettled: (count: number) => operations.filter(row => row.operation === "read").length >= count && awaiting.size === 0 && !delivering,
     disposed: () => connections.every(pair => isRevoked(pair.client)),
-    outstanding: () => Array.from(held.values()).reduce((total, set) => total + set.size, 0),
+    /** Replies the service still keeps until their discard; it keeps nothing for a plain inline reply. */
+    async outstanding(): Promise<number> {
+      // The service keeps nothing for a plain inline reply and settles the rest when it retires a revoked
+      // connection, in its own turn. Waiting for that is bounded only by a hang cap, never a speed judgment.
+      const deadline = Date.now() + 5_000;
+      while (service.resources().responses && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+      return service.resources().responses;
+    },
     filesystem: { fork() {
       const pair = createFilesystemConnection(owner.client);
       connections.push(pair);
-      const pending = new Set<number>();
-      held.set(connections.length, pending);
       const send = pair.client.port.postMessage.bind(pair.client.port);
       const connection = connections.length;
       pair.client.port.postMessage = (message: unknown, transfer?: StructuredSerializeOptions | Transferable[]) => {
-        track(message, pending);
         if (message && typeof message === "object" && "id" in message) awaiting.add(`${connection}:${String(message.id)}`);
         if (Array.isArray(transfer)) send(message, transfer);
         else send(message, transfer);
@@ -98,9 +101,4 @@ function observeReplies(port: MessagePort, replied: (id: unknown) => void): void
       finally { if (event.data && typeof event.data === "object" && "completed" in event.data) replied(event.data.completed); }
     }),
   });
-}
-function track(message: unknown, pending: Set<number>): void {
-  if (!message || typeof message !== "object") return;
-  if ("id" in message && typeof message.id === "number") pending.add(message.id);
-  if ("discard" in message && typeof message.discard === "number") pending.delete(message.discard);
 }
