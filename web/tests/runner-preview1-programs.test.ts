@@ -5,7 +5,7 @@ import { startRun, type RunOptions, type RunResult } from "../src/runner";
 import type { RunRequest } from "../src/bun-executor";
 import { SubprocessBroker, type ExecutableRegistration } from "../src/subprocess-broker";
 import { fixtureFilesystemConnection } from "./process-runtime-fixture";
-import { isNotificationBridgeRequest } from "./notification-worker-fixture";
+import { answerNotificationRelayDrop, isNotificationBridgeRequest } from "./notification-worker-fixture";
 import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
 
 interface Posted { worker: RootWorker; request: RunRequest; transfer: Transferable[] }
@@ -15,6 +15,7 @@ class RootWorker {
   onerror: ((event: ErrorEvent) => void) | null = null;
   terminated = 0;
   postMessage(request: RunRequest, transfer: Transferable[] = []) {
+    if (answerNotificationRelayDrop(this, request)) return;
     if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
     RootWorker.posts.push({ worker: this, request, transfer });
   }
