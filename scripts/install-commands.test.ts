@@ -11,7 +11,8 @@ const cases = ["cacheOffKeepsBunx"];
 for (const target of installFixtureTargets()) {
   test(`${target.engine}: ${cases.join(", ")}`, () => {
     const launcher = process.env.BUN_WASM_LAUNCHER ?? join(process.env.CARGO_TARGET_DIR ?? join(root, "target"), "release/bun-wasm");
-    const result = spawnSync(process.execPath, [join(root, "tests/install/commands.ts")], {
+    // Node: the Browser engine's host (web/scripts/node-host.mjs) needs node:module hooks.
+    const result = spawnSync("node", ["--no-warnings", join(root, "tests/install/commands.ts")], {
       cwd: root,
       env: { ...process.env, INSTALL_ENGINE: target.engine, BUN_WASM: target.wasm, BUN_WASM_LAUNCHER: launcher, INSTALL_CASES: cases.join(",") },
       encoding: "utf8",
