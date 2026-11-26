@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::State;
 use crate::data::{Args, DataFn, NativeError, NativeResult, Record, Val};
 use crate::modules;
-use crate::resolve::{self, Kind, Resolved};
+use crate::resolve::{Kind, Resolved};
 
 mod fs_path;
 
