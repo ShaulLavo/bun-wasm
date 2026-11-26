@@ -16,6 +16,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 mod archive;
+mod bun_hash;
 mod compression;
 mod crypto;
 mod crypto_ec;
@@ -47,6 +48,7 @@ mod node_rsa;
 #[cfg(any(feature = "engine-split", not(feature = "engine-host")))]
 pub(crate) mod ops;
 mod parse_env;
+mod password;
 #[cfg(all(test, feature = "engine-split"))]
 #[allow(dead_code)]
 #[path = "../../bunwasm-engine-quickjs/src/vm.rs"]

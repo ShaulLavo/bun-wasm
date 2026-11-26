@@ -1,0 +1,14 @@
+ok enum + const enum: [ "green", 10, [ "Red", "Green" ] ]
+ok namespace: 4
+ok generics + abstract + private field: box of x,y (42)
+ok satisfies + as const: 3000
+ok type-only imports: [ "real" ]
+ok decorators: decorated hello: hi bun
+ok optional chaining + nullish + bigint: [ "none", 18446744073709551616n ]
+ok using + Symbol.dispose: [ "inside", "disposed" ]
+ok jsx pragma: <section class="card"><h2>Hello</h2><p id="x">from jsx</p>frag</section>
+ok import .tsx component: b:bold
+ok import json + text: [ true, "plain text" ]
+ok top-level await: reached
+ok require + import interop: [ "cjs", "cjs" ]
+ok error stack has .tsx line: true

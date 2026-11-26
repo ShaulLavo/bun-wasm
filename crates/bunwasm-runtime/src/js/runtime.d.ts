@@ -242,6 +242,9 @@ declare namespace BunWasm {
     nodeDigest(algorithm: string, data: Uint8Array, outputLength?: number): Uint8Array;
     nodeHmac(algorithm: string, key: Uint8Array, data: Uint8Array): Uint8Array;
     nodePbkdf2(algorithm: string, password: Uint8Array, salt: Uint8Array, iterations: number, keylen: number): Uint8Array;
+    /** Bun.password (password.rs): (password, algorithm, bcrypt cost, argon2 memoryCost KiB, argon2 timeCost). */
+    passwordHash(password: Uint8Array, algorithm: string, cost: number, memoryCost: number, timeCost: number): string;
+    passwordVerify(password: Uint8Array, hash: Uint8Array, algorithm?: string): boolean;
     streams: {
       /** A node:zlib native handle: (mode, options JSON, dictionary). */
       codec(mode: string, options?: string, dictionary?: Uint8Array): number;

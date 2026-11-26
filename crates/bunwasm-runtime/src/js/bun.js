@@ -319,8 +319,24 @@
     return width;
   }
 
-  function hash(data, seed = 0) {
-    return native.wyhash(hashInput(data), Number(seed));
+  function hash(data) {
+    const [high, low] = seedWords(arguments[1]);
+    return native.wyhash(hashData(data), high, low);
+  }
+
+  // HashObject.rs hash_wrap: strings hash as UTF-8, buffers and in-memory Blobs as their bytes,
+  // other values as their string form; a missing value or a file-backed Blob is an error.
+  function hashData(data) {
+    if (typeof data === "string") return native.utf8Encode(data);
+    if (ArrayBuffer.isView(data) || data instanceof ArrayBuffer) return internal.toUint8(data).slice();
+    if (data instanceof Blob) {
+      if (data._isLazy()) throw Object.assign(new TypeError("File blob cannot be used here"), { code: "ERR_INVALID_ARG_TYPE" });
+      return data._bytes();
+    }
+    if (data === undefined || data === null) {
+      throw Object.assign(new TypeError("data must be a string, ArrayBuffer, ArrayBufferView or Blob"), { code: "ERR_INVALID_ARG_TYPE" });
+    }
+    return native.utf8Encode(String(data));
   }
 
   function hashInput(data) {
@@ -342,11 +358,33 @@
     }
   }
 
+  // HashObject.rs reads a number or bigint seed with JSC's toUInt64NoTruncate, as measured on
+  // native Bun: a bigint wraps to 64 bits; a finite number truncates and wraps (so any negative
+  // number wraps too, and -2^64 is 0) but saturates at u64 max from 2^64 up and at Infinity;
+  // NaN, -Infinity and any other value are 0. Returns the seed as [high, low] 32-bit words.
+  const U64_MAX = 2n ** 64n - 1n;
+  function hashSeed(seed) {
+    if (typeof seed === "bigint") return BigInt.asUintN(64, seed);
+    if (typeof seed !== "number" || Number.isNaN(seed) || seed === -Infinity) return 0n;
+    if (seed >= 2 ** 64) return U64_MAX;
+    return BigInt.asUintN(64, BigInt(Math.trunc(seed)));
+  }
+  function seedWords(seed) {
+    const value = hashSeed(seed);
+    return [Number(value >> 32n), Number(value & 0xffffffffn)];
+  }
+
   hash.wyhash = hash;
-  hash.crc32 = (data) => native.crc32(hashInput(data));
-  hash.adler32 = (data) => native.adler32(hashInput(data));
+  // crc32 continues from a u32 seed; adler32 has none, as in Bun.
+  hash.crc32 = function crc32(data) { return native.crc32(hashData(data), seedWords(arguments[1])[1]); };
+  hash.adler32 = function adler32(data) { return native.adler32(hashData(data)); };
   for (const name of ["cityHash32", "cityHash64", "xxHash32", "xxHash64", "xxHash3", "murmur32v2", "murmur32v3", "murmur64v2", "rapidhash"]) {
-    hash[name] = unsupported(`Bun.hash.${name}`, "only wyhash, crc32 and adler32 are implemented");
+    hash[name] = {
+      [name](data) {
+        const [high, low] = seedWords(arguments[1]);
+        return native.bunHash(name, hashData(data), high, low);
+      },
+    }[name];
   }
 
   const digests = internal.require("node_digest");
@@ -475,6 +513,10 @@
     const { resolve } = internal.require("path");
     const entrypoints = Array.from(config.entrypoints || [], (e) => resolve(toPath(e)));
     if (entrypoints.length === 0) throw new TypeError("Bun.build: expected a non-empty array of entrypoints");
+    // The native bundler has no JavaScript plugin hooks yet; ignoring a plugin would build the wrong output.
+    if (Array.isArray(config.plugins) && config.plugins.length) {
+      unsupported("Bun.build({ plugins })", "the bundler has no JavaScript plugin hooks yet")();
+    }
     const request = { entrypoints };
     for (const key of BUILD_STRINGS) if (config[key] !== undefined) request[key] = String(config[key]);
     for (const key of BUILD_FLAGS) if (config[key]) request[key] = true;
@@ -583,6 +625,9 @@
     which: (command, options) => internal.require("spawn").which(command, options),
     hash,
     CryptoHasher,
+    get password() { return internal.require("bun_password").password; },
+    // Bun.sha is SHA-512/256, as in Bun.
+    sha: function sha(input) { return internal.require("bun_hash_classes").SHA512_256.hash(input, arguments[1]); },
     // Loaded on first use; the module is cached, so each class keeps one identity.
     get MD4() { return internal.require("bun_hash_classes").MD4; },
     get MD5() { return internal.require("bun_hash_classes").MD5; },
