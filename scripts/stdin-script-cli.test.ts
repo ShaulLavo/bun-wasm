@@ -64,7 +64,12 @@ test("stdin main bypasses package aliases and files while ordinary runtime comma
   const start = source.indexOf("  internal.runMain =");
   const end = source.indexOf("  internal.getMainModule", start);
   const scripts = { resolve: () => ({ kind: "runtime" }), run: () => "package-command" };
-  const internal = { require: () => scripts, runMain: (_path: string): unknown => undefined };
+  const internal = {
+    require: () => scripts,
+    runMain: (_path: string): unknown => undefined,
+    // bootstrap's importModule with no mocks registered: the native import.
+    importModule: (path: string): unknown => native.importModule(path),
+  };
   const loaded: string[] = [];
   const native = { runMode: () => "once",
     mainArg: () => "-",
