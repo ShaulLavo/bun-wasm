@@ -1,6 +1,6 @@
 import { Scope, type Admission } from "./scope";
 import { withScoped } from "./scope-fixture";
-import { test, expect, spyOn, setDefaultTimeout } from "bun:test";
+import { test, expect, spyOn, setDefaultTimeout, jest } from "bun:test";
 import { IphoneBus } from "./iphone-bus";
 import { createIphoneTransport, nativeButtonRef, validateIphoneControl } from "./iphone-transport";
 import { checkClick } from "./playground";
@@ -61,33 +61,53 @@ test("native cleanup shares one deadline, cancels its child and never dispatches
   expect(started.every(item => item.at < deadline && item.timeoutMs > 0 && item.timeoutMs <= deadline - item.at)).toBe(true);
   expect(started[1]!.signal.aborted).toBe(true);
   expect(active()).toBe(0);
-  await Bun.sleep(250);
-  expect(started).toHaveLength(2);
 });
 
 async function sharedCleanupDeadline() {
-  let now = Date.now();
-  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  jest.useFakeTimers();
+  jest.setSystemTime(1_000_000);
   const started: { args: string[]; at: number; timeoutMs: number; signal: AbortSignal }[] = [];
   let active = 0;
-  const deadline = now + 200;
-  const runStep = (signal: AbortSignal) => {
+  const deadline = Date.now() + 200;
+  const secondStarted = Promise.withResolvers<void>();
+  const teardown = new AbortController();
+  let settled = false;
+  const runStep = (timeoutMs: number, signal: AbortSignal) => {
     if (started.length === 1) {
-      now += 75;
+      jest.advanceTimersByTime(75);
       return Promise.resolve("");
     }
-    // Wait on the cleanup deadline signal (with a generous hang cap) so cancellation is driven by closeIphoneTab.
-    return ownedCommand([process.execPath, "-e", "await Bun.sleep(60_000)"], signal, 60_000);
+    secondStarted.resolve();
+    return ownedCommand([process.execPath, "-e", "await Bun.sleep(60_000)"], AbortSignal.any([signal, teardown.signal]), timeoutMs);
   };
   const command = (args: string[], timeoutMs: number, signal: AbortSignal) => {
     expect(active).toBe(0);
     active++;
-    started.push({ args, at: now, timeoutMs, signal });
-    return runStep(signal).finally(() => { active--; });
+    started.push({ args, at: Date.now(), timeoutMs, signal });
+    return runStep(timeoutMs, signal).finally(() => { active--; });
   };
-  try { await expect(closeIphoneTab(command, "owned tab", deadline)).rejects.toThrow("iPhone cleanup deadline expired"); }
-  finally { clock.mockRestore(); }
-  return { started, active: () => active, deadline };
+  const cleanup = closeIphoneTab(command, "owned tab", deadline);
+  const outcome = cleanup.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    await secondStarted.promise;
+    jest.advanceTimersByTime(124);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(active).toBe(1);
+    expect(started[1]!.signal.aborted).toBe(false);
+    jest.advanceTimersByTime(1);
+    expect(started[1]!.signal.aborted).toBe(true);
+    await expect(cleanup).rejects.toThrow("iPhone cleanup deadline expired");
+    await outcome;
+    jest.advanceTimersByTime(5000);
+    await Promise.resolve();
+    expect(started).toHaveLength(2);
+    return { started, active: () => active, deadline };
+  } finally {
+    jest.useRealTimers();
+    teardown.abort();
+    await outcome;
+  }
 }
 
 test("transport close is cached and reaps its timed-out native command before any further input", async () => {
