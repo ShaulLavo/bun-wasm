@@ -159,7 +159,8 @@ impl<'source> Names<'source> {
         if !name.starts_with(RESERVED) {
             return self.source.contains(name) || self.decoded.contains(name);
         }
-        let at = |text: &str, offsets: &[usize]| offsets.iter().any(|&at| text[at..].starts_with(name));
+        let at =
+            |text: &str, offsets: &[usize]| offsets.iter().any(|&at| text[at..].starts_with(name));
         at(self.source, &self.reserved) || at(&self.decoded, &self.reserved_decoded)
     }
 
@@ -1382,7 +1383,10 @@ mod source_memory_tests {
     fn reserved_names_collide_with_any_occurrence() {
         let arena = Arena::new();
         let ast = js_ast::Ast::empty_in(&arena);
-        let mut names = Names::new(&ast, "x__bunwasm_ns0_0y; '__bunwasm_m$1'; __bunwasm_i2 __bunwasm");
+        let mut names = Names::new(
+            &ast,
+            "x__bunwasm_ns0_0y; '__bunwasm_m$1'; __bunwasm_i2 __bunwasm",
+        );
         assert_eq!(names.fresh("__bunwasm_ns0_0"), "__bunwasm_ns0_0$1");
         assert_eq!(names.fresh("__bunwasm_m"), "__bunwasm_m$2");
         assert_eq!(names.fresh("__bunwasm_m"), "__bunwasm_m$3");

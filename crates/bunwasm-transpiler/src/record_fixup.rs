@@ -48,7 +48,9 @@ pub(crate) struct Fixed {
 }
 
 pub(crate) fn fix(code: &str, mappings: &str, names: &Names<'_>) -> Option<Fixed> {
-    if mappings.is_empty() || !(code.contains(names.arguments) || has_namespace_call(code, &names.views)) {
+    if mappings.is_empty()
+        || !(code.contains(names.arguments) || has_namespace_call(code, &names.views))
+    {
         return None;
     }
     let mut lines = decode(mappings);
@@ -391,7 +393,10 @@ pub(crate) mod tests {
     #[test]
     fn namespace_callees() {
         let view = ["__bunwasm_ns0_1"];
-        assert_eq!(namespace_call("(0, __bunwasm_ns0_1.test)(1)", &view), Some(25));
+        assert_eq!(
+            namespace_call("(0, __bunwasm_ns0_1.test)(1)", &view),
+            Some(25)
+        );
         assert_eq!(
             namespace_call(r#"(0, __bunwasm_ns12_3["a-\"b"])()"#, &["__bunwasm_ns12_3"]),
             Some(30)
@@ -400,10 +405,22 @@ pub(crate) mod tests {
         assert_eq!(namespace_call("(0, __bunwasm_ns0_1)()", &view), None);
         // Of views where one prefixes another, only the one the member follows fits.
         let nested = ["__bunwasm_ns0_1", "__bunwasm_ns0_1$1", "__bunwasm_ns0_10"];
-        assert_eq!(namespace_call("(0, __bunwasm_ns0_1$1.f)()", &nested), Some(24));
-        assert_eq!(namespace_call("(0, __bunwasm_ns0_10.f)()", &nested), Some(23));
-        assert!(has_namespace_call("x; (0, other.f)(); (0, __bunwasm_ns0_10.f)();", &nested));
-        assert!(!has_namespace_call("__bunwasm_ns0_1.f(); (0, __bunwasm_ns0_2.f)();", &nested));
+        assert_eq!(
+            namespace_call("(0, __bunwasm_ns0_1$1.f)()", &nested),
+            Some(24)
+        );
+        assert_eq!(
+            namespace_call("(0, __bunwasm_ns0_10.f)()", &nested),
+            Some(23)
+        );
+        assert!(has_namespace_call(
+            "x; (0, other.f)(); (0, __bunwasm_ns0_10.f)();",
+            &nested
+        ));
+        assert!(!has_namespace_call(
+            "__bunwasm_ns0_1.f(); (0, __bunwasm_ns0_2.f)();",
+            &nested
+        ));
         // As printed: the call's segment marks the imported name (column 4), then a later
         // token (30); the argument list (25) gets the call's original position.
         let fixed = fix(
@@ -435,7 +452,9 @@ pub(crate) mod tests {
                     .filter_map(|(start, _)| {
                         let rest = text[start..].strip_prefix(prefix.as_str())?;
                         let member = member_length(rest)?;
-                        rest[member..].starts_with(")(").then(|| (start, prefix.len() + member + 1))
+                        rest[member..]
+                            .starts_with(")(")
+                            .then(|| (start, prefix.len() + member + 1))
                     })
                     .collect();
                 for (start, arguments) in calls {
@@ -461,7 +480,8 @@ pub(crate) mod tests {
         let mappings: Vec<String> = code
             .split('\n')
             .map(|text| {
-                let columns: Vec<i64> = (0..text.encode_utf16().count() as i64).step_by(3).collect();
+                let columns: Vec<i64> =
+                    (0..text.encode_utf16().count() as i64).step_by(3).collect();
                 line(&columns)
             })
             .collect();
