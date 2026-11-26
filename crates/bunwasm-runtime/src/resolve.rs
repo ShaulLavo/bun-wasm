@@ -9,6 +9,8 @@ use std::rc::Rc;
 
 use serde_json::Value as Json;
 
+use crate::host::{self, ProbeKind};
+
 /// Remembered require() targets; the cache starts over when it reaches this many.
 const REQUIRED_LIMIT: usize = 4096;
 
@@ -155,6 +157,53 @@ fn is_file(path: &str) -> bool {
 
 fn is_dir(path: &str) -> bool {
     fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false)
+}
+
+/// The first of `candidates` that is a regular file, checked in one filesystem request.
+fn first_file(mut candidates: Vec<String>) -> Option<String> {
+    let found = host::probe(&candidates, ProbeKind::File)?;
+    Some(candidates.swap_remove(found))
+}
+
+/// What `path` may name as a file, in Bun's order: itself, then each extension, then the
+/// TypeScript source of a `.js`-style import ("./foo.js" may name "./foo.ts").
+fn file_candidates(path: &str) -> Vec<String> {
+    let mut candidates = Vec::with_capacity(1 + EXTENSIONS.len() + 2);
+    candidates.push(path.to_owned());
+    candidates.extend(EXTENSIONS.iter().map(|ext| format!("{path}{ext}")));
+    let Some((stem, ext)) = path.rsplit_once('.') else {
+        return candidates;
+    };
+    let alternates: &[&str] = match ext {
+        "js" => &["ts", "tsx"],
+        "jsx" => &["tsx", "ts"],
+        "mjs" => &["mts"],
+        "cjs" => &["cts"],
+        _ => &[],
+    };
+    candidates.extend(alternates.iter().map(|alt| format!("{stem}.{alt}")));
+    candidates
+}
+
+/// `dir/index` with each extension, in Bun's order.
+fn index_candidates(dir: &str) -> impl Iterator<Item = String> + '_ {
+    EXTENSIONS
+        .iter()
+        .map(move |ext| format!("{dir}/index{ext}"))
+}
+
+/// `node_modules/<name>` in `from_dir` and each of its ancestors up to `/`, nearest first.
+fn package_candidates(from_dir: &str, name: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut dir = from_dir;
+    loop {
+        candidates.push(format!("{}/node_modules/{name}", dir.trim_end_matches('/')));
+        let parent = dirname(dir);
+        if dir == "/" || parent == dir {
+            return candidates;
+        }
+        dir = parent;
+    }
 }
 
 /// File URL → path, for `import "file:///x.js"`.
@@ -486,29 +535,7 @@ impl Resolver {
     }
 
     fn resolve_file(&self, path: &str) -> Option<String> {
-        if is_file(path) {
-            return Some(path.to_owned());
-        }
-        if let Some(found) = EXTENSIONS
-            .iter()
-            .map(|ext| format!("{path}{ext}"))
-            .find(|p| is_file(p))
-        {
-            return Some(found);
-        }
-        // TypeScript-style imports: "./foo.js" may name "./foo.ts".
-        let (stem, ext) = path.rsplit_once('.')?;
-        let alternates: &[&str] = match ext {
-            "js" => &["ts", "tsx"],
-            "jsx" => &["tsx", "ts"],
-            "mjs" => &["mts"],
-            "cjs" => &["cts"],
-            _ => &[],
-        };
-        alternates
-            .iter()
-            .map(|alt| format!("{stem}.{alt}"))
-            .find(|p| is_file(p))
+        first_file(file_candidates(path))
     }
 
     fn resolve_directory(&self, dir: &str, kind: Kind) -> Option<String> {
@@ -524,10 +551,7 @@ impl Resolver {
     }
 
     fn resolve_index(&self, dir: &str) -> Option<String> {
-        EXTENSIONS
-            .iter()
-            .map(|ext| format!("{dir}/index{ext}"))
-            .find(|p| is_file(p))
+        first_file(index_candidates(dir).collect())
     }
 
     /// `main` field of a package without `exports`. Like Bun's runtime,
@@ -541,11 +565,11 @@ impl Resolver {
             let Some(main) = pkg.get(*field).and_then(Json::as_str) else {
                 continue;
             };
+            // The file probes, then `main/index.*`, in one batch and in that order.
             let path = join(dir, main);
-            if let Some(found) = self
-                .resolve_file(&path)
-                .or_else(|| self.resolve_index(&path))
-            {
+            let mut candidates = file_candidates(&path);
+            candidates.extend(index_candidates(&path));
+            if let Some(found) = first_file(candidates) {
                 return Some(found);
             }
         }
@@ -560,24 +584,22 @@ impl Resolver {
                 .resolve_in_package(&pkg_dir, Some(&pkg), &subpath, kind)
                 .map(Resolved::File);
         }
-        let mut dir = from_dir.to_owned();
-        loop {
-            let candidate = format!("{}/node_modules/{name}", dir.trim_end_matches('/'));
-            match self.resolve_package_candidate(&candidate, &subpath, kind) {
-                PackageCandidate::Selected(found) => return found.map(Resolved::File),
-                PackageCandidate::Unresolved => (),
+        // `node_modules/<name>` in every ancestor, nearest first. One probe finds the next one
+        // that exists; a candidate that doesn't select the package continues the walk after it.
+        let candidates = package_candidates(from_dir, name);
+        let mut start = 0;
+        while let Some(found) = host::probe(&candidates[start..], ProbeKind::Directory) {
+            let candidate = &candidates[start + found];
+            match self.resolve_package_candidate(candidate, &subpath, kind) {
+                PackageCandidate::Selected(selected) => return selected.map(Resolved::File),
+                PackageCandidate::Unresolved => start += found + 1,
             }
-            if dir == "/" {
-                return None;
-            }
-            dir = dirname(&dir).to_owned();
         }
+        None
     }
 
+    /// Package selection in `dir`, an existing directory.
     fn resolve_package_candidate(&self, dir: &str, subpath: &str, kind: Kind) -> PackageCandidate {
-        if !is_dir(dir) {
-            return PackageCandidate::Unresolved;
-        }
         let pkg = self.package_json_in(dir);
         let found = self.resolve_in_package(dir, pkg.as_deref(), subpath, kind);
         // Exports select this package even when its chosen target cannot resolve.

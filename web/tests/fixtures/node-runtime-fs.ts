@@ -49,7 +49,7 @@ try {
   let instance: WebAssembly.Instance | undefined;
   const { proc } = created.install(imports, () => instance!);
   instance = new WebAssembly.Instance(guest, imports);
-  assert.deepEqual(Object.keys(imports.runtime_fs!).toSorted(), ["path_permissions_get", "path_realpath", "watch_close", "watch_next", "watch_open", "watch_read", "watch_ready"]);
+  assert.deepEqual(Object.keys(imports.runtime_fs!).toSorted(), ["path_permissions_get", "path_probe", "path_realpath", "watch_close", "watch_next", "watch_open", "watch_read", "watch_ready"]);
   const permissions = imports.runtime_fs!.path_permissions_get;
   if (typeof permissions !== "function") throw new Error("missing path_permissions_get import");
   assert.equal(permissions(-1, -1, -1, -1, -1), ENOTSUP);
@@ -124,6 +124,26 @@ try {
   symlinkSync("real/dir/file.txt/", join(scratch, "slashed"));
   assert.deepEqual([resolveReal("link/missing")[0], resolveReal("real/dir/file.txt/")[0], resolveReal("/real")[0]], [44, 54, 63]);
   assert.deepEqual([resolveReal("real/dir/file.txt/.")[0], resolveReal("slashed")[0], resolveReal("link/.")[1]], [54, 54, "/real/dir"]);
+
+  // path_probe (Waffle docs/host-abi.md): checks a NUL-terminated candidate list in order.
+  const probe = (paths: string[], kind: number, fd = 3) => {
+    const input = new TextEncoder().encode(paths.map(path => path + "\0").join(""));
+    new Uint8Array(namedMemory.buffer).set(input, 256);
+    new DataView(namedMemory.buffer).setUint32(128, UNTOUCHED, true);
+    const errno = (named.imports.runtime_fs!.path_probe as (...args: number[]) => number)(fd, 256, input.length, kind, 128);
+    return [errno, new DataView(namedMemory.buffer).getUint32(128, true)];
+  };
+  assert.deepEqual(probe(["missing", "link/file.txt", "real/dir"], 1), [0, 1]);
+  assert.deepEqual(probe(["real/dir/file.txt", "link"], 2), [0, 1]);
+  assert.deepEqual(probe(["missing", "real/dir/file.txt/"], 1), [0, 0xffffffff]);
+  assert.deepEqual(probe(["real/dir"], 2, 99), [EBADF, UNTOUCHED]);
+  // Leading U+FEFF (UTF-8 BOM) is part of the filename, never stripped.
+  writeFileSync(join(scratch, "module.js"), "x");
+  assert.deepEqual(probe(["\uFEFFmodule.js"], 1), [0, 0xffffffff]);
+  writeFileSync(join(scratch, "\uFEFFmodule.js"), "x");
+  assert.deepEqual(probe(["\uFEFFmodule.js"], 1), [0, 0]);
+  // More than 64 pathnames is rejected with EINVAL.
+  assert.deepEqual(probe(Array.from({ length: 65 }, () => "missing"), 1), [EINVAL, UNTOUCHED]);
 
   // A guest that fails before wasi.start() still releases its process host; the unstarted Node
   // WASI keeps its preopen, so release must not surface ERR_WASI_NOT_STARTED.

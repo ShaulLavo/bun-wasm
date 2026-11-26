@@ -1,0 +1,16 @@
+require ../../ext/x: x.ts
+require ./ext/x: x.ts
+require ./both: both.js
+require ./alt/y.js: y.ts for y.js
+require ./onlyjson/data: data.json
+require far: far: outer node_modules
+require near: near: app node_modules
+require main-dir: main-dir: main/index.js
+require main-file: main-file: main.js before main/index
+require linked: linked: through a symlink
+import far: /node_modules/far/index.js
+import near: /app/node_modules/near/index.js
+import main-file: /node_modules/main-file/lib.js
+import linked: linked: through a symlink
+require missing-package: MODULE_NOT_FOUND
+require ../../ext/missing: MODULE_NOT_FOUND

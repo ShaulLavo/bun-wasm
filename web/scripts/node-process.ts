@@ -13,6 +13,7 @@ import { HOST_CALL_FD, installHostSlotsViaImport, type SlotImpls } from "../src/
 import { writeStdio } from "./node-stdio.ts";
 import { createNodeSignalController } from "./node-signals.ts";
 import { installNodeLinks, type NodeRealpath } from "./node-links.ts";
+import { nodePathProbe } from "./node-probe.ts";
 import type { EngineNet } from "../src/net/host.ts";
 
 export type { NodeWasiImports } from "waffle/proc/node-wasi";
@@ -161,6 +162,7 @@ export function createNodeProcess(options: NodeProcessOptions) {
       imports.bun_package_scripts = { handoff: guard(() => -58) };
       imports.runtime_fs = watchImports(memory, descriptors, guard);
       imports.runtime_fs.path_permissions_get = guard(() => 58);
+      imports.runtime_fs.path_probe = guard(nodePathProbe(memory, () => imports.wasi_snapshot_preview1.path_filestat_get as never));
       imports.shell_terminal = {
         inherited_fd: guard(index => index >= 0 && index < 3 ? index : -1),
         columns: guard(() => 80), rows: guard(() => 24), phase: guard(() => 0),

@@ -51,7 +51,7 @@ interface Mount { guest: string; host: string; fd: number }
 interface Resolved { mount: Mount; relative: string; guest: string }
 type Kind = { kind: "missing" | "directory" | "other" } | { kind: "link"; target: string };
 
-const decoder = new TextDecoder("utf-8", { fatal: true });
+const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const encoder = new TextEncoder();
 
 /** A walk mark: never a component, since `parts` drops every `.`. */

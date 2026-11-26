@@ -43,7 +43,9 @@ because the signed path also calls `requestConnection`; its observation wraps
 only the unsigned path, which is the only path this repository's preview uses.
 Selected release `0.0.155`, revision
 `b2cbaa1b6b80ccf3d082d6cb6af8075e2b607006`, keeps all four files byte-identical
-to `0.0.154`.
+to `0.0.154`. Selected release `0.0.156`, revision
+`be2e58bebc094d5185f24f45ed2b7be27d985f30`, keeps all four files byte-identical
+to `0.0.155`.
 The exact installed source hashes and unique insertion anchors reject drift or
 incomplete installations. No provider source is edited.
 
