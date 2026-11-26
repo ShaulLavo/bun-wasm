@@ -370,46 +370,41 @@
     // this many results. The provider still reports ready, so the next turn continues.
     const MAX_NEXT_PER_PUMP = 4096;
 
-    function flushAllBacklogs(budget: { remaining: number }): boolean {
+    function drainBacklogPass(): boolean {
+      let flushed = false;
+      for (const shared of Array.from(sharedById.values())) {
+        if (flushBacklog(shared)) flushed = true;
+      }
+      return flushed;
+    }
+
+    function flushPendingBacklogs(): boolean {
       let progressed = false;
-      while (backlogCount > 0 && budget.remaining > 0) {
-        let flushed = false;
-        for (const shared of Array.from(sharedById.values())) {
-          if (budget.remaining <= 0) break;
-          if (shared.backlog.length === 0) continue;
-          budget.remaining--;
-          if (flushBacklog(shared)) {
-            flushed = true;
-            progressed = true;
-          }
-        }
-        if (!flushed) break;
+      for (let rounds = 0; backlogCount > 0 && rounds < MAX_NEXT_PER_PUMP; rounds++) {
+        if (!drainBacklogPass()) break;
+        progressed = true;
       }
       return progressed;
     }
 
     function pumpWatches(): boolean | "progress" {
-      const budget = { remaining: MAX_NEXT_PER_PUMP };
-      let progressed = flushAllBacklogs(budget);
-      while (sharedById.size > 0 && budget.remaining > 0) {
+      let progressed = flushPendingBacklogs();
+      for (let calls = 0; sharedById.size > 0 && calls < MAX_NEXT_PER_PUMP; calls++) {
         const next = native.fsWatchNext();
         if (next === AGAIN) {
-          if (backlogCount > 0 && flushAllBacklogs(budget)) {
-            progressed = true;
-            continue;
-          }
-          break;
+          if (!flushPendingBacklogs()) break;
+          progressed = true;
+          continue;
         }
-        budget.remaining--;
         progressed = true;
         if (typeof next === "number") {
           failAll(next);
           break;
         }
         deliverNext(next[0], next[1]);
-        if (backlogCount > 0 && flushAllBacklogs(budget)) progressed = true;
+        if (flushPendingBacklogs()) progressed = true;
       }
-      if (backlogCount > 0 && flushAllBacklogs(budget)) progressed = true;
+      if (flushPendingBacklogs()) progressed = true;
       return sharedById.size === 0 ? true : (progressed && "progress");
     }
 
