@@ -174,18 +174,23 @@ export class StorageRoutingEvidence {
       return lifecycle.some(row => row.kind === "request") && lifecycle.some(row => row.kind === "requestfinished");
     });
   }
-  // True when `start` is a navigation that was aborted without any response and a navigation to
-  // this preview's loading page, which loaded and finished, began before the matching request.
+  // True when `start` is a navigation that was aborted without any response, and a navigation to
+  // this preview's loading page got its 200 response before the matching request started and
+  // finished. The aborted request, the loading page and the matching request must all be
+  // navigations in the same frame: other frames of the page share the service worker.
   private abortedForLoading(start: RoutingRow, match: RoutingRow, responses: RoutingRow[]): boolean {
-    if (start.navigation !== true || start.page !== match.page || responses.some(row => row.page === start.page && row.request === start.request)) return false;
-    const failed = this.requests.some(row => row.kind === "requestfailed" && row.page === start.page && row.request === start.request
-      && row.url === start.url && row.navigation === true && row.errorText === "NS_BINDING_ABORTED");
+    if (!positiveId(start.frame) || start.page !== match.page || responses.some(row => row.page === start.page && row.request === start.request)) return false;
+    const inFrame = (row: RoutingRow) => row.page === start.page && row.navigation === true && row.frame === start.frame;
     const matchStart = this.requests.find(row => row.kind === "request" && row.page === match.page && row.request === match.request);
-    if (!failed || !matchStart) return false;
+    if (!matchStart || !inFrame(start) || !inFrame(match) || !inFrame(matchStart)) return false;
+    const failed = this.requests.some(row => row.kind === "requestfailed" && row.page === start.page && row.request === start.request
+      && row.url === start.url && inFrame(row) && row.errorText === "NS_BINDING_ABORTED");
+    if (!failed) return false;
     const prefix = previewPrefix(start.url);
-    return this.requests.some(row => row.kind === "request" && row.page === start.page && row.navigation === true && isLoadingPage(row.url)
+    return this.requests.some(row => row.kind === "request" && inFrame(row) && isLoadingPage(row.url)
       && previewPrefix(row.url) === prefix && Number(row.observed) > Number(start.observed) && Number(row.observed) < Number(matchStart.observed)
-      && this.requests.some(item => item.kind === "response" && item.page === row.page && item.request === row.request && item.status === 200)
+      && this.requests.some(item => item.kind === "response" && item.page === row.page && item.request === row.request && item.status === 200
+        && Number(item.observed) < Number(matchStart.observed))
       && this.requests.some(item => item.kind === "requestfinished" && item.page === row.page && item.request === row.request));
   }
 }
