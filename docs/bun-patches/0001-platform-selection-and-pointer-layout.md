@@ -4,6 +4,8 @@ File `0001-wasm-wasi-arms-for-alloc-core-errno-32-bit-pointer-t.patch`. Class **
 
 Select the POSIX-like code for WASI, add WASI errno definitions, and keep bare wasm stubs separate. Enable real printing, environment access, number formatting, paths, and I/O. Adapt `SmolStr`'s stored pointer word, allocator tags, and `EncodedSlice` pointer tags to 32 bits. Gate native ABI assertions on 64-bit pointers. The 32-bit encoded pointer scheme required linear memory below 512 MiB until patch 0019 replaced it.
 
+At Bun 1.4.5 (`a7733435cf40429e3b35c36072769df2052b80f1`) two parts of the patch follow upstream changes. `src/bun_core/Global.rs` now ends a signal re-raise through `raise_default_action`, which uses signal masks and `_exit`; WASI has neither, so that function, its `Bun__raiseDefaultAction` export and the `_exit` declaration are native-only, and the WASI arm still aborts. Upstream removed the "globally allocated" string flag, so the interim 32-bit pointer tags are the UTF-8 and UTF-16 bits only.
+
 Without it the toolchain crates fail to compile for WASI, 64-bit constants overflow, and bare-wasm branches drop output or return incomplete results. These are support additions for a target Bun does not ship. An explicit 64-bit assertion is a target restriction, unlike the silently incorrect algorithm in 0007.
 
 Files touched, relative to `vendor/bun/`:

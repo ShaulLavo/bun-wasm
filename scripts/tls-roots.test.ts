@@ -6,7 +6,7 @@ const bundle = readFileSync(new URL("../crates/bunwasm-runtime/data/tls-roots.de
 const source: unknown = JSON.parse(readFileSync(new URL("../crates/bunwasm-runtime/data/tls-roots.source.json", import.meta.url), "utf8"));
 
 describe("pinned TLS roots", () => {
-  test("fully parses all 121 CA certificates and verifies the pin", () => {
+  test("fully parses all 118 CA certificates and verifies the pin", () => {
     const result = verifyRootBundle(bundle, source);
     expect(result).toMatchObject({ count: rootPin.count, bytes: rootPin.bytes, sha256: rootPin.sha256 });
     expect(result.sourceFiles).toHaveLength(5);

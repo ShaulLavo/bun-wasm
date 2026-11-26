@@ -1,12 +1,13 @@
 # The browser engine (`bun-browser.wasm`)
 
-bun-wasm has three engines behind one runtime:
+bun-wasm has four engines behind one runtime:
 
 | engine | JS runs on | wasm |
 |---|---|---|
-| QuickJS | QuickJS-ng compiled into the wasm | `dist/bun.wasm` |
-| JSC | JavaScriptCore (no JIT) compiled into the wasm | `dist/bun-jsc.wasm` |
-| browser | the host's own engine: V8 in Chromium and Node, JavaScriptCore with JIT in Safari | `dist/bun-browser.wasm` |
+| QuickJS | QuickJS-ng compiled into the wasm | `dist/bun.wasm` with `quickjs.wasm` |
+| JSC | JavaScriptCore (no JIT) compiled into the wasm | `dist/bun-jsc.wasm` with `jsc-engine.wasm` |
+| SpiderMonkey (experimental) | SpiderMonkey compiled into the wasm | `bun-spidermonkey.wasm` with `spidermonkey-engine.wasm` |
+| browser | the host's own engine: V8 in Chromium and Node, SpiderMonkey in Firefox, JavaScriptCore with JIT in Safari | `dist/bun-browser.wasm` |
 
 The browser engine runs user code and the runtime's JS polyfills (`crates/bunwasm-runtime/src/js/*.js`) directly on the host JS engine, in the same Web Worker as the wasm. The wasm keeps the parts that are Bun proper and don't depend on a JS engine:
 
@@ -18,12 +19,7 @@ The browser engine runs user code and the runtime's JS polyfills (`crates/bunwas
 
 Isolation isn't a goal: user code shares the worker's global object with the host glue.
 
-Build it with `scripts/build-bun-browser.sh`, which compiles `bunwasm-cli` with `--no-default-features --features engine-host,bun-transpiler,bun-build` and then runs wasm-opt `-O2`. The output is 8.2 MB raw and 2.9 MB gzipped. The other engines are larger:
-
-| wasm | raw | gzipped |
-|---|---|---|
-| `bun.wasm` (QuickJS) | 8.9 MB | 3.2 MB |
-| `bun-jsc.wasm` | 42.8 MB | 11.5 MB |
+Build it with `scripts/build-bun-browser.sh`, which compiles `bunwasm-cli` with `--no-default-features --features engine-host,bun-transpiler,bun-build` and then runs wasm-opt `-O2`. For the 2026-11-23 split-profile and Brotli sizes across all four engines, plus shared-group sizes for the three in-Wasm engines, see [Compatibility](compatibility.md#engines).
 
 The host side is one plain-JS ES module, `web/src/engine-host.js`, used both by the playground worker (`web/src/worker.ts`) and by the headless runner (`web/scripts/node-host.mjs`).
 

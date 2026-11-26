@@ -15,14 +15,15 @@ Start with [Getting started](getting-started.md). Everything else is one click f
 
 ## Understand
 
-- [Architecture](concepts/architecture.md): the layers, the three engines, the host interface.
+- [Project overview](project-overview.md): what runs, the architecture diagram, performance and status.
+- [Architecture](concepts/architecture.md): the layers, the four engines, the host interface.
 - [Decision records](adr/001-three-engines-behind-one-runtime.md): why the code has its shape. [001 engines](adr/001-three-engines-behind-one-runtime.md), [002 host slots](adr/002-host-functions-installed-in-the-function-table.md), [003 processes](adr/003-processes-run-on-the-waffle-process-abi.md), [004 guest artifacts](adr/004-guests-live-outside-the-package.md), [005 patching Bun](adr/005-patch-bun-minimally-and-keep-a-ledger.md).
 
 ## Look up
 
 Status and measurements:
 
-- [Compatibility](compatibility.md): commands, engines, real apps, Bun's test suite.
+- [Compatibility](compatibility.md): commands, engines, the framework matrix, Bun's test suite.
 - [Limits](limits.md), [Memory ceiling](memory-ceiling.md): memory, stack, threads, processes, network, filesystem, browsers.
 
 Interfaces:

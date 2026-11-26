@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-const pin = "9510e74152073d850a18758ca41114d8f214ffa6";
+const pin = "a7733435cf40429e3b35c36072769df2052b80f1";
 function objectDatabaseDirectory(): string {
   const value = process.argv[2];
   if (!value) throw new Error("Usage: verify-upstream.ts EXISTING_BUN_OBJECT_DATABASE_CHECKOUT");

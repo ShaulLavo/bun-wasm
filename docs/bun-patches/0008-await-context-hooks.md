@@ -1,6 +1,6 @@
 ### 0008 await context hooks
 
-File `0008-wasm-optional-await-hooks-in-the-printer-for-a-host-.patch`. Class **Host feature**. Upstream path `src/js_printer/lib.rs` at Bun `9510e74152073d850a18758ca41114d8f214ffa6`.
+File `0008-wasm-optional-await-hooks-in-the-printer-for-a-host-.patch`. Class **Host feature**. Upstream path `src/js_printer/lib.rs` at Bun `a7733435cf40429e3b35c36072769df2052b80f1`.
 
 `src/js_printer/lib.rs` adds `BUNWASM_AWAIT_HOOKS`, off by default, and `BUNWASM_HOOKS_VERSION` (3). When on, the printer emits the async-context hooks described in [docs/engine-browser.md](../engine-browser.md#promise-state-and-asynclocalstorage):
 

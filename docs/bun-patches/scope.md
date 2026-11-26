@@ -1,6 +1,6 @@
 # Changes to Bun and other upstream source
 
-This ledger covers the Bun patch series, local changes to vendored dependencies, and copied or adapted upstream source outside vendor directories at this revision. Bun is pinned to `9510e74152073d850a18758ca41114d8f214ffa6` by `scripts/sync-bun.sh`. WebKit is Bun's fork at `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`, pinned in `jsc/common.sh`.
+This ledger covers the Bun patch series, local changes to vendored dependencies, and copied or adapted upstream source outside vendor directories at this revision. Bun is pinned to `a7733435cf40429e3b35c36072769df2052b80f1`, the `bun-v1.4.5` tag, by `scripts/sync-bun.sh`. WebKit is Bun's fork at `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`, pinned in `jsc/common.sh`; Bun 1.4.5 itself pins a later WebKit commit, and [the move to 1.4.5](bun-1.4.5-source-move.md) lists what did not move with it. A record that names an earlier Bun revision gives the revision its adaptation was compared with.
 
 Copied implementations include translations into another language and fragments retained inside otherwise original files. Generated upstream bundles and copied data tables are also listed. Directory names do not determine provenance.
 

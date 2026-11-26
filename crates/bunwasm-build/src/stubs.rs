@@ -38,6 +38,10 @@ extern "C" fn JSBundlerPlugin__hasOnBeforeParsePlugins(_this: *const c_void) -> 
     missing(PLUGINS)
 }
 #[unsafe(no_mangle)]
+extern "C" fn JSBundlerPlugin__freezeFilters(_this: *const c_void) {
+    missing(PLUGINS)
+}
+#[unsafe(no_mangle)]
 extern "C" fn JSBundlerPlugin__callOnBeforeParsePlugins(
     _this: *const c_void,
     _ctx: *mut c_void,

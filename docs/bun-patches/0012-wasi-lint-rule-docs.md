@@ -1,7 +1,7 @@
 ## 0012 WASI lint rule docs
 
 Class **Port**. Upstream `src/lint/driver/{Cargo.toml,explain.rs}` at Bun
-revision `9510e74152073d850a18758ca41114d8f214ffa6`, with an original WASI
+revision `a7733435cf40429e3b35c36072769df2052b80f1`, with an original WASI
 build adapter in `src/lint/driver/build.rs`.
 
 Bun's ordinary debug embedding mode reads `lint-rule-pages.txt` from a path

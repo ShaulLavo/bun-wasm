@@ -1,7 +1,7 @@
-From b3aeae0ea1334015293715e77e08538a149eaa4f Mon Sep 17 00:00:00 2001
+From 9118fdf15aef62ed177a3037ec51bf9e53ef4a76 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 02:10:37 +0300
-Subject: [PATCH 06/14] wasm: openat access mode and fd paths on wasi
+Subject: [PATCH 06/28] wasm: openat access mode and fd paths on wasi
 
 wasi-libc's O_RDONLY is a real bit, so an O_DIRECTORY-only open gets
 EINVAL; add O_RDONLY when no access mode is given. get_fd_path asks
@@ -13,10 +13,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  1 file changed, 38 insertions(+), 1 deletion(-)
 
 diff --git a/src/sys/lib.rs b/src/sys/lib.rs
-index 550cf3a8..3874ec68 100644
+index 6a539bcf..d3d9321d 100644
 --- a/src/sys/lib.rs
 +++ b/src/sys/lib.rs
-@@ -1809,11 +1809,22 @@ mod posix_impl {
+@@ -1796,11 +1796,22 @@ mod posix_impl {
              // NUL-terminated path and `d` is a live dir fd (or AT_FDCWD).
              unsafe { super::nocancel::openat(d, p, f, m) }
          }
@@ -40,7 +40,7 @@ index 550cf3a8..3874ec68 100644
          }
      }
      #[cfg(not(any(target_os = "linux", target_os = "android")))]
-@@ -2076,6 +2087,11 @@ mod posix_impl {
+@@ -2063,6 +2074,11 @@ mod posix_impl {
              let rc = super::nocancel::close(fd.native());
              #[cfg(not(target_os = "macos"))]
              let rc = safe_libc::close(fd.native());
@@ -52,7 +52,7 @@ index 550cf3a8..3874ec68 100644
              if rc < 0 && last_errno() == libc::EBADF {
                  return Err(Error::from_code_int(libc::EBADF, Tag::close).with_fd(fd));
              }
-@@ -7792,11 +7808,21 @@ pub fn get_fd_path<'a>(fd: Fd, out: &'a mut bun_paths::PathBuffer) -> Maybe<&'a
+@@ -7809,11 +7825,21 @@ pub fn get_fd_path<'a>(fd: Fd, out: &'a mut bun_paths::PathBuffer) -> Maybe<&'a
          out.0[..len].copy_from_slice(unsafe { core::slice::from_raw_parts(path_ptr, len) });
          return Ok(&mut out.0[..len]);
      }
@@ -74,7 +74,7 @@ index 550cf3a8..3874ec68 100644
          windows
      )))]
      {
-@@ -7805,6 +7831,17 @@ pub fn get_fd_path<'a>(fd: Fd, out: &'a mut bun_paths::PathBuffer) -> Maybe<&'a
+@@ -7822,6 +7848,17 @@ pub fn get_fd_path<'a>(fd: Fd, out: &'a mut bun_paths::PathBuffer) -> Maybe<&'a
      }
  }
  

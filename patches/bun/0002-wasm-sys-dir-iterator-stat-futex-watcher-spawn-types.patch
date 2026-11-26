@@ -1,7 +1,7 @@
-From 2212f714a930ebbc545ffddeb16772a8feed9442 Mon Sep 17 00:00:00 2001
+From 3ad8a16bc868baf45a4d5272b0059b4739ad66c2 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 01:37:39 +0300
-Subject: [PATCH 02/14] wasm: sys dir iterator, stat, futex, watcher, spawn
+Subject: [PATCH 02/28] wasm: sys dir iterator, stat, futex, watcher, spawn
  types, 64-bit layout asserts
 
 ---
@@ -68,7 +68,7 @@ index 444c4faa..5cc85506 100644
          }
  
 diff --git a/src/ast/b.rs b/src/ast/b.rs
-index 7ce9c8fb..e31c6657 100644
+index f66ba161..659d1f34 100644
 --- a/src/ast/b.rs
 +++ b/src/ast/b.rs
 @@ -51,9 +51,13 @@ impl Default for B {
@@ -86,7 +86,7 @@ index 7ce9c8fb..e31c6657 100644
      core::mem::size_of::<Option<B>>() == core::mem::size_of::<B>(),
      "B lost its niche — check for #[repr] or oversized inline payload"
 diff --git a/src/ast/e.rs b/src/ast/e.rs
-index 04845440..0a39f5f2 100644
+index 721eeeaf..e07df3d7 100644
 --- a/src/ast/e.rs
 +++ b/src/ast/e.rs
 @@ -353,6 +353,7 @@ pub struct Arrow {
@@ -132,7 +132,7 @@ index 04845440..0a39f5f2 100644
  const _: () = assert!(core::mem::offset_of!(PropertyJSON, value) == 16);
  
  /// Where a [`JsonTape`]'s buffers (and, in arena mode, the tape itself) live.
-@@ -1124,9 +1133,13 @@ pub struct ObjectJSON {
+@@ -1130,9 +1139,13 @@ pub struct ObjectJSON {
      pub is_single_line: bool,
  }
  
@@ -147,7 +147,7 @@ index 04845440..0a39f5f2 100644
  
  // SAFETY: the tape outlives the AST (`StoreRef`'s contract) and is read-only once parsing returns.
 diff --git a/src/ast/expr.rs b/src/ast/expr.rs
-index 056ca920..2b5bb82a 100644
+index e6ee3193..643d3604 100644
 --- a/src/ast/expr.rs
 +++ b/src/ast/expr.rs
 @@ -1369,33 +1369,52 @@ pub enum Data {
@@ -204,7 +204,7 @@ index 056ca920..2b5bb82a 100644
  
  // Field-style accessors (`data.e_string()`, `data.e_object()`). The match arms
 diff --git a/src/ast/lib.rs b/src/ast/lib.rs
-index fccb1f24..5396cd7c 100644
+index f4c86093..66782d4b 100644
 --- a/src/ast/lib.rs
 +++ b/src/ast/lib.rs
 @@ -195,7 +195,9 @@ pub enum RefTag {
@@ -218,7 +218,7 @@ index fccb1f24..5396cd7c 100644
  
  /// We mask to 31 bits for `source_index`, 28 for `inner_index`.
 diff --git a/src/ast/nodes.rs b/src/ast/nodes.rs
-index 8fa78903..98adda93 100644
+index 7dcc96f2..0521e137 100644
 --- a/src/ast/nodes.rs
 +++ b/src/ast/nodes.rs
 @@ -28,8 +28,11 @@ pub use crate::flags as Flags;
@@ -293,7 +293,7 @@ index 7ee2e2e0..06111e88 100644
  
  // Field-style union accessors (`data.s_function()`, `data.s_local()`, …).
 diff --git a/src/ast/symbol.rs b/src/ast/symbol.rs
-index 0baff6d2..f1e87d1f 100644
+index a1754094..32ab3f05 100644
 --- a/src/ast/symbol.rs
 +++ b/src/ast/symbol.rs
 @@ -161,7 +161,9 @@ symbol_flag_accessors! {
@@ -307,10 +307,10 @@ index 0baff6d2..f1e87d1f 100644
  
  const INVALID_CHUNK_INDEX: u32 = u32::MAX;
 diff --git a/src/bun_alloc/lib.rs b/src/bun_alloc/lib.rs
-index afc792f1..fe6d8e29 100644
+index 8f5d971c..7204df28 100644
 --- a/src/bun_alloc/lib.rs
 +++ b/src/bun_alloc/lib.rs
-@@ -672,11 +672,6 @@ pub fn page_size() -> usize {
+@@ -652,11 +652,6 @@ pub fn page_size() -> usize {
              GetSystemInfo(&mut info);
              info.dw_page_size as usize
          }
@@ -323,10 +323,10 @@ index afc792f1..fe6d8e29 100644
  }
  
 diff --git a/src/bun_core/lib.rs b/src/bun_core/lib.rs
-index 6b402160..00bb39fb 100644
+index ed094d18..0edb0d0b 100644
 --- a/src/bun_core/lib.rs
 +++ b/src/bun_core/lib.rs
-@@ -2631,7 +2631,7 @@ pub mod ffi {
+@@ -2621,7 +2621,7 @@ pub mod ffi {
      // (`__val: [c_ulong; 16]`) and FreeBSD (`__bits: [u32; 4]`). Gate the
      // explicit impl to everywhere it's NOT already a primitive.
      // SAFETY: integer-array struct on the gated targets; all-zero is valid.
@@ -348,10 +348,10 @@ index 23b8484d..87c24e9c 100644
  
  // ---------------------------------------------------------------------------
 diff --git a/src/bun_core/string/immutable.rs b/src/bun_core/string/immutable.rs
-index e38040c9..07e39da4 100644
+index e90c5e05..39585db1 100644
 --- a/src/bun_core/string/immutable.rs
 +++ b/src/bun_core/string/immutable.rs
-@@ -809,6 +809,7 @@ impl StringOrTinyStringMeta {
+@@ -813,6 +813,7 @@ impl StringOrTinyStringMeta {
      }
  }
  
@@ -360,10 +360,10 @@ index e38040c9..07e39da4 100644
  
  impl StringOrTinyString {
 diff --git a/src/bun_core/util.rs b/src/bun_core/util.rs
-index 1de09775..6d8a9057 100644
+index 4b85b2a2..a288ce50 100644
 --- a/src/bun_core/util.rs
 +++ b/src/bun_core/util.rs
-@@ -2738,7 +2738,7 @@ pub fn self_exe_path() -> crate::CrateResult<&'static ZStr> {
+@@ -2763,7 +2763,7 @@ pub fn self_exe_path() -> crate::CrateResult<&'static ZStr> {
          //  test/js/node/test/parallel/test-process-execpath.js).
          #[cfg(any(target_vendor = "apple", windows))]
          let path = path.canonicalize().unwrap_or(path);
@@ -385,10 +385,10 @@ index 09b41da7..45f2a94a 100644
  
  /// Implemented by the type that owns a `*mut Channel` and receives socket-
 diff --git a/src/collections/array_hash_map.rs b/src/collections/array_hash_map.rs
-index dc6fe76d..949a6ebd 100644
+index a79ece28..47be3727 100644
 --- a/src/collections/array_hash_map.rs
 +++ b/src/collections/array_hash_map.rs
-@@ -1484,6 +1484,7 @@ pub struct StringHashMapKey<A: Allocator + Default = DefaultAlloc> {
+@@ -1485,6 +1485,7 @@ pub struct StringHashMapKey<A: Allocator + Default = DefaultAlloc> {
  const SHMK_OWNED_BIT: usize = 1 << (usize::BITS - 1);
  
  // Compile-time check: with a ZST allocator the key is exactly two words.
@@ -541,10 +541,10 @@ index 188c5fbb..5c144e36 100644
  }
  
 diff --git a/src/event_loop/ConcurrentTask.rs b/src/event_loop/ConcurrentTask.rs
-index b08674e5..c0a8c138 100644
+index 45b518c2..99abc0da 100644
 --- a/src/event_loop/ConcurrentTask.rs
 +++ b/src/event_loop/ConcurrentTask.rs
-@@ -154,6 +154,7 @@ pub struct Task {
+@@ -157,6 +157,7 @@ pub struct Task {
      // [`Task::context`], in the padding `tag` leaves.
      context: ContextId,
  }
@@ -552,7 +552,7 @@ index b08674e5..c0a8c138 100644
  const _: () = assert!(core::mem::size_of::<Task>() == 2 * core::mem::size_of::<usize>());
  
  /// Identifies a script execution context within its VM (`bun_jsc` hands them out, counting up).
-@@ -306,6 +307,7 @@ impl Default for ConcurrentTask {
+@@ -309,6 +310,7 @@ impl Default for ConcurrentTask {
  // turning the MPSC enqueue's single release-store into a load-then-store on a
  // cache line that is bouncing between producer threads and the JS-thread
  // consumer. The extra word of padding is cheap; the contended RMW is not.
@@ -573,10 +573,10 @@ index 00469eb1..25f45754 100644
  
  impl StreamPriority {
 diff --git a/src/md/parser.rs b/src/md/parser.rs
-index 15097705..0621315c 100644
+index 6a7b9f0f..a5218615 100644
 --- a/src/md/parser.rs
 +++ b/src/md/parser.rs
-@@ -212,6 +212,7 @@ const MAX_BLOCK_BYTES: usize =
+@@ -211,6 +211,7 @@ const MAX_BLOCK_BYTES: usize =
  
  // The headroom proof: a buffer filled to the cap can still be aligned up and
  // take one more header without leaving `OFF` range.
@@ -585,10 +585,10 @@ index 15097705..0621315c 100644
      ((MAX_BLOCK_BYTES + (align_of::<BlockHeader>() - 1)) & !(align_of::<BlockHeader>() - 1))
          + size_of::<BlockHeader>()
 diff --git a/src/paths/lib.rs b/src/paths/lib.rs
-index 9db4ede0..fa62b383 100644
+index 3523a150..455db9e6 100644
 --- a/src/paths/lib.rs
 +++ b/src/paths/lib.rs
-@@ -792,6 +792,7 @@ pub mod fs {
+@@ -767,6 +767,7 @@ pub mod fs {
          pub is_symlink: bool,
      }
  
@@ -597,10 +597,10 @@ index 9db4ede0..fa62b383 100644
  
      impl<'a> Default for Path<'a> {
 diff --git a/src/semver/lib.rs b/src/semver/lib.rs
-index 1af94f54..d1cd2a3c 100644
+index f7acc0f2..a357aaf1 100644
 --- a/src/semver/lib.rs
 +++ b/src/semver/lib.rs
-@@ -938,6 +938,7 @@ pub mod semver_string {
+@@ -949,6 +949,7 @@ pub mod semver_string {
          }
      }
  
@@ -609,22 +609,22 @@ index 1af94f54..d1cd2a3c 100644
          core::mem::size_of::<String>() == core::mem::size_of::<Pointer>(),
          "String types must be the same size",
 diff --git a/src/sourcemap/InternalSourceMap.rs b/src/sourcemap/InternalSourceMap.rs
-index fbf1e5b1..e8c399a7 100644
+index ab79e0da..eb506a89 100644
 --- a/src/sourcemap/InternalSourceMap.rs
 +++ b/src/sourcemap/InternalSourceMap.rs
-@@ -133,6 +133,7 @@ pub struct SyncEntry {
+@@ -132,6 +132,7 @@ pub struct SyncEntry {
      pub(crate) source_index: i32,
  }
  
 +#[cfg(target_pointer_width = "64")]
  const _: () = assert!(size_of::<SyncEntry>() == 24);
  
- impl SyncEntry {
+ /// A mapping that `Builder::mark_object_brace` marked.
 diff --git a/src/sourcemap/Mapping.rs b/src/sourcemap/Mapping.rs
-index 0b57c2d8..077f7007 100644
+index 76828f11..b7a070a7 100644
 --- a/src/sourcemap/Mapping.rs
 +++ b/src/sourcemap/Mapping.rs
-@@ -757,7 +757,9 @@ fn parse_simd(
+@@ -756,7 +756,9 @@ fn parse_simd(
      // i32s, so its column storage is byte-identical to `[[i32; 2]]`. That
      // lets the kernel write `{line, col}` pairs straight into the SoA
      // column with no per-row Rust copy.
@@ -635,7 +635,7 @@ index 0b57c2d8..077f7007 100644
  
      // Segments on a line are comma-separated and lines are semicolon-
 diff --git a/src/spawn_sys/lib.rs b/src/spawn_sys/lib.rs
-index 69f8e49f..03156d29 100644
+index 781dcf8a..eb7efcb5 100644
 --- a/src/spawn_sys/lib.rs
 +++ b/src/spawn_sys/lib.rs
 @@ -63,13 +63,16 @@ pub type CStrPtr = *const c_char;
@@ -739,10 +739,10 @@ index add0523b..590fc1e5 100644
                  debug_assert!(self.native() >= 0);
                  match sys::get_errno(sys::safe_libc::close(self.native())) {
 diff --git a/src/sys/lib.rs b/src/sys/lib.rs
-index 59dc9b45..550cf3a8 100644
+index ee87b799..6a539bcf 100644
 --- a/src/sys/lib.rs
 +++ b/src/sys/lib.rs
-@@ -565,6 +565,104 @@ pub mod dir_iterator {
+@@ -547,6 +547,104 @@ pub mod dir_iterator {
          }
      }
  
@@ -847,7 +847,7 @@ index 59dc9b45..550cf3a8 100644
      // ── Windows ──────────────────────────────────────────────────────────
      // `NtQueryDirectoryFile` + `FILE_DIRECTORY_INFORMATION` walk.
      #[cfg(windows)]
-@@ -2207,6 +2305,7 @@ mod posix_impl {
+@@ -2194,6 +2292,7 @@ mod posix_impl {
                  pub stx_dev_minor: u32,
                  __pad1: [u64; 14],
              }
@@ -855,7 +855,7 @@ index 59dc9b45..550cf3a8 100644
              const _: () = assert!(core::mem::size_of::<statx>() == 256);
  
              /// Raw `statx(2)` via syscall — returns `0` on success or `-1` with
-@@ -2645,6 +2744,7 @@ mod posix_impl {
+@@ -2632,6 +2731,7 @@ mod posix_impl {
      }
      /// The extended attributes of an open file, by name, each with its value. On Linux its ACL and its SELinux label are
      /// among them. On FreeBSD: those of the namespace `user`. None on a file system that has none.
@@ -863,7 +863,7 @@ index 59dc9b45..550cf3a8 100644
      pub fn extended_attributes(fd: Fd) -> Maybe<Vec<(Vec<u8>, Vec<u8>)>> {
          let fd = fd.native();
          let listed = filled(Tag::flistxattr, |list, size| {
-@@ -2715,6 +2815,12 @@ mod posix_impl {
+@@ -2702,6 +2802,12 @@ mod posix_impl {
          attributes.sort_unstable();
          Ok(attributes)
      }
@@ -876,7 +876,7 @@ index 59dc9b45..550cf3a8 100644
      pub fn ftruncate(fd: Fd, len: i64) -> Maybe<()> {
          check!(safe_libc::ftruncate(fd.native(), len), Tag::ftruncate);
          Ok(())
-@@ -3629,7 +3735,7 @@ impl TimeLike {
+@@ -3616,7 +3722,7 @@ impl TimeLike {
      }
  }
  #[cfg(any(unix, target_os = "wasi"))]
@@ -885,7 +885,7 @@ index 59dc9b45..550cf3a8 100644
  #[cfg(windows)]
  pub const UTIME_NOW: i64 = -1;
  
-@@ -5351,6 +5457,7 @@ pub mod linux {
+@@ -5362,6 +5468,7 @@ pub mod linux {
          pub sec: time_t,
          pub nsec: libc::c_long,
      }
@@ -893,7 +893,7 @@ index 59dc9b45..550cf3a8 100644
      const _: () = assert!(
          core::mem::size_of::<timespec>() == core::mem::size_of::<libc::timespec>()
              && core::mem::align_of::<timespec>() == core::mem::align_of::<libc::timespec>()
-@@ -8314,15 +8421,19 @@ pub mod net {
+@@ -8331,15 +8438,19 @@ pub mod net {
              scope_id: 0,
          };
      }
@@ -1018,7 +1018,7 @@ index 850877f6..08c785d4 100644
          task.cast::<Node>()
      }
 diff --git a/src/uws_sys/Loop.rs b/src/uws_sys/Loop.rs
-index 42ebb296..27a47ee7 100644
+index 90ab5336..02021577 100644
 --- a/src/uws_sys/Loop.rs
 +++ b/src/uws_sys/Loop.rs
 @@ -100,6 +100,9 @@ pub type EventType = libc::kevent;
@@ -1126,7 +1126,7 @@ index 00000000..7c8a0b66
 +    Ok(())
 +}
 diff --git a/src/watcher/Watcher.rs b/src/watcher/Watcher.rs
-index 59cdd402..89bce27b 100644
+index 1d105fe4..3c9103f8 100644
 --- a/src/watcher/Watcher.rs
 +++ b/src/watcher/Watcher.rs
 @@ -18,7 +18,9 @@ use crate::kevent_watcher as platform;
@@ -1140,7 +1140,7 @@ index 59cdd402..89bce27b 100644
  compile_error!("Unsupported platform");
  
  bun_core::define_scoped_log!(log, watcher, visible);
-@@ -127,7 +129,7 @@ pub struct Watcher {
+@@ -131,7 +133,7 @@ pub struct Watcher {
  
      /// Scratch snapshot of `watchlist.eventlist_index` used by
      /// `watch_loop_cycle`; owned by the watcher thread.
@@ -1149,7 +1149,7 @@ index 59cdd402..89bce27b 100644
      pub(crate) eventlist_index_scratch: Vec<platform::EventListIndex>,
  
      pub(crate) ctx: *mut (),
-@@ -204,7 +206,7 @@ impl Watcher {
+@@ -208,7 +210,7 @@ impl Watcher {
              close_descriptors: bun_core::AtomicCell::new(false),
              evict_list: [0; MAX_EVICTION_COUNT],
              evict_list_i: 0,
@@ -1158,7 +1158,7 @@ index 59cdd402..89bce27b 100644
              eventlist_index_scratch: Vec::new(),
              thread_lock: ThreadLock::init_unlocked(),
          });
-@@ -550,7 +552,7 @@ impl Watcher {
+@@ -558,7 +560,7 @@ impl Watcher {
  
          #[cfg(any(target_os = "macos", target_os = "freebsd"))]
          self.add_file_descriptor_to_kqueue_without_checks(fd, watchlist_id);
@@ -1167,7 +1167,7 @@ index 59cdd402..89bce27b 100644
          let eventlist_index = {
              // inotify needs a trailing NUL. When
              // CLONE_FILE_PATH is true the caller's `file_path` is NOT NUL-terminated,
-@@ -578,7 +580,7 @@ impl Watcher {
+@@ -589,7 +591,7 @@ impl Watcher {
              parent_hash,
              package_json,
              kind: WatchItemKind::File,
@@ -1176,7 +1176,7 @@ index 59cdd402..89bce27b 100644
              eventlist_index,
          });
          Ok(FdOwnership::Watcher)
-@@ -628,7 +630,7 @@ impl Watcher {
+@@ -639,7 +641,7 @@ impl Watcher {
  
          #[cfg(any(target_os = "macos", target_os = "freebsd"))]
          self.add_file_descriptor_to_kqueue_without_checks(fd, watchlist_id);
@@ -1184,8 +1184,8 @@ index 59cdd402..89bce27b 100644
 +        #[cfg(any(target_os = "linux", target_os = "android", target_os = "wasi"))]
          let eventlist_index = {
              let mut buf = bun_paths::path_buffer_pool::get();
-             let path: &ZStr = if CLONE_FILE_PATH
-@@ -662,7 +664,7 @@ impl Watcher {
+             if file_path.len() >= buf.len() {
+@@ -676,7 +678,7 @@ impl Watcher {
              parent_hash,
              kind: WatchItemKind::Directory,
              package_json: None,
@@ -1194,7 +1194,7 @@ index 59cdd402..89bce27b 100644
              eventlist_index,
          });
          Ok((self.watchlist.len() - 1) as WatchItemIndex)
-@@ -983,7 +985,7 @@ impl WatchEvent {
+@@ -997,7 +999,7 @@ impl WatchEvent {
          &buf[self.name_off as usize..][..self.name_len as usize]
      }
  
@@ -1203,7 +1203,7 @@ index 59cdd402..89bce27b 100644
      pub(crate) fn sort_by_index(event: WatchEvent, rhs: WatchEvent) -> core::cmp::Ordering {
          event.index.cmp(&rhs.index)
      }
-@@ -1052,7 +1054,7 @@ pub struct WatchItem {
+@@ -1066,7 +1068,7 @@ pub struct WatchItem {
      pub parent_hash: u32,
      pub kind: WatchItemKind,
      pub package_json: Option<&'static PackageJSON>,
@@ -1212,7 +1212,7 @@ index 59cdd402..89bce27b 100644
      pub eventlist_index: platform::EventListIndex,
  }
  
-@@ -1086,7 +1088,7 @@ pub trait WatchItemColumns {
+@@ -1100,7 +1102,7 @@ pub trait WatchItemColumns {
      fn items_fd_mut(&mut self) -> &mut [Fd];
      fn items_parent_hash(&self) -> &[u32];
      fn items_kind(&self) -> &[WatchItemKind];
@@ -1221,7 +1221,7 @@ index 59cdd402..89bce27b 100644
      fn items_eventlist_index(&self) -> &[platform::EventListIndex];
  }
  
-@@ -1109,7 +1111,7 @@ impl WatchItemColumns for WatchList {
+@@ -1123,7 +1125,7 @@ impl WatchItemColumns for WatchList {
      fn items_kind(&self) -> &[WatchItemKind] {
          self.items::<"kind", WatchItemKind>()
      }
@@ -1230,7 +1230,7 @@ index 59cdd402..89bce27b 100644
      fn items_eventlist_index(&self) -> &[platform::EventListIndex] {
          self.items::<"eventlist_index", platform::EventListIndex>()
      }
-@@ -1134,7 +1136,7 @@ impl WatchItemColumns for bun_collections::multi_array_list::Slice<WatchItem> {
+@@ -1148,7 +1150,7 @@ impl WatchItemColumns for bun_collections::multi_array_list::Slice<WatchItem> {
      fn items_kind(&self) -> &[WatchItemKind] {
          self.items::<"kind", WatchItemKind>()
      }
@@ -1240,10 +1240,10 @@ index 59cdd402..89bce27b 100644
          self.items::<"eventlist_index", platform::EventListIndex>()
      }
 diff --git a/src/watcher/WindowsWatcher.rs b/src/watcher/WindowsWatcher.rs
-index e39adde6..2f284bd8 100644
+index d1863b2c..01a79195 100644
 --- a/src/watcher/WindowsWatcher.rs
 +++ b/src/watcher/WindowsWatcher.rs
-@@ -88,6 +88,7 @@ bun_core::assert_ffi_layout!(
+@@ -91,6 +91,7 @@ bun_core::assert_ffi_layout!(
      ::core::mem::align_of::<w::OVERLAPPED>();
      overlapped @ 0, buf @ 32, dir_handle @ 32 + 64 * 1024,
  );
@@ -1252,7 +1252,7 @@ index e39adde6..2f284bd8 100644
      ::core::mem::offset_of!(DirWatcher, buf)
          % ::core::mem::align_of::<w::FILE_NOTIFY_INFORMATION>()
 diff --git a/src/watcher/lib.rs b/src/watcher/lib.rs
-index 07ffe348..703c854f 100644
+index 5b2edfcf..d13eba9e 100644
 --- a/src/watcher/lib.rs
 +++ b/src/watcher/lib.rs
 @@ -19,6 +19,10 @@ pub mod kevent_watcher;
