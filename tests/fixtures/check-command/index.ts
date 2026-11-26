@@ -78,6 +78,9 @@ assert.equal(buildIsBun.code, 0, buildIsBun.stdout + buildIsBun.stderr);
 const helpBefore = bun(["--help", "check"]);
 assert.equal(helpBefore.code, 0);
 assert.ok(helpBefore.stdout.startsWith("Usage: bun check"), helpBefore.stdout);
+const helpInChain = bun(["-bhpmissing", "check"]);
+assert.equal(helpInChain.code, 0, helpInChain.stdout + helpInChain.stderr);
+assert.ok(helpInChain.stdout.startsWith("Usage: bun check"), helpInChain.stdout);
 writeFileSync("fresh/app.rsp", "-p\n../app\n");
 assert.equal(check(["@app.rsp", "--no-pretty"], "fresh").code, 1);
 for (const args of [["@app.rsp", "--project=", "--no-pretty"], ["--project=", "@app.rsp", "--no-pretty"]]) {

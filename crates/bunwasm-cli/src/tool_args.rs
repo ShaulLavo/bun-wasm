@@ -129,14 +129,17 @@ fn is_check_option(flag: &str) -> bool {
         || flag.starts_with("--threads=")
 }
 
-/// `-bpapp` directly before `check`: Bun's `-b`, then the checker's `-p app`.
-fn check_project(chain: &str) -> String {
-    let value = chain.split_once('p').map_or("", |(_, value)| value);
-    match value.strip_prefix('=') {
+/// A chain like `-bhpapp` directly before `check`: Bun's `-b`, then the checker's `-h` and `-p app`,
+/// as upstream's check command parses the chain with its own table.
+fn check_chain(chain: &str) -> Vec<String> {
+    let (letters, value) = chain[1..].split_once('p').unwrap_or((&chain[1..], ""));
+    let help = letters.contains('h').then(|| "-h".to_owned());
+    let project = match value.strip_prefix('=') {
         Some(value) => format!("--project={value}"),
         None if value.is_empty() => "-p".to_owned(),
         None => format!("--project={value}"),
-    }
+    };
+    help.into_iter().chain([project]).collect()
 }
 
 pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGlobals)> {
@@ -176,7 +179,7 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
             flag if flag.starts_with("--config=") || flag.starts_with("-c=") => {
                 globals.bunfig = Some(flag.split_once('=')?.1.to_owned());
             }
-            _ if is_of_check => for_check.push(check_project(arg)),
+            _ if is_of_check => for_check.extend(check_chain(arg)),
             flag if evaluates(flag) => return None,
             flag if takes_next_argument(flag) => at += 1,
             flag if is_check_option(flag) => {
@@ -254,6 +257,7 @@ mod tests {
                 &["--project=app", "--no-pretty"][..],
             ),
             (&["-bpapp", "check", "app"], &["--project=app", "app"]),
+            (&["-bhpmissing", "check"], &["-h", "--project=missing"]),
             (&["-p=app", "check"], &["--project=app"]),
             (&["--project=app", "check"], &["--project=app"]),
             (&["--help", "check"], &["--help"]),
