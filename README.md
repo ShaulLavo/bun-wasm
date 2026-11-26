@@ -5,7 +5,7 @@ Bun v1.4.5's Rust toolchain compiled to `wasm32-wasip1`, paired with a Bun-compa
 ## Try it
 
 - [Sandbox](https://bun.sprockt.dev/) runs Next.js, Nuxt, SvelteKit, Astro, Vite and eight more starters in your tab. Pick one, install it and edit live.
-- [Playground](https://bun.sprockt.dev/playground/) opens a TypeScript editor beside a terminal. Press Run.
+- [Playground](https://bun.sprockt.dev/playground/) opens an editor, a terminal and one-click Bun API demos with a live server preview. Press Run.
 
 ```console
 user@bun:~$ bun -e 'console.log(2 ** 10)'
@@ -20,7 +20,7 @@ In the 2026-11-23 [compatibility matrix](docs/compatibility.md) on Bun 1.4.4 gue
 
 ## Embed it
 
-bun-wasm registers `bun`, `node` and `nodejs` on a [Waffle](https://github.com/ShaulLavo/waffle) runtime that your page owns. No default guest is published yet, so you build and host the Wasm module yourself. See [Embed bun-wasm in a page](docs/guides/embed-in-a-page.md).
+bun-wasm registers `bun`, `node` and `nodejs` on a [Waffle](https://github.com/ShaulLavo/waffle) runtime that your page owns, downloading the verified default browser guest on first spawn. See [Embed bun-wasm in a page](docs/guides/embed-in-a-page.md).
 
 ## Links
 

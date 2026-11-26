@@ -18,13 +18,12 @@ Exports are explicit:
 ### Installation and ownership
 
 Registered programs launch ordinary Waffle processes through the generic `runtime_proc` bridge.
-Supply the bundler-produced worker URLs. `BUN_WASM_ASSET` is `null` at this revision because no
-guest matching the current source is published, so every engine needs a `module` or an `asset`
-descriptor; the loader verifies each descriptor's uncompressed size and SHA-256 before compilation.
-QuickJS, JSC and the experimental SpiderMonkey engine are explicit opt-ins and
-require their matching compiled module or verified paired asset descriptor; the browser descriptor must
-not be used for them. Guest bytes remain outside the package. No legacy Bun-specific process
-controller is used.
+Supply the bundler-produced worker URLs. The default `browser` engine loads the published immutable
+guest through `BUN_WASM_ASSET`, verifying its uncompressed size and SHA-256 before compilation.
+No `module` or `asset` override is needed for that default. QuickJS, JSC and the experimental
+SpiderMonkey engine are explicit opt-ins and require their matching compiled module or verified
+paired asset descriptor; the browser descriptor must not be used for them. Guest bytes remain
+outside the package. No legacy Bun-specific process controller is used.
 
 ```ts
 import { installBunAdapters } from "bun-wasm";
@@ -36,8 +35,9 @@ const installation = await installBunAdapters(runtime, {
   workerUrl: bunWorkerUrl,
   notificationWorkerUrl, // one helper per Bun process; wakes fs.watch on filesystem commits
   engine: "browser", // default; quickjs, jsc and spidermonkey need their matching paired guest
-  asset: { kind: "single", core: { url: "/bun-browser.wasm", sha256, bytes } }, // or module: compiledModule
+  // module: offlineCompiledModule,
   // wasmUrl: "https://your-immutable-store/<sha256>/bun.wasm.gz",
+  // asset: { kind: "single", core: { url: "/bun-browser.wasm", sha256, bytes } },
 });
 
 // Registers bun:quickjs, bun:jsc, bun:browser (plus bun:spidermonkey when selected) and the selected engine's executable paths.
@@ -197,8 +197,9 @@ BUN_WASM_RUNTIME_PROC_ARTIFACT="$PWD/dist/bun-browser.wasm" \
 ```
 
 Setting `BUN_WASM_RUNTIME_PROC_PUBLISHED_DEFAULT=1` additionally checks that each scenario fetches
-the published immutable guest from `BUN_WASM_ASSET` and verifies its receipt against that descriptor.
-At this revision `BUN_WASM_ASSET` is `null`, so that flag fails until a matching guest is published.
+the published immutable guest from `BUN_WASM_ASSET` and verifies that its byte count and SHA-256
+match the local artifact receipt, so the local artifact must come from the same revision as
+`BUN_WASM_ASSET`.
 
 ### Required full-build interruption acceptance
 

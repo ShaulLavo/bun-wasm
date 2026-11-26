@@ -47,7 +47,7 @@ The guest box is either one Wasm module for the `browser` engine, or a core modu
 
 Two kinds of code sit in the guest.
 
-Bun's own Rust crates, including the transpiler, bundler, resolver, `bun_semver`, data parsers and glob, compile to `wasm32-wasip1` from a pinned checkout of `oven-sh/bun`. The pin lives in `scripts/sync-bun.sh`, which rebuilds `vendor/bun` from that commit plus the 27 patches in `patches/bun/` at the v1.4.5 pin. Those patches add `target_os = "wasi"` arms and a few host hooks without rewriting Bun. [Changes to Bun and other upstream source](../bun-patches.md) lists every patch, copied file and adapter.
+Bun's own Rust crates, including the transpiler, bundler, resolver, `bun_semver`, data parsers and glob, compile to `wasm32-wasip1` from a pinned checkout of `oven-sh/bun`. The pin lives in `scripts/sync-bun.sh`, which rebuilds `vendor/bun` from that commit plus the 28 patches in `patches/bun/` at the v1.4.5 pin. Those patches add `target_os = "wasi"` arms and a few host hooks without rewriting Bun. [Changes to Bun and other upstream source](../bun-patches.md) lists every patch, copied file and adapter.
 
 The runtime is ours. `crates/bunwasm-runtime` implements the module loader, event loop, `Bun.*`, `process`, `node:*` modules and web APIs. It reuses Bun's own JavaScript wherever that code runs without JavaScriptCore internals; [Bun's generated builtins](../bun-builtins.md) supply many `node:*` modules, and Rust natives plus hand-written JavaScript fill the gaps. The runtime also includes a Rust npm installer and a bundled SQLite behind `bun:sqlite`.
 
