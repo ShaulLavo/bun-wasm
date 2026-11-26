@@ -771,11 +771,19 @@ pub fn realpath(path: &str) -> std::io::Result<String> {
     })
 }
 
-/// One `path_realpath` into a buffer that grows to the length the host reports.
+/// `path_realpath`'s "buffer too short" answer, with the needed length at `used`.
+#[cfg(target_arch = "wasm32")]
+const REALPATH_NOBUFS: i32 = 42;
+/// Retries after a short buffer: the result can grow between calls only if the tree changes.
+#[cfg(target_arch = "wasm32")]
+const REALPATH_ATTEMPTS: usize = 4;
+
+/// One `path_realpath` into a buffer that grows to the length the host reports, at most
+/// [`REALPATH_ATTEMPTS`] times.
 #[cfg(target_arch = "wasm32")]
 fn realpath_from(fd: i32, relative: &[u8]) -> std::io::Result<String> {
     let mut buf = vec![0u8; 1024];
-    loop {
+    for _ in 0..REALPATH_ATTEMPTS {
         let mut used = 0u32;
         let errno = proc_call!(runtime_fs::path_realpath(
             fd,
@@ -786,7 +794,7 @@ fn realpath_from(fd: i32, relative: &[u8]) -> std::io::Result<String> {
             ptr_mut(std::slice::from_mut(&mut used))
         ));
         let used = used as usize;
-        if errno == WATCH_NOBUFS && used > buf.len() {
+        if errno == REALPATH_NOBUFS && used > buf.len() {
             buf.resize(used, 0);
             continue;
         }
@@ -797,6 +805,7 @@ fn realpath_from(fd: i32, relative: &[u8]) -> std::io::Result<String> {
         return Ok(String::from_utf8(buf)
             .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()));
     }
+    Err(std::io::Error::from_raw_os_error(REALPATH_NOBUFS))
 }
 
 /// Host builds (unit tests) use the platform's realpath.

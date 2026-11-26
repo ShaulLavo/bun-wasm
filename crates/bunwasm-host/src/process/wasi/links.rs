@@ -210,16 +210,36 @@ impl Roots {
     /// namespace. Every component but the last must be a directory after following links; the
     /// last is followed when `follow` is set or the path ends in `/`.
     pub fn resolve(&mut self, start: &str, path: &str, follow: bool) -> Result<Resolved, i32> {
+        self.walk(start, path, follow, false)
+    }
+
+    /// [`Self::resolve`]; with `directories`, a path or link target ending in `/` or `/.` (or
+    /// being `.`) makes the component before it a directory, as realpath(3) requires: a file
+    /// there is ENOTDIR. A [`DIRECTORY`] mark stands for that requirement while walking.
+    fn walk(
+        &mut self,
+        start: &str,
+        path: &str,
+        follow: bool,
+        directories: bool,
+    ) -> Result<Resolved, i32> {
         let follow = follow || path.ends_with('/');
         let mut pending: VecDeque<String> = VecDeque::new();
         if !path.starts_with('/') {
             pending.extend(parts(start));
         }
         pending.extend(parts(path));
+        if directories && names_directory(path) {
+            pending.push_back(DIRECTORY.to_owned());
+        }
         // The resolved path so far, as `/a/b`; empty is the guest root.
         let mut current = String::new();
         let mut links = 0;
         while let Some(part) = pending.pop_front() {
+            // The component before a mark is no longer last, so it must be a directory.
+            if part == DIRECTORY {
+                continue;
+            }
             if part == ".." {
                 current.truncate(current.rfind('/').unwrap_or(0));
                 continue;
@@ -238,6 +258,9 @@ impl Roots {
                         return Err(LOOP);
                     }
                     current.truncate(if target.starts_with('/') { 0 } else { parent });
+                    if directories && names_directory(&target) {
+                        pending.push_front(DIRECTORY.to_owned());
+                    }
                     for part in parts(&target).rev() {
                         pending.push_front(part);
                     }
@@ -280,14 +303,21 @@ impl Roots {
         if !matches!(self.kind(&normalize(start)), Kind::Directory) {
             return Err(NOTDIR);
         }
-        let resolved = self.resolve(start, path, true)?;
+        let resolved = self.walk(start, path, true, true)?;
         match self.kind(&resolved.guest) {
             Kind::Missing => Err(NOENT),
             Kind::Failed(errno) => Err(errno),
-            Kind::Other if path.ends_with('/') => Err(NOTDIR),
             _ => Ok(resolved.guest),
         }
     }
+}
+
+/// A walk mark: never a component, since [`parts`] drops every `.`.
+const DIRECTORY: &str = ".";
+
+/// Whether `path` must name a directory: it ends in `/` or `/.`, or is `.`.
+fn names_directory(path: &str) -> bool {
+    path.ends_with('/') || path == "." || path.ends_with("/.")
 }
 
 /// The non-empty components of a path other than `.`.
@@ -808,6 +838,7 @@ mod tests {
             link("/mnt/data", "root/home/user/mounted");
             link("self", "root/home/user/self");
             link("missing", "root/home/user/dangling");
+            link("/real/dir/file.txt/", "root/home/user/slashed");
             Self(root)
         }
 
@@ -849,6 +880,10 @@ mod tests {
             ("/", "home/user/dangling", Err(NOENT)),
             ("/", "real/dir/file.txt/", Err(NOTDIR)),
             ("/", "real/dir/file.txt/x", Err(NOTDIR)),
+            ("/", "real/dir/file.txt/.", Err(NOTDIR)),
+            ("/home/user", "slashed", Err(NOTDIR)),
+            ("/", "real/dir/.", Ok("/real/dir")),
+            ("/home/user", "abs/.", Ok("/real/dir")),
             ("/", "home/user/self", Err(LOOP)),
             ("/", "/real", Err(PERM)),
             ("/real/dir/file.txt", "x", Err(NOTDIR)),

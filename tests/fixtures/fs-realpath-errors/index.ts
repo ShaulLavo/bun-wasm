@@ -41,6 +41,15 @@ console.log("native", show(fs.realpathSync.native(join(base, "app/node_modules/p
 process.chdir(join(base, "app"));
 console.log("relative", show(fs.realpathSync("node_modules/pkg/lib")), show(fs.realpathSync(".")));
 console.log("promise", show(await fs.promises.realpath(join(base, "app/node_modules/pkg"))));
+// Relative paths: .native and the promise form resolve them as written from the working
+// directory, never folded first.
+const asWritten = async (path: string) => [
+  code(() => show(fs.realpathSync.native(path)), true),
+  await fs.promises.realpath(path).then(show, (e) => e.code),
+].join(" ");
+for (const path of ["node_modules/pkg/..", "node_modules/pkg/lib/index.js/", "./node_modules/pkg/../node_modules", "node_modules/pkg/lib/index.js/.", ""]) {
+  console.log("relative", JSON.stringify(path), await asWritten(path));
+}
 
 let deep = "";
 for (let i = 0; i < 12; i++) deep = join(deep, "d".repeat(100));
@@ -54,6 +63,11 @@ console.log("missing parent", code(() => fs.realpathSync(join(base, "none/file")
 console.log("dangling", code(() => fs.realpathSync(join(base, "dangling"))));
 console.log("not a directory", code(() => fs.realpathSync(join(base, "store/pkg@1/node_modules/pkg/lib/index.js/x"))));
 console.log("loop", code(() => fs.realpathSync(join(base, "self"))));
+// A file followed by "/.", or reached through a link whose target ends in "/", is not a directory.
+fs.symlinkSync("store/pkg@1/node_modules/pkg/lib/index.js/", join(base, "slashed"));
+const fileDot = base + "/store/pkg@1/node_modules/pkg/lib/index.js/.";
+console.log("file dot", code(() => fs.realpathSync.native(fileDot)), await fs.promises.realpath(fileDot).then(show, (e) => e.code));
+console.log("slashed link", code(() => fs.realpathSync.native(join(base, "slashed"))), await fs.promises.realpath(join(base, "slashed")).then(show, (e) => e.code));
 fs.realpath(join(base, "none"), (error) => console.log("callback", error?.code));
 
 process.chdir(process.env.HOME ?? "/");

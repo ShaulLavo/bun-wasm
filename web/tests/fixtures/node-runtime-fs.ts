@@ -114,7 +114,9 @@ try {
   };
   assert.deepEqual(resolveReal("link/file.txt"), [0, "/real/dir/file.txt", 18]);
   assert.deepEqual(resolveReal("link/file.txt", 4), [42, "", 18]);
+  symlinkSync("real/dir/file.txt/", join(scratch, "slashed"));
   assert.deepEqual([resolveReal("link/missing")[0], resolveReal("real/dir/file.txt/")[0], resolveReal("/real")[0]], [44, 54, 63]);
+  assert.deepEqual([resolveReal("real/dir/file.txt/.")[0], resolveReal("slashed")[0], resolveReal("link/.")[1]], [54, 54, "/real/dir"]);
 
   // A guest that fails before wasi.start() still releases its process host; the unstarted Node
   // WASI keeps its preopen, so release must not surface ERR_WASI_NOT_STARTED.

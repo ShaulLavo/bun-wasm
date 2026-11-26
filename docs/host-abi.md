@@ -575,8 +575,10 @@ for its absolute path with `__wasilibc_find_abspath` and passes the rest relativ
 import follows every link and answers with the absolute guest path, or, for a preopen outside the
 guest's root namespace, a path the guest joins below that preopen. A result longer than
 `buf_len` returns `ENOBUFS` (42) with the needed length at `used_ptr`, and the guest retries with
-a buffer that size. Errors are positive WASI errnos (`ENOENT`, `ENOTDIR`, `ELOOP`, `EACCES`),
-which the runtime reports as Node's `realpath` errors.
+a buffer that size, up to four times. Errors are positive WASI errnos, which the runtime reports
+as Node's `realpath` errors: `ENOENT` (44), `ENOTDIR` (54, including a file followed by `/` or
+`/.`, directly or through a link target), `ELOOP` (32), `EACCES` (2), `EPERM` (63) for an absolute
+pathname, and `EINVAL` (28) for malformed UTF-8, a NUL, or overlapping result and length spans.
 
 Browser hosts get the import from Waffle. The native launcher implements it in
 `crates/bunwasm-host/src/process/wasi/links.rs` with the same guest-namespace walk that it

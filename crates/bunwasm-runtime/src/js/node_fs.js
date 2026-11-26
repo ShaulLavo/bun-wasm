@@ -468,10 +468,11 @@
 
   // As in Bun and Node, realpathSync and the callback realpath fold `.`, `..` and a trailing slash
   // lexically before resolving links; the .native forms and fs.promises.realpath resolve the path
-  // as written, so `link/..` is the link target's parent and `file/` is ENOTDIR.
+  // as written, relative ones from the working directory without folding, so `link/..` is the
+  // link target's parent, `file/` and `file/.` are ENOTDIR, and "" is ENOENT.
   function realpathNative(path, options) {
     const encoding = encodingOf(options);
-    return encodedPath(withPath(path, (abs) => native.realpath(abs === "" ? absolute(".") : abs)), encoding);
+    return encodedPath(withPath(path, (_abs, given) => native.realpath(given)), encoding);
   }
   function realpathSync(path, options) {
     const encoding = encodingOf(options);
