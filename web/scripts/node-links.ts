@@ -54,6 +54,14 @@ type Kind = { kind: "missing" | "directory" | "other" } | { kind: "link"; target
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const encoder = new TextEncoder();
 
+/** A walk mark: never a component, since `parts` drops every `.`. */
+const DIRECTORY = ".";
+
+/** Whether `path` must name a directory: it ends in `/` or `/.`, or is `.`. */
+function namesDirectory(path: string): boolean {
+  return path.endsWith("/") || path === "." || path.endsWith("/.");
+}
+
 function parts(path: string): string[] {
   return path.split("/").filter(part => part && part !== ".");
 }
@@ -110,15 +118,20 @@ class GuestNamespace {
     try { return { kind: "link", target: readlinkSync(host, "utf8") }; } catch { return { kind: "missing" }; }
   }
 
-  /** Resolve `path` from guest directory `start` as Linux would inside the guest namespace. */
-  resolve(start: string, path: string, follow: boolean): Resolved | number {
+  /** Resolve `path` from guest directory `start` as Linux would inside the guest namespace. With
+   * `directories`, a path or link target ending in `/` or `/.` (or being `.`) makes the
+   * component before it a directory, as realpath(3) requires; a `DIRECTORY` mark stands for it. */
+  resolve(start: string, path: string, follow: boolean, directories = false): Resolved | number {
     follow ||= path.endsWith("/");
     const pending = (path.startsWith("/") ? [] : parts(start)).concat(parts(path));
+    if (directories && namesDirectory(path)) pending.push(DIRECTORY);
     pending.reverse();
     const current: string[] = [];
     let links = 0;
     while (pending.length) {
       const part = pending.pop()!;
+      // The component before a mark is no longer last, so it must be a directory.
+      if (part === DIRECTORY) continue;
       if (part === "..") { current.pop(); continue; }
       current.push(part);
       const last = !pending.length;
@@ -128,6 +141,7 @@ class GuestNamespace {
         if (++links > MAX_LINKS) return LOOP;
         current.pop();
         if (found.target.startsWith("/")) current.length = 0;
+        if (directories && namesDirectory(found.target)) pending.push(DIRECTORY);
         for (const next of parts(found.target).reverse()) pending.push(next);
         continue;
       }
@@ -206,8 +220,12 @@ class Memory {
   }
 }
 
+/** realpath(3) in the guest namespace from a Node WASI descriptor (Waffle's
+ * `runtime_fs.path_realpath`, docs/host-abi.md): the absolute guest path, or a WASI errno. */
+export type NodeRealpath = (fd: number, path: string) => string | number;
+
 /** Wrap uvwasi's path calls (taking Node WASI descriptors) to resolve in the guest namespace. */
-export function installNodeLinks(wasi: Preview1, memory: () => WebAssembly.Memory, preopens: Record<string, string>): void {
+export function installNodeLinks(wasi: Preview1, memory: () => WebAssembly.Memory, preopens: Record<string, string>): NodeRealpath {
   const namespace = new GuestNamespace(preopens);
   const guest = new Memory(memory);
   const paths = new Map(namespace.mounts.map(mount => [mount.fd, mount.guest]));
@@ -231,6 +249,17 @@ export function installNodeLinks(wasi: Preview1, memory: () => WebAssembly.Memor
     if (result === 0) paths.delete(args[0] as number);
     return result;
   };
+  return (fd, path) => realpath(namespace, paths, fd, path);
+}
+
+function realpath(namespace: GuestNamespace, paths: Map<number, string>, fd: number, path: string): string | number {
+  const start = paths.get(fd);
+  if (start === undefined) return BADF;
+  if (path.startsWith("/")) return PERM;
+  if (namespace.kind(joinGuest(start, ".")).kind !== "directory") return NOTDIR;
+  const resolved = namespace.resolve(start, path, true, true);
+  if (typeof resolved === "number") return resolved;
+  return namespace.kind(resolved.guest).kind === "missing" ? NOENT : resolved.guest;
 }
 
 /** A call's errno and the guest paths of its path arguments. */
