@@ -56,10 +56,10 @@ test("each engine's own rule decides how an http host source covers an https pag
     [`http://${host}`, onPort, []],
     [`http://${host}:80`, onPort, []],
     [`http://${host}:8444`, onPort, []],
-    // The default ports: 80 stands for 443 in Chromium (with the scheme) and in WebKit, never in Gecko.
-    [`http://${host}:80`, SHIM, ["chromium", "webkit"]],
-    [`https://${host}:80`, SHIM, ["webkit"]],
-    [`${host}:80`, SHIM, ["webkit"]],
+    // The default ports: 80 stands for 443 in Chromium and WebKit only with the scheme upgrade, in Gecko whatever the scheme.
+    [`http://${host}:80`, SHIM, ["chromium", "gecko", "webkit"]],
+    [`https://${host}:80`, SHIM, ["gecko"]],
+    [`${host}:80`, SHIM, ["gecko"]],
     [`http://${host}`, SHIM, ["chromium", "gecko", "webkit"]],
     [`http://${host}:443`, SHIM, ["chromium", "gecko", "webkit"]],
     [`https://${host}:443`, SHIM, ["chromium", "gecko", "webkit"]],

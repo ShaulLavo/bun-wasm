@@ -89,27 +89,33 @@ function chromiumCovers(source: SourceAuthority, url: URL): boolean {
 }
 
 /**
- * Gecko (nsCSPHostSrc::permits, nsCSPUtils.cpp): the scheme may upgrade on its own. A named port
- * must be the URL's port. Without one, the URL must be on the source scheme's default port or on
- * 443: `http://host:8443` covers `https://host:8443`, `http://host:80` does not cover `https://host`.
+ * Gecko (permitsPort, nsCSPUtils.cpp): the scheme may upgrade on its own. A source without a port
+ * covers a URL on its scheme's default port, else it enforces the source scheme's default port. The
+ * enforced port must be the URL's, except that 80 stands for 443 whatever the scheme:
+ * `http://host:8443` covers `https://host:8443`, and `http://host:80`, `https://host:80` and
+ * `host:80` all cover `https://host`.
  */
 function geckoCovers(source: SourceAuthority, url: URL): boolean {
   if (schemePart(source.scheme, url) === "none") return false;
   if (source.port === "*") return true;
+  if (source.port === undefined && url.port === "") return true;
   const port = url.port || DEFAULT_PORT[url.protocol];
-  if (source.port !== undefined) return source.port === port;
-  return port === DEFAULT_PORT[`${source.scheme ?? url.protocol.slice(0, -1)}:`] || port === "443";
+  const enforced = source.port ?? DEFAULT_PORT[`${source.scheme ?? url.protocol.slice(0, -1)}:`];
+  return enforced === port || (enforced === "80" && port === "443");
 }
 
 /**
- * WebKit (ContentSecurityPolicySource.cpp): the scheme may upgrade on its own, and port 80 stands
- * for 443 whatever the scheme: `http://host:8443` covers `https://host:8443`, and `http://host:80`
- * and `https://host:80` cover `https://host`.
+ * WebKit (portMatches, ContentSecurityPolicySource.cpp): the scheme may upgrade on its own. Only
+ * an http-to-https upgrade lets a source without a port, or with 80 or 443, cover the secure
+ * default port: `http://host:8443` covers `https://host:8443` and `http://host:80` covers
+ * `https://host`, but `https://host:80` and `host:80` do not.
  */
 function webkitCovers(source: SourceAuthority, url: URL): boolean {
-  if (schemePart(source.scheme, url) === "none") return false;
+  const scheme = schemePart(source.scheme, url);
+  if (scheme === "none") return false;
   if (source.port === "*" || (source.port ?? "") === url.port) return true;
-  if (source.port === "80" && url.protocol === "https:" && (url.port === "" || url.port === "443")) return true;
+  const upgradable = source.port === undefined || source.port === "80" || source.port === "443";
+  if (scheme === "upgrade" && url.protocol === "https:" && url.port === "" && upgradable) return true;
   return url.port === "" && source.port === DEFAULT_PORT[url.protocol];
 }
 
