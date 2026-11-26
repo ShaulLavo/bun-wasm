@@ -469,6 +469,8 @@ fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, 
                 .collect();
             early.downloads.retain(&needed);
             early.downloads.set_limit(io::TARBALL_PREFETCHES);
+            // Resolution may have cached archives since the listing was made.
+            early.downloads.relist_cache();
             (early.downloads, early.done)
         }
         None => (io::Downloads::new(io::TARBALL_PREFETCHES), BTreeMap::new()),

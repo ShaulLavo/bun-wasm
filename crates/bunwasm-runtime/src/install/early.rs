@@ -108,6 +108,7 @@ impl Early {
     /// installed here and its archive is ready. Packages whose ancestors will not be are
     /// dropped, so they wait for the install phase together with those ancestors.
     fn next(&mut self, registry: &Registry) -> Option<usize> {
+        self.downloads.poll(registry);
         let mut index = 0;
         while index < self.queue.len() {
             let package = &self.queue[index];
@@ -117,7 +118,7 @@ impl Early {
                     self.queued.remove(&package.key());
                     continue;
                 }
-                Ancestors::Done if self.downloads.ready(&package.tarball, true, registry) => {
+                Ancestors::Done if self.downloads.ready(&package.tarball, true) => {
                     return Some(index);
                 }
                 Ancestors::Done | Ancestors::Waiting => index += 1,

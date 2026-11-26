@@ -485,10 +485,21 @@ impl Downloads {
         self.limit = limit;
     }
 
-    /// Whether `fetch(url)` would return without waiting: its response has fully arrived (or
-    /// failed), or a fresh cache file will serve it.
-    pub fn ready(&mut self, url: &str, tarball: bool, registry: &Registry) -> bool {
+    /// Reads what has arrived for every pending response, without waiting.
+    pub fn poll(&mut self, registry: &Registry) {
         self.pump(registry);
+    }
+
+    /// Forgets the cache listing, so the next lookup lists the directory again.
+    pub fn relist_cache(&mut self) {
+        if !matches!(self.cache, CacheIndex::Probe) {
+            self.cache = CacheIndex::Unlisted;
+        }
+    }
+
+    /// Whether `fetch(url)` would return without waiting, as of the last `poll`: its
+    /// response has fully arrived (or failed), or a fresh cache file will serve it.
+    pub fn ready(&mut self, url: &str, tarball: bool) -> bool {
         if let Some((_, download)) = self.pending.iter().find(|(pending, _)| pending == url) {
             return download.as_ref().map_or(true, |download| {
                 matches!(download.state, Body::Done | Body::Failed(_))
