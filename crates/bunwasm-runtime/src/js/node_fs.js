@@ -466,11 +466,19 @@
     promises.cp(from, to, options).then(() => later(() => callback(null)), error => later(() => callback(error)));
   }
 
-  function realpathSync(path, options) {
+  // As in Bun and Node, realpathSync and the callback realpath fold `.`, `..` and a trailing slash
+  // lexically before resolving links; the .native forms and fs.promises.realpath resolve the path
+  // as written, so `link/..` is the link target's parent and `file/` is ENOTDIR.
+  function realpathNative(path, options) {
     const encoding = encodingOf(options);
     return encodedPath(withPath(path, (abs) => native.realpath(abs === "" ? absolute(".") : abs)), encoding);
   }
-  realpathSync.native = realpathSync;
+  function realpathSync(path, options) {
+    const encoding = encodingOf(options);
+    const resolve = internal.require("path").resolve;
+    return encodedPath(withPath(path, (abs) => native.realpath(resolve(abs === "" ? "." : abs))), encoding);
+  }
+  realpathSync.native = realpathNative;
 
   // Bun converts the path, then both times, then sets them (utimensat, or without
   // following a final symlink for lutimes).
@@ -984,7 +992,7 @@
   for (const name of Object.keys(sync)) {
     callbackApi[name.slice(0, -4)] = callbackify(name.slice(0, -4), sync[name]);
   }
-  callbackApi.realpath.native = callbackApi.realpath;
+  callbackApi.realpath.native = callbackify("realpath", realpathNative);
   // fs.exists(path, cb) passes only a boolean, so util.promisify needs its custom form.
   callbackApi.exists = function exists(path, callback) {
     if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
@@ -1168,6 +1176,7 @@
     promises[name] = wholeFilePromise(name, promises[name]);
   }
   promises.readdir = promisifySync((path, options) => readdirImpl(path, options, true), "readdir");
+  promises.realpath = promisifySync(realpathNative, "realpath");
   promises.glob = async function* glob(pattern, options) { yield* globSync(pattern, options); };
   promises.open = async (path, flags, mode) => {
     const pathForDiag = typeof path === "string" ? path : path == null ? undefined : String(path);

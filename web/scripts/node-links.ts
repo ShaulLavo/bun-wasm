@@ -206,8 +206,12 @@ class Memory {
   }
 }
 
+/** realpath(3) in the guest namespace from a Node WASI descriptor (Waffle's
+ * `runtime_fs.path_realpath`, docs/host-abi.md): the absolute guest path, or a WASI errno. */
+export type NodeRealpath = (fd: number, path: string) => string | number;
+
 /** Wrap uvwasi's path calls (taking Node WASI descriptors) to resolve in the guest namespace. */
-export function installNodeLinks(wasi: Preview1, memory: () => WebAssembly.Memory, preopens: Record<string, string>): void {
+export function installNodeLinks(wasi: Preview1, memory: () => WebAssembly.Memory, preopens: Record<string, string>): NodeRealpath {
   const namespace = new GuestNamespace(preopens);
   const guest = new Memory(memory);
   const paths = new Map(namespace.mounts.map(mount => [mount.fd, mount.guest]));
@@ -231,6 +235,20 @@ export function installNodeLinks(wasi: Preview1, memory: () => WebAssembly.Memor
     if (result === 0) paths.delete(args[0] as number);
     return result;
   };
+  return (fd, path) => realpath(namespace, paths, fd, path);
+}
+
+function realpath(namespace: GuestNamespace, paths: Map<number, string>, fd: number, path: string): string | number {
+  const start = paths.get(fd);
+  if (start === undefined) return BADF;
+  if (path.startsWith("/")) return PERM;
+  if (namespace.kind(joinGuest(start, ".")).kind !== "directory") return NOTDIR;
+  const resolved = namespace.resolve(start, path, true);
+  if (typeof resolved === "number") return resolved;
+  const final = namespace.kind(resolved.guest);
+  if (final.kind === "missing") return NOENT;
+  if (final.kind === "other" && path.endsWith("/")) return NOTDIR;
+  return resolved.guest;
 }
 
 /** A call's errno and the guest paths of its path arguments. */
