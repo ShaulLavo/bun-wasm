@@ -1,6 +1,6 @@
 # bun-wasm
 
-Bun v1.4.5's Rust toolchain compiled to `wasm32-wasip1`, paired with a Bun-compatible runtime so `bun install`, `bun run`, `bun test`, `bun build` and `Bun.serve` run inside a browser tab with no server behind them.
+Bun v1.4.5's Rust toolchain compiled to `wasm32-wasip1`, paired with a Bun-compatible runtime so `bun install`, `bun run`, `bun test`, `bun build`, `bun check` and `Bun.serve` run inside a browser tab with no server behind them.
 
 ## Try it
 

@@ -1,5 +1,6 @@
 {
   "owner": "browser-guest",
+  "batch": "12-playground-demos",
   "path": "scripts/playground-demos-browser.test.ts",
   "inputs": [
     ".github/actions/native-setup/action.yml",
@@ -14,6 +15,7 @@
     "web/src/playground/editor-pane.tsx",
     "web/src/playground/playground.ts",
     "web/src/playground/preview-dock.tsx",
-    "web/src/playground/showcase-copy.ts"
+    "web/src/playground/showcase-copy.ts",
+    "web/src/tool-command.ts"
   ]
 }

@@ -1,6 +1,6 @@
 # Project overview
 
-bun-wasm compiles Bun v1.4.5's Rust toolchain to `wasm32-wasip1` and pairs it with a Bun-compatible runtime, so Bun runs inside a browser tab. The in-Wasm guests also run natively under a Wasmtime launcher. Open the [sandbox](https://bun.shaulavo.dev/) to install and run real framework starters in your tab, or the [playground](https://bun.shaulavo.dev/playground/) for an editor, a terminal with Bun-style colored test and error output, and one-click demos of `Bun.serve`, `bun:sqlite`, `bun test`, `Bun.build`, `Bun.$` and `Bun.file` with a docked server preview.
+bun-wasm compiles Bun v1.4.5's Rust toolchain to `wasm32-wasip1` and pairs it with a Bun-compatible runtime, so Bun runs inside a browser tab. The in-Wasm guests also run natively under a Wasmtime launcher. Open the [sandbox](https://bun.shaulavo.dev/) to install and run real framework starters in your tab, or the [playground](https://bun.shaulavo.dev/playground/) for an editor, a terminal with Bun-style colored test and error output, and one-click demos of `Bun.serve`, `bun:sqlite`, `bun test`, `Bun.build`, `bun check`, `Bun.$` and `Bun.file` with a docked server preview.
 
 ![The bun.wasm sandbox: a file tree and src/App.tsx on the left, a running React page with a counter on the right, and Bun's dev server output in the terminal below](assets/sandbox.png)
 
@@ -57,7 +57,7 @@ flowchart TB
   native -.->|"runs in-Wasm guests only"| guest
 ```
 
-The guest binary comes from `crates/bunwasm-cli`. Bun's own Rust crates handle parsing, transpiling, bundling, resolution, semver and data formats. We build them from a pinned `oven-sh/bun` commit, v1.4.5, with 28 small patches that add `target_os = "wasi"` arms and a few host hooks; see [Changes to Bun](bun-patches.md). The runtime in `crates/bunwasm-runtime` is ours. It implements `Bun.*`, `node:*`, the web APIs, `bun:sqlite`, colored terminal output for `bun test` and errors, and an npm installer in Rust, reusing Bun's own `src/js` builtins wherever they run without JavaScriptCore internals.
+The guest binary comes from `crates/bunwasm-cli`. Bun's own Rust crates handle parsing, transpiling, bundling, resolution, semver and data formats. We build them from a pinned `oven-sh/bun` commit, v1.4.5, with 28 small patches that add `target_os = "wasi"` arms and a few host hooks; see [Changes to Bun](bun-patches.md). `bun lint`, `bun fmt` and `bun check` run single-threaded in a separate on-demand guest, `bun-tools.wasm`, from `crates/bunwasm-tools`. The runtime in `crates/bunwasm-runtime` is ours. It implements `Bun.*`, `node:*`, the web APIs, `bun:sqlite`, colored terminal output for `bun test` and errors, and an npm installer in Rust, reusing Bun's own `src/js` builtins wherever they run without JavaScriptCore internals.
 
 The runtime talks to JavaScript through the `Engine` trait in `crates/bunwasm-runtime/src/engine.rs`. QuickJS, JavaScriptCore and SpiderMonkey each build as a second Wasm module that links into the core guest's memory at load time. The `browser` engine build leaves the JS engine out of Wasm and runs the runtime's JavaScript on the worker's own engine with JIT. It is the fastest build and the default in browsers, and the least faithful because standard JS engines do not expose promise state or native async-context hooks; see [The browser engine](engine-browser.md).
 

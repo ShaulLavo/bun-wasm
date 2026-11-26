@@ -501,12 +501,13 @@ test("native-probe inputs are typed and the source utility retains its lightweig
 
 test("Browser guest matrix discovers each profile batch and runs every check exactly once", () => {
   const batches = namedCheckBatches("browser-guest");
-  expect(batches.map(batch => batch.name)).toEqual(["10-storage", "11-multitab", "20-installer-links", "21-subprocess-aliases", "22-preview-websocket-headers", "23-engine-interruption", "24-worker-modules", "25-terminal-stdin", "26-tools-integrity", "default"]);
+  expect(batches.map(batch => batch.name)).toEqual(["10-storage", "11-multitab", "12-playground-demos", "20-installer-links", "21-subprocess-aliases", "22-preview-websocket-headers", "23-engine-interruption", "24-worker-modules", "25-terminal-stdin", "26-tools-integrity", "default"]);
   const paths = batches.flatMap(batch => selectCheckBatch("browser-guest", batch.name));
   expect(paths.toSorted()).toEqual(selectChecks("browser-guest").toSorted());
   expect(new Set(paths).size).toBe(paths.length);
   expect(selectCheckBatch("browser-guest", "10-storage")).toEqual(["scripts/sandbox-fs-observation-browser.test.ts", "scripts/sandbox-storage-browser.test.ts"]);
   expect(selectCheckBatch("browser-guest", "11-multitab")).toEqual(["scripts/isolated-preview-origins-browser.test.ts", "scripts/multitab-browser.test.ts"]);
+  expect(selectCheckBatch("browser-guest", "12-playground-demos")).toEqual(["scripts/playground-demos-browser.test.ts"]);
   expect(selectChecks("web")).toContain("scripts/sandbox-editor-sync.test.ts");
   expect(selectChecks("web")).toContain("scripts/sandbox-dev-server-coordinator.test.ts");
   expect(() => selectCheckBatch("browser-guest", "missing")).toThrow("Unknown check batch");

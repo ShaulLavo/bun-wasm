@@ -287,4 +287,19 @@ console.table(db.query("SELECT id, title, done FROM todos ORDER BY id").all());
 const { open } = db.query("SELECT count(*) AS open FROM todos WHERE done = 0").get() as { open: number };
 console.log(open, "open todo(s)");
 `,
+
+  "check-demo/tsconfig.json": `{
+  "compilerOptions": {
+    "strict": true,
+    "lib": ["es2022"],
+    "noEmit": true
+  },
+  "include": ["src"]
+}
+`,
+
+  "check-demo/src/check.ts": `export const total: number = "three";
+// Bun's TypeScript type checker in WebAssembly.
+// Fix the type error above, then press Run or run: bun check --cwd check-demo
+`,
 };
