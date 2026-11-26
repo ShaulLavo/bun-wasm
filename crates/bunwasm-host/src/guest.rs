@@ -81,6 +81,33 @@ impl GuestMemory {
         Some(())
     }
 
+    /// Stream bytes in `range` to `f` until `f` returns `false` or `range` ends, without
+    /// allocating a full copy of a shared memory range up front.
+    pub fn scan(
+        &self,
+        store: impl AsContext,
+        range: Range<usize>,
+        mut f: impl FnMut(u8) -> bool,
+    ) -> Option<()> {
+        match self {
+            Self::Private(memory) => {
+                for &byte in memory.data(store.as_context()).get(range)? {
+                    if !f(byte) {
+                        break;
+                    }
+                }
+            }
+            Self::Shared(lease) => {
+                for cell in raw(lease).data().get(range)? {
+                    if !f(atomic(cell).load(Ordering::Relaxed)) {
+                        break;
+                    }
+                }
+            }
+        }
+        Some(())
+    }
+
     /// Run `f` over the bytes of each range together with the store's data: borrowed from a
     /// private memory, copied from a shared one.
     pub fn view<'a, T: 'static, R>(
@@ -192,6 +219,27 @@ mod tests {
         let store = store();
         let shared = SharedMemory::new(store.engine(), MemoryType::shared(1, 4)).unwrap();
         assert!(GuestMemory::from_extern(shared.into()).is_none());
+    }
+
+    #[test]
+    fn scan_stops_early_on_both_private_and_shared_memory() {
+        let mut store = store();
+        let payload = b"a\0".repeat(200);
+        for memory in memories(&mut store) {
+            memory.write(&mut store, 64, &payload).unwrap();
+            let mut visited = 0usize;
+            let mut nuls = 0usize;
+            memory
+                .scan(&store, 64..64 + payload.len(), |byte| {
+                    visited += 1;
+                    if byte == 0 {
+                        nuls += 1;
+                    }
+                    nuls < 5
+                })
+                .unwrap();
+            assert_eq!((visited, nuls), (10, 5));
+        }
     }
 
     fn store() -> Store<u32> {
