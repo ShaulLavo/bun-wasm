@@ -4,12 +4,18 @@
 // Cache-Control follows the build's _headers, as on Cloudflare. LATENCY_MS=<n> delays every
 // response by n milliseconds, to measure what network round trips cost a remote user.
 // TLS_CERT=<pem> TLS_KEY=<pem> serves HTTPS: browsers offer Brotli only there, so plain HTTP gets gzip.
+// Preview origins (docs/preview-origins.md): a request whose Host is `<id>-<port>-pv.<domain>` gets
+// the preview host's files from <root>/__preview-origin instead of the app. The domain is
+// `localhost:<port>` unless PREVIEW_ORIGIN_HOST names another host (a `.test` name in tests), and
+// PREVIEW_IDE_HOSTS adds IDE hosts to the two loopback ones allowed to frame a preview.
+// PREVIEW_PUBLIC_PORT names the port browsers reach this server on when it is not the bound one.
 import { existsSync, readFileSync } from "node:fs";
 import { join, normalize, resolve } from "node:path";
 import { brotliDecompressSync } from "node:zlib";
 import { acceptedEncodings, type Encoding } from "../scripts/accept-encoding";
 import { PreviewOwnerHost } from "./scripts/preview-owner-host";
 import { navigationServerListening, navigationServerLog } from "./navigation-server-log";
+import { handlePreviewOriginRequest } from "./src/preview-origin/host";
 
 const root = process.env.ROOT ? resolve(process.env.ROOT) : join(import.meta.dir, "dist");
 const isolate = process.env.ISOLATE !== "0";
@@ -123,8 +129,25 @@ const server = Bun.serve({
   },
 });
 
+/** The preview host's part of this server: same port, told apart by the Host name alone. */
+function previewOrigin(req: Request, server: { url: URL }): Promise<Response> | null {
+  const { protocol, port: bound } = server.url;
+  // PREVIEW_PUBLIC_PORT is the port browsers use when something in front maps it to this server's own.
+  const reached = process.env.PREVIEW_PUBLIC_PORT || bound;
+  const authority = reached ? `:${reached}` : "";
+  const ideHosts = ["localhost", "127.0.0.1"].concat(process.env.PREVIEW_IDE_HOSTS?.split(",").filter(Boolean) ?? []);
+  return handlePreviewOriginRequest(req, {
+    domain: `${process.env.PREVIEW_ORIGIN_HOST || "localhost"}${authority}`,
+    scheme: protocol === "https:" ? "https" : "http",
+    ideOrigins: ideHosts.map(host => new URL(`${protocol}//${host}${authority}`).origin),
+    asset: name => Bun.file(join(root, "__preview-origin", name)).text(),
+  });
+}
+
 async function serve(req: Request, server: Parameters<PreviewOwnerHost["fetch"]>[1]) {
   const url = new URL(req.url);
+  const preview = previewOrigin(req, server);
+  if (preview) return preview;
   if (rootPreviews && previewOwner.handles(url.pathname)) return previewOwner.fetch(req, server);
   if (latency > 0) await Bun.sleep(latency);
   let path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, "");

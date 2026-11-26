@@ -78,6 +78,9 @@ async function runner(load: (api: API, file: string, uncaught: (error: unknown) 
   };
   modules.test_extensions = factory("test_extensions.ts")(internal);
   modules.test_lifecycle = factory("test_lifecycle.ts")();
+  const output = factory("pretty_output.ts")(internal);
+  // Plain reports, whatever FORCE_COLOR the harness runs under.
+  modules.pretty_output = { prettyFmt: output.prettyFmt, markup: output.markup, stdout: false, stderr: false };
   const runtime = factory("bun_test.js")(internal);
   await runtime.run(preloads.flatMap(file => ["--preload", file]).concat(args, files));
   return { stderr, exit: process.exitCode, api: runtime.exports, origin: runtime.getExpectationOrigin, written };

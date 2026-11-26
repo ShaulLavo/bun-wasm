@@ -4,7 +4,7 @@ import type { PreviewConnection } from "waffle/browser/net/helper";
 import { PreviewRouter, type PreviewOptions, type PreviewServer } from "waffle/browser/preview";
 import type { PreviewMessage, PreviewReply } from "waffle/browser/preview-protocol";
 import { swScriptUrl } from "./entry-assets.js";
-import { PREVIEW_DIR } from "./preview-protocol";
+import { PREVIEW_DIR } from "./preview-protocol.js";
 
 export { activated } from "waffle/browser/service-worker";
 export type PreviewState = "ready" | "unsupported" | "failed";
@@ -198,6 +198,15 @@ export class Previews extends PreviewRouter {
       return super.url(port, path);
     }
     return new URL(`${this.routePrefix}${port}${path}`, this.mountBaseURL).href;
+  }
+
+  /** The link that opens a preview URL in a new tab. Mounted previews are their own link; preview origins use a wrapper page. */
+  linkFor(url: string): string {
+    return url;
+  }
+
+  linkUrl(port: number, path = "/"): string {
+    return this.linkFor(this.url(port, path));
   }
 
   get ready(): Promise<PreviewState> {

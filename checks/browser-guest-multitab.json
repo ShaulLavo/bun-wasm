@@ -31,6 +31,7 @@
     "web/src/preview-websocket-client.ts",
     "web/src/sw.ts",
     "web/src/sw-routing.ts",
+    "web/src/preview-html.ts",
     "web/src/playground/playground.ts",
     "web/src/playground/editor.ts",
     "web/src/playground/program-profile.ts",
@@ -45,6 +46,8 @@
     "scripts/browser-guest-site.ts",
     "scripts/browser-build.ts",
     "scripts/multitab-browser.test.ts",
+    "scripts/preview-loading-noise.ts",
+    "sandbox/tests/hmr-connection.ts",
     ".github/actions/native-setup/action.yml",
     ".github/actions/native-seed/action.yml",
     ".github/actions/native-production/action.yml"

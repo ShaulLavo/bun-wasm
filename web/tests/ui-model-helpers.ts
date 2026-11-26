@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { EditorState } from "@codemirror/state";
 import * as stateModule from "@codemirror/state";
 import * as viewModule from "@codemirror/view";
-import { declareModuleMemory, pages, type Runtime } from "waffle";
+import { declareModuleMemory, pages, type Runtime, type RuntimeOptions } from "waffle";
 import { MemoryBackend } from "waffle/fs/backend";
 import { FilesystemService } from "waffle/fs/service";
 import { createFilesystemConnection, FilesystemError } from "waffle/fs/protocol";
@@ -152,7 +152,8 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     ...stateModule, ...viewModule, EditorView: View, EditorState,
     ...engineLoader, declareModuleMemory, pages,
     FitAddon: class { fit() {} }, Terminal: TerminalFixture,
-    createRuntime: () => { storageEvents.push("runtime"); return runtime = { ...runtime }; },
+    createRuntime: (options?: RuntimeOptions) => boundary.onCreateRuntime(options),
+    onCreateRuntime: (_options?: RuntimeOptions) => { storageEvents.push("runtime"); return runtime = { ...runtime }; },
     storedWorkspaces: async () => [],
     openIdleWorkspace: (selection: { name: string }) => { storageEvents.push(`open ${selection.name}`); return boundary.openIdle(); },
     openIdle: async (): Promise<"missing" | "busy" | { close(): Promise<void> }> => "missing",
@@ -201,8 +202,12 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
       onWorkerRecovered() { return () => {}; }
       serves(port: number) { return this.active.has(port); }
       url() { return "https://preview.test/"; }
+      linkFor(url: string) { return url; }
+      linkUrl() { return this.url(); }
       dispose() { this.active.clear(); }
     },
+    // Chosen only with a configured preview domain, which these page models never have.
+    RootPreviews: class {},
     HostedPreviews: class {
       ready = Promise.resolve("ready" as const);
       attachRuntime() {}
@@ -240,7 +245,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     "browser-programs": ["BrowserPrograms", "ProvisionAbortedError", "ProvisionRollbackError"],
     "workspace-storage": ["WorkspaceStorage"],
     "engine-loader": ["ENGINES", "WasmMissing", "createToolsLoader", "engineBuildHint", "engineUnavailable", "isEngine", "loadEngineProgram", "loadWasm", "mb", "registerModuleScope"],
-    "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],
+    "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "root-previews": ["RootPreviews"], "terminal-links": ["linkLocalUrls"],
     "terminal-mount": ["openTerminal"],
     "preview-links": ["installPreviewLinks"],
     "runner": ["startRun"], "bash-web/session": ["BrowserSession"], "bash-web/prompt": ["createPrompt"], "examples": ["examples", "HOME"],
@@ -257,14 +262,7 @@ import { App as SandboxApp } from ${JSON.stringify(`${root}sandbox/src/app.tsx`)
 export const renderPlayground = playground => renderToString(PlaygroundApp({ props: { playground }, signal: new AbortController().signal, update: async () => {} })());
 export const renderSandbox = sandbox => renderToString(SandboxApp({ props: { sandbox }, signal: new AbortController().signal, update: async () => {} })());
 export { Playground } from ${JSON.stringify(`${root}web/src/playground/playground.ts`)};
-import { Sandbox as SandboxModel } from ${JSON.stringify(`${root}sandbox/src/sandbox.ts`)};
-export class Sandbox extends SandboxModel {
-  constructor(search) {
-    const params = new URLSearchParams(search);
-    if (!params.has("mode")) params.set("mode", "memory");
-    super(params.toString());
-  }
-}
+export { Sandbox } from ${JSON.stringify(`${root}sandbox/src/sandbox.ts`)};
 export { Editor as PlaygroundEditor } from ${JSON.stringify(`${root}web/src/playground/editor.ts`)};
 export { Editor as SandboxEditor } from ${JSON.stringify(`${root}sandbox/src/editor.ts`)};
 export { loadTemplate } from ${JSON.stringify(`${root}sandbox/src/template.ts`)};

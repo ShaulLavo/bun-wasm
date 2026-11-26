@@ -1,6 +1,6 @@
 ## 0020 registration record parsing
 
-File `0020-wasm-parse-registration-records-without-folding-this.patch`. Class **Host feature**. Upstream source is Bun at `9510e74152073d850a18758ca41114d8f214ffa6`, after patches 0001 to 0019: `src/js_parser/lib.rs`, `src/js_parser/p.rs`, `src/js_parser/visit/visit_binary.rs`, `src/js_parser/visit/visit_expr.rs` and `src/js_parser/visit/visit_stmt.rs`.
+File `0020-wasm-parse-registration-records-without-folding-this.patch`. Class **Host feature**. Upstream source is Bun at `a7733435cf40429e3b35c36072769df2052b80f1`, after patches 0001 to 0019: `src/js_parser/lib.rs`, `src/js_parser/p.rs`, `src/js_parser/visit/visit_binary.rs`, `src/js_parser/visit/visit_expr.rs` and `src/js_parser/visit/visit_stmt.rs`.
 
 A [registration record](module-registration-loader.md) runs a module's body inside a strict generator called without a receiver. Bun's parser assumes the body stays a module: it replaces module-level `this` with `undefined` (or `exports`), folds `typeof` of a literal and literal (in)equality, moves an equality's constant operand to the right, and names an anonymous `export default function` after the file. Each of those is right for a module and wrong once the body is a generator: the name, the folds and the reordering change what `Function.prototype.toString`, `.name` and `this` report. A generator also accepts `new.target`, which a module rejects as an early error.
 

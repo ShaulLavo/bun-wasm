@@ -1,7 +1,7 @@
-From 9031854313cf16a8ec112bfe20309fe82b5777f6 Mon Sep 17 00:00:00 2001
+From cab4f6bbd0f5948e2ff63e3f8f5660de6f8f187b Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 09:15:42 +0300
-Subject: [PATCH 08/16] wasm: optional await hooks in the printer for a host
+Subject: [PATCH 08/28] wasm: optional await hooks in the printer for a host
  engine without AsyncContext
 
 BUNWASM_AWAIT_HOOKS (off by default) prints async-context hooks so a host
@@ -39,10 +39,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  1 file changed, 333 insertions(+), 10 deletions(-)
 
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
-index 0e71d390..14a59011 100644
+index 3366c890..66aa8f60 100644
 --- a/src/js_printer/lib.rs
 +++ b/src/js_printer/lib.rs
-@@ -1631,6 +1631,59 @@ pub(crate) mod __gated_printer {
+@@ -1645,6 +1645,59 @@ pub(crate) mod __gated_printer {
      pub(crate) fn slice_of<'a, T>(p: js_ast::StoreSlice<T>) -> &'a [T] {
          p.slice()
      }
@@ -102,7 +102,7 @@ index 0e71d390..14a59011 100644
      /// `EnumSet<T>` field-style mutation helper.
      #[inline(always)]
      fn set_flag<T: enumset::EnumSetType>(set: &mut enumset::EnumSet<T>, flag: T, on: bool) {
-@@ -2136,6 +2189,107 @@ pub(crate) mod __gated_printer {
+@@ -2150,6 +2203,107 @@ pub(crate) mod __gated_printer {
              }
          }
  
@@ -210,7 +210,7 @@ index 0e71d390..14a59011 100644
          pub(crate) fn print_body(&mut self, stmt: Stmt) {
              match &stmt.data {
                  StmtData::SBlock(block) => {
-@@ -2502,6 +2656,12 @@ pub(crate) mod __gated_printer {
+@@ -2525,6 +2679,12 @@ pub(crate) mod __gated_printer {
          }
  
          pub(crate) fn print_func(&mut self, func: &G::Fn) {
@@ -223,7 +223,7 @@ index 0e71d390..14a59011 100644
              self.print_fn_args(
                  Some(func.open_parens_loc),
                  slice_of(func.args),
-@@ -2509,7 +2669,7 @@ pub(crate) mod __gated_printer {
+@@ -2532,7 +2692,7 @@ pub(crate) mod __gated_printer {
                  false,
              );
              self.print_space();
@@ -232,7 +232,7 @@ index 0e71d390..14a59011 100644
          }
  
          pub(crate) fn print_class(&mut self, class: &G::Class) {
-@@ -2534,6 +2694,7 @@ pub(crate) mod __gated_printer {
+@@ -2557,6 +2717,7 @@ pub(crate) mod __gated_printer {
                      self.print(b"static");
                      self.print_space();
                      let csb = item.class_static_block_ref().unwrap();
@@ -240,7 +240,7 @@ index 0e71d390..14a59011 100644
                      self.print_block(csb.loc, csb.stmts.slice(), None);
                      self.print_newline();
                      continue;
-@@ -3810,6 +3971,7 @@ pub(crate) mod __gated_printer {
+@@ -3834,6 +3995,7 @@ pub(crate) mod __gated_printer {
                          self.print_space();
                      }
  
@@ -248,7 +248,7 @@ index 0e71d390..14a59011 100644
                      self.print_fn_args(
                          if e.is_async { None } else { Some(expr.loc) },
                          &e.args,
-@@ -3830,7 +3992,7 @@ pub(crate) mod __gated_printer {
+@@ -3854,7 +4016,7 @@ pub(crate) mod __gated_printer {
                      }
  
                      if !was_printed {
@@ -257,7 +257,7 @@ index 0e71d390..14a59011 100644
                      }
  
                      if wrap {
-@@ -4375,9 +4537,30 @@ pub(crate) mod __gated_printer {
+@@ -4401,9 +4563,30 @@ pub(crate) mod __gated_printer {
  
                      self.print_space_before_identifier();
                      self.add_source_mapping(expr.loc);
@@ -291,7 +291,7 @@ index 0e71d390..14a59011 100644
  
                      if wrap {
                          self.print(b")");
-@@ -4391,6 +4574,14 @@ pub(crate) mod __gated_printer {
+@@ -4417,6 +4600,14 @@ pub(crate) mod __gated_printer {
  
                      self.print_space_before_identifier();
                      self.add_source_mapping(expr.loc);
@@ -306,7 +306,7 @@ index 0e71d390..14a59011 100644
                      self.print(b"yield");
  
                      if let Some(val) = &e.value {
-@@ -4398,7 +4589,13 @@ pub(crate) mod __gated_printer {
+@@ -4424,7 +4615,13 @@ pub(crate) mod __gated_printer {
                              self.print(b"*");
                          }
                          self.print_space();
@@ -321,7 +321,7 @@ index 0e71d390..14a59011 100644
                      }
  
                      if wrap {
-@@ -5886,6 +6083,14 @@ pub(crate) mod __gated_printer {
+@@ -5930,6 +6127,14 @@ pub(crate) mod __gated_printer {
                      self.print_body(s.body);
                  }
                  StmtData::SForOf(s) => {
@@ -336,7 +336,7 @@ index 0e71d390..14a59011 100644
                      self.print_indent();
                      self.print_space_before_identifier();
                      self.add_source_mapping(stmt.loc);
-@@ -5901,9 +6106,25 @@ pub(crate) mod __gated_printer {
+@@ -5945,9 +6150,25 @@ pub(crate) mod __gated_printer {
                      self.print_space_before_identifier();
                      self.print(b"of");
                      self.print_space();
@@ -364,7 +364,7 @@ index 0e71d390..14a59011 100644
                  }
                  StmtData::SWhile(s) => {
                      self.print_indent();
-@@ -5933,9 +6154,25 @@ pub(crate) mod __gated_printer {
+@@ -5977,9 +6198,25 @@ pub(crate) mod __gated_printer {
                      }
                      self.print_space_before_identifier();
                      self.add_source_mapping(stmt.loc);
@@ -390,7 +390,7 @@ index 0e71d390..14a59011 100644
                  }
                  StmtData::STry(s) => {
                      self.print_indent();
-@@ -5956,14 +6193,14 @@ pub(crate) mod __gated_printer {
+@@ -6000,7 +6237,7 @@ pub(crate) mod __gated_printer {
                              self.print(b")");
                          }
                          self.print_space();
@@ -399,15 +399,16 @@ index 0e71d390..14a59011 100644
                      }
  
                      if let Some(finally) = &s.finally {
-                         self.print_space();
+@@ -6008,7 +6245,7 @@ pub(crate) mod __gated_printer {
+                         self.add_source_mapping(finally.loc);
                          self.print(b"finally");
                          self.print_space();
--                        self.print_block(finally.loc, slice_of(finally.stmts), None);
-+                        self.print_handler_block(finally.loc, slice_of(finally.stmts));
+-                        self.print_block(finally.body_loc, slice_of(finally.stmts), None);
++                        self.print_handler_block(finally.body_loc, slice_of(finally.stmts));
                      }
  
                      self.print_newline();
-@@ -7581,6 +7818,72 @@ pub type BufferPrinter = Writer<BufferWriter>;
+@@ -7628,6 +7865,72 @@ pub type BufferPrinter = Writer<BufferWriter>;
  // Format / GenerateSourceMap
  // ───────────────────────────────────────────────────────────────────────────
  
@@ -480,7 +481,7 @@ index 0e71d390..14a59011 100644
  #[derive(Clone, Copy, PartialEq, Eq)]
  pub enum Format {
      Esm,
-@@ -7843,8 +8146,28 @@ pub fn print_ast<'a, W: WriterTrait, const ASCII_ONLY: bool, const GENERATE_SOUR
+@@ -7889,8 +8192,28 @@ pub fn print_ast<'a, W: WriterTrait, const ASCII_ONLY: bool, const GENERATE_SOUR
          }
      }
  

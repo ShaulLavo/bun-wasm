@@ -1,6 +1,6 @@
 ## 0019 wasm32 string flags beside the pointer
 
-Class **Port**. Upstream is Bun `9510e74152073d850a18758ca41114d8f214ffa6`,
+Class **Port**. Upstream is Bun `a7733435cf40429e3b35c36072769df2052b80f1`,
 `src/bun_core/string/mod.rs`. Patch
 `0019-wasm-store-32-bit-string-flags-beside-the-pointer.patch` replaces patch 0001's
 32-bit pointer flags with design A's full pointer, length, and flags byte.
@@ -13,6 +13,13 @@ substrings. `untagged(ptr)` is available only on 64-bit, where its existing
 The 32-bit `EncodedSlice` and containing `String` have compile-time size and
 alignment assertions. No wasm32 C++ peer uses this representation. Rust FFI
 users in `bunwasm-glue` and `bunwasm-build` use the same `bun_core::String` type.
+
+Bun 1.4.5 dropped the third flag, "globally allocated" (pointer bit 62, which its
+C++ now reserves), with `is_globally_allocated`, `utf16_global` and
+`String::borrow_utf16`. The patch follows: two flags, UTF-8 (1) and UTF-16 (4),
+at the same bit positions as before, and no 64-bit pointer ever gets bit 62.
+The probe covers the two flags and builds its UTF-16 `String` from the
+`EncodedSlice` arm directly.
 
 The original verification adapter `scripts/check-encoded-slice.ts` selects the
 actual declarations and method bodies from the synchronized vendor source,

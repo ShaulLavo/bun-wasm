@@ -136,6 +136,8 @@ const nonTranscriptCallers = [
   "scripts/sandbox-storage-browser.test.ts", "scripts/sandbox-fs-observation-browser.test.ts", "scripts/multitab-browser.test.ts",
   // Starts the server session only; its scenario module reads the transcript.
   "scripts/typescript-language-server-browser.test.ts",
+  // The preview-origin check starts servers and reads preview frames; it uses playground.mjs only to serve the site.
+  "scripts/isolated-preview-origins-browser.test.ts",
 ];
 const inheritedTranscriptCallers = ["web/tests/browser-quickjs-stack.ts", "web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts", "scripts/bench-engines.test.ts", "scripts/engine-chromium-bench.ts"];
 

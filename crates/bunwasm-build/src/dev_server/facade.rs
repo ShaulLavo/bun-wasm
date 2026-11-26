@@ -72,6 +72,8 @@ impl IncrementalResult {
 pub(crate) struct GraphTraceState {
     pub(crate) client_bits: DynamicBitSet,
     pub(crate) server_bits: DynamicBitSet,
+    /// Filled by `TraceImportGoal::FindErrors`, which this server never requests.
+    pub(crate) failures: Vec<SerializedFailure>,
 }
 impl GraphTraceState {
     #[inline]

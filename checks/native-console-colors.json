@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/console-colors",
+  "engines": ["quickjs", "jsc", "browser"]
+}

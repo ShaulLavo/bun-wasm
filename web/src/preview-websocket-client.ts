@@ -1,11 +1,15 @@
 // The preview runs the runtime's existing WebSocket implementation over a MessagePort TCP stream.
 import websocketFactory from "bun-wasm:websocket";
+import { SOCKET_MISSED_PINGS, SOCKET_PING_MS, SW_SOCKET } from "./preview-origin/protocol";
 
 const nativeWebSocket = globalThis.WebSocket;
 const script = document.currentScript;
 const previewPort = Number(script?.getAttribute("data-bun-port"));
 const previewPrefix = script?.getAttribute("data-bun-prefix") ?? "/__preview/";
 const previewRoute = script?.getAttribute("data-bun-route") || undefined;
+// On a preview origin the app owns `/`: the IDE page opens the socket from structured fields
+// (preview-origin/port-session.ts), so this side sends them instead of raw upgrade bytes.
+const rootOrigin = script?.getAttribute("data-bunwasm-preview") === "shim";
 const encoder = new TextEncoder();
 const accepts = new Map<string, string>();
 const connections = new Set<Connection>();
@@ -44,6 +48,10 @@ class Connection {
   private timer: ReturnType<typeof setTimeout>;
   private acceptInput: string | null = null;
   private upgrading = true;
+  private answered = false;
+  private missedPings = 0;
+  private pinger: ReturnType<typeof setInterval> | undefined;
+  private readonly peerGone = () => this.fail("The IDE tab serving this preview went away");
 
   constructor(handle: number) {
     const stream = streams.get(handle);
@@ -55,11 +63,16 @@ class Connection {
     connections.add(this);
     this.timer = setTimeout(() => this.fail("Preview WebSocket connection timed out"), 10000);
     port.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data);
+    // Chromium reports a port whose other end's tab is gone. watchPeer() covers the other browsers.
+    if (rootOrigin) port.addEventListener("close", this.peerGone);
   }
 
   private receive(message: unknown): void {
     if (!message || typeof message !== "object" || !("type" in message)) return;
-    if (message.type === "accepted") { clearTimeout(this.timer); return; }
+    this.answered = true;
+    this.missedPings = 0;
+    if (this.closed) { this.port.close(); return; }
+    if (message.type === "accepted") { clearTimeout(this.timer); this.watchPeer(); return; }
     if (message.type === "data" && "chunk" in message && message.chunk instanceof Uint8Array) { this.onData?.(message.chunk); return; }
     if (message.type === "end") { this.onEnd?.(); this.destroy(); return; }
     if (message.type === "error") this.fail("Preview server stopped or refused the connection");
@@ -70,6 +83,19 @@ class Connection {
     this.destroy();
   }
 
+  /**
+   * On a preview origin the other end is the IDE tab itself, and a port gives no sign when that tab
+   * crashed or closed. An open socket asks it now and then, and fails once it stops answering.
+   */
+  private watchPeer(): void {
+    if (!rootOrigin || this.pinger !== undefined) return;
+    this.pinger = setInterval(() => {
+      if (this.missedPings >= SOCKET_MISSED_PINGS) { this.fail("The IDE tab serving this preview stopped answering"); return; }
+      this.missedPings++;
+      this.port.postMessage({ type: "ping" });
+    }, SOCKET_PING_MS);
+  }
+
   write(bytes: Uint8Array): void {
     if (this.closed) return;
     const owned = bytes.slice();
@@ -78,12 +104,15 @@ class Connection {
   }
 
   private async writeReady(bytes: Uint8Array): Promise<void> {
-    if (this.upgrading) bytes = await this.upgradeRequest(bytes);
+    const upgrade = this.upgrading ? await this.upgradeRequest(bytes) : null;
     this.queue.shift();
-    if (!this.closed) this.port.postMessage({ type: "data", chunk: bytes }, [bytes.buffer]);
+    if (this.closed) return;
+    if (upgrade instanceof Uint8Array) bytes = upgrade;
+    else if (upgrade) { this.port.postMessage(upgrade); return; }
+    this.port.postMessage({ type: "data", chunk: bytes }, [bytes.buffer]);
   }
 
-  private async upgradeRequest(bytes: Uint8Array): Promise<Uint8Array> {
+  private async upgradeRequest(bytes: Uint8Array): Promise<Uint8Array | ReturnType<typeof rootOpen>> {
     this.upgrading = false;
     const request = new TextDecoder().decode(bytes);
     const key = /^sec-websocket-key:\s*(\S+)\r?$/im.exec(request)?.[1];
@@ -93,6 +122,7 @@ class Connection {
     this.acceptInput = input;
     const digest = await crypto.subtle.digest("SHA-1", encoder.encode(input));
     if (!this.closed) accepts.set(input, btoa(String.fromCharCode(...new Uint8Array(digest))));
+    if (rootOrigin) return rootOpen(request);
     return encoder.encode(request.replace(/^host:[^\r\n]*/im, () => `host: ${this.authority}`)
       .replace(/\r\n\r\n$/, () => `\r\norigin: ${location.origin}\r\n\r\n`));
   }
@@ -105,11 +135,27 @@ class Connection {
     connections.delete(this);
     if (this.acceptInput) accepts.delete(this.acceptInput);
     clearTimeout(this.timer);
+    if (this.pinger !== undefined) clearInterval(this.pinger);
+    this.port.removeEventListener("close", this.peerGone);
     this.queue.length = 0;
     this.port.postMessage({ type: "end" });
-    this.port.close();
+    // On a preview origin the other end travels page, service worker, IDE page. WebKit terminates the
+    // process of a page that closes a port whose other end is still in transit, so wait for an answer.
+    if (!rootOrigin || this.answered) this.port.close();
     this.onClose?.();
   }
+}
+
+/** The upgrade as fields. The IDE page supplies Host, Cookie and the socket's Origin itself. */
+function rootOpen(request: string): { type: "open"; url: string; method: string; headers: [string, string][] } {
+  const [start = "", ...lines] = request.split("\r\n");
+  const [method = "GET", target = "/"] = start.split(" ");
+  const headers = lines.flatMap((line): [string, string][] => {
+    const at = line.indexOf(":");
+    const name = line.slice(0, Math.max(at, 0)).trim();
+    return name === "" || /^(?:host|origin|cookie)$/i.test(name) ? [] : [[name, line.slice(at + 1).trim()]];
+  });
+  return { type: "open", url: new URL(target, location.origin).href, method, headers };
 }
 
 function connect(): number {
@@ -119,6 +165,7 @@ function connect(): number {
   streams.set(handle, { port: channel.port1, authority: constructingAuthority });
   const controller = navigator.serviceWorker.controller;
   if (!controller) { channel.port2.close(); return handle; }
+  if (rootOrigin) { controller.postMessage({ type: SW_SOCKET }, [channel.port2]); return handle; }
   controller.postMessage(
     previewRoute ? { type: "preview-socket", port: previewPort, route: previewRoute } : { type: "preview-socket", port: previewPort },
     [channel.port2],
@@ -146,8 +193,12 @@ function tunnelUrl(input: string | URL): { url: URL; authority: string } | null 
   if (url.protocol === "https:") url.protocol = "wss:";
   const sameHost = url.host === location.host;
   const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) && Number(url.port || 80) === previewPort;
-  if (!sameHost && !loopback) return null;
+  if (!sameHost && (rootOrigin || !loopback)) return null;
   if (!["ws:", "wss:"].includes(url.protocol)) return null;
+  if (rootOrigin) {
+    url.protocol = "ws:";
+    return { url, authority: url.host };
+  }
   const marker = `${previewPrefix}${previewPort}`;
   if (url.pathname === marker) url.pathname = "/";
   else if (url.pathname.startsWith(marker + "/")) url.pathname = url.pathname.slice(marker.length);

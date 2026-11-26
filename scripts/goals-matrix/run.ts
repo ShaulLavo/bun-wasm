@@ -143,13 +143,12 @@ function selectedCell(cell: Cell, config: Options): boolean {
   if (cell.status === "fail" && !config.retryFailures) return false;
   return true;
 }
-export function playgroundURL(base: string, framework: Framework, engine: Engine, profile?: PlaygroundProfile, mode?: "fast" | "memory"): string {
+export function playgroundURL(base: string, framework: Framework, engine: Engine, profile?: PlaygroundProfile): string {
   templateProfile(engine, framework.template, profile);
   const url = new URL(base);
   url.searchParams.set("template", framework.template); url.searchParams.set("engine", engine);
   if (profile !== undefined) url.searchParams.set("profile", profile);
   url.searchParams.set("prompt", "off");
-  if (mode !== undefined) url.searchParams.set("mode", mode);
   if (framework.rootPreview) url.searchParams.set("root-previews", "");
   return url.href;
 }

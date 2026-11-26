@@ -1,13 +1,13 @@
 {
   "schema": 1,
   "repository": "https://github.com/oven-sh/bun",
-  "commit": "9510e74152073d850a18758ca41114d8f214ffa6",
+  "commit": "a7733435cf40429e3b35c36072769df2052b80f1",
   "path": "packages/bun-usockets/root_certs.der",
-  "sha256": "9c211f519356eff61365ff890856135b1b8ee298775b144ce6089782ae603f90",
-  "bytes": 129635,
-  "count": 121,
+  "sha256": "8f6217fc19d21cbc22c06064283f59a2a1004408813e919d2ceac8987d404ea3",
+  "bytes": 127583,
+  "count": 118,
   "format": "u32-le count; u32-le offsets[count + 1]; concatenated DER certificates",
-  "importedAt": "2026-11-01",
+  "importedAt": "2026-11-25",
   "origin": "Mozilla NSS certdata.txt, filtered for SERVER_AUTH:TRUSTED_DELEGATOR",
   "nssRelease": null,
   "license": {
@@ -18,11 +18,11 @@
   "sourceFiles": [
     {
       "path": "packages/bun-usockets/certdata.txt",
-      "sha256": "81b7f2576333a2e360e673f912d7b0b7a765d836c731003e348a46cac5d37198"
+      "sha256": "3ec2b4d240dc12c747eaf450061db84af757c483bbda302f9e29ceb5d70be510"
     },
     {
       "path": "packages/bun-usockets/root_certs.txt",
-      "sha256": "ef62e6b6f5ae9ce04a60537ea5cb279627e4c96f87936f3570401e7eff72d830"
+      "sha256": "241ec590afc726a191f678f815d2a4b2437c3c5d66e90c0dd4166d36e416764c"
     },
     {
       "path": "packages/bun-usockets/generate-root-certs.pl",

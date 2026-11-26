@@ -1,7 +1,7 @@
 ## 0016 wasm32 symbol reservation cap
 
 Class **Port**. The upstream path is `src/js_parser/p.rs` at pinned Bun revision
-`9510e74152073d850a18758ca41114d8f214ffa6`.
+`a7733435cf40429e3b35c36072769df2052b80f1`.
 
 Upstream pre-sizes three per-file tables from the source length, one symbol per 16 bytes:
 the module scope's member table, the parser's symbol list and the symbol-use map. On wasm32
