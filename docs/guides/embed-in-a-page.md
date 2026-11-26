@@ -14,7 +14,7 @@ Pin bun-wasm to an exact commit and match that checkout's `waffle` pin:
 {
 	"dependencies": {
 		"bun-wasm": "github:ShaulLavo/bun-wasm#<commit>",
-		"waffle": "npm:@waffle-os/runtime@0.0.152"
+		"waffle": "npm:@waffle-os/runtime@0.0.153"
 	},
 	"trustedDependencies": ["bun-wasm"]
 }
