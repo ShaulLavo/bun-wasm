@@ -40,10 +40,16 @@ async function scenarios() {
   });
 
   const running = Promise.withResolvers<void>();
-  const server = startBun(runtime, ["-e", "setInterval(() => {}, 1000); console.log('running')"], { onStdout: () => running.resolve() });
+  const server = startBun(runtime, ["-e", "setInterval(() => {}, 1000); console.log('running')"], { onStdout: () => { running.resolve(); } });
   await running.promise;
   await server.kill();
   const killed = await server.result;
+
+  // An async callback is refused: its failure would otherwise vanish while Bun exits 0.
+  const asyncCallback = async () => { throw new Error("async output callback"); };
+  const refused = await runBun(runtime, ["-e", "console.log('x')"], {
+    onStdout: asyncCallback as unknown as () => undefined,
+  }).then(() => "resolved", (error: unknown) => String(error));
 
   await runtime.dispose();
   return {
@@ -54,11 +60,27 @@ async function scenarios() {
     tests: summary(tests),
     stdin: { ...summary(stdin), chunks: chunks.join("") },
     killed: summary(killed),
+    refused,
   };
 }
 
+/**
+ * The guide's zero-configuration path: no `asset`, so the published guest from
+ * `BUN_WASM_ASSET` downloads. `bun test` needs a guest that matches this host, so a stale
+ * published guest fails here.
+ */
+async function publishedDefault() {
+  const runtime = createRuntime({ filesystem: { workerURL: "/fs-worker.js", mode: "memory" } });
+  await installBunAdapters(runtime, { workerUrl, notificationWorkerUrl });
+  await runtime.filesystem.mkdirp("/app");
+  await runtime.filesystem.writeFile("/app/math.test.ts", "import { expect, test } from 'bun:test';\ntest('adds', () => { expect(1 + 2).toBe(3); });\n");
+  const tests = await runBun(runtime, ["test"], { cwd: "/app" });
+  await runtime.dispose();
+  return summary(tests);
+}
+
 try {
-  Reflect.set(globalThis, "embedResult", { ok: true, ...await scenarios() });
+  Reflect.set(globalThis, "embedResult", { ok: true, ...await scenarios(), published: await publishedDefault() });
 } catch (error) {
   Reflect.set(globalThis, "embedResult", { ok: false, error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error) });
 }

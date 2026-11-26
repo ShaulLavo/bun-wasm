@@ -78,6 +78,10 @@ for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").spl
       expect(result.killed.stopped).toBe(true);
       expect(result.killed.stdout).toBe("running\n");
       expect(result.killed.exitCode).toBe(137);
+      expect(result.refused).toContain("Command output callbacks must return undefined synchronously");
+      // No asset: the published default guest downloads and must match this host.
+      expect(result.published.exitCode, result.published.stderr).toBe(0);
+      expect(result.published.stderr).toContain("1 pass");
       expect(errors).toEqual([]);
     } finally {
       await browser.close();
