@@ -199,13 +199,19 @@ function requestedDirectArchiveChange(name: string, after: unknown, root: Record
   return false;
 }
 
-function collectRootPins(obj: Record<string, unknown>): Map<string, string> {
-  const result = new Map<string, string>();
+function collectRootPins(obj: Record<string, unknown>): Map<string, Map<string, string>> {
+  const result = new Map<string, Map<string, string>>();
   for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "overrides"]) {
     const section = obj[field];
     if (!section || typeof section !== "object" || Array.isArray(section)) continue;
     for (const [k, v] of Object.entries(section)) {
-      if (typeof v === "string") result.set(k, v);
+      if (typeof v !== "string") continue;
+      let fields = result.get(k);
+      if (!fields) {
+        fields = new Map<string, string>();
+        result.set(k, fields);
+      }
+      fields.set(field, v);
     }
   }
   return result;
@@ -309,7 +315,7 @@ export function verifyUnrelatedPackages(
   const changedRootNames = new Set<string>();
   const unchangedRootNames = new Set<string>();
   for (const name of new Set([...beforeRootPins.keys(), ...afterRootPins.keys()])) {
-    if (beforeRootPins.get(name) === afterRootPins.get(name)) {
+    if (isDeepStrictEqual(beforeRootPins.get(name), afterRootPins.get(name))) {
       unchangedRootNames.add(name);
     } else {
       changedRootNames.add(name);
