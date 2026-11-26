@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
-import { COOKIE_PATH, RELAY_PATH, SHIM_PATH, SW_ATTACH, SW_COOKIES, SW_COOKIES_ACK, SW_NEED_PORT, SW_PATH, SW_SHIM, SW_SOCKET, type SessionReply, type SessionRequest } from "../src/preview-origin/protocol";
+import {
+  COOKIE_PATH, IDE_ONLY_MESSAGE, RELAY_PATH, SHIM_PATH, SW_ATTACH, SW_COOKIES, SW_COOKIES_ACK, SW_NEED_PORT, SW_PATH, SW_SHIM, SW_SOCKET,
+  type SessionReply, type SessionRequest,
+} from "../src/preview-origin/protocol";
 import { insertAfterDoctype } from "../src/preview-html";
-import { createPreviewOriginServiceWorker, withoutFrameAncestors, type OriginClient } from "../src/preview-origin/sw-core";
+import { createPreviewOriginServiceWorker, scriptNonce, withoutFrameAncestors, type OriginClient } from "../src/preview-origin/sw-core";
 
 const ORIGIN = `https://${"a".repeat(52)}-5173-pv.sprockt.dev`;
 const IDE = "https://bun.sprockt.dev";
@@ -75,7 +78,7 @@ function request(path: string, init: FakeRequest = {}): Request {
     destination: init.destination ?? "",
     credentials: init.credentials ?? "same-origin",
     referrer: init.referrer ?? "",
-    signal: init.signal,
+    signal: init.signal ?? new AbortController().signal,
     arrayBuffer: async () => body!.buffer,
   } as unknown as Request;
 }
@@ -159,23 +162,119 @@ test("a framed HTML navigation gets the shim, the cookies script may see, and th
   ide.port.close();
 });
 
-test("a top-level document and a fetched HTML fragment keep the app's own headers and bytes", async () => {
+test("a top-level visit is told to use the IDE and reaches nothing, even with a live IDE tab attached", async () => {
   const { worker, attach } = setup();
   const ide = attach();
-  const top = worker.fetch(request("/", { mode: "navigate", destination: "document" }), "")!;
-  const first = await ide.next("open");
-  respond(ide, first.id, [["content-type", "text/html"], ["x-frame-options", "DENY"]], ["<!doctype html><p>top</p>"]);
-  const document = await top;
-  expect(document.headers.get("x-frame-options")).toBe("DENY");
-  expect(document.headers.has("cross-origin-embedder-policy")).toBe(false);
-  expect(await document.text()).toContain(SHIM_PATH);
+  await ide.next("attached");
+  const target = new URL(COOKIE_PATH, ORIGIN);
+  target.searchParams.set("line", "planted=1; Path=/");
+  for (const path of ["/", "/account/secret?x=1", SHIM_PATH, target.href]) {
+    for (const method of ["GET", "POST", "HEAD"]) {
+      const response = await worker.fetch(request(path, { method, mode: "navigate", destination: "document", credentials: "include", body: method === "POST" ? "a=1" : undefined }), "")!;
+      expect(response.status).toBe(403);
+      expect(response.headers.get("content-type")).toStartWith("text/html");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; frame-ancestors 'none'");
+      const text = await response.text();
+      expect(text).toBe(method === "HEAD" ? "" : `<!doctype html><meta charset="utf-8"><title>Preview</title><body><p role="status">${IDE_ONLY_MESSAGE}</p></body>`);
+    }
+  }
+  // A frame of the same pages is the app's, and is served.
+  const framed = worker.fetch(request("/account/secret?x=1", { mode: "navigate", destination: "iframe" }), "")!;
+  const open = await ide.next("open");
+  respond(ide, open.id, [["content-type", "text/html"]], ["<!doctype html><p>framed</p>"]);
+  expect(await (await framed).text()).toContain("<p>framed</p>");
+  // Nothing of the top-level visits crossed: no request, no cookie write.
+  expect(ide.requests.filter(item => item.t === "open").length).toBe(1);
+  expect(ide.requests.some(item => item.t === "cookie")).toBe(false);
+  ide.port.close();
+});
+
+test("a fetched HTML fragment keeps the app's own headers and bytes", async () => {
+  const { worker, attach } = setup();
+  const ide = attach();
   const fragment = worker.fetch(request("/fragment"), "page")!;
-  const second = await ide.next("open", 1);
-  ide.reply({ t: "output", id: second.id, output: { type: "head", status: 200, statusText: "OK", headers: [["content-type", "text/html"]] } });
+  const open = await ide.next("open");
+  ide.reply({ t: "output", id: open.id, output: { type: "head", status: 200, statusText: "OK", headers: [["content-type", "text/html"], ["x-frame-options", "DENY"]] } });
   const data = bytes("<p>fragment</p>");
-  ide.reply({ t: "output", id: second.id, output: { type: "data", chunk: data } }, [data.buffer]);
-  ide.reply({ t: "output", id: second.id, output: { type: "end" } });
-  expect(await (await fragment).text()).toBe("<p>fragment</p>");
+  ide.reply({ t: "output", id: open.id, output: { type: "data", chunk: data } }, [data.buffer]);
+  ide.reply({ t: "output", id: open.id, output: { type: "end" } });
+  const response = await fragment;
+  expect(response.headers.get("x-frame-options")).toBe("DENY");
+  expect(response.headers.has("cross-origin-embedder-policy")).toBe(false);
+  expect(await response.text()).toBe("<p>fragment</p>");
+  ide.port.close();
+});
+
+test("a request aborted while it waits for an attachment opens nothing and holds no exchange slot", async () => {
+  const { worker, relays, attach } = setup();
+  const aborted = new AbortController();
+  const upload = new AbortController();
+  // Both wait: the worker has no port yet and asks the relay frame for one.
+  const cancelled = worker.fetch(request("/cancelled", { signal: aborted.signal }), "page")!;
+  const cancelledUpload = worker.fetch(request("/cancelled-upload", { method: "POST", body: "payload", signal: upload.signal }), "page")!;
+  const kept = worker.fetch(request("/kept"), "page")!;
+  await Bun.sleep(20);
+  expect(relays[0]!.messages).toEqual([{ type: SW_NEED_PORT }]);
+  aborted.abort();
+  upload.abort();
+  const ide = attach();
+  const open = await ide.next("open");
+  expect(open.url).toBe(`${ORIGIN}/kept`);
+  respond(ide, open.id, [], ["kept"]);
+  expect(await (await kept).text()).toBe("kept");
+  expect((await cancelled).status).toBe(503);
+  expect((await cancelledUpload).status).toBe(503);
+  await Bun.sleep(20);
+  // The guest saw one connection: no `open` for the cancelled requests, and no `end` for an exchange that never was.
+  expect(ide.requests.filter(item => item.t === "open").map(item => new URL(item.url).pathname)).toEqual(["/kept"]);
+  expect(ide.requests.filter(item => item.t === "input" && item.input.type === "end")).toEqual([]);
+  expect(worker.attachments.length).toBe(1);
+  expect(worker.attachments[0]!.exchanges.size).toBe(0);
+  ide.port.close();
+});
+
+test("a request aborted after it opened ends its exchange once and frees the slot", async () => {
+  const { worker, attach } = setup();
+  const ide = attach();
+  const controller = new AbortController();
+  const pending = worker.fetch(request("/slow", { signal: controller.signal }), "page")!;
+  const open = await ide.next("open");
+  expect(worker.attachments[0]!.exchanges.size).toBe(1);
+  controller.abort();
+  expect((await pending).status).toBe(502);
+  expect(await ide.next("input")).toEqual({ t: "input", id: open.id, input: { type: "end" } });
+  expect(worker.attachments[0]!.exchanges.size).toBe(0);
+  ide.port.close();
+});
+
+test("the shim carries the nonce of a nonce-based policy, and a document that is not HTML crosses untouched", async () => {
+  const { worker, attach } = setup();
+  const ide = attach();
+  const policies: [string, string | undefined][] = [
+    ["script-src 'nonce-r4nd0m+/=' 'strict-dynamic'; object-src 'none'", "r4nd0m+/="],
+    ["default-src 'none'; script-src-elem 'nonce-abc_-123'; script-src 'nonce-other'", "abc_-123"],
+    ["default-src 'nonce-fallback'", "fallback"],
+    ["img-src 'self', script-src 'nonce-second'", "second"],
+    ["script-src 'self'; style-src 'nonce-style'", undefined],
+    ["script-src 'nonce-bad\"><script>x()</script>'", undefined],
+  ];
+  for (const [index, [policy, nonce]] of policies.entries()) {
+    expect(scriptNonce(policy)).toBe(nonce);
+    const pending = worker.fetch(request(`/page-${index}`, { mode: "navigate", destination: "iframe" }), "")!;
+    const open = await ide.next("open", index);
+    respond(ide, open.id, [["content-type", "text/html"], ["content-security-policy", policy]], ["<!doctype html><p>page</p>"]);
+    const text = await (await pending).text();
+    expect(text).toStartWith(nonce ? `<!doctype html><script src="${SHIM_PATH}" nonce="${nonce}" data-bunwasm-preview="shim"` : `<!doctype html><script src="${SHIM_PATH}" data-bunwasm-preview="shim"`);
+  }
+  expect(scriptNonce(null)).toBeUndefined();
+  // Plain text has nowhere to put a script: it is the server's bytes, and the frame's embedder settles it (RootPreviews.watchFrame).
+  const plain = worker.fetch(request("/notes.txt", { mode: "navigate", destination: "iframe" }), "")!;
+  const open = await ide.next("open", policies.length);
+  respond(ide, open.id, [["content-type", "text/plain; charset=utf-8"]], ["<!doctype html> is not markup here"]);
+  const response = await plain;
+  expect(await response.text()).toBe("<!doctype html> is not markup here");
+  expect(response.headers.get("cross-origin-embedder-policy")).toBe("require-corp");
   ide.port.close();
 });
 

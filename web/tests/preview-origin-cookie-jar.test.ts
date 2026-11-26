@@ -30,6 +30,26 @@ test("page script never sees or replaces an HttpOnly cookie", () => {
   expect(cookies.header("/", NOW + 1)).toBe("sid=secret; theme=dark; client=1");
 });
 
+test("an expired HttpOnly cookie no longer blocks a script write to its name and path", () => {
+  const cookies = jar();
+  cookies.setFromHeader("session=secret; Path=/; HttpOnly; Max-Age=60", "/", NOW);
+  // While it lives, script can neither read nor replace it.
+  expect(cookies.setFromScript("session=mine; Path=/", "/", NOW + 59_000)).toBe(false);
+  expect(cookies.header("/", NOW + 59_000)).toBe("session=secret");
+  // Once it expired it is gone, though nothing has read the jar since.
+  const version = cookies.scriptVersion;
+  expect(cookies.setFromScript("session=mine; Path=/", "/", NOW + 61_000)).toBe(true);
+  expect(cookies.scriptVersion).toBeGreaterThan(version);
+  expect(cookies.scriptString("/", NOW + 61_000)).toBe("session=mine");
+  expect(cookies.header("/", NOW + 61_000)).toBe("session=mine");
+  // The new cookie is its own: it does not inherit the old one's place in the order.
+  expect(cookies.serialize(NOW + 61_000)).toEqual([{ name: "session", value: "mine", path: "/", expires: null, secure: false, httpOnly: false, sameSite: null, created: NOW + 61_000 }]);
+  // Another path's live HttpOnly cookie still protects itself.
+  cookies.setFromHeader("session=admin; Path=/admin; HttpOnly", "/", NOW + 61_000);
+  expect(cookies.setFromScript("session=stolen; Path=/admin", "/", NOW + 62_000)).toBe(false);
+  expect(cookies.header("/admin", NOW + 62_000)).toBe("session=admin; session=mine");
+});
+
 test("Max-Age and Expires end a cookie, and Max-Age wins", () => {
   const cookies = jar();
   cookies.setFromHeader("a=1; Max-Age=60", "/", NOW);

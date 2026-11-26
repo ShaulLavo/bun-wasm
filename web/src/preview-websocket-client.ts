@@ -1,6 +1,6 @@
 // The preview runs the runtime's existing WebSocket implementation over a MessagePort TCP stream.
 import websocketFactory from "bun-wasm:websocket";
-import { SW_SOCKET } from "./preview-origin/protocol";
+import { SOCKET_MISSED_PINGS, SOCKET_PING_MS, SW_SOCKET } from "./preview-origin/protocol";
 
 const nativeWebSocket = globalThis.WebSocket;
 const script = document.currentScript;
@@ -49,6 +49,9 @@ class Connection {
   private acceptInput: string | null = null;
   private upgrading = true;
   private answered = false;
+  private missedPings = 0;
+  private pinger: ReturnType<typeof setInterval> | undefined;
+  private readonly peerGone = () => this.fail("The IDE tab serving this preview went away");
 
   constructor(handle: number) {
     const stream = streams.get(handle);
@@ -60,13 +63,16 @@ class Connection {
     connections.add(this);
     this.timer = setTimeout(() => this.fail("Preview WebSocket connection timed out"), 10000);
     port.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data);
+    // Chromium reports a port whose other end's tab is gone. watchPeer() covers the other browsers.
+    if (rootOrigin) port.addEventListener("close", this.peerGone);
   }
 
   private receive(message: unknown): void {
     if (!message || typeof message !== "object" || !("type" in message)) return;
     this.answered = true;
+    this.missedPings = 0;
     if (this.closed) { this.port.close(); return; }
-    if (message.type === "accepted") { clearTimeout(this.timer); return; }
+    if (message.type === "accepted") { clearTimeout(this.timer); this.watchPeer(); return; }
     if (message.type === "data" && "chunk" in message && message.chunk instanceof Uint8Array) { this.onData?.(message.chunk); return; }
     if (message.type === "end") { this.onEnd?.(); this.destroy(); return; }
     if (message.type === "error") this.fail("Preview server stopped or refused the connection");
@@ -75,6 +81,19 @@ class Connection {
   private fail(message: string): void {
     this.onError?.(new Error(message));
     this.destroy();
+  }
+
+  /**
+   * On a preview origin the other end is the IDE tab itself, and a port gives no sign when that tab
+   * crashed or closed. An open socket asks it now and then, and fails once it stops answering.
+   */
+  private watchPeer(): void {
+    if (!rootOrigin || this.pinger !== undefined) return;
+    this.pinger = setInterval(() => {
+      if (this.missedPings >= SOCKET_MISSED_PINGS) { this.fail("The IDE tab serving this preview stopped answering"); return; }
+      this.missedPings++;
+      this.port.postMessage({ type: "ping" });
+    }, SOCKET_PING_MS);
   }
 
   write(bytes: Uint8Array): void {
@@ -116,6 +135,8 @@ class Connection {
     connections.delete(this);
     if (this.acceptInput) accepts.delete(this.acceptInput);
     clearTimeout(this.timer);
+    if (this.pinger !== undefined) clearInterval(this.pinger);
+    this.port.removeEventListener("close", this.peerGone);
     this.queue.length = 0;
     this.port.postMessage({ type: "end" });
     // On a preview origin the other end travels page, service worker, IDE page. WebKit terminates the

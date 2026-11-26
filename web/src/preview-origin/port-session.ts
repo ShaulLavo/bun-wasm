@@ -3,7 +3,7 @@
 // select another server, port or owner. Malformed messages are dropped before they reach Waffle.
 import type { PreviewHostExchange, PreviewHostOutput, PreviewHostRelay } from "waffle/browser/preview-host";
 import type { CookieJar } from "./cookie-jar.js";
-import { MAX_EXCHANGES, sessionRequest, socketRequest, type SessionReply, type SessionRequest } from "./protocol.js";
+import { MAX_EXCHANGES, sessionRequest, SOCKET_IDE_SILENCE_MS, socketRequest, type SessionReply, type SessionRequest } from "./protocol.js";
 
 export interface SessionBinding {
   /** The one grant this port reaches. */
@@ -19,12 +19,18 @@ export interface SessionBinding {
    * Without it a session owns its sockets and closes them with itself.
    */
   sockets?: Set<{ close(): void }>;
+  /** A response head went out for a navigation of a frame: the guest itself answered it. */
+  navigationServed?(): void;
+  /** How long a socket may hear nothing from its page before it is let go. A hang cap, not a speed limit. */
+  socketSilenceMs?: number;
 }
 
 const MAX_SOCKETS = 64;
 const MAX_SOCKET_HEAD = 64 * 1024;
 const HEAD_END = [13, 10, 13, 10];
 const supplied = (name: string) => /^(?:cookie|host)$/i.test(name);
+const headerValue = (headers: readonly [string, string][], wanted: string) => headers.find(([name]) => name.toLowerCase() === wanted)?.[1];
+type SocketOutput = PreviewHostOutput | { type: "pong" };
 
 function headEnd(bytes: Uint8Array): number {
   return bytes.findIndex((_, at) => HEAD_END.every((byte, offset) => bytes[at + offset] === byte));
@@ -52,14 +58,24 @@ class SocketChannel {
   private pendingHead: Uint8Array | null = new Uint8Array();
   private path = "/";
   private closed = false;
+  private heard = Date.now();
+  private readonly watch: ReturnType<typeof setInterval>;
+  private readonly gone = () => this.close();
 
   constructor(private readonly port: MessagePort, private readonly binding: SessionBinding, private readonly released: () => void) {
     port.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data);
+    // Where the browser reports that the page's end is gone (Chromium), the guest connection ends at
+    // once. Elsewhere a port stays silent forever, so a page that stopped pinging is let go.
+    port.addEventListener("close", this.gone);
+    const silence = binding.socketSilenceMs ?? SOCKET_IDE_SILENCE_MS;
+    this.watch = setInterval(() => { if (Date.now() - this.heard > silence) this.close(); }, Math.max(1, Math.floor(silence / 5)));
   }
 
   private receive(data: unknown): void {
     const request = socketRequest(data);
     if (!request || this.closed) return;
+    this.heard = Date.now();
+    if (request.type === "ping") { this.send({ type: "pong" }); return; }
     if (request.type === "open") { this.open(request); return; }
     // The page gave up before it opened anything: answer, so it may close its end, and let go.
     if (request.type === "end" && !this.exchange) { this.send({ type: "end" }); this.close(); return; }
@@ -86,13 +102,22 @@ class SocketChannel {
       .catch(() => this.close());
   }
 
+  /**
+   * Nothing of the response head reaches the page until all of it is here and filtered: it may
+   * carry Set-Cookie. A head that never ends within the cap fails the upgrade.
+   */
   private output(output: PreviewHostOutput): void {
     if (output.type !== "data" || this.pendingHead === null) { this.send(output); return; }
     const bytes = join(this.pendingHead, output.chunk);
     const end = headEnd(bytes);
     if (end < 0 && bytes.length < MAX_SOCKET_HEAD) { this.pendingHead = bytes; return; }
     this.pendingHead = null;
-    this.send({ type: "data", chunk: end < 0 ? bytes : this.withoutSetCookie(bytes, end + HEAD_END.length) });
+    if (end < 0) {
+      this.send({ type: "error", message: "The server's upgrade response head is too large" });
+      this.close();
+      return;
+    }
+    this.send({ type: "data", chunk: this.withoutSetCookie(bytes, end + HEAD_END.length) });
   }
 
   /** The 101 response head may set cookies; they go into the jar, never to the page. */
@@ -110,7 +135,7 @@ class SocketChannel {
     return join(head, bytes.subarray(headLength));
   }
 
-  private send(output: PreviewHostOutput): void {
+  private send(output: SocketOutput): void {
     if (this.closed) return;
     try { this.port.postMessage(output, output.type === "data" ? [output.chunk.buffer] : []); } catch { this.close(); }
   }
@@ -122,6 +147,8 @@ class SocketChannel {
     this.exchange = null;
     try { exchange?.onmessage?.({ type: "end" }); } catch {}
     this.closed = true;
+    clearInterval(this.watch);
+    this.port.removeEventListener("close", this.gone);
     this.port.onmessage = null;
     this.port.close();
     this.released();
@@ -183,6 +210,7 @@ export class PortSession {
         return;
       case "ping": this.send({ t: "pong", n: request.n }); return;
       case "open": this.open(request); return;
+      case "invalid": this.refuse(request.id, "Malformed preview request"); return;
       case "input": this.exchanges.get(request.id)?.onmessage?.(request.input); return;
       case "cookie": this.writeCookie(request); return;
       case "socket": this.socket(ports[0]); return;
@@ -217,9 +245,14 @@ export class PortSession {
     const cookie = credentialed ? jar.header(url.pathname) : null;
     if (cookie) headers.push(["cookie", cookie]);
     const { id } = request;
+    // The service worker says what kind of request this is. It decides nothing but when a frame counts as loaded.
+    const framedNavigation = headerValue(request.headers, "sec-fetch-mode") === "navigate";
     const exchange: PreviewHostExchange = {
       onmessage: null,
-      postMessage: (output, transfer = []) => this.output(id, url.pathname, credentialed, output, transfer),
+      postMessage: (output, transfer = []) => {
+        if (output.type === "head" && framedNavigation) this.binding.navigationServed?.();
+        this.output(id, url.pathname, credentialed, output, transfer);
+      },
       close: () => { if (this.exchanges.delete(id)) this.send({ t: "finish", id }); },
     };
     this.exchanges.set(id, exchange);

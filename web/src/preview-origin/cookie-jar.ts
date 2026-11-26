@@ -124,7 +124,10 @@ export class CookieJar {
     if (cookie.secure && !this.secure) return false;
     if (fromScript && cookie.httpOnly) return false;
     const key = `${cookie.name}\n${cookie.path}`;
-    const previous = this.cookies.get(key);
+    const stored = this.cookies.get(key);
+    // An expired cookie is gone: it protects nothing, HttpOnly or not.
+    const previous = stored && stored.expires !== null && stored.expires <= now ? undefined : stored;
+    if (!previous) this.cookies.delete(key);
     if (fromScript && previous?.httpOnly) return false;
     if ((previous && !previous.httpOnly) || !cookie.httpOnly) this.scriptVersion++;
     if (cookie.expires !== null && cookie.expires <= now) return this.cookies.delete(key);

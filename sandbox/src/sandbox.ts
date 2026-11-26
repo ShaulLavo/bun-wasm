@@ -2222,16 +2222,19 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     retry: (document: Document | null) => void,
   ): () => void {
     if (!(this.previews instanceof RootPreviews)) return () => {};
-    const stop = this.previews.observeFrame(navigation.frame, (message) => {
-      if (this.preview !== navigation || this.server !== target || this.frame !== navigation.frame || this.workspace?.fs.ownershipLost) {
-        stop();
-        return;
-      }
-      if (message.event === "commit") return;
-      if (message.event === "error" && message.transient) { retry(null); return; }
-      if (message.event === "error") { this.setStatus("preview failed to load · press Restart", "error"); return; }
-      if (navigation.loaded) navigation.loaded = { document: null, url: message.href };
-      else markReady(null, message.href);
+    const current = () => this.preview === navigation && this.server === target && this.frame === navigation.frame && !this.workspace?.fs.ownershipLost;
+    const stop = this.previews.watchFrame(navigation.frame, {
+      // A document without the shim (plain text, a page whose policy keeps the shim out) gives no address.
+      loaded: (href) => {
+        if (!current()) { stop(); return; }
+        if (!navigation.loaded) { markReady(null, href ?? navigation.url); return; }
+        if (href) navigation.loaded = { document: null, url: href };
+      },
+      failed: (transient) => {
+        if (!current()) { stop(); return; }
+        if (transient) { retry(null); return; }
+        this.setStatus("preview failed to load · press Restart", "error");
+      },
     });
     return stop;
   }

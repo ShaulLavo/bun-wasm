@@ -38,8 +38,8 @@ export class HttpExchange {
       cancel: () => this.cancel(),
     }, { highWaterMark: 0 });
     this.timer = setTimeout(() => this.fail("Preview server timed out waiting for response headers", true), options.headTimeoutMs);
+    // The caller opens no exchange for a request that is already aborted, so only a later abort is heard here.
     options.signal?.addEventListener("abort", this.abort, { once: true });
-    if (options.signal?.aborted) this.cancel();
   }
 
   output(message: PreviewHostOutput): void {

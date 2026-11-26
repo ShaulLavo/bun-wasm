@@ -268,19 +268,87 @@ Bun.serve({ port: 3001, fetch: app("two"), websocket });
 console.log("servers-listening");
 `;
 
+/**
+ * What the playground's Run button starts for the dock test. Its page allows scripts by nonce only,
+ * `/plain` is no HTML at all, and `/locked` allows no script whatever: three documents that say
+ * differently, or not at all, that they loaded.
+ */
+const DOCK_APP = `
+const probe = ${JSON.stringify(PROBE)};
+Bun.serve({ port: 3000, fetch(req: Request) {
+  const path = new URL(req.url).pathname;
+  if (path === "/plain") return new Response("plain text, no markup", { headers: { "content-type": "text/plain; charset=utf-8" } });
+  if (path === "/locked") return new Response("<!doctype html><title>locked</title><h1>locked</h1>", { headers: { "content-type": "text/html", "content-security-policy": "script-src 'none'" } });
+  return new Response('<!doctype html><title>dock</title><script nonce="n0nce">' + probe + '</script><h1 id="path">dock:' + path + '</h1>', {
+    headers: { "content-type": "text/html", "content-security-policy": "script-src 'nonce-n0nce' 'unsafe-eval'", "set-cookie": "theme=dock; Path=/" },
+  });
+} });
+console.log("dock-app-listening");
+`;
+
+/** A server that takes every connection and hangs up without a word: the preview frame gets the service worker's error page. */
+const DOCK_REFUSER = `
+Bun.listen({ hostname: "localhost", port: 3000, socket: { open(socket: { end(): void }) { socket.end(); }, data() {} } });
+console.log("dock-refuser-listening");
+`;
+
 interface PlaygroundApi {
-  editor?: { path?: string };
+  editor?: { path?: string; open(path: string): Promise<void> };
   fs: { writeFile(path: string, data: string): Promise<void>; flush(): Promise<void> };
   shell: { submit(command: string): Promise<void> };
-  previews?: { serves(port: number): boolean; linkUrl(port: number): string };
+  previews?: {
+    serves(port: number): boolean;
+    linkUrl(port: number): string;
+    watchFrame(frame: HTMLIFrameElement, watch: { loaded(href: string | null): void; failed(transient: boolean): void }): () => void;
+  };
 }
 
-/** Starts the two fixture servers in the playground and returns their new-tab links, by port. */
-async function startPlaygroundServers(page: Page): Promise<Map<number, URL>> {
+async function playgroundReady(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const playground = Reflect.get(globalThis, "playground") as unknown as PlaygroundApi | undefined;
     return playground?.editor?.path === "/home/user/index.ts" && document.querySelector("#status")?.getAttribute("data-kind") === "ok";
   }, null, { timeout: 120_000 });
+}
+
+/** Opens a file of the examples workspace and presses Run, as a visitor does. */
+async function runInPlayground(page: Page, path: string): Promise<void> {
+  await page.waitForFunction(() => document.querySelector("#run")?.getAttribute("data-state") === "run" && !document.querySelector<HTMLButtonElement>("#run")?.disabled, null, { timeout: 60_000 });
+  await page.evaluate(file => (Reflect.get(globalThis, "playground") as unknown as PlaygroundApi).editor?.open(file), path);
+  await page.locator("#run").click();
+}
+
+/** Presses Stop until the foreground program is gone: the second press forces it, as the button's title says. */
+async function stopInPlayground(page: Page): Promise<void> {
+  const stopped = (timeout: number) => page.waitForFunction(() => document.querySelector("#run")?.getAttribute("data-state") === "run", null, { timeout });
+  await page.locator("#run").click();
+  await stopped(10_000).catch(async () => {
+    await page.locator("#run").click();
+    await stopped(60_000);
+  });
+}
+
+/** How a fresh frame at `url` settles, by the IDE page's own watch (RootPreviews.watchFrame). */
+function frameSettles(page: Page, url: string): Promise<string> {
+  return page.evaluate(target => new Promise<string>((resolve) => {
+    const previews = (Reflect.get(globalThis, "playground") as unknown as PlaygroundApi).previews;
+    if (!previews) throw new Error("No previews");
+    const frame = document.createElement("iframe");
+    frame.setAttribute("aria-hidden", "true");
+    frame.style.display = "none";
+    const done = (outcome: string) => {
+      stop();
+      frame.remove();
+      resolve(outcome);
+    };
+    const stop = previews.watchFrame(frame, { loaded: href => done(`loaded ${href}`), failed: transient => done(`failed ${transient}`) });
+    document.body.appendChild(frame);
+    frame.src = target;
+  }), url);
+}
+
+/** Starts the two fixture servers in the playground and returns their new-tab links, by port. */
+async function startPlaygroundServers(page: Page): Promise<Map<number, URL>> {
+  await playgroundReady(page);
   await page.evaluate(async (source) => {
     const playground = Reflect.get(globalThis, "playground") as unknown as PlaygroundApi;
     await playground.fs.writeFile("/home/user/preview-origins-server.ts", source);
@@ -423,9 +491,68 @@ for (const browserName of browsers) {
       expect(sorted((await requestEcho(other)).cookie)).toEqual(["sid=secret-two", "theme=dark-two"]);
       expect(await inPreview(other, () => document.cookie, "no cookie string")).toBe("theme=dark-two");
 
+      // A tab on the preview origin itself is outside the IDE. The IDE tab is attached and, in this
+      // same-site layout, the origin's service worker also controls that tab in Chromium and Firefox;
+      // it refuses the visit as the static host does (WebKit's tab gets no worker), and the server,
+      // with its cookies, never hears of it.
+      const direct = await context.newPage();
+      const visit = await navigateTestPage(direct, `${origin}/direct-visit?probe=1`);
+      await direct.waitForFunction(() => (document.body?.innerText ?? "").includes("only works inside its IDE tab"), null, { timeout: 60_000 });
+      expect(visit?.status()).toBe(403);
+      if (browserName === "chromium") expect(visit?.fromServiceWorker()).toBe(true);
+      expect(await direct.evaluate(() => document.cookie)).toBe("");
+      await direct.close();
+      const reached = await inPreview(tab, async () => (await (await fetch("/api/log")).json()) as string[], "no log");
+      expect(reached.filter(line => line.includes("direct-visit"))).toEqual([]);
+
       // Nothing reached the IDE origin, or the browser's own cookie store at all.
       expect(await ide.evaluate(() => document.cookie)).toBe("");
       expect((await context.cookies()).filter(cookie => /^(?:sid|theme|client)$/.test(cookie.name))).toEqual([]);
+      expect(errors).toEqual([]);
+    });
+  });
+
+  test(`${browserName}: the playground's docked preview settles by what its frame says, and opens through the IDE's wrapper page`, async () => {
+    await withSite(browserName, "same", async (context, served) => {
+      const errors: string[] = [];
+      const ide = await context.newPage();
+      trackErrors(ide, "playground", errors);
+      await navigateTestPage(ide, ideUrl("same", served, "/"));
+      await playgroundReady(ide);
+      await ide.evaluate(async (files) => {
+        const playground = Reflect.get(globalThis, "playground") as unknown as PlaygroundApi;
+        for (const [name, source] of Object.entries(files)) await playground.fs.writeFile(`/home/user/${name}`, source);
+        await playground.fs.flush();
+      }, { "dock-app.ts": DOCK_APP, "dock-refuser.ts": DOCK_REFUSER });
+
+      await runInPlayground(ide, "/home/user/dock-app.ts");
+      await ide.locator('.preview-dock[data-frame="loaded"]').waitFor({ timeout: 120_000 });
+      const src = new URL((await ide.locator(".preview-dock iframe").getAttribute("src")) ?? "about:blank");
+      expect(PREVIEW_HOST.exec(src.hostname)?.[1]).toBe("3000");
+      // The page allows scripts by nonce only. The shim carries that nonce, so the page has its cookies and reported its load.
+      expect(await inPreview(ide, () => document.cookie, "no cookie string")).toBe("theme=dock");
+
+      // The open button leads to the IDE's wrapper page, never to a tab on the preview origin itself.
+      const link = new URL((await ide.locator(".preview-dock a.control").getAttribute("href")) ?? "about:blank");
+      expect(link.origin).toBe(new URL(ide.url()).origin);
+      expect(link.pathname.endsWith("/preview-frame.html")).toBe(true);
+      expect(link.searchParams.get("url")).toBe(src.href);
+      const tab = await openLink(context, link, errors, "dock link");
+      await text(tab, "#path", "dock:/");
+      await tab.close();
+
+      // Documents that cannot report settle too: plain text, and a page whose policy keeps every script out.
+      expect(await frameSettles(ide, `${src.origin}/plain`)).toBe("loaded null");
+      expect(await frameSettles(ide, `${src.origin}/locked`)).toBe("loaded null");
+
+      // A frame's load event is no proof: it fires for the service worker's error page as well. A
+      // server that answers nothing leaves the dock saying so, after its retries.
+      await stopInPlayground(ide);
+      await ide.locator(".preview-dock").waitFor({ state: "detached", timeout: 60_000 });
+      await runInPlayground(ide, "/home/user/dock-refuser.ts");
+      await ide.locator('.preview-dock[data-frame="failed"]').waitFor({ timeout: 120_000 });
+      expect(await ide.locator(".preview-dock .spinner").count()).toBe(0);
+      expect(await ide.locator(".preview-dock .preview-failed").count()).toBe(1);
       expect(errors).toEqual([]);
     });
   });

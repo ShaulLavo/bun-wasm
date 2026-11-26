@@ -1,13 +1,12 @@
 // The static host of preview origins, for a Cloudflare Worker, Bun.serve or any fetch handler.
 // It serves four fixed files and nothing else: once an origin's service worker is installed, no
 // request of the app reaches this host again.
-import { parsePreviewHost, RELAY_PATH, SW_PATH } from "./protocol.js";
+import { parsePreviewHost, RELAY_PATH, SW_PATH, type PreviewOriginConfig } from "./protocol.js";
 
 export type PreviewOriginAsset = "sw.js" | "relay.html" | "bootstrap.html" | "top.html";
 
-export interface PreviewOriginHostConfig {
-  /** The domain preview hosts end with, as in the IDE page's configuration. */
-  domain: string;
+/** The domain preview hosts end with and its scheme, exactly as in the IDE page's configuration. */
+export interface PreviewOriginHostConfig extends PreviewOriginConfig {
   /** The IDE origins that may frame a preview and attach to its service worker. */
   ideOrigins: readonly string[];
   /** The built file of that name (web/preview-origin-build.ts). */
@@ -33,9 +32,9 @@ function originsLiteral(config: PreviewOriginHostConfig): string {
   return JSON.stringify(config.ideOrigins).replaceAll("<", "\\u003c");
 }
 
-async function page(config: PreviewOriginHostConfig, name: PreviewOriginAsset, head: boolean): Promise<Response> {
+async function page(config: PreviewOriginHostConfig, name: PreviewOriginAsset, head: boolean, status = 200): Promise<Response> {
   const text = (await config.asset(name)).replace(IDE_ORIGINS_PLACEHOLDER, () => originsLiteral(config));
-  return new Response(head ? null : text, { headers: headers(config, "text/html; charset=utf-8") });
+  return new Response(head ? null : text, { status, headers: headers(config, "text/html; charset=utf-8") });
 }
 
 async function worker(config: PreviewOriginHostConfig, head: boolean): Promise<Response> {
@@ -57,13 +56,15 @@ function isNavigation(request: Request): boolean {
  */
 export function handlePreviewOriginRequest(request: Request, config: PreviewOriginHostConfig): Promise<Response> | null {
   const url = new URL(request.url);
-  if (!parsePreviewHost(url.host, config.domain)) return null;
+  if (!parsePreviewHost(url.host, config)) return null;
   const head = request.method === "HEAD";
   const refused = (status: number, message: string) => Promise.resolve(new Response(head ? null : `${message}\n`, { status, headers: headers(config, "text/plain; charset=utf-8") }));
   if (request.method !== "GET" && !head) return refused(503, "This preview's service worker is not running yet. Reload the preview.");
   if (url.pathname === SW_PATH) return worker(config, head);
   if (url.pathname === RELAY_PATH) return page(config, "relay.html", head);
   if (!isNavigation(request)) return refused(503, "This preview's service worker is not running yet. Reload the preview.");
-  // A top-level tab on the preview origin cannot reach the IDE tab in every browser.
-  return page(config, request.headers.get("sec-fetch-dest") === "document" ? "top.html" : "bootstrap.html", head);
+  // A top-level tab on the preview origin is outside the IDE page. It is refused here, and by the
+  // service worker once that is installed (sw-core.ts), so the answer does not depend on which one runs.
+  if (request.headers.get("sec-fetch-dest") === "document") return page(config, "top.html", head, 403);
+  return page(config, "bootstrap.html", head);
 }

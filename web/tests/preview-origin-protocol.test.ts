@@ -21,10 +21,30 @@ test("preview origins are single-level names that parse back to their id and por
   expect(previewOrigin({ domain: "localhost:4173" }, ID, 3000)).toBe(`http://${ID}-3000-pv.localhost:4173`);
   expect(previewOrigin({ domain: "bunwasm.localhost:4173" }, ID, 3000)).toBe(`http://${ID}-3000-pv.bunwasm.localhost:4173`);
   expect(previewOrigin({ domain: "example.test:8443", scheme: "http" }, ID, 80)).toBe(`http://${ID}-80-pv.example.test:8443`);
-  expect(parsePreviewHost(`${ID}-5173-pv.sprockt.dev`, "sprockt.dev")).toEqual({ id: ID, port: 5173 });
-  expect(parsePreviewHost(`${ID}-3000-pv.localhost:4173`, "localhost:4173")).toEqual({ id: ID, port: 3000 });
+  expect(parsePreviewHost(`${ID}-5173-pv.sprockt.dev`, { domain: "sprockt.dev" })).toEqual({ id: ID, port: 5173 });
+  expect(parsePreviewHost(`${ID}-3000-pv.localhost:4173`, { domain: "localhost:4173" })).toEqual({ id: ID, port: 3000 });
   expect(() => previewOrigin({ domain: "sprockt.dev" }, "short", 5173)).toThrow();
   expect(() => previewOrigin({ domain: "sprockt.dev" }, ID, 70000)).toThrow();
+});
+
+test("a domain written with its scheme's default port makes and matches the same names as one without", () => {
+  const configs = [
+    { domain: "example.test:443" }, { domain: "example.test" }, { domain: "EXAMPLE.test:443", scheme: "https" as const },
+    { domain: "example.test:80", scheme: "http" as const }, { domain: "example.test", scheme: "http" as const },
+  ];
+  for (const config of configs) {
+    const origin = previewOrigin(config, ID, 5173);
+    expect(origin).toBe(`${config.scheme ?? "https"}://${ID}-5173-pv.example.test`);
+    // What a browser sends as Host, and what `URL.host` reads, carry no default port.
+    expect(parsePreviewHost(new URL(origin).host, config)).toEqual({ id: ID, port: 5173 });
+    expect(parsePreviewHost(`${ID}-5173-pv.example.test:${config.scheme === "http" ? 80 : 443}`, config)).toEqual({ id: ID, port: 5173 });
+    expect(isPreviewOrigin(origin, config)).toBe(true);
+  }
+  // A port that is not the scheme's default stays part of the name.
+  expect(previewOrigin({ domain: "example.test:443", scheme: "http" }, ID, 5173)).toBe(`http://${ID}-5173-pv.example.test:443`);
+  expect(parsePreviewHost(`${ID}-5173-pv.example.test`, { domain: "example.test:443", scheme: "http" })).toBeNull();
+  expect(parsePreviewHost(`${ID}-5173-pv.example.test:8443`, { domain: "example.test:443" })).toBeNull();
+  expect(new URL(previewFrameLink(`https://${ID}-5173-pv.example.test/`, "https://bun.example.test/", { domain: "example.test:443" })).searchParams.get("preview-origin")).toBe("https://example.test");
 });
 
 test("only the exact preview name shape is a preview host", () => {
@@ -32,7 +52,8 @@ test("only the exact preview name shape is a preview host", () => {
     "bun.sprockt.dev", "sprockt.dev", "www-pv.sprockt.dev", `${ID}-pv.sprockt.dev`, `${ID}-0-pv.sprockt.dev`, `${ID}-70000-pv.sprockt.dev`,
     `${ID}-5173-pv.evil.dev`, `${ID}-5173-pv.sprockt.dev.evil.dev`, `x.${ID}-5173-pv.sprockt.dev`, `${ID.slice(1)}-5173-pv.sprockt.dev`,
     `${"A".repeat(51)}1-5173-pv.sprockt.dev`, `${ID}-5173-pvsprockt.dev`,
-  ]) expect(parsePreviewHost(host, "sprockt.dev")).toBeNull();
+    `${ID}-5173-pv.sprockt.dev:99999`, `${ID}-5173-pv.sprockt.dev/x`, `user@${ID}-5173-pv.sprockt.dev`,
+  ]) expect(parsePreviewHost(host, { domain: "sprockt.dev" })).toBeNull();
   expect(isPreviewOrigin(`https://${ID}-5173-pv.sprockt.dev`, { domain: "sprockt.dev" })).toBe(true);
   expect(isPreviewOrigin(`http://${ID}-5173-pv.sprockt.dev`, { domain: "sprockt.dev" })).toBe(false);
   expect(isPreviewOrigin("https://bun.sprockt.dev", { domain: "sprockt.dev" })).toBe(false);
@@ -54,6 +75,24 @@ test("a build's domain wins, and the query parameter works only on a loopback or
   expect(resolvePreviewOriginConfig(local, "https://sprockt.dev")).toEqual({ domain: "sprockt.dev", scheme: "https" });
 });
 
+test("a link never sends a local page's previews to a public domain", () => {
+  // The page hands each preview origin a port to its dev server, so the query may only name local hosts.
+  const pages = [
+    { hostname: "localhost", port: "4173" }, { hostname: "127.0.0.1", port: "4173" }, { hostname: "ide.app.localhost", port: "" },
+    { hostname: "bun.example.test", port: "" },
+  ];
+  // An address has no subdomains, so it is no preview domain either.
+  const remote = ["evil.dev", "https://evil.dev", "evil.dev:443", "sprockt.dev", "localhost.evil.dev", "test.evil.dev", "evil.test.dev", "10.0.0.5:4173", "127.0.0.1:9000"];
+  for (const page of pages) {
+    for (const domain of remote) expect(resolvePreviewOriginConfig({ ...page, search: `?preview-origin=${domain}` })).toBeNull();
+    for (const domain of ["localhost:4173", "app.localhost", "other.test:8443"]) {
+      expect(resolvePreviewOriginConfig({ ...page, search: `?preview-origin=${domain}` })).toEqual({ domain });
+    }
+  }
+  // A public domain comes from the build (or the server's own configuration) and from nowhere else.
+  expect(resolvePreviewOriginConfig({ hostname: "localhost", port: "4173", search: "?preview-origin=evil.dev" }, "sprockt.dev")).toEqual({ domain: "sprockt.dev" });
+});
+
 test("a new-tab link is an IDE-origin page that names the preview", () => {
   const link = new URL(previewFrameLink(`https://${ID}-5173-pv.sprockt.dev/dashboard?tab=1`, "https://bun.sprockt.dev/playground/", { domain: "sprockt.dev" }));
   expect(link.origin + link.pathname).toBe("https://bun.sprockt.dev/playground/preview-frame.html");
@@ -72,13 +111,22 @@ test("dev servers learn a public preview domain through Vite's variable, and not
 test("requests from the preview origin are rebuilt from known fields or dropped", () => {
   const forged = { t: "open", id: 1, url: "https://p.test/", method: "GET", headers: [["a", "b"]], body: null, credentials: "include", authorization: { owner: "x" }, port: 9, route: "ws-other" };
   expect(sessionRequest(forged)).toEqual({ t: "open", id: 1, url: "https://p.test/", method: "GET", headers: [["a", "b"]], body: null, credentials: "include" });
-  expect(sessionRequest({ ...forged, credentials: "same-origin" })).toMatchObject({ credentials: "include" });
   expect(sessionRequest({ ...forged, credentials: "omit" })).toMatchObject({ credentials: "omit" });
   for (const bad of [
-    null, "open", { t: "grant" }, { ...forged, id: -1 }, { ...forged, id: 1.5 }, { ...forged, method: "GET /x" }, { ...forged, headers: [["a"]] },
-    { ...forged, headers: "a: b" }, { ...forged, body: "text" }, { ...forged, url: 5 }, { t: "ping" }, { t: "cookie", id: 1, line: 5, url: "x" },
+    null, "open", { t: "grant" }, { ...forged, id: -1 }, { ...forged, id: 1.5 }, { t: "ping" }, { t: "cookie", id: 1, line: 5, url: "x" },
     { t: "input", id: 1, input: { type: "data", chunk: "bytes" } }, { t: "input", id: 1, input: { type: "grant" } },
   ]) expect(sessionRequest(bad)).toBeNull();
+  // An open that names its exchange but is not well formed is answered with a refusal, never dispatched.
+  for (const malformed of [
+    { ...forged, credentials: undefined }, { ...forged, credentials: "same-origin" }, { ...forged, credentials: "INCLUDE" }, { ...forged, credentials: true },
+    { ...forged, method: "GET /x" }, { ...forged, url: 5 }, { ...forged, body: "text" }, { ...forged, headers: "a: b" }, { ...forged, headers: [["a"]] },
+    { ...forged, headers: [["a", "b", "c"]] }, { ...forged, headers: [["", "b"]] }, { ...forged, headers: [["a b", "c"]] }, { ...forged, headers: [["a:", "c"]] },
+    { ...forged, headers: [["a", "b\r\nx-injected: 1"]] }, { ...forged, headers: [["a", "b\0"]] }, { ...forged, headers: [["a\r\n", "b"]] },
+    { ...forged, headers: [["a", 5]] }, { ...forged, headers: [[5, "b"]] }, { ...forged, headers: [["a", " "]] },
+  ]) expect(sessionRequest(malformed)).toEqual({ t: "invalid", id: 1 });
+  expect(sessionRequest({ ...forged, headers: [["x-tab", "a\tb"], ["x-latin", "café"], ["x-empty", ""]] })).toMatchObject({ t: "open" });
+  expect(socketRequest({ type: "open", url: "wss://p.test/hmr", method: "GET", headers: [["a", "b\r\nc: d"]] })).toBeNull();
+  expect(socketRequest({ type: "ping", extra: 1 })).toEqual({ type: "ping" });
   expect(sessionRequest({ t: "input", id: 3, input: { type: "pull", extra: 1 } })).toEqual({ t: "input", id: 3, input: { type: "pull" } });
   expect(sessionRequest({ t: "cookie", id: 2, line: "a=1", url: "https://p.test/x" })).toEqual({ t: "cookie", id: 2, line: "a=1", url: "https://p.test/x" });
   expect(socketRequest({ type: "open", url: "wss://p.test/hmr", method: "GET", headers: [], authorization: {} })).toEqual({ type: "open", url: "wss://p.test/hmr", method: "GET", headers: [] });

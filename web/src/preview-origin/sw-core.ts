@@ -4,7 +4,7 @@
 //
 // Globals stay out of this module so the routing can be unit-tested (sw.ts binds them).
 import {
-  COOKIE_PATH, FRAME_MESSAGE, RELAY_PATH, SHIM_PATH, SW_ATTACH, SW_COOKIES, SW_COOKIES_ACK, SW_NEED_PORT, SW_PATH, SW_SHIM, SW_SOCKET,
+  COOKIE_PATH, FRAME_MESSAGE, IDE_ONLY_MESSAGE, RELAY_PATH, SHIM_PATH, SW_ATTACH, SW_COOKIES, SW_COOKIES_ACK, SW_NEED_PORT, SW_PATH, SW_SHIM, SW_SOCKET,
   type ScriptCookie, type SessionReply, type SessionRequest,
 } from "./protocol";
 import { insertAfterDoctype } from "../preview-html";
@@ -57,9 +57,8 @@ interface Attachment {
 
 interface RequestContext {
   readonly method: string;
+  /** A navigation of a frame inside the cross-origin isolated IDE page: top-level visits are never relayed. */
   readonly navigation: boolean;
-  /** A navigation of a frame inside the cross-origin isolated IDE page. */
-  readonly framed: boolean;
   readonly clientId: string;
   readonly signal?: AbortSignal;
 }
@@ -79,6 +78,26 @@ export function withoutFrameAncestors(value: string): string {
     .map(policy => policy.split(";").filter(directive => !/^\s*frame-ancestors(\s|$)/i.test(directive)).join(";").trim())
     .filter(policy => policy !== "")
     .join(", ");
+}
+
+const SCRIPT_DIRECTIVES = ["script-src-elem", "script-src", "default-src"];
+
+/** The nonce that the directive governing script elements of one policy asks for, if it asks for one. */
+function policyNonce(policy: string): string | undefined {
+  const directives = new Map(policy.split(";").map((directive) => {
+    const [name = "", ...sources] = directive.trim().split(/\s+/);
+    return [name.toLowerCase(), sources] as const;
+  }));
+  const governing = SCRIPT_DIRECTIVES.map(name => directives.get(name)).find(sources => sources !== undefined);
+  return governing?.map(source => /^'nonce-([A-Za-z0-9+/_-]+={0,2})'$/.exec(source)?.[1]).find(nonce => nonce !== undefined);
+}
+
+/**
+ * The nonce a response's Content-Security-Policy accepts for script elements. The injected shim
+ * carries it, as the app's own scripts do, so a nonce-based policy does not keep the shim out.
+ */
+export function scriptNonce(value: string | null): string | undefined {
+  return value?.split(",").map(policyNonce).find(nonce => nonce !== undefined);
 }
 
 export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
@@ -252,9 +271,21 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
     return headers;
   }
 
+  /**
+   * A top-level visit gets the static host's answer, whatever it asks for: a tab on the preview
+   * origin is outside the IDE page, so nothing of the app, its cookies included, is served to it.
+   */
+  function ideOnly(method: string): Response {
+    const headers = documentHeaders(false);
+    headers.set("content-type", "text/html; charset=utf-8");
+    headers.set("content-security-policy", "default-src 'none'; frame-ancestors 'none'");
+    const page = `<!doctype html><meta charset="utf-8"><title>Preview</title><body><p role="status">${escapeHtml(IDE_ONLY_MESSAGE)}</p></body>`;
+    return new Response(method === "HEAD" ? null : page, { status: 403, headers });
+  }
+
   /** This worker's own answer where the server gave none. Frames tell their embedder, which may retry. */
   function gateway(context: RequestContext, status: number, message: string, transient: boolean): Response {
-    const headers = documentHeaders(context.framed);
+    const headers = documentHeaders(context.navigation);
     if (!context.navigation) {
       headers.set("content-type", "text/plain; charset=utf-8");
       return new Response(`${message}\n`, { status, headers });
@@ -282,8 +313,9 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
     if (frameAncestors) headers.append("content-security-policy", frameAncestors);
   }
 
-  function shimTag(): string {
-    return `<script src="${SHIM_PATH}" data-bunwasm-preview="shim" data-cookies="${escapeHtml(JSON.stringify(cookies))}"></script>`;
+  function shimTag(nonce: string | undefined): string {
+    const allowed = nonce ? ` nonce="${escapeHtml(nonce)}"` : "";
+    return `<script src="${SHIM_PATH}"${allowed} data-bunwasm-preview="shim" data-cookies="${escapeHtml(JSON.stringify(cookies))}"></script>`;
   }
 
   function buildResponse(context: RequestContext, head: ResponseHead, stream: ReadableStream<Uint8Array>): Response {
@@ -292,11 +324,13 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
       if (DROP_RESPONSE.has(name.toLowerCase())) continue;
       try { headers.append(name, value); } catch { /* A header the browser rejects is skipped. */ }
     }
-    if (context.framed) framePolicy(headers);
+    if (context.navigation) framePolicy(headers);
     const bodyless = context.method === "HEAD" || NULL_BODY.has(head.status);
+    // Any other document (plain text, an image, a compressed page) goes through as it is, without
+    // the shim: its embedder learns that it loaded from the frame itself (RootPreviews.watchFrame).
     const html = context.navigation && !bodyless
       && (headers.get("content-type")?.toLowerCase().includes("text/html") ?? false) && !headers.get("content-encoding");
-    const body = bodyless ? null : html ? insertAfterDoctype(stream, shimTag()) : stream;
+    const body = bodyless ? null : html ? insertAfterDoctype(stream, shimTag(scriptNonce(headers.get("content-security-policy")))) : stream;
     try {
       return new Response(body, { status: head.status, statusText: head.statusText, headers });
     } catch (error) {
@@ -372,20 +406,16 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
   }
 
   function forward(request: Request, url: URL, clientId: string): Promise<Response> {
-    const navigation = request.mode === "navigate";
-    const context: RequestContext = {
-      method: request.method,
-      navigation,
-      framed: navigation && request.destination !== "document",
-      clientId,
-      signal: request.signal,
-    };
+    const context: RequestContext = { method: request.method, navigation: request.mode === "navigate", clientId, signal: request.signal };
     const bodyless = request.method === "GET" || request.method === "HEAD";
     // Both start now, so a request waits only for its own body and for what arrived before it.
     const ready = Promise.all([acquire(), bodyless ? null : request.arrayBuffer()]).catch(() => null);
     return new Promise<Response>(resolve => {
       inOrder(ready, prepared => {
         const attachment = prepared?.[0];
+        // The page gave up while this request waited for its turn: nothing is opened for it, so
+        // the guest sees no connection and no exchange slot is held.
+        if (request.signal.aborted) { resolve(gateway(context, 503, "Preview request aborted", false)); return; }
         if (!prepared) { resolve(gateway(context, 400, "The preview request body could not be read.", false)); return; }
         if (!attachment) { resolve(gateway(context, 503, "This preview is not connected to its IDE tab. Open it from the IDE.", true)); return; }
         resolve(relay(attachment, context, request, url, prepared[1]));
@@ -427,6 +457,7 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
     if (url.origin !== options.origin) return;
     // The relay page and this script come from the static host.
     if (url.pathname === SW_PATH || url.pathname === RELAY_PATH) return;
+    if (request.mode === "navigate" && request.destination === "document") return Promise.resolve(ideOnly(request.method));
     if (url.pathname === SHIM_PATH) {
       return Promise.resolve(new Response(options.shimScript, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } }));
     }

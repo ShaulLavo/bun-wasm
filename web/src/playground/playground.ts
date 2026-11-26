@@ -15,7 +15,7 @@ import { HostedPreviews } from "../hosted-previews";
 import type { BunNetworkOptions, BunProcessStart, RuntimeNetworkHelper } from "../net/helper";
 import { Previews } from "../preview";
 import { previewHostEnv, resolvePreviewOriginConfig, type PreviewOriginConfig } from "../preview-origin/protocol";
-import { RootPreviews } from "../preview-origin/root-previews";
+import { RootPreviews, type FrameWatch } from "../preview-origin/root-previews";
 import { installRuntimeSharedObjects } from "../shared-objects/runtime";
 import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "../shared-fs";
 import type { BrowserSession, SessionState } from "bash-web/session";
@@ -127,7 +127,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   /** The demo the visitor last started; `?demo=<id>` starts one when the page is ready. */
   activeDemo: Demo | undefined;
   /** A server started in the examples workspace, shown docked next to the terminal. */
-  dockedPreview: { url: string; port: number; key: number; launch: Launch | undefined } | undefined;
+  /** `link` opens the preview in a new tab: the URL itself, or the IDE-origin wrapper page of a preview origin. */
+  dockedPreview: { url: string; link: string; port: number; key: number; launch: Launch | undefined } | undefined;
   /** The pane a phone shows in the examples workspace. */
   pane: Pane = "code";
   /** Who owns the foreground: nothing, a demo or Restart preparing, or a launch the playground submitted. */
@@ -626,9 +627,17 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
    * process has none, so its preview offers no Restart.
    */
   private dockPreview(url: string, port: number, launch: Launch | undefined): void {
-    this.dockedPreview = { url, port, key: ++this.previewKey, launch };
+    this.dockedPreview = { url, link: this.previews?.linkFor(url) ?? url, port, key: ++this.previewKey, launch };
     if (launch?.demo) this.pane = "preview";
     this.changed();
+  }
+
+  /**
+   * A preview on its own origin says for itself when its frame loaded or failed. Mounted previews
+   * return undefined: their frame is same-origin and the dock reads it.
+   */
+  watchPreviewFrame(frame: HTMLIFrameElement, watch: FrameWatch): (() => void) | undefined {
+    return this.previews instanceof RootPreviews ? this.previews.watchFrame(frame, watch) : undefined;
   }
 
   closePreview(): void {

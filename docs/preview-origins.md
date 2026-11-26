@@ -24,8 +24,9 @@ bun web/build.ts && bun web/serve.ts      # or the sandbox: ROOT=sandbox/dist bu
 Open the printed address on `localhost` with `?preview-origin`. Previews then load from
 `<id>-<port>-pv.localhost:<port>`, which every browser resolves to this machine. The parameter also
 takes a domain (`?preview-origin=app.localhost:4173` with the page on `ide.app.localhost:4173`). It
-is honored only on a loopback or `.test` page host: on a public host a crafted link could otherwise
-hand a workspace's dev server to another domain. A deployed site gets its domain at build time:
+is honored only on a loopback or `.test` page host, and only for a preview domain under `localhost`
+or `.test`: the page hands each preview origin a port to its dev server, so a link must never choose
+a public place for it. A public domain comes from the build and from nowhere else:
 `BUN_WASM_PREVIEW_ORIGIN=sprockt.dev bun web/build.ts`.
 
 ## How a request travels
@@ -53,12 +54,19 @@ A service worker cannot carry WebSockets, so every HTML document gets one inject
 replaces `WebSocket` for the preview's own origin and opens the socket over a port that runs from
 the page to the IDE directly, so a hot-reload connection outlives a service worker restart.
 
+A port gives no sign when the tab at its other end is gone, except in Chromium. An open socket
+therefore pings the IDE tab every 15 seconds and fails after two unanswered pings, and the IDE ends
+the server's connection for a page it has not heard from for 150 seconds. The IDE reads a socket's
+whole response head (64 KiB at most) and removes `Set-Cookie` before any of it reaches the page; a
+longer head fails the socket.
+
 ## Trust
 
 The whole preview origin is untrusted: the app's code runs there. The capability is the
 `MessagePort`. Its handler in the IDE page holds exactly one Waffle grant and supplies it itself,
-so nothing sent from the preview origin can select another port, workspace or owner; malformed
-messages are dropped before they reach Waffle. The relay frame takes ports only from an allowed
+so nothing sent from the preview origin can select another port, workspace or owner. A request
+with an unknown `credentials` value or a header that is not a valid HTTP header is refused, and any
+other malformed message is dropped, before it reaches Waffle. The relay frame takes ports only from an allowed
 IDE origin, and `frame-ancestors` keeps other sites from framing the preview host's own pages.
 
 ## Cookies
@@ -85,7 +93,9 @@ workspace and the playground use the tab's identity.
 A top-level tab on a preview origin cannot reach the IDE tab's relay in every browser (Safari keeps
 a frame's service worker apart from a tab's, even on one site). "Open in a new tab" therefore opens
 `preview-frame.html` on the IDE origin, which frames the preview. A direct visit to a preview host
-says to open it from the IDE. The new tab works while the IDE tab that runs the server stays open.
+gets a `403` page that says to open it from the IDE, from the static host and from the origin's
+service worker alike, so the app and its cookies are never served to a tab outside the IDE. The new
+tab works while the IDE tab that runs the server stays open.
 
 ## Hosting
 
@@ -96,7 +106,7 @@ The preview host serves four fixed files and nothing else (`handlePreviewOriginR
 | `/__bunwasm-preview/sw.js` | the service worker, scope `/` |
 | `/__bunwasm-preview/relay.html` | the relay page |
 | a framed navigation | a page that registers the worker, then navigates once |
-| a top-level navigation | "open this from the IDE" |
+| a top-level navigation | `403`, "open this from the IDE" |
 | anything else | `503` |
 
 `web/serve.ts` answers preview hosts on its own port. For Cloudflare, `site/preview-worker.ts` with
@@ -131,8 +141,13 @@ const response = handlePreviewOriginRequest(request, { domain: "sprockt.dev", id
 showPreviewFrame({ domain: "sprockt.dev" });
 ```
 
-`previews.observeFrame(frame, listener)` reports `load` and `error` from the preview document
-itself; a cross-origin frame's own `load` event fires for error pages too.
+`previews.watchFrame(frame, { loaded, failed })` tells when a preview frame settled. A cross-origin
+frame's `load` event fires for error pages too, so three things settle it: the page's own report
+(HTML pages get it with the injected script, which carries the nonce of a nonce-based
+Content-Security-Policy); the service worker's error page, which reports a failure and whether a
+retry is worth it; and, for a document that cannot report (plain text, an image, a page whose policy
+allows no script), the frame's `load` event once this tab's server has answered a frame navigation.
+A tab that shows another tab's server takes the `load` event as it is.
 
 ## Limits
 

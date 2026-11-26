@@ -135,6 +135,7 @@ function previewOrigin(req: Request, server: { url: URL }): Promise<Response> | 
   const ideHosts = ["localhost", "127.0.0.1"].concat(process.env.PREVIEW_IDE_HOSTS?.split(",").filter(Boolean) ?? []);
   return handlePreviewOriginRequest(req, {
     domain: `${process.env.PREVIEW_ORIGIN_HOST || "localhost"}${authority}`,
+    scheme: protocol === "https:" ? "https" : "http",
     ideOrigins: ideHosts.map(host => `${protocol}//${host}${authority}`),
     asset: name => Bun.file(join(root, "__preview-origin", name)).text(),
   });

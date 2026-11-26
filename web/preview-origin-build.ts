@@ -9,7 +9,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { previewOriginShimScript } from "./preview-build";
 import { IDE_ORIGINS_PLACEHOLDER, type PreviewOriginAsset } from "./src/preview-origin/host";
-import { FRAME_PAGE } from "./src/preview-origin/protocol";
+import { FRAME_PAGE, IDE_ONLY_MESSAGE } from "./src/preview-origin/protocol";
 
 const source = join(import.meta.dir, "src/preview-origin");
 
@@ -52,7 +52,7 @@ export async function previewOriginAssets(): Promise<Record<PreviewOriginAsset, 
     "sw.js": worker,
     "relay.html": document("Preview relay", `<script>self.__bunwasmPreviewIdeOrigins=${IDE_ORIGINS_PLACEHOLDER};</script>${inline(relay)}`),
     "bootstrap.html": document("Loading preview", `<p role="status">Starting the preview…</p>${inline(bootstrap)}`),
-    "top.html": document("Preview", `<p role="status">This preview only works inside its IDE tab. Open it from the IDE.</p>`),
+    "top.html": document("Preview", `<p role="status">${IDE_ONLY_MESSAGE}</p>`),
   };
 }
 

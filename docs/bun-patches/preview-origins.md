@@ -25,7 +25,8 @@ behavior.
 
 - The page shim bundles `web/src/preview-websocket-client.ts`, the existing adapter of the runtime's
   WebSocket client ([its record](preview-websocket-visible-headers.md)). On a preview origin that
-  adapter sends the upgrade as structured fields instead of raw bytes.
+  adapter sends the upgrade as structured fields instead of raw bytes, and pings the IDE tab while
+  the socket is open.
 - The exchange framing follows `web/src/preview-owner-client.ts` (ids, open, input, output,
   finish) over a `MessagePort` instead of the loopback host's WebSocket. The loopback host
   ([its record](preview-origin-host.md)) is unchanged.
@@ -46,3 +47,15 @@ behavior.
   never chosen, whichever of two ports arrives first.
 - `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` is Vite's own variable for hosted environments. It
   avoids a `server.allowedHosts` edit in every template.
+- The `?preview-origin` parameter names local domains only (`localhost`, `.test`). The IDE page
+  sends each preview origin a port to its dev server, so a link must not be able to name a public one.
+- A socket's upgrade response head is held until all of it arrived and `Set-Cookie` is removed. A
+  head past 64 KiB fails the socket: forwarding it unread could carry an HttpOnly cookie to the page.
+- A top-level visit is refused by the service worker with the static host's answer. In a same-site
+  layout the worker also controls a tab on the preview origin in Chromium and Firefox, and would
+  otherwise serve the app and its cookies outside the IDE.
+- A socket port has no disconnect signal outside Chromium, so the page pings the IDE tab (it counts
+  unanswered pings, because a hidden page's timers are throttled) and the IDE drops a silent page.
+- A frame settles by its `load` event only once the tab's own server answered a frame navigation.
+  That event also fires for the cold-load page and for error pages, and a plain-text document or one
+  whose policy allows no script has no other way to say that it loaded.

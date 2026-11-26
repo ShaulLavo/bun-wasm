@@ -36,7 +36,10 @@ test("a framed navigation boots the worker, a top-level one is told to use the I
   const framed = await get(`https://${HOST}/dashboard?x=1`, { "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe" })!;
   expect(await framed.text()).toBe("asset:bootstrap.html");
   expect(framed.headers.get("content-security-policy")).toStartWith("frame-ancestors https://bun.sprockt.dev");
-  const top = await get(`https://${HOST}/`, { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" })!;
+  expect(framed.status).toBe(200);
+  // The same answer the installed service worker gives a top-level visit (preview-origin-sw.test.ts).
+  const top = await get(`https://${HOST}/account/secret`, { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" })!;
+  expect(top.status).toBe(403);
   expect(await top.text()).toBe("asset:top.html");
   const legacy = await get(`https://${HOST}/`, { accept: "text/html,application/xhtml+xml" })!;
   expect(await legacy.text()).toBe("asset:bootstrap.html");
@@ -48,6 +51,19 @@ test("a framed navigation boots the worker, a top-level one is told to use the I
   const head = await get(`https://${HOST}${SW_PATH}`, {}, "HEAD")!;
   expect(head.status).toBe(200);
   expect(await head.text()).toBe("");
+});
+
+test("a domain configured with its scheme's default port answers the hosts browsers actually send", async () => {
+  const id = "a".repeat(52);
+  const asked = (url: string, hostConfig: Pick<PreviewOriginHostConfig, "domain" | "scheme">) => handlePreviewOriginRequest(new Request(url), { ...config, ...hostConfig });
+  // `example.test:443` over https is `example.test`: the names the IDE page makes carry no port.
+  for (const domain of ["example.test:443", "example.test"]) {
+    expect(await asked(`https://${id}-5173-pv.example.test${SW_PATH}`, { domain })!.then(response => response.status)).toBe(200);
+    expect(asked(`https://${id}-5173-pv.example.test:8443${SW_PATH}`, { domain })).toBeNull();
+  }
+  expect(await asked(`http://${id}-5173-pv.example.test${SW_PATH}`, { domain: "example.test:80", scheme: "http" })!.then(response => response.status)).toBe(200);
+  expect(await asked(`http://${id}-5173-pv.example.test:8080${SW_PATH}`, { domain: "example.test:8080", scheme: "http" })!.then(response => response.status)).toBe(200);
+  expect(asked(`http://${id}-5173-pv.example.test${SW_PATH}`, { domain: "example.test:8080", scheme: "http" })).toBeNull();
 });
 
 test("with no IDE origin configured nothing may frame a preview page", async () => {
