@@ -650,9 +650,10 @@ fn install_probe(
               -> Result<i32> {
             let memory = memory(&mut caller)?;
             let size = memory.len(&caller);
-            let (Some(list), Some(output)) =
-                (span(size, paths, length as u32 as usize), span(size, found, 4))
-            else {
+            let (Some(list), Some(output)) = (
+                span(size, paths, length as u32 as usize),
+                span(size, found, 4),
+            ) else {
                 return Ok(FAULT);
             };
             let bytes = memory.read(&caller, list).unwrap_or_default();
@@ -847,13 +848,20 @@ mod tests {
             ("/", ".", true, true),
         ];
         for (start, path, directory, expected) in cases {
-            assert_eq!(roots.names(start, path, directory), expected, "{start} {path} {directory}");
+            assert_eq!(
+                roots.names(start, path, directory),
+                expected,
+                "{start} {path} {directory}"
+            );
         }
     }
 
     #[test]
     fn probe_lists_end_in_a_nul_and_hold_at_most_the_limit() {
-        assert_eq!(probe_names(b"a\0b/c\0"), Some(vec!["a".into(), "b/c".into()]));
+        assert_eq!(
+            probe_names(b"a\0b/c\0"),
+            Some(vec!["a".into(), "b/c".into()])
+        );
         assert_eq!(probe_names(b"\0"), Some(vec![String::new()]));
         assert_eq!(probe_names(b""), None);
         assert_eq!(probe_names(b"a"), None);

@@ -187,7 +187,9 @@ fn file_candidates(path: &str) -> Vec<String> {
 
 /// `dir/index` with each extension, in Bun's order.
 fn index_candidates(dir: &str) -> impl Iterator<Item = String> + '_ {
-    EXTENSIONS.iter().map(move |ext| format!("{dir}/index{ext}"))
+    EXTENSIONS
+        .iter()
+        .map(move |ext| format!("{dir}/index{ext}"))
 }
 
 /// `node_modules/<name>` in `from_dir` and each of its ancestors up to `/`, nearest first.
