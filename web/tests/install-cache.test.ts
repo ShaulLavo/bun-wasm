@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { installFetch } from "../src/net/install-cache.js";
+import { clearInstallCache, installFetch } from "../src/net/install-cache.js";
 
 const TARBALL = "application/vnd.bun.install-tarball";
 const CACHE_LIMIT = 4 * 1024 * 1024;
@@ -11,6 +11,7 @@ interface Deferred<T> {
 }
 
 interface CacheDouble {
+  keys?(): Promise<readonly Request[]>;
   match(url: string): Promise<Response | undefined>;
   put(url: string, response: Response): Promise<void>;
 }
@@ -546,4 +547,308 @@ test("authentication, metadata and ordinary requests bypass tarball persistence"
     if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches);
     else Reflect.deleteProperty(globalThis, "caches");
   }
+});
+
+interface IndexedCacheStorage {
+  storage: { open(name: string): Promise<CacheDouble>; delete(name: string): Promise<boolean> };
+  opens: string[];
+  deletes: string[];
+  keysCalls: number;
+  matchCalls: string[];
+  putCalls: string[];
+  stored: Map<string, Response>;
+}
+
+function indexedCacheStorage(initial: Record<string, Response> = {}, overrides: Partial<CacheDouble> = {}): IndexedCacheStorage {
+  const stored = new Map<string, Response>(Object.entries(initial).map(([url, response]) => [new URL(url).href, response]));
+  const opens: string[] = [];
+  const deletes: string[] = [];
+  const matchCalls: string[] = [];
+  const putCalls: string[] = [];
+  const state: IndexedCacheStorage = {
+    opens,
+    deletes,
+    keysCalls: 0,
+    matchCalls,
+    putCalls,
+    stored,
+    storage: {
+      async open(name: string) {
+        opens.push(name);
+        return cache;
+      },
+      async delete(name: string) {
+        deletes.push(name);
+        stored.clear();
+        return true;
+      },
+    },
+  };
+  const cache: CacheDouble = {
+    async keys() {
+      state.keysCalls++;
+      return Array.from(stored.keys(), url => new Request(url));
+    },
+    async match(url: string) {
+      matchCalls.push(url);
+      const hit = stored.get(new URL(url).href);
+      return hit ? Response.prototype.clone.call(hit) : undefined;
+    },
+    async put(url: string, response: Response) {
+      putCalls.push(url);
+      stored.set(new URL(url).href, Response.prototype.clone.call(response));
+      await response.arrayBuffer();
+    },
+    ...overrides,
+  };
+  return state;
+}
+
+async function withStorage<T>(
+  storage: { open(name: string): Promise<CacheDouble>; delete?(name: string): Promise<boolean> },
+  fetcher: (...args: Parameters<typeof fetch>) => Promise<Response>,
+  run: () => Promise<T>,
+): Promise<T> {
+  const originalCaches = Object.getOwnPropertyDescriptor(globalThis, "caches");
+  const originalFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "caches", { configurable: true, value: storage });
+  globalThis.fetch = Object.assign(fetcher, { preconnect: originalFetch.preconnect });
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches);
+    else Reflect.deleteProperty(globalThis, "caches");
+  }
+}
+
+test("cold misses skip cache.match once cache.keys loads and reuse the opened cache", async () => {
+  const env = indexedCacheStorage();
+  let networkCalls = 0;
+  await withStorage(env.storage, async (input) => {
+    networkCalls++;
+    return new Response(`body:${String(input)}`);
+  }, async () => {
+    const urls = Array.from({ length: 12 }, (_, index) => `https://registry.invalid/pkg-${index}.tgz`);
+    const bodies = await Promise.all(urls.map(async url => (await installFetch(url, requestOptions())).text()));
+    expect(bodies).toEqual(urls.map(url => `body:${url}`));
+    expect(env.opens).toEqual(["bun-wasm-install-v1"]);
+    expect(env.keysCalls).toBe(1);
+    expect(env.matchCalls).toEqual([]);
+    expect(networkCalls).toBe(urls.length);
+  });
+});
+
+test("warm hits match normalized URLs and newly persisted cold misses become warm hits", async () => {
+  const warmUrl = "https://registry.invalid/warm.tgz";
+  const coldUrl = "https://registry.invalid/cold.tgz";
+  const coldPublished = deferred<void>();
+  const env = indexedCacheStorage({ [warmUrl]: new Response("warm body") }, {
+    async put(url, response) {
+      env.putCalls.push(url);
+      env.stored.set(new URL(url).href, Response.prototype.clone.call(response));
+      await response.arrayBuffer();
+      coldPublished.resolve();
+    },
+  });
+  let networkCalls = 0;
+  await withStorage(env.storage, async () => {
+    networkCalls++;
+    return new Response("cold body");
+  }, async () => {
+    const warm = await installFetch("https://REGISTRY.INVALID:443/dir/../warm.tgz", requestOptions());
+    expect(await warm.text()).toBe("warm body");
+    expect(env.matchCalls).toEqual(["https://REGISTRY.INVALID:443/dir/../warm.tgz"]);
+    expect(networkCalls).toBe(0);
+
+    const cold = await installFetch(coldUrl, requestOptions());
+    expect(await cold.text()).toBe("cold body");
+    expect(env.matchCalls).toEqual(["https://REGISTRY.INVALID:443/dir/../warm.tgz"]);
+    expect(networkCalls).toBe(1);
+
+    await observeBeforeDeadline(coldPublished.promise, "cold tarball was not persisted");
+    const hit = await installFetch(coldUrl, requestOptions());
+    expect(await hit.text()).toBe("cold body");
+    expect(networkCalls).toBe(1);
+    expect(env.matchCalls).toEqual(["https://REGISTRY.INVALID:443/dir/../warm.tgz", coldUrl]);
+  });
+});
+
+test("keys enumeration failures fall back to cache.match without breaking warm hits", async () => {
+  const hit = new Response("fallback cached");
+  const matchCalls: string[] = [];
+  const cache = cacheDouble({
+    async keys() { throw new Error("keys unavailable"); },
+    async match(url) { matchCalls.push(url); return hit; },
+  });
+  let networkCalls = 0;
+  await withEnvironment(cache, async () => { networkCalls++; return new Response("network"); }, async () => {
+    expect(await installFetch("https://registry.invalid/fallback.tgz", requestOptions())).toBe(hit);
+    expect(matchCalls).toEqual(["https://registry.invalid/fallback.tgz"]);
+    expect(networkCalls).toBe(0);
+  });
+});
+
+test("evicted keys drop from the index and no-cache refresh skips cache.match", async () => {
+  const url = "https://registry.invalid/evicted.tgz";
+  const env = indexedCacheStorage({ [url]: new Response("stale") });
+  let status = 503;
+  await withStorage(env.storage, async () => new Response("network", { status }), async () => {
+    // Simulate external eviction after keys() already reported the URL.
+    const originalKeys = env.storage.open;
+    let openedOnce = false;
+    env.storage.open = async (name) => {
+      const opened = await originalKeys(name);
+      if (!openedOnce) {
+        openedOnce = true;
+        const originalKeysFn = opened.keys!;
+        opened.keys = async () => {
+          const list = await originalKeysFn();
+          env.stored.clear();
+          return list;
+        };
+      }
+      return opened;
+    };
+
+    expect((await installFetch(url, requestOptions())).status).toBe(503);
+    expect(env.matchCalls).toEqual([url]);
+    // After the miss evicted the key from the index, a second miss skips cache.match.
+    expect((await installFetch(url, requestOptions())).status).toBe(503);
+    expect(env.matchCalls).toEqual([url]);
+
+    // Refresh also bypasses cache.match even when the key is known.
+    status = 200;
+    const refreshed = await installFetch(url, { method: "GET", headers: { accept: TARBALL, "cache-control": "no-cache" } });
+    expect(await refreshed.text()).toBe("network");
+    expect(env.matchCalls).toEqual([url]);
+  });
+});
+
+test("background cache.put writes stay serialized at concurrency 1 and survive failures", async () => {
+  const gates = [deferred<void>(), deferred<void>(), deferred<void>(), deferred<void>()];
+  const started: string[] = [];
+  const startedSignals = gates.map(() => deferred<void>());
+  let active = 0;
+  let peak = 0;
+  const completed: string[] = [];
+  const allDone = deferred<void>();
+  const env = indexedCacheStorage({}, {
+    async put(url, response) {
+      const index = started.length;
+      started.push(url);
+      startedSignals[index]!.resolve();
+      active++;
+      peak = Math.max(peak, active);
+      try {
+        await response.arrayBuffer();
+        await gates[index]!.promise;
+        if (index === 1) throw new Error("quota error on second put");
+        completed.push(url);
+      } finally {
+        active--;
+        if (started.length === gates.length && active === 0) allDone.resolve();
+      }
+    },
+  });
+  await withStorage(env.storage, async (input) => new Response(`payload:${String(input)}`), async () => {
+    const urls = gates.map((_, index) => `https://registry.invalid/serial-${index}.tgz`);
+    for (const url of urls) {
+      expect(await (await installFetch(url, requestOptions())).text()).toBe(`payload:${url}`);
+    }
+    await observeBeforeDeadline(startedSignals[0]!.promise, "first put did not start");
+    await Bun.sleep(10);
+    expect(started).toEqual([urls[0]!]);
+    expect(peak).toBe(1);
+
+    for (let index = 0; index < gates.length; index++) {
+      gates[index]!.resolve();
+      if (index + 1 < gates.length) {
+        await observeBeforeDeadline(startedSignals[index + 1]!.promise, `put ${index + 1} did not start`);
+      }
+    }
+    await observeBeforeDeadline(allDone.promise, "serial puts did not drain");
+    expect(peak).toBe(1);
+    expect(started).toEqual(urls);
+    expect(completed).toEqual([urls[0]!, urls[2]!, urls[3]!]);
+  });
+});
+
+test("put queue bounds total buffered bytes and drops overflow without stalling downloads", async () => {
+  const chunkSize = 3 * 1024 * 1024;
+  const firstPutStarted = deferred<void>();
+  const releaseFirstPut = deferred<void>();
+  const putUrls: string[] = [];
+  const secondPutDone = deferred<void>();
+  const env = indexedCacheStorage({}, {
+    async put(url, response) {
+      putUrls.push(url);
+      if (putUrls.length === 1) {
+        firstPutStarted.resolve();
+        await releaseFirstPut.promise;
+      }
+      await response.arrayBuffer();
+      if (putUrls.length === 2) secondPutDone.resolve();
+    },
+  });
+  const payload = bytes(chunkSize, 5);
+  await withStorage(env.storage, async () => new Response(responseBody(payload)), async () => {
+    const urls = [
+      "https://registry.invalid/big-0.tgz",
+      "https://registry.invalid/big-1.tgz",
+      "https://registry.invalid/big-2.tgz",
+    ];
+    // First 3 MiB response starts in-flight put (3 MiB <= 8 MiB).
+    expect((await readBody(await installFetch(urls[0]!, requestOptions()))).byteLength).toBe(chunkSize);
+    await observeBeforeDeadline(firstPutStarted.promise, "first big put did not start");
+    // Second 3 MiB response fits in the 8 MiB budget (3 + 3 = 6 MiB <= 8 MiB).
+    expect((await readBody(await installFetch(urls[1]!, requestOptions()))).byteLength).toBe(chunkSize);
+    // Third 3 MiB response exceeds 8 MiB (3 + 3 + 3 = 9 MiB > 8 MiB): download still completes cleanly, put is dropped.
+    expect((await readBody(await installFetch(urls[2]!, requestOptions()))).byteLength).toBe(chunkSize);
+
+    releaseFirstPut.resolve();
+    await observeBeforeDeadline(secondPutDone.promise, "second big put did not drain");
+    await Bun.sleep(15);
+    expect(putUrls).toEqual([urls[0]!, urls[1]!]);
+  });
+});
+
+test("clearInstallCache drops queued puts, resets the key index, and deletes the cache", async () => {
+  const firstStarted = deferred<void>();
+  const releaseFirst = deferred<void>();
+  const putUrls: string[] = [];
+  const env = indexedCacheStorage({}, {
+    async put(url, response) {
+      putUrls.push(url);
+      if (putUrls.length === 1) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      }
+      await response.arrayBuffer();
+    },
+  });
+  let networkCalls = 0;
+  await withStorage(env.storage, async (input) => {
+    networkCalls++;
+    return new Response(`fresh:${String(input)}`);
+  }, async () => {
+    const firstUrl = "https://registry.invalid/clear-0.tgz";
+    const secondUrl = "https://registry.invalid/clear-1.tgz";
+    expect(await (await installFetch(firstUrl, requestOptions())).text()).toBe(`fresh:${firstUrl}`);
+    await observeBeforeDeadline(firstStarted.promise, "first put did not start");
+    expect(await (await installFetch(secondUrl, requestOptions())).text()).toBe(`fresh:${secondUrl}`);
+
+    expect(await clearInstallCache()).toBe(true);
+    expect(env.deletes).toEqual(["bun-wasm-install-v1"]);
+
+    releaseFirst.resolve();
+    await Bun.sleep(15);
+    // Queued second put was dropped by clearInstallCache, and first put did not populate the next session.
+    expect(putUrls).toEqual([firstUrl]);
+
+    expect(await (await installFetch(firstUrl, requestOptions())).text()).toBe(`fresh:${firstUrl}`);
+    expect(env.opens).toEqual(["bun-wasm-install-v1", "bun-wasm-install-v1"]);
+    expect(env.matchCalls).toEqual([]);
+    expect(networkCalls).toBe(3);
+  });
 });
