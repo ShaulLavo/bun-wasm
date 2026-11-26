@@ -55,26 +55,40 @@ test("bus rejects wrong documents, stale replies and expired commands", async ()
 });
 
 test("native cleanup shares one deadline, cancels its child and never dispatches a later input", async () => {
-  const started: { args: string[]; at: number; timeoutMs: number }[] = [];
+  const { started, active, deadline } = await sharedCleanupDeadline();
+  expect(started.map(item => item.args[0])).toEqual(["open", "batch"]);
+  expect(started.map(item => item.timeoutMs)).toEqual([200, 125]);
+  expect(started.every(item => item.at < deadline && item.timeoutMs > 0 && item.timeoutMs <= deadline - item.at)).toBe(true);
+  expect(started[1]!.signal.aborted).toBe(true);
+  expect(active()).toBe(0);
+  await Bun.sleep(250);
+  expect(started).toHaveLength(2);
+});
+
+async function sharedCleanupDeadline() {
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const started: { args: string[]; at: number; timeoutMs: number; signal: AbortSignal }[] = [];
   let active = 0;
-  const deadline = Date.now() + 200;
-  await expect(closeIphoneTab(async (args, timeoutMs, signal) => {
+  const deadline = now + 200;
+  const runStep = (signal: AbortSignal) => {
+    if (started.length === 1) {
+      now += 75;
+      return Promise.resolve("");
+    }
+    // Wait on the cleanup deadline signal (with a generous hang cap) so cancellation is driven by closeIphoneTab.
+    return ownedCommand([process.execPath, "-e", "await Bun.sleep(60_000)"], signal, 60_000);
+  };
+  const command = (args: string[], timeoutMs: number, signal: AbortSignal) => {
     expect(active).toBe(0);
     active++;
-    started.push({ args, at: Date.now(), timeoutMs });
-    try {
-      const delay = started.length === 1 ? 10 : 500;
-      return await ownedCommand([process.execPath, "-e", `await Bun.sleep(${delay}); console.log('done')`], signal, timeoutMs);
-    } finally { active--; }
-  }, "owned tab", deadline)).rejects.toThrow();
-  const count = started.length;
-  expect(count).toBeGreaterThan(0);
-  expect(count).toBeLessThanOrEqual(2);
-  expect(active).toBe(0);
-  expect(started.every(item => item.at < deadline && item.timeoutMs <= deadline - item.at + 1)).toBe(true);
-  await Bun.sleep(250);
-  expect(started.length).toBe(count);
-});
+    started.push({ args, at: now, timeoutMs, signal });
+    return runStep(signal).finally(() => { active--; });
+  };
+  try { await expect(closeIphoneTab(command, "owned tab", deadline)).rejects.toThrow("iPhone cleanup deadline expired"); }
+  finally { clock.mockRestore(); }
+  return { started, active: () => active, deadline };
+}
 
 test("transport close is cached and reaps its timed-out native command before any further input", async () => {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-goals-close-"));
