@@ -38,6 +38,22 @@ function record(type: "change" | "rename" | "overflow", name?: string | null) {
 }
 const chunk = (...records: Uint8Array[]) => Buffer.concat(records);
 
+/** runtime_fs.watch_next over a real GuestWatchTable, as natives.rs surfaces it. */
+function tableNext(table: GuestWatchTable): () => [number, Uint8Array | number] | number {
+  return () => {
+    try {
+      const result = table.readNext(65536);
+      if (result.kind === "error") return -result.errno;
+      if (result.kind === "watch_error") return [result.id, -result.errno];
+      if (result.kind === "short") throw new Error("unexpected short watch record");
+      return [result.id, result.length ? Buffer.concat(result.records) : 0];
+    } catch (error) {
+      if (error instanceof FilesystemError) return -error.errno;
+      throw error;
+    }
+  };
+}
+
 function fixture(options: { resolve?: (path: string) => { dev?: bigint; ino: bigint } | number } = {}) {
   const queued = new Map<number, (Uint8Array | number)[]>();
   const opened: { path: string; recursive: boolean; id: number; fd?: number }[] = [];
@@ -46,7 +62,7 @@ function fixture(options: { resolve?: (path: string) => { dev?: bigint; ino: big
   const fdToPath = new Map<number, string>();
   const ticks: (() => void)[] = [];
   const effects = { stats: 0, timers: 0, scans: 0 };
-  const traffic = { readiness: 0, reads: 0 };
+  const traffic = { readiness: 0, reads: 0, next: 0 };
   let nextId = 40;
   let nextFd = 100;
   let openResult: number | undefined;
@@ -85,6 +101,17 @@ function fixture(options: { resolve?: (path: string) => { dev?: bigint; ino: big
         traffic.reads++;
         if (closed.includes(id)) return -8;
         return queued.get(id)?.shift() ?? -6;
+      },
+      // Like runtime_fs.watch_next: the first open watch with a result, then rotate it last.
+      fsWatchNext(): [number, Uint8Array | number] | number {
+        traffic.next++;
+        for (const [id, results] of queued) {
+          if (closed.includes(id) || results.length === 0) continue;
+          queued.delete(id);
+          queued.set(id, results);
+          return [id, results.shift()!];
+        }
+        return -6;
       },
       fsWatchClose(id: number) {
         if (closed.includes(id)) return -8;
@@ -133,7 +160,7 @@ test("idle turns query readiness once and read none of the registered watches", 
   const watchers = Array.from({ length: 2000 }, (_, index) => world.module.watch(`/app/${index}`));
   try {
     for (let turn = 0; turn < 10; turn++) expect(world.pump()).toBe(false);
-    expect(world.traffic).toEqual({ readiness: 10, reads: 0 });
+    expect(world.traffic).toEqual({ readiness: 10, reads: 0, next: 0 });
   } finally { for (const watcher of watchers) watcher.close(); }
   world.pump();
   expect(world.traffic.readiness).toBe(10);
@@ -161,6 +188,7 @@ function providerFixture() {
       throw error;
     }
   };
+  world.internal.native.fsWatchNext = tableNext(table);
   world.internal.native.fsWatchClose = (watch: number) => table.close(watch);
   return { ...world, table, id: () => id, closed: () => closed,
     commit(value: WatchBatch) { batch = value; Atomics.add(cells, 3, 1); },
@@ -553,6 +581,10 @@ test("repeated joins bound the shared backlog and preserve provider overflow", (
     const batch = Buffer.concat(q.splice(0, q.length) as Uint8Array[]);
     return batch;
   };
+  world.internal.native.fsWatchNext = () => {
+    const ready = Array.from(queues.keys()).find(id => overflowed.has(id) || queues.get(id)!.length > 0);
+    return ready === undefined ? -6 : [ready, world.internal.native.fsWatchRead(ready)];
+  };
   world.internal.native.fsWatchClose = (id: number) => {
     queues.delete(id);
     overflowed.delete(id);
@@ -662,6 +694,7 @@ test("captureBoundary bounds both records (<=128) and bytes (<=16384) against a 
         throw error;
       }
     };
+    world.internal.native.fsWatchNext = tableNext(table);
     world.internal.native.fsWatchClose = (id: number) => table.close(id);
     return {
       backend, world, table,
@@ -712,4 +745,147 @@ test("captureBoundary bounds both records (<=128) and bytes (<=16384) against a 
   longRun.world.pump();
   for (let i = 0; i < 70; i++) expect(longSeen.has(`${prefix}${i}`)).toBe(true);
   aLong.close();
+});
+
+test("writes under 1,500 watches reach their listeners through a few batched watch_next calls and no per-watch reads", () => {
+  const backend = new MemoryBackend();
+  const service = new WatchService(backend);
+  const root = backend.execute("preopen", ["/"], new Uint8Array()) as number;
+  const handles = new Map<string, number>();
+  for (let index = 0; index < 1500; index++) {
+    backend.execute("mkdirp", [`/app/d${index}`], new Uint8Array());
+    handles.set(`/app/d${index}`, (backend.execute("resolve", [root, `app/d${index}`], new Uint8Array()) as { node: number }).node);
+  }
+  const calls = { read: 0, drain: 0, next: 0 };
+  const table = new GuestWatchTable({
+    cells: backend.shared.watch.cells,
+    revoked: false,
+    open: (handle, recursive) => service.open(1, handle, recursive, () => false),
+    read: (id) => { calls.read++; return service.read(1, id); },
+    drain: () => {
+      calls.drain++;
+      const held = service.drainHeld(1);
+      try { return { entries: held.entries, more: held.more }; } finally { held.release(); }
+    },
+    close: (id) => service.close(1, id),
+  });
+  const world = fixture();
+  const next = tableNext(table);
+  // An empty identity never shares, so each path is its own registration.
+  world.internal.native.fsWatchResolve = (path: string): [number, string] => [handles.get(path)!, ""];
+  world.internal.native.fsWatchOpenFd = (fd: number, recursive: boolean) => table.open(fd, recursive);
+  world.internal.native.fsWatchDropFd = () => {};
+  world.internal.native.fsWatchReady = () => table.ready();
+  world.internal.native.fsWatchRead = () => { throw new Error("the hub reads through fsWatchNext"); };
+  world.internal.native.fsWatchNext = () => { calls.next++; return next(); };
+  world.internal.native.fsWatchClose = (id: number) => table.close(id);
+  const fired = new Set<string>();
+  const files = new Set<string>();
+  const watchers = Array.from(handles.keys(), path => world.module.watch(path, (type, name) => {
+    fired.add(path);
+    if (type === "rename") files.add(`${path}/${name}`);
+  }));
+  try {
+    for (const index of [3, 700, 1499]) backend.execute("writeFile", [`/app/d${index}/page.ts`, false], new Uint8Array([1]));
+    expect(world.pump()).toBe(true);
+    expect(Array.from(fired).toSorted()).toEqual(["/app/d1499", "/app/d3", "/app/d700"]);
+    expect(Array.from(files).toSorted()).toEqual(["/app/d1499/page.ts", "/app/d3/page.ts", "/app/d700/page.ts"]);
+    expect(calls.read).toBe(0);
+    expect(calls.drain).toBeGreaterThan(0);
+    expect(calls.next).toBeLessThan(10);
+  } finally { for (const watcher of watchers) watcher.close(); }
+});
+
+test("an unscoped watch_next error fails every watch, and an unknown id is released", () => {
+  const world = fixture();
+  const errors: string[] = [];
+  const watchers = ["/a", "/b"].map(path => world.module.watch(path).on("error", (error: { code: string }) => errors.push(`${path} ${error.code}`)));
+  const results: ([number, Uint8Array | number] | number)[] = [[99, chunk(record("change", "x"))], -29];
+  world.internal.native.fsWatchReady = () => results.length > 0;
+  world.internal.native.fsWatchNext = () => results.shift() ?? -6;
+  expect(world.pump()).toBe(true);
+  expect(world.closed.toSorted()).toEqual([40, 41, 99]);
+  expect(errors).toEqual(["/a EIO", "/b EIO"]);
+  expect(world.pending()).toBe(0);
+  for (const watcher of watchers) watcher.close();
+});
+
+test("an unhandled unscoped watch_next error still fails and closes remaining watches", () => {
+  const world = fixture();
+  const errors: string[] = [];
+  const first = world.module.watch("/a");
+  const second = world.module.watch("/b").on("error", (error: { code: string }) => errors.push(error.code));
+  world.internal.native.fsWatchReady = () => true;
+  world.internal.native.fsWatchNext = () => -29;
+  expect(() => world.pump()).toThrow("EIO");
+  expect(world.closed.toSorted()).toEqual([40, 41]);
+  expect(errors).toEqual(["EIO"]);
+  expect(world.pending()).toBe(0);
+  first.close();
+  second.close();
+});
+
+test("a late join during a watch_next pump drains the joined watch's backlog before socket waiters", () => {
+  const world = fixture({ resolve: path => ({ ino: path === "/a" ? 1n : 2n }) });
+  const seen: string[] = [];
+  let late: ReturnType<typeof world.module.watch> | undefined;
+  const watchA = world.module.watch("/a", (_type, name) => {
+    seen.push(`a:${String(name)}`);
+    // Joining /b moves /b's queued record into its backlog via captureBoundary before watch_next returns EAGAIN.
+    late = world.module.watch("/b", (_t, n) => seen.push(`b-late:${String(n)}`));
+  });
+  const watchB = world.module.watch("/b", (_type, name) => seen.push(`b:${String(name)}`));
+  let socketRan = false;
+  world.internal.addIoWaiter({
+    ref: true,
+    step() {
+      if (socketRan) return true;
+      socketRan = true;
+      seen.push("socket");
+      return true;
+    },
+    fail() {},
+  });
+  const nextResults: ([number, Uint8Array | number] | number)[] = [[40, chunk(record("change", "one"))]];
+  const readB: (Uint8Array | number)[] = [chunk(record("change", "two"))];
+  world.internal.native.fsWatchReady = () => nextResults.length > 0 || readB.length > 0;
+  world.internal.native.fsWatchNext = () => nextResults.shift() ?? -6;
+  world.internal.native.fsWatchRead = (id: number) => (id === 41 ? (readB.shift() ?? -6) : -6);
+  try {
+    expect(world.pump()).toBe(true);
+    expect(seen).toEqual(["a:one", "b:two", "socket"]);
+  } finally {
+    watchA.close();
+    watchB.close();
+    late?.close();
+  }
+});
+
+test("an unscoped watch_next error detaches sharing keys so a watch opened in an error handler stays open", () => {
+  const world = fixture({ resolve: path => ({ ino: path === "/a" ? 1n : 2n }) });
+  const events: string[] = [];
+  let reopened: ReturnType<typeof world.module.watch> | undefined;
+  const watchA = world.module.watch("/a").on("error", (error: { code: string }) => {
+    events.push(`a:${error.code}`);
+    reopened = world.module.watch("/b", (_type, name) => events.push(`b-new:${String(name)}`))
+      .on("error", (err: { code: string }) => events.push(`b-new:${err.code}`));
+  });
+  const watchB = world.module.watch("/b").on("error", (error: { code: string }) => events.push(`b:${error.code}`));
+  const nextResults: ([number, Uint8Array | number] | number)[] = [-29];
+  world.internal.native.fsWatchReady = () => nextResults.length > 0;
+  world.internal.native.fsWatchNext = () => nextResults.shift() ?? -6;
+  try {
+    expect(world.pump()).toBe(true);
+    expect(events).toEqual(["a:EIO", "b:EIO"]);
+    expect(world.closed.toSorted()).toEqual([40, 41]);
+    expect(reopened).toBeDefined();
+    // The replacement watch on /b got a fresh id (42) instead of joining the failing shared watch.
+    nextResults.push([42, chunk(record("change", "after"))]);
+    expect(world.pump()).toBe(true);
+    expect(events).toEqual(["a:EIO", "b:EIO", "b-new:after"]);
+  } finally {
+    watchA.close();
+    watchB.close();
+    reopened?.close();
+  }
 });

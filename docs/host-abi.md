@@ -607,6 +607,12 @@ following descriptor-scoped watch primitives together alongside `fsWatchReady`,
   Without `maxBytes`, grows the read buffer on `ENOBUFS` (`-42`); with `maxBytes`, caps the
   underlying `runtime_fs.watch_read` buffer to `maxBytes` and returns `-42` (`ENOBUFS`)
   without consuming records if the next record exceeds that cap.
+- `fsWatchNext() -> [id: number, Uint8Array | number] | number`:
+  One `runtime_fs.watch_next`: the next ready watch's id with its whole records, `0` at its end
+  of stream, or its negative watch-scoped WASI errno. A bare negative errno has no watch scope:
+  `-6` (`EAGAIN`) when no watch is ready. A first record larger than the reused buffer grows it
+  and retries. The watch hub drains through this call; `fsWatchRead` serves only the capped
+  capture when a subscriber joins a shared watch.
 
 How hosts implement the underlying WASI calls:
 

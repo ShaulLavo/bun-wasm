@@ -6,7 +6,7 @@ Class **Host feature**, **original adapter** in `src/js/fs_watch.ts`, wired by
 wraps a private native filesystem watcher that these engines cannot call.
 
 Each watcher subscribes through a single process-local watch hub over Waffle's `runtime_fs`
-imports (`watch_open`, `watch_ready`, `watch_read`, `watch_close`; Waffle `docs/host-abi.md`,
+imports (`watch_open`, `watch_ready`, `watch_read`, `watch_next`, `watch_close`; Waffle `docs/host-abi.md`,
 "Guest filesystem watches"). `fsWatchResolve(path)` opens the path once (following a final
 symlink) and derives its full-width 64-bit `(dev, ino)` identity from that open descriptor.
 Watchers on the exact same live `(dev, ino, recursive, path)` share one underlying watch
@@ -22,9 +22,17 @@ subscriber releases the native id. There is no timer and no tree scan. The hub r
 `watch: true` I/O waiter with no `runtime_proc` subscriptions, so the idle loop sleeps in the
 network host poll and `ioPending()` does not scan every open watcher. The Bun web executor arms
 Waffle's notification set for that poll (`NetHost.attachNotifications`), which wakes it when a
-filesystem commit is pending for a guest watch. The hub drains each shared watch's `fsWatchRead`
-(one reused 64 KiB buffer) until `EAGAIN`, preserving delivery and retirement for remaining
-subscribers if one throws and letting unhandled errors reach the uncaught path. A record is `u8`
+filesystem commit is pending for a guest watch. The hub first delivers any captured join
+backlogs, then calls `fsWatchNext()` (`runtime_fs.watch_next`, one reused 64 KiB buffer) until
+`EAGAIN`. Each call returns the next ready registration's id with its records, its end or a
+watch-scoped errno, so the hub never reads an idle watch: Waffle 0.0.155 drains only ready
+subscriptions in batched service replies (Waffle PR 653), where one read per watch used to cost
+a service round trip each. A watch's own backlog is delivered before anything newer for it. An
+error without a watch id fails every watch, and an id the hub doesn't hold is closed. One pump
+stops after 4,096 results so a listener that keeps writing inside a watched tree can't starve
+other I/O; the provider stays ready and the next turn continues. `fsWatchRead` remains only for
+the capped capture when a subscriber joins a shared watch. Delivery and retirement continue for
+remaining subscribers if one throws, and unhandled errors reach the uncaught path. A record is `u8`
 type (1 change, 2 rename, 3 overflow), three zero bytes, a little-endian `u32` name length
 (`0xffffffff` for the watched root and overflow), then the UTF-8 relative name padded to 4 bytes.
 Root events report the watched path's basename, as before.
@@ -95,8 +103,8 @@ checks that invalid encodings stat nothing and open no watch, and
 `scripts/runtime-fs-watch-events.test.ts` covers delivery, ordering and lifecycle
 over the real `net.js` scheduler.
 
-The native wasmtime host (`crates/bunwasm-host/src/fs_watch.rs`) implements the same four
-`runtime_fs` imports over the `notify` crate 8.2.0: inotify on Linux and FSEvents on macOS,
+The native wasmtime host (`crates/bunwasm-host/src/fs_watch.rs`) implements the same five
+`runtime_fs` watch imports over the `notify` crate 8.2.0: inotify on Linux and FSEvents on macOS,
 with no polling fallback. A watch follows the node the descriptor holds, never a saved
 pathname, so a rename, a replacement at the old path or `fd_renumber` cannot redirect it.
 `watch_open(fd)` reads that descriptor's preview1 `filestat` through Wasmtime's own
@@ -124,6 +132,10 @@ unqualified: no macOS run has exercised it. A WASI-level test also
 pins Wasmtime's `ino` to the host identity, so a Wasmtime change to it fails the tests. Each delivered
 notification bumps the network notification that `Slot::Poll` waits on, so a native guest wakes on the commit like a browser guest. Records,
 coalescing, the 128-record bound, overflow, end of stream and the errnos follow the Waffle ABI.
+Its `watch_read` and `watch_next` validate their output spans as Waffle 0.0.155 does (EFAULT, then
+EINVAL for overlap). `watch_next` (original) clears the id word and reads the open watches in id
+order starting after the one it last reported, so a busy watch can't starve the others; it returns
+`EAGAIN` when none has records, an end or a short first record.
 `notify` reports a new directory before watching it and never reports entries that already
 exist inside it. So when a recursive watch drains a directory create, it walks that
 directory and reports each entry as a rename, as Node's recursive watcher does. A native
@@ -141,21 +153,24 @@ Class **Host feature**, **adapted implementation** in `web/scripts/node-process.
 
 The Node host (`web/scripts/node-host.ts`, used by `scripts/jsc-embedding.ts` and
 `scripts/test.sh --engine browser`) runs guests on Node's `node:wasi` over the real
-filesystem, with no Waffle filesystem service and no change source. It answers the four
-`runtime_fs` imports as Waffle's `Wasi` does for a filesystem without `watches`. `watch_open`
+filesystem, with no Waffle filesystem service and no change source. It answers the five
+`runtime_fs` watch imports as Waffle's `Wasi` does for a filesystem without `watches`. `watch_open`
 checks the output range (EFAULT), the flags (EINVAL), the guest descriptor in the host's own
 descriptor table (EBADF) and its kind (EINVAL for pipes and terminals). A valid file or
 directory then reports ENOTSUP and writes no id. No id ever exists, so `watch_read` reports
-EFAULT for an out-of-range buffer and otherwise EBADF, and `watch_close` reports EBADF.
+EFAULT for an out-of-range buffer, EINVAL for overlapping buffer/length spans, and otherwise EBADF,
+and `watch_close` reports EBADF.
 `fs.watch` on this host throws `ENOTSUP`; there is no polling fallback. Local change: it
 validates against the Node host's `DescriptorTable` instead of `Wasi.descriptors`, because
 Waffle's `Wasi` methods are private and bound to its own table.
 The original `watch_ready` extension returns zero because this host cannot register a watch.
+The original `watch_next` extension checks its three spans (EFAULT, then EINVAL for overlap, as
+Waffle 0.0.155 does), writes id 0 and reports EAGAIN, because no watch is ever ready.
 
 Releasing the host after a start failure is original. Before `wasi.start()` binds memory,
 Node WASI rejects every call with `ERR_WASI_NOT_STARTED`. Only preopens exist then, and the
 unstarted instance's own table releases them, so the release ignores that one error code.
-`web/tests/node-runtime-fs.test.ts` instantiates guests importing all four names on a real
+`web/tests/node-runtime-fs.test.ts` instantiates guests importing the watch names on a real
 Node WASI host and checks each errno and the unstarted release.
 
 

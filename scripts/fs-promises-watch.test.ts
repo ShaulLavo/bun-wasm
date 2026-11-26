@@ -215,6 +215,7 @@ function productionBackend() {
       fsWatchOpenFd() { open.add(7); return 7; },
       fsWatchDropFd() {},
       fsWatchRead: () => reads.shift() ?? -6,
+      fsWatchNext: () => reads.length && open.has(7) ? [7, reads.shift()!] : -6,
       fsWatchClose(id: number) { expect(open.delete(id)).toBe(true); return 0; },
     },
     require: (name: string) => name === "events" ? EventEmitter : name === "resource_frame" ? resourceFrames() : { Buffer },

@@ -8,6 +8,9 @@
     fsWatchDropFd(fd: number): void;
     /** Whole records, 0 at end of stream, or a negative WASI errno (-6 EAGAIN, -42 ENOBUFS). */
     fsWatchRead(id: number, maxBytes?: number): Uint8Array | number;
+    /** The next ready watch as `[id, records | 0 at end | -errno]`, from the provider's batched
+     * drain, or a bare negative errno: -6 (EAGAIN) when no watch is ready, else an unscoped error. */
+    fsWatchNext(): [number, Uint8Array | number] | number;
     fsWatchClose(id: number): number;
   };
   hasWatchBacklog?: () => boolean;
@@ -303,7 +306,8 @@
       fanOut(subscribers, seq, watcher => watcher._deliverRecords(payload));
     }
 
-    function drainShared(shared: SharedWatch): boolean {
+    /** Deliver what a late subscriber's join captured, before anything newer from the provider. */
+    function flushBacklog(shared: SharedWatch): boolean {
       let progressed = false;
       while (!shared.closed && shared.backlog.length > 0) {
         const entry = shared.backlog.shift()!;
@@ -313,21 +317,94 @@
         progressed = true;
         dispatchPayload(shared, entry.payload, entry.seq);
       }
-      while (!shared.closed) {
-        const chunk = native.fsWatchRead(shared.id);
-        if (chunk === AGAIN) break;
+      return progressed;
+    }
+
+    /** One provider result: records, end (0) or a watch-scoped -errno for watch `id`. */
+    function deliverNext(id: number, chunk: Uint8Array | number) {
+      const shared = sharedById.get(id);
+      // Every registration in this process is a shared watch; release one this table doesn't hold.
+      if (!shared) {
+        native.fsWatchClose(id);
+        return;
+      }
+      const payload = typeof chunk === "number" ? chunk : decode(chunk);
+      if (shared.backlog.length > 0) {
+        const records = typeof payload === "number" ? 1 : Math.max(1, payload.length);
+        const bytes = typeof chunk === "number" ? 8 : chunk.byteLength;
+        shared.backlog.push({ seq: ++shared.seq, payload, records, bytes });
+        shared.backlogRecords += records;
+        shared.backlogBytes += bytes;
+        backlogCount++;
+        flushBacklog(shared);
+        return;
+      }
+      dispatchPayload(shared, payload, ++shared.seq);
+    }
+
+    /** An unscoped provider error (no watch id) fails every watch. Detach sharing keys before
+     * running any handler so a watcher opened inside an error listener gets a fresh registration
+     * instead of joining one about to fail. */
+    function failAll(errno: number) {
+      const affected = Array.from(sharedById.values()).filter(shared => !shared.closed);
+      for (const shared of affected) detachKey(shared);
+      let hasError = false;
+      let firstError: unknown;
+      for (const shared of affected) {
+        if (shared.closed) continue;
+        try {
+          dispatchPayload(shared, errno, ++shared.seq);
+        } catch (error) {
+          if (!hasError) {
+            hasError = true;
+            firstError = error;
+          } else {
+            internal.nextTick(() => { throw error; });
+          }
+        }
+      }
+      if (hasError) throw firstError;
+    }
+
+    // A listener that writes inside a watched tree refills the drain; yield to other I/O after
+    // this many results. The provider still reports ready, so the next turn continues.
+    const MAX_NEXT_PER_PUMP = 4096;
+
+    function drainBacklogPass(): boolean {
+      let flushed = false;
+      for (const shared of Array.from(sharedById.values())) {
+        if (flushBacklog(shared)) flushed = true;
+      }
+      return flushed;
+    }
+
+    function flushPendingBacklogs(): boolean {
+      let progressed = false;
+      for (let rounds = 0; backlogCount > 0 && rounds < MAX_NEXT_PER_PUMP; rounds++) {
+        if (!drainBacklogPass()) break;
         progressed = true;
-        const payload = typeof chunk === "number" ? chunk : decode(chunk);
-        dispatchPayload(shared, payload, ++shared.seq);
       }
       return progressed;
     }
 
     function pumpWatches(): boolean | "progress" {
-      let progressed = false;
-      for (const shared of Array.from(sharedById.values())) {
-        if (drainShared(shared)) progressed = true;
+      let progressed = flushPendingBacklogs();
+      for (let calls = 0; sharedById.size > 0 && calls < MAX_NEXT_PER_PUMP; calls++) {
+        const next = native.fsWatchNext();
+        if (next === AGAIN) {
+          if (!flushPendingBacklogs()) break;
+          progressed = true;
+          continue;
+        }
+        progressed = true;
+        if (typeof next === "number") {
+          failAll(next);
+          break;
+        }
+        deliverNext(next[0], next[1]);
+        if (flushPendingBacklogs()) progressed = true;
       }
+      if (flushPendingBacklogs()) progressed = true;
       return sharedById.size === 0 ? true : (progressed && "progress");
     }
 
