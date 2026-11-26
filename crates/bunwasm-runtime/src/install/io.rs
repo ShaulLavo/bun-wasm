@@ -312,7 +312,7 @@ impl Default for CacheWriter {
 
 /// Whether the host keeps an install cache: every host does unless it sets
 /// `BUN_WASM_INSTALL_CACHE=off`.
-pub fn install_cache_enabled() -> bool {
+fn install_cache_enabled() -> bool {
     std::env::var_os("BUN_WASM_INSTALL_CACHE").is_none_or(|value| value != "off")
 }
 

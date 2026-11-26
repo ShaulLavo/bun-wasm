@@ -1203,12 +1203,10 @@ fn main() {
         transpiler: transpiler(),
         mode: flags.mode,
     });
-    // The host engine runs the program after `_start` returns, and its host runs the exit
-    // cleanup when the program ends.
+    // The host engine runs the program after `_start` returns.
     if code == 0 && bunwasm_runtime::host_engine_ready() {
         return;
     }
-    bunwasm_runtime::exit_cleanup::run();
     std::process::exit(code);
 }
 

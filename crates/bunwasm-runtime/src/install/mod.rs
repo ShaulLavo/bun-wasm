@@ -1352,35 +1352,6 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
         "{:x}",
         Sha256::digest(format!("{}/{name}@{range}", registry.url).as_bytes())
     );
-    if !io::install_cache_enabled() {
-        if no_install {
-            return Err(format!("Executable not found: {bin_name}"));
-        }
-        // Without an install cache, each run installs into its own temporary directory,
-        // removed when the process ends (after the program, which may load files late).
-        let mut random = [0u8; 16];
-        getrandom::fill(&mut random).map_err(|e| e.to_string())?;
-        // `std::env::temp_dir` is unsupported on WASI.
-        let temp =
-            std::env::var_os("TMPDIR").map_or_else(|| "/tmp".into(), std::path::PathBuf::from);
-        let staging = cwd
-            .join(temp)
-            .join(format!("bun-wasm-bunx-{:x}", u128::from_le_bytes(random)));
-        fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-        let installed = install_x(&staging, &cwd, &name, &range, &registry, parser);
-        if installed.is_err() {
-            let _ = fs::remove_dir_all(&staging);
-            installed?;
-        }
-        crate::exit_cleanup::remove_at_exit(staging.clone());
-        return x_binary(
-            &staging,
-            &name,
-            package.as_ref().map(|_| bin_name),
-            args,
-            parser,
-        );
-    }
     let cache = cwd.join(io::cache_dir()).join("bunx");
     let destination = cache.join(hash);
     if !destination.join("bun.lock").exists() {
@@ -1393,7 +1364,21 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
         let staging = cache.join(format!(".staging-{:x}", u128::from_le_bytes(random)));
         fs::create_dir(&staging).map_err(|e| e.to_string())?;
         let result = (|| {
-            install_x(&staging, &cwd, &name, &range, &registry, parser)?;
+            io::write(
+                &staging.join("package.json"),
+                json!({"dependencies": {name.clone(): range}})
+                    .to_string()
+                    .as_bytes(),
+            )?;
+            std::env::set_current_dir(&staging).map_err(|e| e.to_string())?;
+            let installed = execute(
+                "install",
+                vec!["--silent".into()],
+                parser,
+                Some(registry.clone()),
+            );
+            std::env::set_current_dir(&cwd).map_err(|e| e.to_string())?;
+            installed?;
             match fs::rename(&staging, &destination) {
                 Ok(()) => Ok(()),
                 Err(_) if destination.join("bun.lock").exists() => Ok(()),
@@ -1405,52 +1390,9 @@ pub fn prepare_x(args: Vec<String>, parser: &dyn Transpiler) -> Result<(String, 
         }
         result?;
     }
-    x_binary(
-        &destination,
-        &name,
-        package.as_ref().map(|_| bin_name),
-        args,
-        parser,
-    )
-}
-
-/// Installs `name@range` alone into `directory`, as `bun x` runs it.
-fn install_x(
-    directory: &Path,
-    cwd: &Path,
-    name: &str,
-    range: &str,
-    registry: &io::Registry,
-    parser: &dyn Transpiler,
-) -> Result<()> {
-    io::write(
-        &directory.join("package.json"),
-        json!({"dependencies": {name: range}})
-            .to_string()
-            .as_bytes(),
-    )?;
-    std::env::set_current_dir(directory).map_err(|e| e.to_string())?;
-    let installed = execute(
-        "install",
-        vec!["--silent".into()],
-        parser,
-        Some(registry.clone()),
-    );
-    std::env::set_current_dir(cwd).map_err(|e| e.to_string())?;
-    installed
-}
-
-/// The executable `bun x` runs from an installation in `directory`.
-fn x_binary(
-    directory: &Path,
-    name: &str,
-    requested: Option<&str>,
-    args: impl Iterator<Item = String>,
-    parser: &dyn Transpiler,
-) -> Result<(String, Vec<String>)> {
-    let base = directory.join("node_modules").join(name);
+    let base = destination.join("node_modules").join(&name);
     let meta = io::read(&base.join("package.json"), "JSON", parser)?;
-    let file = package_binary(&meta, &base, requested)?
+    let file = package_binary(&meta, &base, package.as_ref().map(|_| bin_name))?
         .ok_or_else(|| format!("Could not determine executable for package {name}"))?;
     Ok((file.to_string_lossy().into_owned(), args.collect()))
 }

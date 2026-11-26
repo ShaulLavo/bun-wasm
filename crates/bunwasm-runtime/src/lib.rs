@@ -30,7 +30,6 @@ mod encoding;
 mod engine;
 #[cfg(feature = "engine-host")]
 pub mod engine_host;
-pub mod exit_cleanup;
 mod glob;
 pub mod host;
 mod hot_run;
@@ -296,7 +295,6 @@ impl State {
         self.dispose_tls();
         self.directories.borrow_mut().close_all();
         self.flush();
-        exit_cleanup::run();
         // The linked engine program remains rooted until process exit.
         std::process::exit(code)
     }
