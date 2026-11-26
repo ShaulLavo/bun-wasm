@@ -137,6 +137,13 @@ try {
   assert.deepEqual(probe(["real/dir/file.txt", "link"], 2), [0, 1]);
   assert.deepEqual(probe(["missing", "real/dir/file.txt/"], 1), [0, 0xffffffff]);
   assert.deepEqual(probe(["real/dir"], 2, 99), [EBADF, UNTOUCHED]);
+  // Leading U+FEFF (UTF-8 BOM) is part of the filename, never stripped.
+  writeFileSync(join(scratch, "module.js"), "x");
+  assert.deepEqual(probe(["\uFEFFmodule.js"], 1), [0, 0xffffffff]);
+  writeFileSync(join(scratch, "\uFEFFmodule.js"), "x");
+  assert.deepEqual(probe(["\uFEFFmodule.js"], 1), [0, 0]);
+  // More than 64 pathnames is rejected with EINVAL.
+  assert.deepEqual(probe(Array.from({ length: 65 }, () => "missing"), 1), [EINVAL, UNTOUCHED]);
 
   // A guest that fails before wasi.start() still releases its process host; the unstarted Node
   // WASI keeps its preopen, so release must not surface ERR_WASI_NOT_STARTED.

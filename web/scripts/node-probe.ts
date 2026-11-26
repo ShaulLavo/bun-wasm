@@ -6,7 +6,7 @@ const BADF = 8, FAULT = 21, INVAL = 28, NOTDIR = 54, NOTCAPABLE = 76;
 const PROBE_LIMIT = 64;
 const FILESTAT_SIZE = 64, FILETYPE_OFFSET = 16;
 const FILETYPE: Record<number, number> = { 1: 4, 2: 3 }; // regular file, directory
-const decoder = new TextDecoder("utf-8", { fatal: true });
+const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const encoder = new TextEncoder();
 
 type FilestatGet = (fd: number, flags: number, path: number, len: number, out: number) => number;
@@ -14,10 +14,15 @@ type FilestatGet = (fd: number, flags: number, path: number, len: number, out: n
 /** A probe list: one to PROBE_LIMIT pathnames, each ended by a NUL, or undefined. */
 function probeNames(bytes: Uint8Array): string[] | undefined {
   if (bytes.length === 0 || bytes[bytes.length - 1] !== 0) return undefined;
-  let text: string;
-  try { text = decoder.decode(bytes.subarray(0, bytes.length - 1)); } catch { return undefined; }
-  const names = text.split("\0");
-  return names.length > PROBE_LIMIT ? undefined : names;
+  const names: string[] = [];
+  let start = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] !== 0) continue;
+    if (names.length === PROBE_LIMIT) return undefined;
+    try { names.push(decoder.decode(bytes.subarray(start, i))); } catch { return undefined; }
+    start = i + 1;
+  }
+  return names;
 }
 
 /** `runtime_fs.path_probe` over `filestat`, read when called so it is the final wrapped import. */
@@ -26,7 +31,7 @@ export function nodePathProbe(memory: () => WebAssembly.Memory, filestat: () => 
     const size = memory().buffer.byteLength;
     paths >>>= 0; len >>>= 0; found >>>= 0;
     if (paths + len > size || found + 4 > size) return FAULT;
-    const names = probeNames(new Uint8Array(memory().buffer, paths, len).slice());
+    const names = probeNames(new Uint8Array(memory().buffer, paths, len));
     const filetype = FILETYPE[kind >>> 0];
     if (names === undefined || filetype === undefined) return INVAL;
     const stat = (name: string) => statKind(memory, filestat(), fd, name);

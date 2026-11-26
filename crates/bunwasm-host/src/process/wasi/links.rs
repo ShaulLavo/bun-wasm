@@ -122,6 +122,7 @@ pub(super) struct Resolved {
     pub root: usize,
     pub relative: String,
     pub guest: String,
+    opaque_link: bool,
 }
 
 enum Kind {
@@ -129,6 +130,8 @@ enum Kind {
     Directory,
     Other,
     Link(String),
+    /// A symlink whose host target is not valid UTF-8.
+    OpaqueLink,
     /// A lookup failure other than a missing entry (EACCES and the like), as a WASI errno.
     Failed(i32),
 }
@@ -136,6 +139,10 @@ enum Kind {
 impl Roots {
     pub fn new(mounts: Vec<(PathBuf, String)>) -> Self {
         Self { mounts, dirs: None }
+    }
+
+    pub fn len(&self) -> usize {
+        self.mounts.len()
     }
 
     fn dir(&mut self, index: usize) -> Option<&Dir> {
@@ -170,9 +177,14 @@ impl Roots {
     }
 
     fn kind(&mut self, path: &str) -> Kind {
+        self.kind_in(path, None)
+    }
+
+    fn kind_in(&mut self, path: &str, live: Option<&[bool]>) -> Kind {
         // A nested preopen makes its ancestors directories in the guest namespace.
-        let ancestor = self.mounts.iter().any(|(_, guest)| {
-            guest.len() > path.len()
+        let ancestor = self.mounts.iter().enumerate().any(|(index, (_, guest))| {
+            live.is_none_or(|live| live.get(index).copied().unwrap_or(false))
+                && guest.len() > path.len()
                 && guest.starts_with(path)
                 && guest.as_bytes()[path.len()] == b'/'
         });
@@ -182,6 +194,9 @@ impl Roots {
         let Some((index, rest)) = self.mount(path) else {
             return Kind::Missing;
         };
+        if live.is_some_and(|live| !live.get(index).copied().unwrap_or(false)) {
+            return Kind::Missing;
+        }
         if rest.is_empty() {
             return Kind::Directory;
         }
@@ -201,7 +216,7 @@ impl Roots {
             return Kind::Other;
         }
         match dir.read_link_contents(&rest).map(PathBuf::into_os_string) {
-            Ok(target) => target.into_string().map_or(Kind::Other, Kind::Link),
+            Ok(target) => target.into_string().map_or(Kind::OpaqueLink, Kind::Link),
             Err(_) => Kind::Missing,
         }
     }
@@ -222,6 +237,18 @@ impl Roots {
         path: &str,
         follow: bool,
         directories: bool,
+    ) -> Result<Resolved, i32> {
+        self.walk_in(start, path, follow, directories, None, false)
+    }
+
+    fn walk_in(
+        &mut self,
+        start: &str,
+        path: &str,
+        follow: bool,
+        directories: bool,
+        live: Option<&[bool]>,
+        allow_opaque_link: bool,
     ) -> Result<Resolved, i32> {
         let follow = follow || path.ends_with('/');
         let mut pending: VecDeque<String> = VecDeque::new();
@@ -251,7 +278,7 @@ impl Roots {
             if last && !follow {
                 break;
             }
-            match self.kind(&current) {
+            match self.kind_in(&current, live) {
                 Kind::Link(target) => {
                     links += 1;
                     if links > MAX_LINKS {
@@ -265,8 +292,29 @@ impl Roots {
                         pending.push_front(part);
                     }
                 }
+                Kind::OpaqueLink if allow_opaque_link => {
+                    let (root, rest) = self.mount(&current).ok_or(NOENT)?;
+                    if live.is_some_and(|live| !live.get(root).copied().unwrap_or(false)) {
+                        return Err(PERM);
+                    }
+                    let mut relative = if rest.is_empty() {
+                        ".".to_owned()
+                    } else {
+                        rest.to_owned()
+                    };
+                    for tail in pending {
+                        relative.push('/');
+                        relative.push_str(&tail);
+                    }
+                    return Ok(Resolved {
+                        root,
+                        relative,
+                        guest: current,
+                        opaque_link: true,
+                    });
+                }
                 Kind::Missing if !last => return Err(NOENT),
-                Kind::Other if !last => return Err(NOTDIR),
+                Kind::Other | Kind::OpaqueLink if !last => return Err(NOTDIR),
                 Kind::Failed(errno) if !last => return Err(errno),
                 _ => {}
             }
@@ -277,6 +325,9 @@ impl Roots {
             current
         };
         let (root, rest) = self.mount(&guest).ok_or(NOENT)?;
+        if live.is_some_and(|live| !live.get(root).copied().unwrap_or(false)) {
+            return Err(PERM);
+        }
         let mut relative = if rest.is_empty() {
             ".".to_owned()
         } else {
@@ -289,6 +340,7 @@ impl Roots {
             root,
             relative,
             guest,
+            opaque_link: false,
         })
     }
 }
@@ -297,21 +349,36 @@ impl Roots {
     /// Whether `path` from the directory at guest path `start`, every link followed, names a
     /// directory (`directory`) or a regular file, as a stat with the follow flag would answer
     /// (`runtime_fs.path_probe`). A path that does not resolve names neither.
+    #[cfg(test)]
     pub fn names(&mut self, start: &str, path: &str, directory: bool) -> bool {
+        let live = vec![true; self.mounts.len()];
+        self.names_in(start, path, directory, &live)
+    }
+
+    /// [`Self::names`], restricting lookups to preopens whose `live` slot is still open.
+    pub fn names_in(&mut self, start: &str, path: &str, directory: bool, live: &[bool]) -> bool {
         if path.is_empty() || path.starts_with('/') {
             return false;
         }
-        let Ok(resolved) = self.walk(start, path, true, true) else {
+        let Ok(resolved) = self.walk_in(start, path, true, true, Some(live), true) else {
             return false;
         };
-        if directory {
-            return matches!(self.kind(&resolved.guest), Kind::Directory);
+        if !live.get(resolved.root).copied().unwrap_or(false) {
+            return false;
+        }
+        if directory && !resolved.opaque_link {
+            return matches!(self.kind_in(&resolved.guest, Some(live)), Kind::Directory);
         }
         let Some(dir) = self.dir(resolved.root) else {
             return false;
         };
-        dir.metadata(&resolved.relative)
-            .is_ok_and(|metadata| metadata.is_file())
+        dir.metadata(&resolved.relative).is_ok_and(|metadata| {
+            if directory {
+                metadata.is_dir()
+            } else {
+                metadata.is_file()
+            }
+        })
     }
 
     /// `realpath(3)` of `path` from the directory at guest path `start`: the absolute guest
@@ -665,17 +732,25 @@ pub(super) fn install(
 const PROBE_LIMIT: usize = 64;
 
 /// A `path_probe` list: one to [`PROBE_LIMIT`] UTF-8 pathnames, each ended by a NUL.
-fn probe_names(bytes: &[u8]) -> Option<Vec<String>> {
+/// Enforces [`PROBE_LIMIT`] while scanning so oversized lists stop before allocating.
+fn probe_names(bytes: &[u8]) -> Option<Vec<&str>> {
     let (last, body) = bytes.split_last()?;
     if *last != 0 {
         return None;
     }
-    let names: Vec<String> = std::str::from_utf8(body)
-        .ok()?
-        .split('\0')
-        .map(str::to_owned)
-        .collect();
-    (names.len() <= PROBE_LIMIT).then_some(names)
+    let mut names = Vec::new();
+    let mut start = 0;
+    for (i, &byte) in body.iter().enumerate() {
+        if byte == 0 {
+            if names.len() + 1 >= PROBE_LIMIT {
+                return None;
+            }
+            names.push(std::str::from_utf8(&body[start..i]).ok()?);
+            start = i + 1;
+        }
+    }
+    names.push(std::str::from_utf8(&body[start..]).ok()?);
+    Some(names)
 }
 
 /// Waffle's `runtime_fs.path_probe`: the index of the first pathname that names a regular file
@@ -704,8 +779,13 @@ fn install_probe(
             ) else {
                 return Ok(FAULT);
             };
-            let bytes = memory.read(&caller, list).unwrap_or_default();
-            let Some(names) = probe_names(&bytes) else {
+            let Some(names) = memory
+                .view(&mut caller, &[list], |views, _| {
+                    probe_names(views[0])
+                        .map(|names| names.into_iter().map(str::to_owned).collect::<Vec<_>>())
+                })
+                .flatten()
+            else {
                 return Ok(INVAL);
             };
             let directory = match kind {
@@ -719,12 +799,18 @@ fn install_probe(
             let Some(start) = start.filter(|_| state.files.contains_key(&fd)) else {
                 return Ok(BADF);
             };
-            if !matches!(state.roots.kind(&normalize(&start)), Kind::Directory) {
+            let live: Vec<bool> = (0..state.roots.len())
+                .map(|index| state.root_fd(index).is_some())
+                .collect();
+            if !matches!(
+                state.roots.kind_in(&normalize(&start), Some(&live)),
+                Kind::Directory
+            ) {
                 return Ok(NOTDIR);
             }
             let index = names
                 .iter()
-                .position(|name| state.roots.names(&start, name, directory));
+                .position(|name| state.roots.names_in(&start, name, directory, &live));
             drop(state);
             let word = index.map_or(u32::MAX, |index| index as u32);
             super::store_word(&memory, &mut caller, output.start, word)?;
@@ -994,16 +1080,46 @@ mod tests {
 
     #[test]
     fn probe_lists_end_in_a_nul_and_hold_at_most_the_limit() {
-        assert_eq!(
-            probe_names(b"a\0b/c\0"),
-            Some(vec!["a".into(), "b/c".into()])
-        );
-        assert_eq!(probe_names(b"\0"), Some(vec![String::new()]));
+        assert_eq!(probe_names(b"a\0b/c\0"), Some(vec!["a", "b/c"]));
+        assert_eq!(probe_names(b"\0"), Some(vec![""]));
         assert_eq!(probe_names(b""), None);
         assert_eq!(probe_names(b"a"), None);
         assert_eq!(probe_names(b"\xff\0"), None);
         assert!(probe_names(&b"a\0".repeat(PROBE_LIMIT)).is_some());
         assert_eq!(probe_names(&b"a\0".repeat(PROBE_LIMIT + 1)), None);
+        assert_eq!(probe_names(&b"a\0".repeat(100_000)), None);
+    }
+
+    #[test]
+    fn names_in_ignores_closed_preopens() {
+        let mounts = Mounts::new();
+        let mut roots = mounts.roots();
+        assert!(roots.names_in("/", "mnt/data", true, &[true, true]));
+        assert!(roots.names_in("/home/user", "mounted", true, &[true, true]));
+        // Closing `/mnt` prevents probes from consulting that mount directly or via symlink.
+        assert!(!roots.names_in("/", "mnt/data", true, &[true, false]));
+        assert!(!roots.names_in("/", "mnt", true, &[true, false]));
+        assert!(!roots.names_in("/home/user", "mounted", true, &[true, false]));
+        // The still-open `/` preopen continues to resolve normally.
+        assert!(roots.names_in("/", "real/pkg/index.js", false, &[true, false]));
+    }
+
+    #[test]
+    fn names_follows_relative_symlink_to_non_utf8_directory() {
+        let mounts = Mounts::new();
+        let raw_dir = std::ffi::OsString::from_vec(b"nonutf8-\xff".to_vec());
+        let target_dir = mounts.0.join("root/real").join(&raw_dir);
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("index.js"), "x").unwrap();
+        let mut rel_target = std::ffi::OsString::from("../../real/");
+        rel_target.push(&raw_dir);
+        std::os::unix::fs::symlink(&rel_target, mounts.0.join("root/app/node_modules/nonutf8"))
+            .unwrap();
+        let mut roots = mounts.roots();
+        assert!(roots.names("/", "app/node_modules/nonutf8", true));
+        assert!(!roots.names("/", "app/node_modules/nonutf8", false));
+        assert!(roots.names("/", "app/node_modules/nonutf8/index.js", false));
+        assert!(!roots.names("/", "app/node_modules/nonutf8/index.js/", false));
     }
 
     #[test]
