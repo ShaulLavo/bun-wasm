@@ -72,6 +72,14 @@ impl Registry {
     }
 
     fn safe_text(&self, message: &str) -> bool {
+        // Every authentication marker and every URL contains ':', so most strings (names,
+        // versions, ranges) need only the secret check, without allocating.
+        if !message.contains(':') {
+            return !self
+                .secrets
+                .iter()
+                .any(|secret| message.contains(secret.as_str()));
+        }
         !has_embedded_auth(message) && self.redact(message) == message
     }
 
@@ -1072,6 +1080,29 @@ mod tests {
             assert!(!cacheable(&bytes, false, &registry));
         }
         assert!(!cacheable(b"{", false, &registry));
+    }
+
+    #[test]
+    fn the_colon_free_fast_path_agrees_with_full_redaction() {
+        let registry = Registry::configured(&json!({
+            "url": "https://registry.invalid",
+            "username": "user",
+            "password": "pass-word"
+        }))
+        .unwrap();
+        for text in [
+            "^1.2.3",
+            "left-pad",
+            "my pass-word here",
+            "dXNlcjpwYXNzLXdvcmQ=",
+            "//registry.invalid/:_authToken=abc",
+            "https://registry.invalid/a/-/a-1.0.0.tgz",
+            "https://registry.invalid/a.tgz?token=1",
+            "",
+        ] {
+            let full = !has_embedded_auth(text) && registry.redact(text) == text;
+            assert_eq!(registry.safe_text(text), full, "{text:?}");
+        }
     }
 
     /// A reader that offers `available` bytes in total, then reports `then`.
