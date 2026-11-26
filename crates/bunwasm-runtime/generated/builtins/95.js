@@ -1,7 +1,7 @@
-// Generated from Bun 9510e74152073d850a18758ca41114d8f214ffa6, src/js/internal/streams/iter/from.ts.
+// Generated from Bun a7733435cf40429e3b35c36072769df2052b80f1, src/js/internal/streams/iter/from.ts.
 (function (intrinsics) {
 "use strict";
-var $, { isAnyArrayBuffer, isPromise, isTypedArray, isUint8Array } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 205) || intrinsics.createInternalModuleById(205), { kValidatedSource, toStreamable, toAsyncStreamable } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 96) || intrinsics.createInternalModuleById(96), { hasProtocol, toUint8Array } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 97) || intrinsics.createInternalModuleById(97), FROM_BATCH_SIZE = 128;
+var $, { isAnyArrayBuffer, isPromise, isTypedArray, isUint8Array } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 208) || intrinsics.createInternalModuleById(208), { kValidatedSource, toStreamable, toAsyncStreamable } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 101) || intrinsics.createInternalModuleById(101), { hasProtocol, toUint8Array } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 102) || intrinsics.createInternalModuleById(102), FROM_BATCH_SIZE = 128;
 function isPrimitiveChunk(value) {
     return typeof value === "string" || isAnyArrayBuffer(value) || intrinsics.ArrayBuffer.isView(value);
 }

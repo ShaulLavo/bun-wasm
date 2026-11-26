@@ -1,7 +1,7 @@
-// Generated from Bun 9510e74152073d850a18758ca41114d8f214ffa6, src/js/thirdparty/node-fetch.ts.
+// Generated from Bun a7733435cf40429e3b35c36072769df2052b80f1, src/js/thirdparty/node-fetch.ts.
 (function (intrinsics) {
 "use strict";
-var $, bindings = intrinsics.lazy(134), WebResponse = bindings[0], WebRequest = bindings[1], Blob = bindings[2], WebHeaders = bindings[3], FormData = bindings[4], File = bindings[5], nativeFetch = Bun.fetch, JSONParse = JSON.parse;
+var $, bindings = intrinsics.lazy(160), WebResponse = bindings[0], WebRequest = bindings[1], Blob = bindings[2], WebHeaders = bindings[3], FormData = bindings[4], File = bindings[5], nativeFetch = Bun.fetch, JSONParse = JSON.parse;
 class Headers extends WebHeaders {
     raw() {
         let obj = this.toJSON();
@@ -21,7 +21,7 @@ function closeEmptyBody(controller) {
     controller.close();
 }
 function readableFromOldStyleStream(source) {
-    let { PassThrough } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 176) || intrinsics.createInternalModuleById(176), passthrough = new PassThrough;
+    let { PassThrough } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 180) || intrinsics.createInternalModuleById(180), passthrough = new PassThrough;
     return source.on("error", (err) => {
         if (!passthrough.writableEnded)
             passthrough.destroy(err);
@@ -32,7 +32,7 @@ class Response extends WebResponse {
     [kHeaders];
     [kFetched];
     constructor(body, init) {
-        let { Readable, Stream } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 176) || intrinsics.createInternalModuleById(176);
+        let { Readable, Stream } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 180) || intrinsics.createInternalModuleById(180);
         if (body && typeof body === "object" && (body instanceof Stream || body instanceof Readable))
             body = Readable.toWeb(body instanceof Readable ? body : readableFromOldStyleStream(body));
         super(body, init);
@@ -46,7 +46,7 @@ class Response extends WebResponse {
                     return null;
                 web = new intrinsics.ReadableStream({ start: closeEmptyBody });
             }
-            body = this[kBody] = new (intrinsics.getInternalField(intrinsics.internalModuleRegistry, 123) || intrinsics.createInternalModuleById(123))._ReadableFromWeb({ responseBody: !0 }, web);
+            body = this[kBody] = new (intrinsics.getInternalField(intrinsics.internalModuleRegistry, 128) || intrinsics.createInternalModuleById(128))._ReadableFromWeb({ responseBody: !0 }, web);
         }
         return body;
     }
@@ -81,7 +81,7 @@ function tlsFromAgent(agent, url) {
     }
     if (!intrinsics.isObject(agent) || !ObjectHasOwn(agent, "options") || !intrinsics.isObject(agent.options))
         return intrinsics.undefined;
-    return (intrinsics.getInternalField(intrinsics.internalModuleRegistry, 112) || intrinsics.createInternalModuleById(112)).nodeClientTlsToNative({ __proto__: null, ...agent.options });
+    return (intrinsics.getInternalField(intrinsics.internalModuleRegistry, 117) || intrinsics.createInternalModuleById(117)).nodeClientTlsToNative({ __proto__: null, ...agent.options });
 }
 class Request extends WebRequest {
     [kUrl];
@@ -100,7 +100,7 @@ class Request extends WebRequest {
 async function fetch(url, init) {
     let initBody = init?.body;
     if (initBody && typeof initBody === "object" && !initBody[Symbol.asyncIterator]) {
-        let { Readable, Stream } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 176) || intrinsics.createInternalModuleById(176);
+        let { Readable, Stream } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 180) || intrinsics.createInternalModuleById(180);
         if (initBody instanceof Stream || initBody instanceof Readable) {
             let readable = initBody instanceof Readable ? initBody : readableFromOldStyleStream(initBody);
             init = { ...init, body: Readable.toWeb(readable) };

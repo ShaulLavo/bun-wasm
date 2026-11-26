@@ -20,8 +20,17 @@ pub(crate) mod packed_map;
 #[allow(dead_code, clippy::all)] // Unchanged pinned Bun module; upstream owns its lint policy.
 pub(crate) mod serialized_failure;
 
-pub(crate) mod dev_server_body {
+pub(crate) mod dev_server {
     pub(crate) use super::{CachedFileIndex, HotUpdateContext};
+}
+
+/// The frontend server has no framework router, so no route has client page files.
+pub(crate) mod router_glue {
+    #[allow(dead_code)] // Option shape required by Bun's included incremental graph.
+    pub(crate) struct ClientPageFiles {
+        pub(crate) page: Option<Box<[u8]>>,
+        pub(crate) layouts: Vec<Box<[u8]>>,
+    }
 }
 
 pub(crate) const CLIENT_PREFIX: &str = "/_bun/client";
@@ -157,6 +166,7 @@ impl DevServer {
         Ok(GraphTraceState {
             client_bits: DynamicBitSet::init_empty(self.client_graph.bundled_files.count())?,
             server_bits: DynamicBitSet::init_empty(self.server_graph.bundled_files.count())?,
+            failures: Vec::new(),
         })
     }
 

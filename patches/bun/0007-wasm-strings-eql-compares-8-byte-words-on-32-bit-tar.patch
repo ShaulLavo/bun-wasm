@@ -1,7 +1,7 @@
-From 48658c2c16014add068e39a2178ff300e5ddc9d1 Mon Sep 17 00:00:00 2001
+From 9e99cbb6d08cc5f42ceec2529a5108f2cb9c295a Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 02:18:08 +0300
-Subject: [PATCH 07/14] wasm: strings::eql compares 8-byte words on 32-bit
+Subject: [PATCH 07/28] wasm: strings::eql compares 8-byte words on 32-bit
  targets
 
 eql_long counted len >> 3 words but read usize, which is 4 bytes on
@@ -16,10 +16,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  1 file changed, 6 insertions(+), 4 deletions(-)
 
 diff --git a/src/bun_core/string/immutable.rs b/src/bun_core/string/immutable.rs
-index 07e39da4..0a1dd574 100644
+index 39585db1..14f89c11 100644
 --- a/src/bun_core/string/immutable.rs
 +++ b/src/bun_core/string/immutable.rs
-@@ -1273,21 +1273,23 @@ pub fn eql_long(a_str: &[u8], b_str: &[u8], check_len: bool) -> bool {
+@@ -1277,21 +1277,23 @@ pub fn eql_long(a_str: &[u8], b_str: &[u8], check_len: bool) -> bool {
          }
  
          {

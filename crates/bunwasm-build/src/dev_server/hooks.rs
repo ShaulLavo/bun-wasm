@@ -54,9 +54,8 @@ fn __bun_dispatch__DevServerHandle__Bake__handle_parse_task_failure(
 ) -> Result<(), Error> {
     unsafe {
         (*ptr.cast::<Driver>()).graph.client_graph.insert_failure(
-            graph::incremental_graph::InsertFailureKey::AbsPath(path),
+            graph::incremental_graph::InsertFailureKey::AbsPath(path, Graph::Client),
             &*log,
-            false,
         )?;
     }
     Ok(())

@@ -1,9 +1,13 @@
 # JavaScriptCore for wasm32-wasip1 (experimental)
 
-Bun's own engine, JavaScriptCore from Bun's WebKit fork at the commit Bun pins
-(`vendor/bun/scripts/build/deps/webkit.ts`), compiled to `wasm32-wasip1`, and `bun-jsc.wasm`, a
+Bun's own engine, JavaScriptCore from Bun's WebKit fork at the commit pinned in `jsc/common.sh`,
+compiled to `wasm32-wasip1`, and `bun-jsc.wasm`, a
 second `bun` that runs on it. The default engine is still QuickJS (`crates/bunwasm-runtime`);
 this is the experiment that shows how far Bun's real engine gets.
+
+That commit is the one Bun pinned before 1.4.5. Bun 1.4.5 pins a later one
+(`vendor/bun/scripts/build/deps/webkit.ts`); moving `jsc/webkit-wasi.patch` to it is
+[separate work](bun-patches/bun-1.4.5-source-move.md#what-did-not-move).
 
 ```sh
 scripts/build-jsc.sh        # WebKit checkout, ICU, JSC static libs, jsc.wasm (the jsc shell)

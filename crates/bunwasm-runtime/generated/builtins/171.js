@@ -1,4 +1,4 @@
-// Generated from Bun 9510e74152073d850a18758ca41114d8f214ffa6, src/js/node/punycode.ts.
+// Generated from Bun a7733435cf40429e3b35c36072769df2052b80f1, src/js/node/punycode.ts.
 (function (intrinsics) {
 "use strict";
 var $, maxInt = 2147483647, base = 36, tMin = 1, tMax = 26, skew = 38, damp = 700, initialBias = 72, initialN = 128, delimiter = "-", regexPunycode = /^xn--/, regexNonASCII = /[^\0-\x7F]/, regexSeparators = /[\x2E\u3002\uFF0E\uFF61]/g, errors = {

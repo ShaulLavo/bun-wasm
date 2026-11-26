@@ -1,7 +1,7 @@
-From 5e0baa66516f3af00b008cdf1521c681317741e8 Mon Sep 17 00:00:00 2001
+From 2d28c98edb21d0c3ec207b9c4586d9926c03301f Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sat, 17 Oct 2026 08:24:52 +0300
-Subject: [PATCH 12/14] wasm: embed lint rule docs with native generators
+Subject: [PATCH 12/28] wasm: embed lint rule docs with native generators
 
 ---
  src/lint/driver/Cargo.toml |  1 +
@@ -11,7 +11,7 @@ Subject: [PATCH 12/14] wasm: embed lint rule docs with native generators
  create mode 100644 src/lint/driver/build.rs
 
 diff --git a/src/lint/driver/Cargo.toml b/src/lint/driver/Cargo.toml
-index 62c9f7db..51ebb4fa 100644
+index d49a5c78..b59038ff 100644
 --- a/src/lint/driver/Cargo.toml
 +++ b/src/lint/driver/Cargo.toml
 @@ -2,6 +2,7 @@
@@ -67,12 +67,12 @@ index 00000000..d162835d
 +    println!("cargo:rustc-env=BUN_LINT_DOCS={}", compressed.display());
 +}
 diff --git a/src/lint/driver/explain.rs b/src/lint/driver/explain.rs
-index c0bdaef1..aff646e0 100644
+index 310b05a8..067b7eca 100644
 --- a/src/lint/driver/explain.rs
 +++ b/src/lint/driver/explain.rs
 @@ -28,7 +28,17 @@ macro_rules! pretty {
- /// Every page: a NUL, its [name](Meta::page), a newline, then its Markdown. That's the description on one line, an empty
- /// line, then the rest.
+ /// Every page: a NUL, its [name](Meta::page), a newline, then its Markdown. That's the description on one line, an
+ /// empty line, then the rest.
  fn pages() -> &'static [u8] {
 -    bun_zstd::embed_compressed!(codegen "lint-rule-pages.txt")
 +    #[cfg(target_os = "wasi")]

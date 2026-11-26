@@ -1,7 +1,7 @@
-// Generated from Bun 9510e74152073d850a18758ca41114d8f214ffa6, src/js/thirdparty/undici.js.
+// Generated from Bun a7733435cf40429e3b35c36072769df2052b80f1, src/js/thirdparty/undici.js.
 (function (intrinsics) {
 "use strict";
-var $, EventEmitter = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 153) || intrinsics.createInternalModuleById(153), { _ReadableFromWeb: ReadableFromWeb } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 123) || intrinsics.createInternalModuleById(123), ObjectCreate = Object.create, kEmptyObject = ObjectCreate(null), fetch = Bun.fetch, bindings = intrinsics.lazy(135), Response = bindings[0], Request = bindings[1], Headers = bindings[2], FormData = bindings[3], File = bindings[4], URL = bindings[5], AbortSignal = bindings[6], URLSearchParams = bindings[7], WebSocket = bindings[8], CloseEvent = bindings[9], ErrorEvent = bindings[10], MessageEvent = bindings[11];
+var $, EventEmitter = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 157) || intrinsics.createInternalModuleById(157), dc = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 153) || intrinsics.createInternalModuleById(153), { isArrayBuffer } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 208) || intrinsics.createInternalModuleById(208), { _ReadableFromWeb: ReadableFromWeb } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 128) || intrinsics.createInternalModuleById(128), ObjectCreate = Object.create, kEmptyObject = ObjectCreate(null), fetch = Bun.fetch, bindings = intrinsics.lazy(161), Response = bindings[0], Request = bindings[1], Headers = bindings[2], FormData = bindings[3], File = bindings[4], URL = bindings[5], AbortSignal = bindings[6], URLSearchParams = bindings[7], BunWebSocket = bindings[8], CloseEvent = bindings[9], ErrorEvent = bindings[10], MessageEvent = bindings[11];
 class FileReader extends EventTarget {
     constructor() {
         super();
@@ -236,7 +236,38 @@ var errors = {
     headerNameToString: () => {
         notImplemented();
     }
-};
+}, pingChannel = dc.channel("undici:websocket:ping"), pongChannel = dc.channel("undici:websocket:pong");
+function toBuffer(data) {
+    if (intrinsics.isTypedArrayView(data))
+        return data;
+    return intrinsics.Buffer.from(isArrayBuffer(data) ? data : intrinsics.peekPromiseSettledValue(data.arrayBuffer()));
+}
+function onPing(event) {
+    if (pingChannel.hasSubscribers)
+        pingChannel.publish({ payload: toBuffer(event.data), websocket: event.target });
+}
+function onPong(event) {
+    if (pongChannel.hasSubscribers)
+        pongChannel.publish({ payload: toBuffer(event.data), websocket: event.target });
+}
+class WebSocket extends BunWebSocket {
+    constructor(url, protocols) {
+        super(url, protocols);
+        this.addEventListener("ping", onPing), this.addEventListener("pong", onPong);
+    }
+}
+function ping(ws, body) {
+    if (intrinsics.Buffer.isBuffer(body)) {
+        if (body.length > 125)
+            intrinsics.throwTypeError("A PING frame cannot have a body larger than 125 bytes.");
+    }
+    else if (body !== intrinsics.undefined)
+        intrinsics.throwTypeError("Expected buffer payload");
+    if (!(ws instanceof BunWebSocket))
+        intrinsics.throwTypeError("Expected a WebSocket");
+    if (ws.readyState === BunWebSocket.OPEN)
+        ws.ping(body);
+}
 class EventSource extends EventTarget {
     static CONNECTING = 0;
     static OPEN = 1;
@@ -310,6 +341,7 @@ var moduleExports = {
     mockErrors,
     MockPool,
     parseMIMEType,
+    ping,
     pipeline,
     Pool,
     ProxyAgent,

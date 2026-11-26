@@ -2,7 +2,7 @@
 
 `crates/bunwasm-runtime/src/js/bun_console_constructor.js` is generated from
 Bun's `src/js/builtins/ConsoleObject.ts`, function `createConsoleConstructor`,
-at revision `9510e74152073d850a18758ca41114d8f214ffa6`. Bun attributes this
+at revision `a7733435cf40429e3b35c36072769df2052b80f1`. Bun attributes this
 constructor to Node's `lib/internal/console/constructor.js` at
 `d2c7c367741bdcb6f7f77f55ce95a745f0b29fef/lib/internal/console/constructor.js`.
 The existing generated-builtins directory contains Bun's license.

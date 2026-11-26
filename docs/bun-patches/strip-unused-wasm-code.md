@@ -9,7 +9,7 @@
 
 ## Upstream patch: `bun_js_parser` `react-compiler` feature
 
-Upstream source: `oven-sh/bun` at pinned revision `9510e74152073d850a18758ca41114d8f214ffa6`:
+Upstream source: `oven-sh/bun` at pinned revision `a7733435cf40429e3b35c36072769df2052b80f1`:
 
 - `src/js_parser/Cargo.toml`
 - `src/js_parser/lib.rs`

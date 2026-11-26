@@ -2,7 +2,7 @@
 
 Classification: upstream bug fix.
 
-Upstream: oven-sh/bun at `9510e74152073d850a18758ca41114d8f214ffa6`,
+Upstream: oven-sh/bun at `a7733435cf40429e3b35c36072769df2052b80f1`,
 `src/js_parser/parse/parse_stmt.rs`.
 
 Patch: `0022-Preserve-parsed-loader-selectors-on-direct-re-export.patch`.
