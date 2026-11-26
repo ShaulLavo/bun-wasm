@@ -23,6 +23,8 @@ async function scenarios() {
 
   // Collected output is a pipe, not a terminal: no colour codes around inspected values.
   const inspected = await runBun(runtime, ["-e", "console.log({ a: 1 }); console.error([true]); console.log(process.stdout.isTTY ?? false)"]);
+  // Asked for, a terminal is what Bun sees, and it colours inspected values.
+  const terminal = await runBun(runtime, ["-e", "console.log(process.stdout.isTTY ?? false)"], { terminal: true });
 
   await runtime.filesystem.mkdirp("/app");
   await runtime.filesystem.writeFile("/app/index.ts", "const greeting: string = 'hello from TypeScript';\nconsole.log(greeting);\nconsole.error('to stderr');\nprocess.exit(3);\n");
@@ -47,6 +49,7 @@ async function scenarios() {
   return {
     example: { exitCode, stdout },
     inspected: summary(inspected),
+    terminal: summary(terminal),
     typescript: summary(typescript),
     tests: summary(tests),
     stdin: { ...summary(stdin), chunks: chunks.join("") },

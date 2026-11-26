@@ -21,6 +21,11 @@ export interface RunBunOptions {
   readonly outputLimitBytes?: number;
   /** `"join"` (default) waits for children that outlive Bun; `"stop"` stops them when Bun exits. */
   readonly onLeaderExit?: CommandLeaderExit;
+  /**
+   * Present stdout and stderr to Bun as a terminal, so `isTTY` is true and Bun colours its
+   * output. By default they are pipes and the captured output is plain text.
+   */
+  readonly terminal?: boolean;
   /** Aborting stops the process tree, as `kill()` does. */
   readonly signal?: AbortSignal;
 }
@@ -80,6 +85,7 @@ export function startBun(runtime: Runtime, args: readonly string[], options: Run
     // Bun registers as a compiled cooperative module, not as interruptible Wasm bytes.
     programs: "guest",
     onLeaderExit: options.onLeaderExit,
+    terminal: options.terminal ?? false,
     args,
     cwd: options.cwd ?? "/",
     env: pathEnvironment(executable.slice(0, executable.lastIndexOf("/")) || "/", options.env ?? {}),
