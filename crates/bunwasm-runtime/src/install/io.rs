@@ -250,21 +250,25 @@ pub fn read(path: &Path, format: &str, parser: &dyn Transpiler) -> Result<Value>
 }
 
 pub fn write(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomically(path, bytes).map_err(|e| e.to_string())
+}
+
+/// `write`, keeping the I/O error so callers can tell its kind.
+pub(super) fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut random = [0u8; 16];
-    getrandom::fill(&mut random).map_err(|e| e.to_string())?;
+    getrandom::fill(&mut random).map_err(|e| std::io::Error::other(e.to_string()))?;
     let temp = path.with_extension(format!("bun-wasm-tmp-{:x}", u128::from_le_bytes(random)));
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&temp)
-        .map_err(|e| e.to_string())?;
+        .open(&temp)?;
     let written = file.write_all(bytes);
     drop(file);
     let result = written.and_then(|()| fs::rename(&temp, path));
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }
-    result.map_err(|e: std::io::Error| e.to_string())
+    result
 }
 
 pub fn cache_dir() -> PathBuf {
@@ -285,9 +289,9 @@ fn cache_path(url: &str) -> PathBuf {
 }
 
 /// The install cache directory, created at most once per `Downloads`: each filesystem call
-/// is a host round trip in the browser. A write that fails because the directory has since
-/// disappeared creates it again and retries once; any other failure leaves the entry
-/// absent, as before.
+/// is a host round trip in the browser. A write that fails with `NotFound` because the
+/// directory has since disappeared creates it again and retries once; any other failure
+/// leaves the entry absent, as before.
 #[derive(Default)]
 pub(super) struct CacheWriter {
     created: bool,
@@ -296,7 +300,7 @@ pub(super) struct CacheWriter {
 impl CacheWriter {
     /// Writes `bytes` as the cache file for `url`.
     pub(super) fn store(&mut self, url: &str, bytes: &[u8]) {
-        self.store_with(url, bytes, write);
+        self.store_with(url, bytes, write_atomically);
     }
 
     /// `store` with the atomic write it uses passed in, so tests can make it fail.
@@ -304,17 +308,19 @@ impl CacheWriter {
         &mut self,
         url: &str,
         bytes: &[u8],
-        mut write: impl FnMut(&Path, &[u8]) -> Result<()>,
+        mut write: impl FnMut(&Path, &[u8]) -> std::io::Result<()>,
     ) {
         if !self.created && fs::create_dir_all(cache_dir()).is_err() {
             return;
         }
         self.created = true;
         let path = cache_path(url);
-        if write(&path, bytes).is_ok() || cache_dir().is_dir() {
+        let Err(error) = write(&path, bytes) else {
             return;
-        }
-        if fs::create_dir_all(cache_dir()).is_ok() {
+        };
+        // Only a write that found no cache directory is retried; any other error stands.
+        let missing = error.kind() == std::io::ErrorKind::NotFound && !cache_dir().exists();
+        if missing && fs::create_dir_all(cache_dir()).is_ok() {
             let _ = write(&path, bytes);
         }
     }
