@@ -83,6 +83,11 @@ test("actual createRecords uses import-only resolution for graph preparation and
   try {
     const namespace = await loaded.importKey("/entry.mjs");
     expect(namespace.default).toBe("exact text");
-    expect(calls.filter(call => call.startsWith(token)).length).toBeGreaterThanOrEqual(2);
+    // Preparation resolves the edge once; linking that graph reads the prepared resolution.
+    expect(calls).toEqual([`${token}|/entry.mjs|inferred`]);
+    // A later graph that reaches the module resolves afresh (the runtime's resolver owns caching).
+    const again = await loaded.importKey("/entry.mjs");
+    expect(again).toBe(namespace);
+    expect(calls).toEqual([`${token}|/entry.mjs|inferred`, `${token}|/entry.mjs|inferred`]);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 });

@@ -95,8 +95,13 @@ const setAdd = uncurry(Set.prototype.add) as <T>(set: Set<T>, value: T) => Set<T
 const arrayPush = uncurry(Array.prototype.push) as <T>(array: T[], item: T) => number;
 const abandoned = <T>(): Promise<T> => new NativePromise<T>(() => {});
 
-/** A module's evaluated record (or a non-ES module's format), once `settled` fulfils. */
-type Entry = { settled: Promise<void>; value: ModuleRecord | string | undefined };
+/**
+ * A module's evaluated record (or a non-ES module's format), once `settled` fulfils. `loaded`
+ * is an ES module's static requests by specifier as the latest graph preparation that reached
+ * it resolved them; that graph's linking reads them instead of resolving each request again.
+ * Each preparation resolves afresh (the runtime's resolver owns caching and invalidation).
+ */
+type Entry = { settled: Promise<void>; value: ModuleRecord | string | undefined; loaded: Map<string, string> | undefined };
 
 /** Creates the process's one record loader. Call before user code runs, after the host wraps promise reactions: `then` and `factory` capture built-ins. */
 export function createModuleRecords(host: RecordHost, factory: LoaderFactory, then: Then): ModuleRecords {
@@ -106,7 +111,7 @@ export function createModuleRecords(host: RecordHost, factory: LoaderFactory, th
   const entryOf = (key: string): Entry => {
     const known = mapGet(evaluated, key);
     if (known !== undefined) return known;
-    const entry: Entry = { settled: abandoned(), value: undefined };
+    const entry: Entry = { settled: abandoned(), value: undefined, loaded: undefined };
     entry.settled = evaluate(host, key, entry);
     mapSet(evaluated, key, entry);
     then(entry.settled, () => {}, () => { if (mapGet(evaluated, key) === entry) mapDelete(evaluated, key); });
@@ -115,7 +120,11 @@ export function createModuleRecords(host: RecordHost, factory: LoaderFactory, th
   const ready = new NativeMap<string, ModuleRecord | string>();
   const prepare = (key: string) => prepareGraph(host, key, entryOf, ready, then);
   const loader = factory({
-    resolve: (specifier, referrer) => host.resolve(specifier, referrer),
+    // Linking reads the requests its graph's preparation resolved.
+    resolve: (specifier, referrer) => {
+      const loaded = mapGet(evaluated, referrer)?.loaded;
+      return (loaded === undefined ? undefined : mapGet(loaded, specifier)) ?? host.resolve(specifier, referrer);
+    },
     load: key => {
       const prepared = mapGet(ready, key) ?? host.record(key).format;
       return { record: typeof prepared === "string" ? nonModuleRecord(host, key, prepared) : prepared };
@@ -175,7 +184,7 @@ function prepareGraph(host: RecordHost, root: string, entryOf: (key: string) => 
         if (!host.active()) return;
         const next: string[] = [];
         try {
-          for (let index = 0; index < keys.length; index++) addRequests(host, keys[index]!, entries[index]!.value!, seen, next, ready);
+          for (let index = 0; index < keys.length; index++) addRequests(host, keys[index]!, entries[index]!, seen, next, ready);
         } catch (error) {
           reject(error);
           return;
@@ -205,15 +214,25 @@ function all(entries: Entry[], then: Then, done: () => void, fail: (error: unkno
   }
 }
 
-function addRequests(host: RecordHost, key: string, record: ModuleRecord | string, seen: Set<string>, next: string[], ready: Map<string, ModuleRecord | string>): void {
+function addRequests(host: RecordHost, key: string, entry: Entry, seen: Set<string>, next: string[], ready: Map<string, ModuleRecord | string>): void {
+  const record = entry.value!;
   mapSet(ready, key, record);
   if (typeof record === "string") return;
+  const loaded = entry.loaded = loadedModules(host, key, record);
   for (let index = 0; index < record.r.length; index++) {
-    const child = host.resolve(record.r[index]!, key);
+    const child = mapGet(loaded, record.r[index]!)!;
     if (setHas(seen, child)) continue;
     setAdd(seen, child);
     arrayPush(next, child);
   }
+}
+
+// The module's requests resolved in order. The first failure throws, so the last walk that
+// succeeded is what linking reads.
+function loadedModules(host: RecordHost, key: string, record: ModuleRecord): Map<string, string> {
+  const loaded = new NativeMap<string, string>();
+  for (let index = 0; index < record.r.length; index++) mapSet(loaded, record.r[index]!, host.resolve(record.r[index]!, key));
+  return loaded;
 }
 
 // The record of a CommonJS, JSON, text or built-in module, made when the loader loads it
