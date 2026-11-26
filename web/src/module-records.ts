@@ -67,7 +67,7 @@ export interface RecordHost {
  * preparation fulfils with it and the loader hands it back (as `scope`) only while it links
  * that graph, so it never outlives the preparation or reaches another graph.
  */
-type Resolutions = { generation: number; found: Map<string, string> };
+type Resolutions = { generation: number; handoffs: number; found: Map<string, string> };
 
 type LoaderNative = {
   resolve(specifier: string, referrer: string, scope?: unknown): string;
@@ -125,17 +125,21 @@ export function createModuleRecords(host: RecordHost, factory: LoaderFactory, th
     return entry;
   };
   const ready = new NativeMap<string, ModuleRecord | string>();
-  const prepare = (key: string) => prepareGraph(host, key, entryOf, ready, then);
+  let handoffs = 0;
+  const prepare = (key: string) => prepareGraph(host, key, entryOf, ready, then, () => handoffs);
   const loader = factory({
     // A static request while its graph links reuses what that graph's preparation found, as
-    // long as nothing this process did since (a CommonJS handoff runs user code mid-link) can
-    // have changed it. Everything else, `import()` specifiers included, resolves live.
+    // long as neither this process's resolver generation nor an executable non-ES handoff
+    // (such as CommonJS, which can run child processes like Bun.spawnSync) ran since.
+    // Everything else, `import()` specifiers included, resolves live.
     resolve: (specifier, referrer, scope) => scope === undefined
       ? host.resolve(specifier, referrer)
-      : reuse(host, current(host, scope as Resolutions), specifier, referrer),
+      : reuse(host, current(host, scope as Resolutions, handoffs), specifier, referrer),
     load: key => {
       const prepared = mapGet(ready, key) ?? host.record(key).format;
-      return { record: typeof prepared === "string" ? nonModuleRecord(host, key, prepared) : prepared };
+      if (typeof prepared !== "string") return { record: prepared };
+      if (prepared !== "builtin" && prepared !== "json" && prepared !== "text" && prepared !== "toml") handoffs += 1;
+      return { record: nonModuleRecord(host, key, prepared) };
     },
     initMeta: (key, meta) => host.initMeta(key, meta),
     active: () => host.active(),
@@ -177,11 +181,12 @@ function evaluate(host: RecordHost, key: string, entry: Entry): Promise<void> {
 // the loader links anything or runs any CommonJS module.
 // Fulfils with the graph's resolutions, which only its own link reads. The value has no
 // prototype, so fulfilling with it looks up no user-visible `then`.
-function prepareGraph(host: RecordHost, root: string, entryOf: (key: string) => Entry, ready: Map<string, ModuleRecord | string>, then: Then): Promise<Resolutions> {
+function prepareGraph(host: RecordHost, root: string, entryOf: (key: string) => Entry, ready: Map<string, ModuleRecord | string>, then: Then, currentHandoffs: () => number): Promise<Resolutions> {
   return new NativePromise<Resolutions>((resolve, reject) => {
     if (!host.active()) return;
     const scope: Resolutions = create(null);
     scope.generation = host.generation();
+    scope.handoffs = currentHandoffs();
     scope.found = new NativeMap<string, string>();
     // Filled with the captured `add`: the constructor would look `add` up on the prototype.
     const seen = new NativeSet<string>();
@@ -198,7 +203,7 @@ function prepareGraph(host: RecordHost, root: string, entryOf: (key: string) => 
         if (!host.active()) return;
         const next: string[] = [];
         // User code may have run while the level's records evaluated; none runs in the loop.
-        current(host, scope);
+        current(host, scope, currentHandoffs());
         try {
           for (let index = 0; index < keys.length; index++) addRequests(host, scope, keys[index]!, entries[index]!.value!, seen, next, ready);
         } catch (error) {
@@ -242,11 +247,13 @@ function addRequests(host: RecordHost, scope: Resolutions, key: string, record: 
 }
 
 // `scope`, emptied first if this process changed a path, mock or plugin module since it was
-// filled (the generation moved).
-function current(host: RecordHost, scope: Resolutions): Resolutions {
+// filled (the generation moved) or ran an executable non-ES handoff (such as CommonJS, which
+// can mutate paths out-of-process via `Bun.spawnSync`).
+function current(host: RecordHost, scope: Resolutions, handoffs: number): Resolutions {
   const generation = host.generation();
-  if (generation === scope.generation) return scope;
+  if (generation === scope.generation && handoffs === scope.handoffs) return scope;
   scope.generation = generation;
+  scope.handoffs = handoffs;
   scope.found = new NativeMap<string, string>();
   return scope;
 }

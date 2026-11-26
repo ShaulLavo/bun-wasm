@@ -221,10 +221,11 @@ test("a path change while the graph is prepared empties its resolutions", async 
 test("a CommonJS module that changes a path during linking leaves later requests to the live resolver", async () => {
   const files = tree({ "/main.mjs": "/main.mjs", "/mutate.cjs": "/mutate.cjs", "/dep.mjs": "/dep.mjs" });
   const bodies: string[] = [];
+  // Intentionally omits `files.bump()` to mirror out-of-process mutation (e.g. `Bun.spawnSync`).
   const { records } = host({
     "/main.mjs": esm(["./mutate.cjs", "./dep.mjs"], function* (api) { api.l({}); yield; yield; bodies.push("main"); }),
     "/dep.mjs": valued("dep"),
-  }, { "/mutate.cjs": () => { files.files.delete("/dep.mjs"); files.bump(); return {}; } }, undefined, files.overrides);
+  }, { "/mutate.cjs": () => { files.files.delete("/dep.mjs"); return {}; } }, undefined, files.overrides);
   const error = await records.importKey("/main.mjs").catch((caught: Error) => caught);
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).toBe("Cannot find module './dep.mjs' from '/main.mjs'");

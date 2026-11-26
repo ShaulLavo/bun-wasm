@@ -250,6 +250,11 @@ export function testModuleRecordControls(wasm: string): void {
         "mutate.cjs": "require('node:fs').unlinkSync('/dep.mjs');",
         "dep.mjs": "export default 'deleted';",
       })).toEqual({ stdout: "", status: 1, missing: true });
+      expect(run("commonjs-spawn", {
+        "main.mjs": "import './mutate.cjs'; import value from './dep.mjs'; console.log(value);",
+        "mutate.cjs": "const r = Bun.spawnSync([process.execPath, '-e', \"require('node:fs').unlinkSync('/dep.mjs')\"]); if (r.exitCode !== 0) throw new Error(r.stderr.toString());",
+        "dep.mjs": "export default 'deleted';",
+      })).toEqual({ stdout: "", status: 1, missing: true });
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
