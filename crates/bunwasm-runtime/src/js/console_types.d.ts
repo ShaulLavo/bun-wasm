@@ -5,7 +5,7 @@ declare namespace BunWasm {
     depth?: number; compact?: boolean; colors?: boolean; sorted?: boolean;
     showHidden?: boolean; getters?: boolean; customInspect?: boolean;
   }
-  interface ConsoleFormatOptions extends ConsoleInspectOptions { indent?: number; level?: "warn" | "error" }
+  interface ConsoleFormatOptions extends ConsoleInspectOptions { indent?: number; level?: "log" | "warn" | "error" }
   interface ConsoleInspector {
     formatArgs(args: readonly unknown[], options?: ConsoleFormatOptions): string;
     bunInspect(value: unknown, options?: ConsoleInspectOptions): string;

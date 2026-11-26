@@ -34,6 +34,9 @@ function runtime(isProxy = types.isProxy) {
   const util = factory("util.ts")(internal);
   modules.util = util;
   modules.test_matchers = factory("test_matchers.ts")(internal);
+  const output = factory("pretty_output.ts")(internal);
+  // Plain reports, whatever FORCE_COLOR the harness runs under.
+  modules.pretty_output = { prettyFmt: output.prettyFmt, markup: output.markup, stdout: false, stderr: false };
   modules.test_extensions = factory("test_extensions.ts")(internal);
   modules.test_lifecycle = factory("test_lifecycle.ts")();
   modules.fs = {

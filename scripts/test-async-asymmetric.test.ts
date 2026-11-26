@@ -23,7 +23,10 @@ test("async asymmetric comparisons through the actual util and expect factories"
       Promise.prototype.then.call(promise, fulfilled, rejected),
   });
   const intrinsic = { isPromise: types.isPromise, promiseThen: (value: Promise<unknown>, fulfilled: (value: unknown) => unknown, rejected?: (error: unknown) => unknown) => Promise.prototype.then.call(value, fulfilled, rejected) };
-  const modules = { inspect: { bunInspect: Bun.inspect, formatError: (error: unknown) => String(error) + "\n" }, test_matchers: support };
+  const output = factory("pretty_output.ts")({ native: { isatty: () => false } });
+  // Plain reports, whatever FORCE_COLOR the harness runs under.
+  const pretty = { prettyFmt: output.prettyFmt, markup: output.markup, stdout: false, stderr: false };
+  const modules = { inspect: { bunInspect: Bun.inspect, formatError: (error: unknown) => String(error) + "\n" }, test_matchers: support, pretty_output: pretty };
   const util = factory("util.ts")({ ...intrinsic, require: (name: keyof typeof modules) => modules[name] });
   const extensions = factory("test_extensions.ts")({ ...intrinsic, require: (name: keyof typeof modules) => modules[name] });
   const available = { ...modules, util, test_extensions: extensions };

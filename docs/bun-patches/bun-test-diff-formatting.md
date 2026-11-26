@@ -4,6 +4,8 @@
 
 Translate the colorless formatting path, sorted keys, expected/received sections, context chunking, line prefixes, and agent-mode thresholds to JavaScript. Replace Bun's tuned Myers line differ with a local common-prefix/suffix trim and LCS implementation for small diffs, with a bounded large-diff path. This reproduces useful test diagnostics without the native test runner. Discovery, scopes, matchers, mock tracking, scheduling, and snapshot storage in the rest of the file are local implementations that follow Bun's observable contract.
 
+Coloured reports use Bun's own printer instead; see [Terminal colours](terminal-colors.md).
+
 Assertion diagnostics enumerate own string property names, including
 non-enumerable properties. This preserves a non-callable FormData.toJSON value
 in the diagnostic without calling it. Accessor properties print as

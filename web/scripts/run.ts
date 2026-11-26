@@ -9,7 +9,7 @@ import { MemFS } from "../src/fs";
 import { NetHost } from "../src/net/host";
 import { createRing } from "../src/net/ring";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "../src/net/trampoline";
-import { Wasi } from "waffle/core";
+import { Wasi, type Stream } from "waffle/core";
 import { ProcessABI, ProcessSignalExit } from "waffle/proc/abi";
 import { ExecutableRegistry } from "waffle/proc/registry";
 import { ProcessSupervisor } from "waffle/proc/supervisor";
@@ -24,6 +24,21 @@ if (!wasmPath) {
 const fs = new MemFS();
 fs.mkdirp("/tmp");
 for (const [name, source] of Object.entries(examples)) fs.writeFile(`${HOME}/${name}`, source);
+
+// Output redirected to a file or pipe reaches the guest as a pipe, not a terminal, so its isatty
+// and colour decisions match the host stream. A terminal keeps Waffle's default terminal stream.
+function hostOutput(stream: NodeJS.WriteStream): Stream | undefined {
+  if (stream.isTTY) return undefined;
+  const write = (chunks: readonly Uint8Array[]) => {
+    let total = 0;
+    for (const chunk of chunks) {
+      if (chunk.length > 0) stream.write(chunk.slice());
+      total += chunk.length;
+    }
+    return total;
+  };
+  return { kind: "pipe", read: () => 0, write, tryWrite: write, readiness: () => ({ readable: false, writable: true, hangup: false }) };
+}
 
 function testEnv(): Record<string, string> {
   return Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[0].startsWith("TEST_") && e[1] !== undefined));
@@ -42,6 +57,7 @@ const wasi = new Wasi({
   preopens: { "/": "/" },
   stdout: (data) => process.stdout.write(data),
   stderr: (data) => process.stderr.write(data),
+  stdio: { 1: hostOutput(process.stdout), 2: hostOutput(process.stderr) },
   sleep: (ms) => void Atomics.wait(cell, 0, 0, ms),
   trace: process.env.WASI_TRACE ? (line) => process.stderr.write(`[wasi] ${line}\n`) : undefined,
 });
