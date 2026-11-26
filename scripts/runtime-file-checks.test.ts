@@ -60,6 +60,7 @@ test("only audited runtime files opt into process isolation", () => {
   const plan = runtimePlan(paths, checks);
   expect(plan.isolated).toEqual([
     "scripts/hot-run-live.test.ts",
+    "scripts/install-early.test.ts",
     "scripts/install-metadata.test.ts",
     "scripts/install-selection.test.ts",
     "scripts/install-tarballs.test.ts",
