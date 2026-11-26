@@ -18,7 +18,7 @@ export class StorageRoutingEvidence {
     this.rows.push({ ...row, observed: ++this.native });
   }
   request(value: RoutingRow): void {
-    if (!routingTargets.concat(["/"]).includes(path(value.url) ?? "")) return;
+    if (!routingTargets.concat(["/"]).includes(path(value.url) ?? "") && !isLoadingPage(value.url)) return;
     if (this.requests.length === 128) { this.requests.shift(); this.dropped++; }
     this.requests.push({ ...value, observed: ++this.native });
   }
@@ -161,7 +161,12 @@ export class StorageRoutingEvidence {
     const match = matches[0]!;
     const loading = responses.filter(row => row !== match);
     if (loading.length > 1 || loading.some(row => row.loadingNavigation !== true || row.status !== 307 || row.fromServiceWorker !== true || row.page !== match.page)) return false;
-    const starts = this.requests.filter(row => row.kind === "request" && row.url === url);
+    const allStarts = this.requests.filter(row => row.kind === "request" && row.url === url);
+    // Firefox does not report the service worker's redirect to the loading page. It reports the
+    // first navigation as aborted and then starts a navigation to the loading page itself.
+    const redirected = loading.length ? [] : allStarts.filter(start => this.abortedForLoading(start, match, responses));
+    if (redirected.length > 1) return false;
+    const starts = allStarts.filter(start => !redirected.includes(start));
     if (starts.length !== responses.length || new Set(starts.map(row => `${row.page}:${row.request}`)).size !== starts.length) return false;
     return responses.every(response => {
       if (!positiveId(response.page) || !positiveId(response.request)) return false;
@@ -169,6 +174,38 @@ export class StorageRoutingEvidence {
       return lifecycle.some(row => row.kind === "request") && lifecycle.some(row => row.kind === "requestfinished");
     });
   }
+  // True when `start` is a navigation that was aborted without any response, and a navigation to
+  // this preview's loading page got its 200 response before the matching request started and
+  // finished. The aborted request, the loading page and the matching request must all be
+  // navigations in the same frame: other frames of the page share the service worker.
+  private abortedForLoading(start: RoutingRow, match: RoutingRow, responses: RoutingRow[]): boolean {
+    if (!positiveId(start.frame) || start.page !== match.page || responses.some(row => row.page === start.page && row.request === start.request)) return false;
+    const inFrame = (row: RoutingRow) => row.page === start.page && row.navigation === true && row.frame === start.frame;
+    const matchStart = this.requests.find(row => row.kind === "request" && row.page === match.page && row.request === match.request);
+    if (!matchStart || !inFrame(start) || !inFrame(match) || !inFrame(matchStart)) return false;
+    const failed = this.requests.some(row => row.kind === "requestfailed" && row.page === start.page && row.request === start.request
+      && row.url === start.url && inFrame(row) && row.errorText === "NS_BINDING_ABORTED");
+    if (!failed) return false;
+    const prefix = previewPrefix(start.url);
+    return this.requests.some(row => row.kind === "request" && inFrame(row) && isLoadingPage(row.url)
+      && previewPrefix(row.url) === prefix && Number(row.observed) > Number(start.observed) && Number(row.observed) < Number(matchStart.observed)
+      && this.requests.some(item => item.kind === "response" && item.page === row.page && item.request === row.request && item.status === 200
+        && Number(item.observed) < Number(matchStart.observed))
+      && this.requests.some(item => item.kind === "requestfinished" && item.page === row.page && item.request === row.request));
+  }
+}
+function previewPrefix(value: unknown): string | undefined {
+  if (typeof value !== "string") return;
+  try {
+    const url = new URL(value);
+    const prefix = /^(.*\/__preview\/)/.exec(url.pathname)?.[1];
+    return prefix && url.origin + prefix;
+  } catch { return; }
+}
+function isLoadingPage(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try { return /\/__preview\/\.loading\/[a-f0-9-]{36}$/.test(new URL(value).pathname); }
+  catch { return false; }
 }
 function positiveId(value: unknown): boolean { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
 
