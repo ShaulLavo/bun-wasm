@@ -5,14 +5,14 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { installFixture, installFixtureCommand, installFixtureTargets, type InstallFixtureTarget } from "./install-fixture-command";
 import { packageFixture, tarEntry } from "../tests/install/registry.mjs";
 
 // An install that starts without node_modules prepares packages while resolution waits on
 // metadata. These cases hold `b-delayed`'s metadata so that work happens, and compare with a
-// control run whose empty node_modules turns it off. The guest stages in its temporary
-// directory, which these fixtures map to `<project>/tmp`.
+// control run whose empty node_modules turns it off. Each project sits beside its own
+// temporary directory, mounted as the guest's `/tmp`, where early work stages.
 const STAGING = "bun-wasm-early-";
 
 type Fixture = ReturnType<typeof packageFixture>;
@@ -71,19 +71,25 @@ async function registry(options: Options): Promise<Registry> {
   };
 }
 
+/** A project directory with a sibling temporary directory (see `temp`). */
 function project(manifest: object, control = false): string {
-  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-early-test-"));
+  const directory = join(mkdtempSync(join(tmpdir(), "bun-wasm-early-test-")), "project");
+  mkdirSync(directory);
+  mkdirSync(temp(directory));
   writeFileSync(join(directory, "package.json"), JSON.stringify(manifest));
   if (control) mkdirSync(join(directory, "node_modules"));
   return directory;
 }
 
+/** The host directory mounted as the guest's `/tmp` for `directory`. */
+const temp = (directory: string) => join(dirname(directory), "tmp");
+const remove = (directory: string) => rmSync(dirname(directory), { recursive: true, force: true });
+
 const archiveRequests = (registry: Registry, name = "a-known") => registry.requests.filter(path => path === `archives/${name}`).length;
 
 /** Staging directories in the guest's temporary directory. */
 function stagings(directory: string): string[] {
-  const temp = join(directory, "tmp");
-  return existsSync(temp) ? readdirSync(temp).filter(name => name.startsWith(STAGING)).map(name => join(temp, name)) : [];
+  return readdirSync(temp(directory)).filter(name => name.startsWith(STAGING)).map(name => join(temp(directory), name));
 }
 
 async function withRegistry(options: Options, run: (registry: Registry) => Promise<void>) {
@@ -99,12 +105,12 @@ async function bothArms(manifest: object, prepare: (directory: string) => void, 
       prepare(directory);
       await run(directory);
       assert.deepEqual(stagings(directory), [], "staging was left behind");
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+    } finally { remove(directory); }
   }
 }
 
 for (const target of installFixtureTargets()) {
-  const install = (directory: string, base: string, expected: number, archives = true, environment: string[] = []) => installFixture(directory, base, [], expected, archives, environment, target);
+  const install = (directory: string, base: string, expected: number, archives = true, environment: string[] = []) => installFixture(directory, base, [], expected, archives, environment, target, temp(directory));
 
   test(`${target.engine}: a metadata error after early work leaves no packages behind`, () => withRegistry({ delayed: 404 }, async server => {
     const directory = project({ dependencies: { "a-known": "1.0.0", "b-delayed": "1.0.0" } });
@@ -117,21 +123,38 @@ for (const target of installFixtureTargets()) {
       writeFileSync(join(directory, "package.json"), JSON.stringify({ dependencies: {} }));
       await install(directory, server.base, 0);
       assert.ok(!existsSync(join(directory, "node_modules/a-known")));
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+    } finally { remove(directory); }
   }), 120_000);
 
-  test(`${target.engine}: a killed install's staging is reaped and never reaches a different graph`, () => withRegistry({ delayed: "hold" }, async server => {
+  test(`${target.engine}: a killed install's staging is left alone and never reaches a different graph`, () => withRegistry({ delayed: "hold" }, async server => {
     const directory = project({ dependencies: { "a-known": "1.0.0", "b-delayed": "1.0.0" } });
     try {
       await killWhenStaged(directory, server.base, target);
       assert.ok(!existsSync(join(directory, "node_modules")), "early work wrote into node_modules");
+      const killed = stagings(directory);
+      assert.equal(killed.length, 1);
       writeFileSync(join(directory, "package.json"), JSON.stringify({ dependencies: { "c-other": "1.0.0" } }));
       await install(directory, server.base, 0);
       assert.ok(existsSync(join(directory, "node_modules/c-other/package.json")));
       assert.ok(!existsSync(join(directory, "node_modules/a-known")), "a package from the killed run was published");
-      assert.deepEqual(stagings(directory), [], "the killed run's staging was not reaped");
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+      // The install removed its own staging and left the killed run's to the host.
+      assert.deepEqual(stagings(directory), killed, "an install removed staging it did not create, or left its own");
+    } finally { remove(directory); }
   }), 120_000);
+
+  for (const tmpdir of [".", "/project/tmp", "/tmp/../project"]) {
+    test(`${target.engine}: TMPDIR=${tmpdir} inside the project means no early work and an untouched project`, () => withRegistry({ delayed: 1500 }, async server => {
+      const directory = project({ dependencies: { "a-known": "1.0.0", "b-delayed": "1.0.0" } });
+      try {
+        const output = await install(directory, server.base, 0, true, [`TMPDIR=${tmpdir}`, "BUN_WASM_INSTALL_TRACE=1"]);
+        assert.doesNotMatch(output, /early-install/, "early work ran");
+        assert.ok(server.requests.indexOf("archives/a-known") > server.requests.indexOf("b-delayed"), "an archive was fetched while resolution waited");
+        // Only what any install writes: the lockfile, packages, and the fixture's install cache.
+        assert.deepEqual(readdirSync(directory).toSorted(), ["bun.lock", "cache", "node_modules", "package.json"]);
+        assert.deepEqual(readdirSync(temp(directory)), []);
+      } finally { remove(directory); }
+    }), 120_000);
+  }
 
   test(`${target.engine}: a project's own .bun-wasm-early directory is never touched`, () => withRegistry({ delayed: 1500 }, async server => {
     const directory = project({ dependencies: { "a-known": "1.0.0", "b-delayed": "1.0.0" } });
@@ -146,7 +169,7 @@ for (const target of installFixtureTargets()) {
       await install(directory, server.base, 0);
       assert.equal(readFileSync(owned, "utf8"), "mine", "a cold install touched the project");
       assert.ok(existsSync(join(directory, "node_modules/a-known/package.json")));
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+    } finally { remove(directory); }
   }), 120_000);
 
   for (const local of ["./node_modules/a-known", "./.bun-wasm-early/1"]) {
@@ -159,8 +182,8 @@ for (const target of installFixtureTargets()) {
         await install(control, server.base, 0);
         assert.equal(readFileSync(join(early, "bun.lock"), "utf8"), readFileSync(join(control, "bun.lock"), "utf8"));
       } finally {
-        rmSync(early, { recursive: true, force: true });
-        rmSync(control, { recursive: true, force: true });
+        remove(early);
+        remove(control);
       }
     }), 120_000);
   }
@@ -178,7 +201,7 @@ for (const target of installFixtureTargets()) {
           try {
             const output = await install(directory, server.base, optional ? 0 : 1);
             results.push({ output, requests: archiveRequests(server), installed: existsSync(join(directory, "node_modules/a-known")) });
-          } finally { rmSync(directory, { recursive: true, force: true }); }
+          } finally { remove(directory); }
         });
       }
       const [early, control] = results;
@@ -214,7 +237,7 @@ for (const target of installFixtureTargets()) {
 
 /** Starts an install, kills it once a package is staged, and waits for it to exit. */
 async function killWhenStaged(directory: string, base: string, target: InstallFixtureTarget) {
-  const [program, argv] = installFixtureCommand(directory, base, [], true, [], target);
+  const [program, argv] = installFixtureCommand(directory, base, [], true, [], target, temp(directory));
   const child = spawn(program, argv, { cwd: directory, stdio: "ignore" });
   const exited = new Promise<void>(accept => child.once("close", () => accept()));
   try {

@@ -317,6 +317,7 @@ async function stressSandboxMidEdit(context: BrowserContext, sandboxOrigin: stri
 interface PlaygroundHandle {
   fs?: {
     writeFile(path: string, data: string): Promise<void>;
+    mkdirp(path: string): Promise<void>;
     readFile(path: string): Promise<Uint8Array | undefined>;
     listFiles(path?: string): Promise<string[]>;
     flush(path?: string): Promise<void>;
@@ -397,6 +398,10 @@ async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOri
       await pg.fs.writeFile("/home/user/.baseline-install.txt", baseline);
       await pg.fs.writeFile("/home/user/package.json", JSON.stringify({ name: "stress-install", dependencies }));
       await pg.fs.writeFile("/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(base)}\n`);
+      // Staging a killed install would leave, which the next boot clears, and a file it keeps.
+      await pg.fs.mkdirp("/tmp/bun-wasm-early-leftover/1");
+      await pg.fs.writeFile("/tmp/bun-wasm-early-leftover/1/package.json", "{}");
+      await pg.fs.writeFile("/tmp/kept.txt", "kept");
       await pg.fs.flush();
     }, { base: registry.base, dependencies: registry.dependencies, baseline });
 
@@ -431,6 +436,13 @@ async function stressPlaygroundMidInstall(context: BrowserContext, playgroundOri
 
       await waitForPlaygroundReady(page, `after interrupted install cycle ${cycle}`);
       expect(await readPlaygroundFile(page, "/home/user/.baseline-install.txt")).toBe(baseline);
+      // Boot cleared the staging of the killed install and the planted leftover, nothing else.
+      const temporary = await page.evaluate(async () => {
+        const pg = Reflect.get(globalThis, "playground") as unknown as PlaygroundHandle | undefined;
+        return (await pg?.fs?.listFiles("/tmp")) ?? [];
+      });
+      expect(temporary.filter(path => path.includes("bun-wasm-early-"))).toEqual([]);
+      expect(await readPlaygroundFile(page, "/tmp/kept.txt")).toBe("kept");
       expect(errors).toEqual([]);
     }
 

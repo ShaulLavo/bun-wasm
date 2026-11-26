@@ -1,11 +1,16 @@
 //! Packages prepared while resolution waits: staging, eligibility, outcomes and publication.
-use std::{fs, path::Path, process::Command};
+use std::{
+    ffi::OsStr,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use serde_json::{Value, json};
 
 use super::{
     Package, Resolver,
-    early::{self, Early},
+    early::{self, Early, staging_parent},
     install_packages, installed_source_path, io,
     resolve::test_support::{archive_entries, cache_archive, seed_cache},
     trace,
@@ -33,18 +38,25 @@ fn plain(name: &str, chain: &[&str]) -> Package {
     package(name, chain, json!({}))
 }
 
-fn in_child(name: &str) {
+/// A scratch directory holding `project` (the child's working directory), its install cache
+/// and its temporary directory, side by side.
+fn scratch(name: &str) -> PathBuf {
     let directory =
-        std::env::temp_dir().join(format!("bun-wasm-early-{}-{name}", std::process::id()));
+        std::env::temp_dir().join(format!("bun-wasm-early-test-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&directory);
-    fs::create_dir(&directory).unwrap();
+    fs::create_dir_all(directory.join("project")).unwrap();
+    directory
+}
+
+fn in_child(name: &str) {
+    let directory = scratch(name);
     let output = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
             &format!("install::early_tests::{name}"),
             "--nocapture",
         ])
-        .current_dir(&directory)
+        .current_dir(directory.join("project"))
         .env("BUN_INSTALL_CACHE_DIR", directory.join("cache"))
         .env("BUN_WASM_INSTALL_TRACE", "1")
         .env("BUN_WASM_EARLY_CHILD", "1")
@@ -110,15 +122,9 @@ fn early_work_stages_outside_the_project() {
         early.root().starts_with(std::env::var("TMPDIR").unwrap()),
         "staging is not under TMPDIR"
     );
-    // The test's own install cache and temporary directory, nothing else.
-    let mut project: Vec<_> = fs::read_dir(".")
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name())
-        .collect();
-    project.sort();
     assert_eq!(
-        project,
-        ["cache", "tmp"],
+        fs::read_dir(".").unwrap().count(),
+        0,
         "early work wrote into the project"
     );
     assert!(early.prepared(&outer) && early.prepared(&nested));
@@ -291,9 +297,9 @@ fn a_final_graph_that_hoists_differently_still_uses_what_was_staged() {
 }
 
 #[test]
-fn staging_an_interrupted_run_left_is_reaped_and_never_published() {
+fn staging_an_interrupted_run_left_is_never_published_or_deleted() {
     if !child() {
-        return in_child("staging_an_interrupted_run_left_is_reaped_and_never_published");
+        return in_child("staging_an_interrupted_run_left_is_never_published_or_deleted");
     }
     // An earlier run was killed with `left` staged; the next run resolves a different graph.
     let left = plain("left", &["left"]);
@@ -305,22 +311,96 @@ fn staging_an_interrupted_run_left_is_reaped_and_never_published() {
     let abandoned = killed.root().to_path_buf();
     std::mem::forget(killed_guard);
     drop(killed);
-    // Another project's staging in the same temporary directory is left alone.
-    let foreign =
-        Path::new(&std::env::var("TMPDIR").unwrap()).join(format!("{}0-other", early::STAGING));
-    fs::create_dir_all(&foreign).unwrap();
-    let (mut early, _guard) = start();
-    assert!(
-        !abandoned.exists(),
-        "the killed run's staging was not reaped"
-    );
-    assert!(foreign.exists(), "another project's staging was reaped");
+    let (mut early, guard) = start();
     early.added(&other, None, &registry());
     assert_eq!(drain(&mut early), 1);
+    let root = early.root().to_path_buf();
     let mut resolver = resolver_with(early, &[&other]);
     let (installed, _) = install_packages(&mut resolver).unwrap();
     assert_eq!(installed, 1);
     assert!(!left.path().exists());
+    drop(guard);
+    assert!(!root.exists(), "the install left its own staging");
+    // Whether the killed run is over is not this install's to judge.
+    assert!(
+        abandoned.exists(),
+        "an install deleted staging it did not create"
+    );
+}
+
+#[test]
+fn projects_sharing_a_temporary_directory_never_touch_each_others_staging() {
+    let directory = scratch("shared-temp");
+    let temp = directory.join("tmp");
+    let start = |project: &str| {
+        let cwd = directory.join(project);
+        fs::create_dir_all(&cwd).unwrap();
+        Early::start_in(&cwd, Some(temp.as_os_str()), false).unwrap()
+    };
+    // Staging of another install whose state this one cannot know, named like its own.
+    let stranger = temp.join(format!("{}0", early::STAGING));
+    fs::create_dir_all(stranger.join("1")).unwrap();
+    let (first, first_guard) = start("first");
+    let (second, second_guard) = start("second");
+    let (first_root, second_root) = (first.root().to_path_buf(), second.root().to_path_buf());
+    assert_ne!(first_root, second_root);
+    drop((first, first_guard));
+    assert!(!first_root.exists(), "the first install left its staging");
+    assert!(
+        second_root.exists(),
+        "the first install removed the second's staging"
+    );
+    assert!(
+        stranger.join("1").exists(),
+        "an install removed staging it did not create"
+    );
+    drop((second, second_guard));
+    assert!(!second_root.exists());
+    assert!(stranger.exists());
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn a_temporary_directory_in_the_project_turns_early_work_off() {
+    let directory = scratch("temp-in-project");
+    let project = directory.join("project");
+    fs::create_dir_all(directory.join("outside")).unwrap();
+    // A link outside the project that leads into it.
+    std::os::unix::fs::symlink(&project, directory.join("outside/link")).unwrap();
+    let absolute = project.join("tmp");
+    let inside: [&OsStr; 6] = [
+        OsStr::new("."),
+        OsStr::new(""),
+        OsStr::new("tmp"),
+        OsStr::new("../project/./tmp"),
+        absolute.as_os_str(),
+        OsStr::new("../outside/link/tmp"),
+    ];
+    for tmpdir in inside {
+        assert_eq!(staging_parent(&project, Some(tmpdir)), None, "{tmpdir:?}");
+        assert!(
+            Early::start_in(&project, Some(tmpdir), false).is_none(),
+            "{tmpdir:?}"
+        );
+    }
+    assert_eq!(
+        fs::read_dir(&project).unwrap().count(),
+        0,
+        "a skipped early install touched the project"
+    );
+    // Outside the project, through `..` or a link, it stages there.
+    fs::create_dir_all(directory.join("tmp")).unwrap();
+    assert_eq!(
+        staging_parent(&project, Some(OsStr::new("../tmp"))),
+        Some(directory.join("tmp"))
+    );
+    std::os::unix::fs::symlink(directory.join("tmp"), project.join("temp-link")).unwrap();
+    assert_eq!(
+        staging_parent(&project, Some(OsStr::new("temp-link"))),
+        Some(directory.join("tmp")),
+        "a link out of the project resolves to its target"
+    );
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

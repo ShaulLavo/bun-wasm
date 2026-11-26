@@ -10,6 +10,7 @@ import { BrowserPrograms, ProvisionAbortedError, type ProvisioningStatus } from 
 import { ENGINES, type Engine, WasmMissing, createToolsLoader, engineBuildHint, engineUnavailable, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../engine-loader";
 import { installCompileObserver, measurementEnvironment } from "../compile-observer";
 import { HOME, examples } from "../examples";
+import { clearEarlyStaging } from "../install-staging";
 import { normalize } from "../fs";
 import { HostedPreviews } from "../hosted-previews";
 import type { BunNetworkOptions, BunProcessStart, RuntimeNetworkHelper } from "../net/helper";
@@ -1012,6 +1013,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
                 identity,
                 this.ownClaimIds,
                 async () => {
+                  // No guest runs in any tab while live writers are excluded.
+                  await clearEarlyStaging(fs);
                   if (this.template) {
                     const { loadTemplate } = await import("../../../sandbox/src/template");
                     await loadTemplate(fs, HOME, this.template.file, false, { signal: bootSignal });
@@ -1034,6 +1037,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       });
     } else {
       await fs.mkdirp("/tmp");
+      await clearEarlyStaging(fs);
       stage("filesystem-open");
       if (this.template) {
         const { loadTemplate } = await import("../../../sandbox/src/template");

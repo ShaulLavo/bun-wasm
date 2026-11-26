@@ -4,7 +4,12 @@
 //! after it spends most of its time extracting archives. When an install starts without
 //! `node_modules`, the archives of packages resolution has placed are fetched and extracted
 //! during those waits, into staging that this install owns under the temporary directory,
-//! outside the project. Nothing touches the project until the install phase, which runs
+//! outside the project. Each install creates its own uniquely named staging and removes only
+//! that one; an install never deletes staging it did not create. When the temporary
+//! directory is the project or inside it, or can't be resolved, there is no early work.
+//! Staging that a killed install left is cleared by whoever knows nothing is running: the
+//! browser hosts at boot, and on the native launcher the system's temporary-file cleaner.
+//! Nothing touches the project until the install phase, which runs
 //! after the final graph and lockfile exist and publishes each staged package by rename, in
 //! install order; where a rename cannot move it, the package is extracted again from its
 //! archive, which staging keeps for that and for later packages with the same archive.
@@ -15,8 +20,9 @@
 //! so archive errors appear exactly as without early work.
 use std::{
     collections::{BTreeSet, VecDeque},
-    fs,
-    path::{Path, PathBuf},
+    ffi::{OsStr, OsString},
+    fs, io as stdio,
+    path::{Component, Path, PathBuf},
 };
 
 use serde_json::Value;
@@ -27,7 +33,8 @@ use super::{
     trace,
 };
 
-/// Names of staging directories, followed by the project's hash and the install's own suffix.
+/// Names of staging directories, followed by the install's own random suffix. The browser
+/// hosts clear these at boot (`web/src/install-staging.ts`).
 pub const STAGING: &str = "bun-wasm-early-";
 /// Archives requested ahead while metadata is still loading. Metadata decides when
 /// resolution ends, so archives take a small share of the connection.
@@ -51,40 +58,88 @@ impl Drop for StagingGuard {
     }
 }
 
-/// The temporary directory, as an absolute path (`std::env::temp_dir` is missing on WASI).
-fn temp_dir(cwd: &Path) -> PathBuf {
-    let temp = std::env::var_os("TMPDIR").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
-    cwd.join(temp)
+/// Symlinks followed while resolving one path before giving up on a loop.
+const MAX_LINKS: u32 = 40;
+
+/// Where this install may stage: the temporary directory (`tmpdir`, or `/tmp`), resolved
+/// against `cwd`, unless it is the project in `cwd` or inside it or can't be resolved.
+pub(super) fn staging_parent(cwd: &Path, tmpdir: Option<&OsStr>) -> Option<PathBuf> {
+    let project = resolve(cwd)?;
+    let temp = resolve(&project.join(tmpdir.unwrap_or(OsStr::new("/tmp"))))?;
+    (!temp.starts_with(&project)).then_some(temp)
 }
 
-/// Staging names for the project in `cwd`: a hash of its path, so reaping stays within it.
-fn project_prefix(cwd: &Path) -> String {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(cwd.to_string_lossy().as_bytes());
-    format!(
-        "{STAGING}{:x}-",
-        u64::from_be_bytes(hash[..8].try_into().unwrap())
-    )
-}
-
-/// Creates this install's staging after removing what an interrupted install of the same
-/// project left. Two installs of one project at once are unsupported anyway: each replaces
-/// the other's node_modules.
-fn create_staging(cwd: &Path) -> Option<PathBuf> {
-    let temp = temp_dir(cwd);
-    let prefix = project_prefix(cwd);
-    if let Ok(entries) = fs::read_dir(&temp) {
-        for entry in entries.flatten() {
-            if entry.file_name().to_string_lossy().starts_with(&prefix) {
-                let _ = fs::remove_dir_all(entry.path());
-            }
+/// `path` with `.`, `..` and symlinks resolved, as `realpath` would (`fs::canonicalize` is
+/// unsupported on WASI). A missing tail is kept as written. `None` when `path` is relative,
+/// a link can't be read, or links loop.
+fn resolve(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut queue: VecDeque<OsString> = parts(path).into();
+    let mut resolved = PathBuf::from("/");
+    let mut links = 0;
+    while let Some(part) = queue.pop_front() {
+        if part == ".." {
+            resolved.pop();
+            continue;
+        }
+        let candidate = resolved.join(&part);
+        let Some(target) = link_target(&candidate)? else {
+            resolved = candidate;
+            continue;
+        };
+        links += 1;
+        if links > MAX_LINKS {
+            return None;
+        }
+        if target.is_absolute() {
+            resolved = PathBuf::from("/");
+        }
+        for piece in parts(&target).into_iter().rev() {
+            queue.push_front(piece);
         }
     }
-    let mut random = [0u8; 16];
-    getrandom::fill(&mut random).ok()?;
-    let root = temp.join(format!("{prefix}{:x}", u128::from_le_bytes(random)));
-    fs::create_dir_all(&root).ok()?;
-    Some(root)
+    Some(resolved)
+}
+
+/// The names and `..` steps of `path`.
+fn parts(path: &Path) -> Vec<OsString> {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(name) => Some(name.to_owned()),
+            Component::ParentDir => Some("..".into()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The target of the symlink at `path`: `Some(None)` when it is not a symlink or is missing,
+/// `None` when it can't be read.
+fn link_target(path: &Path) -> Option<Option<PathBuf>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => fs::read_link(path).ok().map(Some),
+        Ok(_) => Some(None),
+        Err(error) if error.kind() == stdio::ErrorKind::NotFound => Some(None),
+        Err(_) => None,
+    }
+}
+
+/// Creates a staging directory under `parent` that this install alone owns: an exclusive
+/// create under a fresh random name.
+fn create_staging(parent: &Path) -> Option<PathBuf> {
+    fs::create_dir_all(parent).ok()?;
+    for _ in 0..4 {
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random).ok()?;
+        let root = parent.join(format!("{STAGING}{:032x}", u128::from_le_bytes(random)));
+        match fs::create_dir(&root) {
+            Ok(()) => return Some(root),
+            Err(error) if error.kind() == stdio::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// What early work did for one package, keyed by its source record.
@@ -130,9 +185,18 @@ struct Job {
 
 impl Early {
     /// Early work for an install in `cwd`, with the guard that removes its staging, or
-    /// `None` when no staging can be made.
+    /// `None` when there is to be none (see [`staging_parent`]).
     pub fn start(cwd: &Path, refresh: bool) -> Option<(Self, StagingGuard)> {
-        let root = create_staging(cwd)?;
+        Self::start_in(cwd, std::env::var_os("TMPDIR").as_deref(), refresh)
+    }
+
+    /// [`Early::start`] with the temporary directory `tmpdir` instead of `$TMPDIR`.
+    pub(super) fn start_in(
+        cwd: &Path,
+        tmpdir: Option<&OsStr>,
+        refresh: bool,
+    ) -> Option<(Self, StagingGuard)> {
+        let root = create_staging(&staging_parent(cwd, tmpdir)?)?;
         Some((Self::new(root.clone(), refresh), StagingGuard(root)))
     }
 
