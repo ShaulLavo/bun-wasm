@@ -33,6 +33,7 @@
 //! `crates/bunwasm-runtime/src/js/esm_loader.ts` links and evaluates the records.
 
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
 use bun_alloc::Arena;
@@ -104,19 +105,54 @@ impl Module {
 /// name appears nowhere in the module's own tokens, strings or comments, every printed
 /// occurrence of it is one the record put there.
 ///
-/// Most fresh names start with [`RESERVED`], so the offsets where that prefix occurs are
-/// found once: such a name occurs in the text only at one of them. Other names scan the text.
+/// Most fresh names start with [`RESERVED`] and are ASCII identifiers. Such a name occurs in
+/// the text only inside the identifier run that starts at an occurrence of the prefix, so
+/// those runs are collected once, sorted and deduplicated, the first time one is needed.
 struct Names<'source> {
     taken: HashSet<String>,
     source: &'source str,
     decoded: Cow<'source, str>,
-    /// Byte offsets of [`RESERVED`] in `source`, then in `decoded` when it differs.
-    reserved: Vec<usize>,
-    reserved_decoded: Vec<usize>,
+    reserved: OnceCell<Reserved>,
 }
 
 /// The prefix of the record's own generated names.
 const RESERVED: &str = "__bunwasm";
+
+/// The distinct identifier runs starting with [`RESERVED`] in the source and, when it
+/// differs, in its decoded spelling, as sorted byte ranges.
+struct Reserved {
+    source: Vec<(usize, usize)>,
+    decoded: Vec<(usize, usize)>,
+}
+
+fn identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
+}
+
+/// Sorted, distinct ranges of the identifier runs that start at each [`RESERVED`] in `text`.
+fn reserved_runs(text: &str) -> Vec<(usize, usize)> {
+    let mut runs: Vec<(usize, usize)> = text
+        .match_indices(RESERVED)
+        .map(|(start, _)| {
+            let length = text.as_bytes()[start..]
+                .iter()
+                .take_while(|&&byte| identifier_byte(byte))
+                .count();
+            (start, start + length)
+        })
+        .collect();
+    runs.sort_unstable_by(|a, b| text[a.0..a.1].cmp(&text[b.0..b.1]));
+    runs.dedup_by(|a, b| text[a.0..a.1] == text[b.0..b.1]);
+    runs
+}
+
+/// Whether one of the sorted `runs` of `text` starts with `name`: those runs sort together,
+/// first of all runs not below `name`.
+fn run_starts_with(text: &str, runs: &[(usize, usize)], name: &str) -> bool {
+    let at = runs.partition_point(|&(start, end)| &text[start..end] < name);
+    runs.get(at)
+        .is_some_and(|&(start, end)| text[start..end].starts_with(name))
+}
 
 /// A wrapper parameter that cannot capture the module's own names, including escaped names.
 pub fn commonjs_metadata_name(source: &str) -> String {
@@ -134,19 +170,11 @@ impl<'source> Names<'source> {
     }
 
     fn with_taken(taken: HashSet<String>, source: &'source str) -> Self {
-        let decoded = decode_escapes(source);
-        let offsets = |text: &str| text.match_indices(RESERVED).map(|(at, _)| at).collect();
-        let reserved = offsets(source);
-        let reserved_decoded = match &decoded {
-            Cow::Borrowed(_) => Vec::new(),
-            Cow::Owned(text) => offsets(text),
-        };
         Names {
             taken,
             source,
-            decoded,
-            reserved,
-            reserved_decoded,
+            decoded: decode_escapes(source),
+            reserved: OnceCell::new(),
         }
     }
 
@@ -156,12 +184,18 @@ impl<'source> Names<'source> {
 
     /// Whether `name` is a substring of the source or its decoded spelling.
     fn occurs(&self, name: &str) -> bool {
-        if !name.starts_with(RESERVED) {
+        if !name.starts_with(RESERVED) || !name.bytes().all(identifier_byte) {
             return self.source.contains(name) || self.decoded.contains(name);
         }
-        let at =
-            |text: &str, offsets: &[usize]| offsets.iter().any(|&at| text[at..].starts_with(name));
-        at(self.source, &self.reserved) || at(&self.decoded, &self.reserved_decoded)
+        let reserved = self.reserved.get_or_init(|| Reserved {
+            source: reserved_runs(self.source),
+            decoded: match &self.decoded {
+                Cow::Borrowed(_) => Vec::new(),
+                Cow::Owned(text) => reserved_runs(text),
+            },
+        });
+        run_starts_with(self.source, &reserved.source, name)
+            || run_starts_with(&self.decoded, &reserved.decoded, name)
     }
 
     fn fresh(&mut self, base: &str) -> String {
@@ -1396,6 +1430,28 @@ mod source_memory_tests {
         assert_eq!(escaped.fresh("__bunwasm_r"), "__bunwasm_r$1");
         assert_eq!(escaped.fresh("__bunwasm_m"), "__bunwasm_m$1");
         assert_eq!(escaped.fresh("__bunwasm_i"), "__bunwasm_i");
+    }
+
+    #[test]
+    fn repeated_prefixes_index_once_and_keep_substring_semantics() {
+        let arena = Arena::new();
+        let ast = js_ast::Ast::empty_in(&arena);
+        let mut comment = "/* ".to_owned();
+        comment.push_str(&"__bunwasm ".repeat(5_000));
+        comment.push_str("__bunwasm_ns7_7$1x __bunwasm_ns8_8.y */");
+        let mut names = Names::new(&ast, &comment);
+        assert_eq!(names.fresh("__bunwasm_ns7_7"), "__bunwasm_ns7_7$2");
+        assert_eq!(names.fresh("__bunwasm_ns8_8"), "__bunwasm_ns8_8$1");
+        assert_eq!(names.fresh("__bunwasm_ns9_9"), "__bunwasm_ns9_9");
+        // Thousands of identical runs collapse into one entry per distinct spelling.
+        assert_eq!(
+            names.reserved.get().map(|index| index.source.len()),
+            Some(3)
+        );
+        // Names outside the prefix scan the text and never build the index.
+        let mut metadata = Names::with_taken(std::collections::HashSet::new(), &comment);
+        assert_eq!(metadata.fresh("$Bun_import_meta"), "$Bun_import_meta");
+        assert!(metadata.reserved.get().is_none());
     }
 
     #[test]
