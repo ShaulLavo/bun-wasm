@@ -1,13 +1,18 @@
 (function (internal: BunWasm.Internal & {
   native: {
+    /** Opens `path` once and returns `[fd, "dev:ino"]` (full 64-bit identity) or a negative errno. */
+    fsWatchResolve?(path: string): [number, string] | number;
+    /** Registers a watch on an open descriptor from `fsWatchResolve`, or returns a negative errno. */
+    fsWatchOpenFd?(fd: number, recursive: boolean): number;
+    /** Closes a temporary descriptor from `fsWatchResolve`. */
+    fsWatchDropFd?(fd: number): void;
     /** A process-local watch id, or a negative WASI errno (runtime_fs.watch_open). */
     fsWatchOpen(path: string, recursive: boolean): number;
     /** Whole records, 0 at end of stream, or a negative WASI errno (-6 when nothing is pending). */
     fsWatchRead(id: number): Uint8Array | number;
-    /** Optional O(1) ready-only drain: [id, bytes | 0 | -errno], null on EAGAIN, undefined if unsupported. */
-    fsWatchNext?(): [number, Uint8Array | number] | null | undefined;
     fsWatchClose(id: number): number;
   };
+  hasWatchBacklog?: () => boolean;
   nextTick(callback: () => void): void;
 }) {
   "use strict";
@@ -101,21 +106,6 @@
     return result;
   }
 
-  function shareKey(path: string, recursive: boolean, stat: unknown): string | undefined {
-    if (stat === null || typeof stat !== "object") return undefined;
-    const record = stat as StatsRecord;
-    const ino = record.ino;
-    if ((typeof ino !== "number" && typeof ino !== "bigint") || ino === 0 || ino === 0n) return undefined;
-    const mode = record.mode;
-    if (typeof mode === "number") {
-      const isDir = typeof record.isDirectory === "function" ? Boolean((record.isDirectory as () => unknown)()) : false;
-      const required = isDir ? 0o500 : 0o400;
-      if ((mode & required) !== required) return undefined;
-    }
-    const dev = typeof record.dev === "number" || typeof record.dev === "bigint" ? record.dev : 0;
-    return `${dev}:${ino}:${recursive ? 1 : 0}:${path}`;
-  }
-
   // fs.watchFile polls stat (docs/bun-patches/fs-watch-file.md). Like libuv's uv_fs_poll, a
   // poll reports a change of any compared field or of existence. A missing file reads as
   // all-zero stats and, when missing at start, reports one change with both stats zero.
@@ -136,24 +126,35 @@
   }
 
   return function createWatch(fs: FileSystem) {
+    interface BacklogEntry {
+      readonly seq: number;
+      readonly chunk: Uint8Array | number;
+    }
+
     interface SharedWatch {
       readonly id: number;
       readonly key: string | undefined;
       readonly subscribers: Set<FSWatcher>;
+      readonly backlog: BacklogEntry[];
+      seq: number;
       closed: boolean;
     }
 
     const sharedById = new Map<number, SharedWatch>();
     const sharedByKey = new Map<string, SharedWatch>();
     let refCount = 0;
+    let backlogCount = 0;
     let hubRegistered = false;
 
+    internal.hasWatchBacklog = () => backlogCount > 0;
+
+    // Rethrow from fail so an unhandled watcher error reaches the existing uncaught path.
     const hubWaiter: BunWasm.IoWaiter & { watch: true } = {
       get ref() { return refCount > 0; },
       watch: true,
       permanent: true,
       step: () => pumpWatches(),
-      fail: () => {},
+      fail(error) { throw error; },
     };
 
     function ensureHub() {
@@ -169,74 +170,148 @@
       internal.removeIoWaiter(hubWaiter);
     }
 
-    function closeShared(shared: SharedWatch) {
-      if (shared.closed) return;
-      shared.closed = true;
-      sharedById.delete(shared.id);
+    function detachKey(shared: SharedWatch) {
       if (shared.key !== undefined && sharedByKey.get(shared.key) === shared) {
         sharedByKey.delete(shared.key);
       }
+    }
+
+    function closeShared(shared: SharedWatch) {
+      if (shared.closed) return;
+      shared.closed = true;
+      if (shared.backlog.length > 0) {
+        backlogCount -= shared.backlog.length;
+        shared.backlog.length = 0;
+      }
+      sharedById.delete(shared.id);
+      detachKey(shared);
       native.fsWatchClose(shared.id);
       releaseHubIfEmpty();
     }
 
-    function dispatchChunk(shared: SharedWatch, chunk: Uint8Array | number) {
+    /** Drain any events already queued on `shared` into its backlog so a late subscriber starts
+     * strictly after them. Returns false if `shared` is ending, errored, or overflowed and must
+     * not accept new subscribers. */
+    function captureBoundary(shared: SharedWatch): boolean {
+      if (typeof native.fsWatchReady === "function" && !native.fsWatchReady()) return true;
+      while (!shared.closed) {
+        const chunk = native.fsWatchRead(shared.id);
+        if (chunk === AGAIN) return true;
+        shared.backlog.push({ seq: ++shared.seq, chunk });
+        backlogCount++;
+        internal.markWatchDirty?.();
+        if (chunk === 0 || typeof chunk === "number" || decode(chunk).some(r => r.type === "overflow")) {
+          detachKey(shared);
+          return false;
+        }
+      }
+      return false;
+    }
+
+    function createShared(id: number, key: string | undefined): SharedWatch {
+      const shared: SharedWatch = { id, key, subscribers: new Set(), backlog: [], seq: 0, closed: false };
+      sharedById.set(id, shared);
+      if (key !== undefined) sharedByKey.set(key, shared);
+      internal.markWatchDirty?.();
+      return shared;
+    }
+
+    /** Acquire a shared or fresh native watch from a single resolved descriptor so the sharing key
+     * always names the exact opened inode (full 64-bit dev:ino) with no stat-to-open TOCTOU race. */
+    function acquireShared(path: string, recursive: boolean): { shared: SharedWatch; since: number } {
+      if (
+        typeof native.fsWatchResolve === "function" &&
+        typeof native.fsWatchOpenFd === "function" &&
+        typeof native.fsWatchDropFd === "function"
+      ) {
+        const resolved = native.fsWatchResolve(path);
+        if (typeof resolved === "number") throw watchError(-resolved, path, true);
+        const [fd, identity] = resolved;
+        try {
+          const key = identity ? `${identity}:${recursive ? 1 : 0}:${path}` : undefined;
+          const existing = key !== undefined ? sharedByKey.get(key) : undefined;
+          if (existing && !existing.closed && captureBoundary(existing)) {
+            return { shared: existing, since: existing.seq };
+          }
+          const id = native.fsWatchOpenFd(fd, recursive);
+          if (id < 0) throw watchError(-id, path, true);
+          return { shared: createShared(id, key), since: 0 };
+        } finally {
+          native.fsWatchDropFd(fd);
+        }
+      }
+      // Without descriptor-derived identity, keep registrations independent rather than sharing.
+      fs.statSync(path);
+      const id = native.fsWatchOpen(path, recursive);
+      if (id < 0) throw watchError(-id, path, true);
+      return { shared: createShared(id, undefined), since: 0 };
+    }
+
+    function fanOut(subscribers: readonly FSWatcher[], seq: number, deliver: (watcher: FSWatcher) => void) {
+      let hasError = false;
+      let firstError: unknown;
+      for (const watcher of subscribers) {
+        if (watcher._since >= seq) continue;
+        try {
+          deliver(watcher);
+        } catch (error) {
+          if (!hasError) {
+            hasError = true;
+            firstError = error;
+          } else {
+            internal.nextTick(() => { throw error; });
+          }
+        }
+      }
+      if (hasError) throw firstError;
+    }
+
+    function dispatchChunk(shared: SharedWatch, chunk: Uint8Array | number, seq: number) {
       const subscribers = Array.from(shared.subscribers);
       if (chunk === 0) {
-        for (const watcher of subscribers) watcher.close();
+        fanOut(subscribers, seq, watcher => watcher.close());
         return;
       }
       if (typeof chunk === "number") {
-        for (const watcher of subscribers) watcher._deliverErrno(-chunk);
+        fanOut(subscribers, seq, watcher => watcher._deliverErrno(-chunk));
         return;
       }
       const records = decode(chunk);
-      for (const watcher of subscribers) watcher._deliverRecords(records);
+      fanOut(subscribers, seq, watcher => watcher._deliverRecords(records));
+    }
+
+    function drainShared(shared: SharedWatch): boolean {
+      let progressed = false;
+      while (!shared.closed && shared.backlog.length > 0) {
+        const entry = shared.backlog.shift()!;
+        backlogCount--;
+        progressed = true;
+        dispatchChunk(shared, entry.chunk, entry.seq);
+      }
+      while (!shared.closed) {
+        const chunk = native.fsWatchRead(shared.id);
+        if (chunk === AGAIN) break;
+        progressed = true;
+        dispatchChunk(shared, chunk, ++shared.seq);
+      }
+      return progressed;
     }
 
     function pumpWatches(): boolean | "progress" {
       let progressed = false;
-      if (typeof native.fsWatchNext === "function") {
-        let unsupported = false;
-        while (sharedById.size > 0) {
-          const next = native.fsWatchNext();
-          if (next === undefined) {
-            unsupported = true;
-            break;
-          }
-          if (next === null) break;
-          progressed = true;
-          const [id, chunk] = next;
-          const shared = sharedById.get(id);
-          if (!shared) {
-            native.fsWatchClose(id);
-            continue;
-          }
-          dispatchChunk(shared, chunk);
-        }
-        if (!unsupported) {
-          return sharedById.size === 0 ? true : (progressed && "progress");
-        }
-      }
       for (const shared of Array.from(sharedById.values())) {
-        while (!shared.closed) {
-          const chunk = native.fsWatchRead(shared.id);
-          if (chunk === AGAIN) break;
-          progressed = true;
-          dispatchChunk(shared, chunk);
-        }
+        if (drainShared(shared)) progressed = true;
       }
       return sharedById.size === 0 ? true : (progressed && "progress");
     }
 
     class FSWatcher extends EventEmitter {
+      readonly _since: number;
       #closed = false;
       #shared: SharedWatch;
       #refed: boolean;
       // Changes, errors and the close an error causes run in the frame current at watch().
       #frame: BunWasm.ResourceFrame;
-      #bound: BunWasm.IoWaiter;
-      #pending: readonly WatchRecord[] | number | undefined;
       #path: string;
       #options: Options;
       #abort = () => this.close();
@@ -245,28 +320,14 @@
         super();
         // Validate everything that can throw before the watch exists.
         if (listener && typeof listener !== "function") throw invalidListener();
-        const stat = fs.statSync(path);
         const recursive = Boolean(settings.recursive);
-        const key = shareKey(path, recursive, stat);
-        let shared = key !== undefined ? sharedByKey.get(key) : undefined;
-        if (!shared || shared.closed) {
-          const id = native.fsWatchOpen(path, recursive);
-          if (id < 0) throw watchError(-id, path, true);
-          shared = { id, key, subscribers: new Set(), closed: false };
-          sharedById.set(id, shared);
-          if (key !== undefined) sharedByKey.set(key, shared);
-          internal.markWatchDirty?.();
-        }
+        const { shared, since } = acquireShared(path, recursive);
+        this._since = since;
         this.#shared = shared;
         this.#path = path;
         this.#options = settings;
         this.#refed = settings.persistent !== false;
         this.#frame = frames.capture();
-        this.#bound = this.#frame.bind({
-          ref: false,
-          step: () => this.#dispatchPending(),
-          fail: (error: unknown) => this.#fail(error),
-        });
         shared.subscribers.add(this);
         if (this.#refed) refCount++;
         try {
@@ -291,33 +352,28 @@
 
       #deliver(payload: readonly WatchRecord[] | number) {
         if (this.#closed) return;
-        this.#pending = payload;
-        try {
-          this.#bound.step();
-        } catch (error) {
-          this.#bound.fail?.(error);
-        } finally {
-          this.#pending = undefined;
-        }
+        this.#frame.run(this.#dispatchPending, this, [payload]);
       }
 
-      #dispatchPending(): boolean {
-        const pending = this.#pending;
-        if (pending === undefined) return false;
-        if (typeof pending === "number") {
-          this.#fail(watchError(pending, this.#path));
-          return true;
-        }
-        for (const record of pending) {
-          if (this.#closed) return true;
-          if (record.type === "overflow") {
-            this.#fail(watchError(61, this.#path));
-            return true;
+      #dispatchPending(pending: readonly WatchRecord[] | number): void {
+        try {
+          if (typeof pending === "number") {
+            this.#fail(watchError(pending, this.#path));
+            return;
           }
-          const encoded = Buffer.from(record.name ?? this.#path.slice(this.#path.lastIndexOf("/") + 1));
-          this.emit("change", record.type, this.#options.encoding === "buffer" ? encoded : encoded.toString(this.#options.encoding));
+          for (const record of pending) {
+            if (this.#closed) return;
+            if (record.type === "overflow") {
+              this.#fail(watchError(61, this.#path));
+              return;
+            }
+            const encoded = Buffer.from(record.name ?? this.#path.slice(this.#path.lastIndexOf("/") + 1));
+            const name = this.#options.encoding === "buffer" ? encoded : encoded.toString(this.#options.encoding);
+            this.emit("change", record.type, name);
+          }
+        } catch (error) {
+          this.#fail(error);
         }
-        return false;
       }
 
       #fail(error: unknown) {

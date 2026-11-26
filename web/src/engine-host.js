@@ -14,6 +14,7 @@ import { hostCrypto } from "./host-crypto.ts";
 import { reportWasmCallTrap } from "./wasm-call-trap.ts";
 import { installSharedBufferRealm } from "./shared-objects/realm.ts";
 import { createTickScheduler } from "./tick-scheduler.ts";
+import { createIoPumpGate } from "./io-pump-gate.ts";
 import { decodeUtf8, defineField, encodeUtf8, encodeUtf8Into, IN_PLACE_ENCODE } from "./engine-codec.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
@@ -490,14 +491,11 @@ class EngineHost {
     this.records = null;
     this.asyncContext = undefined;
     this.wakeArmed = false;
-    this.ioDirty = true;
-    this.lastIoWake = NaN;
-    this.lastWatchWord = NaN;
-    this.watchStillReady = false;
-    this.lastIoPumpAt = 0;
-    this.pumpWakeBefore = 0;
-    this.pumpWatchBefore = NaN;
-    this.pumpWatchChecked = false;
+    this.ioPump = createIoPumpGate({
+      processWake: o.processWake,
+      fsWatchWord: o.fsWatchWord,
+      fsWatchReady: o.fsWatchReady,
+    });
     if (NativeMessageChannel) {
       this.channel = new NativeMessageChannel();
       this.channel.port1.onmessage = () => {
@@ -603,24 +601,14 @@ class EngineHost {
       Object.assign(native, net.natives);
       if (native.hostLookup) native.hostLookup = trackLookup(native.hostLookup, promise => this.track(promise));
       net.onNews(() => {
-        this.ioDirty = true;
+        this.ioPump.onNetNews();
         this.schedule(0);
       });
     }
     if (this.o.terminal) native.terminalSetRawMode = raw => this.o.terminal.setRawMode(raw);
     if (this.o.fsWatchReady && native.fsWatchReady) {
-      const watchReady = this.o.fsWatchReady;
-      const watchWord = this.o.fsWatchWord;
-      native.fsWatchReady = watchWord
-        ? () => {
-            if (this.watchStillReady) return watchReady();
-            const word = watchWord();
-            if (!word) return false;
-            return nativeAtomicsLoad(word, 3) !== this.lastWatchWord ? watchReady() : false;
-          }
-        : watchReady;
+      native.fsWatchReady = () => this.ioPump.watchReady();
     }
-    if (this.o.fsWatchNext) native.fsWatchNext = this.o.fsWatchNext;
     native.engine = "host";
     // Name the host's engine only where the host reports it: Node's real V8 version.
     // Browser workers expose no engine version, so they add no key.
@@ -1359,45 +1347,11 @@ class EngineHost {
   }
 
   attachIoHooks(internal) {
-    const host = this;
-    internal.markIoDirty = () => {
-      host.ioDirty = true;
-    };
-    internal.markWatchDirty = () => {
-      host.watchStillReady = true;
-      host.ioDirty = true;
-    };
-    internal.ioBeginPump = force => {
-      const wakeWord = host.o.processWake;
-      if (!wakeWord) return true;
-      const wake = nativeAtomicsLoad(wakeWord, 0);
-      const watchWord = host.o.fsWatchWord?.();
-      const watchGen = watchWord ? nativeAtomicsLoad(watchWord, 3) : NaN;
-      const watchChanged = Boolean(watchWord && watchGen !== host.lastWatchWord);
-      if (
-        !force &&
-        !host.ioDirty &&
-        !host.watchStillReady &&
-        !watchChanged &&
-        wake === host.lastIoWake &&
-        nativeDateNow() - host.lastIoPumpAt < 16
-      ) {
-        return false;
-      }
-      host.ioDirty = false;
-      host.pumpWakeBefore = wake;
-      host.pumpWatchBefore = watchGen;
-      host.pumpWatchChecked = watchChanged || host.watchStillReady;
-      return true;
-    };
-    internal.ioEndPump = progressed => {
-      if (!host.o.processWake) return;
-      host.lastIoWake = host.pumpWakeBefore;
-      host.lastWatchWord = host.pumpWatchBefore;
-      host.watchStillReady = host.pumpWatchChecked ? Boolean(host.o.fsWatchReady?.()) : false;
-      if (progressed) host.ioDirty = true;
-      host.lastIoPumpAt = nativeDateNow();
-    };
+    const gate = this.ioPump;
+    internal.markIoDirty = () => gate.markIoDirty();
+    internal.markWatchDirty = () => gate.markWatchDirty();
+    internal.ioBeginPump = force => gate.beginPump(force);
+    internal.ioEndPump = progressed => gate.endPump(progressed);
   }
 
   // Pipe and child changes publish on the process wake word: run the loop for them rather than
@@ -1410,7 +1364,7 @@ class EngineHost {
     this.wakeArmed = true;
     nativePromiseThen(wait.value, () => {
       this.wakeArmed = false;
-      this.ioDirty = true;
+      this.ioPump?.onProcessWake();
       this.schedule(0);
     });
   }

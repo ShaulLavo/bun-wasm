@@ -6,23 +6,25 @@ Class **Host feature**, **original adapter** in `src/js/fs_watch.ts`, wired by
 wraps a private native filesystem watcher that these engines cannot call.
 
 Each watcher subscribes through a single process-local watch hub over Waffle's `runtime_fs`
-imports (`watch_open`, `watch_ready`, `watch_read`, `watch_close`, plus optional `watch_next` /
-direct `GuestWatchTable.readNext`; Waffle `docs/host-abi.md`, "Guest filesystem watches"). The
-`fsWatchOpen(path, recursive)` native opens the path with symlink follow after the existing
-`statSync` check, registers the watch on that descriptor and closes it; the watch follows the
-node's identity. Watchers on the exact same live `(dev, ino, recursive, path)` share one
-underlying watch registration while keeping independent `ResourceFrame`, encoding, `ref`/`unref`,
-abort signal and listener state; closing the last subscriber releases the native id. There is no
-timer and no tree scan. The hub registers one `watch: true` I/O waiter with no `runtime_proc`
-subscriptions, so the idle loop sleeps in the network host poll and `ioPending()` does not scan
-every open watcher. The Bun web executor arms Waffle's notification set for that poll
-(`NetHost.attachNotifications`), which wakes it when a filesystem commit is pending for a guest
-watch. When `fsWatchNext` is available (via Browser host direct table access or `runtime_fs.watch_next`),
-the hub drains only ready watch ids in O(ready) calls; otherwise it drains each shared watch's
-`fsWatchRead` (one reused 64 KiB buffer) until `EAGAIN`. A record is `u8` type (1 change,
-2 rename, 3 overflow), three zero bytes, a little-endian `u32` name length
-(`0xffffffff` for the watched root and overflow), then the UTF-8 relative name
-padded to 4 bytes. Root events report the watched path's basename, as before.
+imports (`watch_open`, `watch_ready`, `watch_read`, `watch_close`; Waffle `docs/host-abi.md`,
+"Guest filesystem watches"). `fsWatchResolve(path)` opens the path once (following a final
+symlink) and derives its full-width 64-bit `(dev, ino)` identity from that open descriptor.
+Watchers on the exact same live `(dev, ino, recursive, path)` share one underlying watch
+registration via `fsWatchOpenFd(fd, recursive)` (or open independent registrations when
+descriptor identity is unavailable) while keeping independent `ResourceFrame`, encoding,
+`ref`/`unref`, abort signal, registration cursor and listener state; before a late subscriber
+joins a shared watch, any events already queued on that watch are captured into a sequence-gated
+backlog so the late subscriber only receives events after it registered. Closing the last
+subscriber releases the native id. There is no timer and no tree scan. The hub registers one
+`watch: true` I/O waiter with no `runtime_proc` subscriptions, so the idle loop sleeps in the
+network host poll and `ioPending()` does not scan every open watcher. The Bun web executor arms
+Waffle's notification set for that poll (`NetHost.attachNotifications`), which wakes it when a
+filesystem commit is pending for a guest watch. The hub drains each shared watch's `fsWatchRead`
+(one reused 64 KiB buffer) until `EAGAIN`, preserving delivery and retirement for remaining
+subscribers if one throws and letting unhandled errors reach the uncaught path. A record is `u8`
+type (1 change, 2 rename, 3 overflow), three zero bytes, a little-endian `u32` name length
+(`0xffffffff` for the watched root and overflow), then the UTF-8 relative name padded to 4 bytes.
+Root events report the watched path's basename, as before.
 
 `persistent`, `ref` and `unref` set the waiter's reference. `close`, an abort
 signal, end of stream (`0`), a read error, revocation (`ECANCELED`) and overflow all

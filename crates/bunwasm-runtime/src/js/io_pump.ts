@@ -1,4 +1,7 @@
-(function (internal: Pick<BunWasm.Internal, "native">) {
+(function (internal: Pick<BunWasm.Internal, "native"> & { hasWatchBacklog?: () => boolean }) {
+  function watchesReady(): boolean {
+    return Boolean(internal.hasWatchBacklog?.()) || internal.native.fsWatchReady();
+  }
   function step(waiters: Set<BunWasm.IoWaiter>, waiter: BunWasm.IoWaiter): boolean {
     try {
       const result = waiter.step();
@@ -32,7 +35,7 @@
   ): boolean {
     if (watchWaiters !== undefined) {
       let progressed = false;
-      if (watchWaiters.size > 0 && internal.native.fsWatchReady()) {
+      if (watchWaiters.size > 0 && watchesReady()) {
         progressed = stepSet(watchWaiters);
       }
       if (waiters.size > 0) {
@@ -42,10 +45,10 @@
     }
     if (waiters.size === 0) return false;
     const turn = Array.from(waiters).sort((a, b) => Number(b.watch === true) - Number(a.watch === true));
-    const watchesReady = turn[0]?.watch !== true || internal.native.fsWatchReady();
+    const ready = turn[0]?.watch !== true || watchesReady();
     let progressed = false;
     for (const waiter of turn) {
-      if (waiter.watch === true && !watchesReady) continue;
+      if (waiter.watch === true && !ready) continue;
       progressed = step(waiters, waiter) || progressed;
     }
     return progressed;

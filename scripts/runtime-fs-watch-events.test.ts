@@ -36,19 +36,46 @@ function record(type: "change" | "rename" | "overflow", name?: string | null) {
 }
 const chunk = (...records: Uint8Array[]) => Buffer.concat(records);
 
-function fixture() {
+function fixture(options: { resolve?: (path: string) => { dev?: bigint; ino: bigint } | number } = {}) {
   const queued = new Map<number, (Uint8Array | number)[]>();
-  const opened: { path: string; recursive: boolean; id: number }[] = [];
+  const opened: { path: string; recursive: boolean; id: number; fd?: number }[] = [];
   const closed: number[] = [];
+  const droppedFds: number[] = [];
+  const fdToPath = new Map<number, string>();
   const ticks: (() => void)[] = [];
   const effects = { stats: 0, timers: 0, scans: 0 };
   const traffic = { readiness: 0, reads: 0 };
   let nextId = 40;
+  let nextFd = 100;
   let openResult: number | undefined;
   let net: unknown;
+  const resolveNatives = options.resolve
+    ? {
+        fsWatchResolve(path: string): [number, string] | number {
+          const resolved = options.resolve!(path);
+          if (typeof resolved === "number") return resolved;
+          const fd = nextFd++;
+          fdToPath.set(fd, path);
+          const identity = resolved.ino === 0n ? "" : `${resolved.dev ?? 0n}:${resolved.ino}`;
+          return [fd, identity];
+        },
+        fsWatchOpenFd(fd: number, recursive: boolean) {
+          if (openResult !== undefined) return openResult;
+          const id = nextId++;
+          opened.push({ path: fdToPath.get(fd) ?? "", recursive, id, fd });
+          queued.set(id, []);
+          return id;
+        },
+        fsWatchDropFd(fd: number) {
+          droppedFds.push(fd);
+          fdToPath.delete(fd);
+        },
+      }
+    : {};
   const internal: any = {
     native: {
       hostCaps: {},
+      ...resolveNatives,
       fsWatchOpen(path: string, recursive: boolean) {
         if (openResult !== undefined) return openResult;
         const id = nextId++;
@@ -98,7 +125,7 @@ function fixture() {
   const factory = runInNewContext(transpile("fs_watch.ts"), { AbortSignal });
   const module: WatchModule = factory(internal)(filesystem);
   return {
-    module, opened, closed, effects, traffic, internal,
+    module, opened, closed, droppedFds, effects, traffic, internal,
     commit(id: number, ...results: (Uint8Array | number)[]) { queued.get(id)!.push(...results); },
     failOpen(errno: number) { openResult = -errno; },
     pump: (): boolean => internal.pumpIo(),
@@ -370,14 +397,15 @@ test("a construction failure after registration releases the watch and its waite
   expect([world.closed.length, world.pending()]).toEqual([1, 0]);
 });
 
-test("watchers on the same node, path and recursive flag share one native watch", () => {
-  const world = fixture();
+test("watchers on the same descriptor identity, path and recursive flag share one native watch", () => {
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 42n }) });
   const seenA: unknown[][] = [];
   const seenB: unknown[][] = [];
   const a = world.module.watch("/shared/file.txt", "utf8", (...args) => seenA.push(args));
   const b = world.module.watch("/shared/file.txt", "buffer", (...args) => seenB.push(args));
   const c = world.module.watch("/shared/file.txt", { recursive: true });
   expect(world.opened).toHaveLength(2);
+  expect(world.droppedFds).toHaveLength(3);
   expect(world.pending()).toBe(1);
   world.commit(world.opened[0]!.id, chunk(record("change", null)));
   expect(world.pump()).toBe(true);
@@ -403,31 +431,107 @@ test("watchers on the same node, path and recursive flag share one native watch"
   expect(world.pending()).toBe(0);
 });
 
-test("fsWatchNext drains only ready watches without calling fsWatchRead on idle watchers", () => {
-  const world = fixture();
-  const readyQueue: [number, Uint8Array | number][] = [];
-  let nextCalls = 0;
-  world.internal.native.fsWatchReady = () => {
-    world.traffic.readiness++;
-    return readyQueue.length > 0;
+test("late subscriber on a shared watch does not receive events queued before it registered", () => {
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 77n }) });
+  const events: string[] = [];
+  const a = world.module.watch("/dir", (_event, name) => events.push(`A:${name}`));
+  const watchId = world.opened[0]!.id;
+  // Write occurs while only A is registered, before pump runs.
+  world.commit(watchId, chunk(record("change", "old")));
+  const b = world.module.watch("/dir", (_event, name) => events.push(`B:${name}`));
+  expect(world.opened).toHaveLength(1);
+  expect(world.pump()).toBe(true);
+  expect(events).toEqual(["A:old"]);
+
+  // Subsequent writes reach both A and B.
+  world.commit(watchId, chunk(record("change", "new")));
+  expect(world.pump()).toBe(true);
+  expect(events).toEqual(["A:old", "A:new", "B:new"]);
+
+  a.close();
+  b.close();
+  expect(world.closed).toEqual([watchId]);
+});
+
+test("late subscriber opens a fresh watch when existing shared watch has queued overflow", () => {
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 88n }) });
+  const errorsA: string[] = [];
+  const eventsB: string[] = [];
+  const a = world.module.watch("/dir");
+  a.on("error", (err: { code: string }) => errorsA.push(err.code));
+  const idA = world.opened[0]!.id;
+  world.commit(idA, chunk(record("overflow")));
+  const b = world.module.watch("/dir", (_event, name) => eventsB.push(String(name)));
+  expect(world.opened).toHaveLength(2);
+  const idB = world.opened[1]!.id;
+  expect(world.pump()).toBe(true);
+  expect(errorsA).toEqual(["EOVERFLOW"]);
+  expect(world.closed).toEqual([idA]);
+
+  world.commit(idB, chunk(record("change", "fresh")));
+  expect(world.pump()).toBe(true);
+  expect(eventsB).toEqual(["fresh"]);
+  b.close();
+  expect(world.closed).toEqual([idA, idB]);
+});
+
+test("sharing key derives from the opened descriptor and keeps full 64-bit inode width", () => {
+  // Symlink target switches between inode 2 and inode 1: each open resolves its own fd identity.
+  const resolvedInos = [2n, 1n, 2n];
+  const openedInos: bigint[] = [];
+  let cursor = 0;
+  const world = fixture({
+    resolve: () => {
+      const ino = resolvedInos[cursor++]!;
+      return { dev: 1n, ino };
+    },
+  });
+  const origOpenFd = world.internal.native.fsWatchOpenFd;
+  world.internal.native.fsWatchOpenFd = (fd: number, recursive: boolean) => {
+    openedInos.push(resolvedInos[cursor - 1]!);
+    return origOpenFd(fd, recursive);
   };
-  world.internal.native.fsWatchNext = () => {
-    nextCalls++;
-    return readyQueue.shift() ?? null;
-  };
-  const seen: string[] = [];
-  const watchers = Array.from({ length: 1500 }, (_, index) =>
-    world.module.watch(`/app/${index}`, (_event, name) => seen.push(`${index}:${name}`)));
+  const w1 = world.module.watch("/link");
+  const w2 = world.module.watch("/link");
+  const w3 = world.module.watch("/link");
+  expect(openedInos).toEqual([2n, 1n]);
+  expect(world.opened).toHaveLength(2);
+  w1.close();
+  w2.close();
+  w3.close();
+
+  // 64-bit inodes above 2^53 that collide in IEEE-754 Number must not share a watch.
+  const wide = [9007199254740992n, 9007199254740993n];
+  let wideAt = 0;
+  const wideWorld = fixture({ resolve: () => ({ dev: 1n, ino: wide[wideAt++]! }) });
+  const wa = wideWorld.module.watch("/same-path");
+  const wb = wideWorld.module.watch("/same-path");
+  expect(wideWorld.opened).toHaveLength(2);
+  wa.close();
+  wb.close();
+});
+
+test("unhandled overflow on one shared subscriber still delivers to remaining subscribers and propagates uncaught", () => {
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 99n }) });
+  const errorsB: string[] = [];
+  const a = world.module.watch("/dir");
+  const b = world.module.watch("/dir");
+  b.on("error", (err: { code: string }) => errorsB.push(err.code));
+  expect(world.opened).toHaveLength(1);
+  const watchId = world.opened[0]!.id;
+  expect(world.pending()).toBe(1);
+
+  world.commit(watchId, chunk(record("overflow")));
+  let caught: unknown;
   try {
-    expect(world.pump()).toBe(false);
-    expect(nextCalls).toBe(0);
-    expect(world.traffic.reads).toBe(0);
-    readyQueue.push([world.opened[777]!.id, chunk(record("change", "hit.ts"))]);
-    expect(world.pump()).toBe(true);
-    expect(seen).toEqual(["777:hit.ts"]);
-    expect(nextCalls).toBe(2);
-    expect(world.traffic.reads).toBe(0);
-  } finally {
-    for (const watcher of watchers) watcher.close();
+    world.pump();
+  } catch (error) {
+    caught = error;
   }
+  expect(caught).toMatchObject({ code: "EOVERFLOW", syscall: "watch" });
+  expect(errorsB).toEqual(["EOVERFLOW"]);
+  expect(world.closed).toEqual([watchId]);
+  expect(world.pending()).toBe(0);
+  expect(a).toBeDefined();
+  expect(b).toBeDefined();
 });

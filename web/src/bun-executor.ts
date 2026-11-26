@@ -224,36 +224,6 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
           const table = wasiWatches?.() as { ready?(): boolean } | undefined;
           return table?.ready ? table.ready() : false;
         },
-        fsWatchNext: () => {
-          type WatchNextResult =
-            | { readonly kind: "records"; readonly id: number; readonly records: readonly Uint8Array[]; readonly length: number }
-            | { readonly kind: "short"; readonly id: number; readonly needed: number }
-            | { readonly kind: "watch_error"; readonly id: number; readonly errno: number }
-            | { readonly kind: "error"; readonly errno: number };
-          const table = wasiWatches?.() as { readNext?(capacity: number): WatchNextResult } | undefined;
-          if (!table) return null;
-          if (typeof table.readNext !== "function") return undefined;
-          let result: WatchNextResult;
-          try {
-            result = table.readNext(65536);
-            if (result.kind === "short") result = table.readNext(result.needed);
-          } catch (error) {
-            if (typeof error === "object" && error !== null && "errno" in error && error.errno === 6) return null;
-            return undefined;
-          }
-          if (result.kind === "error") return result.errno === 6 ? null : undefined;
-          if (result.kind === "watch_error") return [result.id, -result.errno];
-          if (result.kind === "short") return [result.id, -42];
-          if (!result.length) return [result.id, 0];
-          if (result.records.length === 1) return [result.id, result.records[0]!];
-          const merged = new Uint8Array(result.length);
-          let at = 0;
-          for (const part of result.records) {
-            merged.set(part, at);
-            at += part.length;
-          }
-          return [result.id, merged];
-        },
         onExit: code => finish({ code }),
       });
     },

@@ -6,6 +6,7 @@ import { RuntimeWorkerSignal } from "waffle/browser/worker";
 import { memoryViews } from "waffle/core";
 import { DefaultSignal } from "../src/default-signal.ts";
 import { createTickScheduler } from "../src/tick-scheduler.ts";
+import { createIoPumpGate } from "../src/io-pump-gate.ts";
 
 // The released constructor is private. Use the same module as the installed bootstrap,
 // rather than inventing a lookalike or loading a second copy of Waffle's source.
@@ -39,7 +40,7 @@ function fixture(runMain: () => unknown) {
   const errors: unknown[] = [];
   const exits: number[] = [];
   const done = Promise.withResolvers<number>();
-  const context = { TextEncoder, TextDecoder, URL, Blob, queueMicrotask, SLOT_NAMES: [], memoryViews,
+  const context = { TextEncoder, TextDecoder, URL, Blob, queueMicrotask, SLOT_NAMES: [], memoryViews, createIoPumpGate,
     setTimeout: () => 1, clearTimeout() { cleanup.push("timer"); },
     installNativeStreamState: () => () => { cleanup.push("streams"); } };
   const { EngineHost, startEngineHost, exitSignal } = runInNewContext(source + "\n({ EngineHost, startEngineHost, exitSignal: () => new ExitSignal() });", context);
@@ -302,6 +303,7 @@ function tickHostHarness(extraContext: Record<string, unknown> = {}) {
     SLOT_NAMES: [],
     memoryViews,
     createTickScheduler,
+    createIoPumpGate,
     installNativeStreamState: () => () => {},
     ...extraContext,
   };
@@ -508,6 +510,7 @@ test("native.gc() schedules one unref'd post-turn collection and cancels it on e
     memoryViews,
     createScriptEvaluation: () => ({}),
     createTickScheduler,
+    createIoPumpGate,
     transferArrayBuffers: () => {},
     isWasmMemoryBuffer: () => false,
     installNativeStreamState: () => () => {},
@@ -576,6 +579,7 @@ function runNodeHostGcProbe(body: string) {
       memoryViews: () => ({ bytes: () => new Uint8Array(), view: () => new DataView(new ArrayBuffer(0)) }),
       createScriptEvaluation: () => ({}),
       createTickScheduler: () => ({ queued: false, schedule() {}, runTask: fn => fn(), runRejectionCallback: fn => fn(), drainBeforeTurn: () => false, drainNow() {}, reset() {} }),
+      createIoPumpGate: () => ({ markIoDirty() {}, markWatchDirty() {}, onNetNews() {}, onProcessWake() {}, beginPump: () => true, endPump() {}, watchReady: () => false }),
       transferArrayBuffers: () => {},
       isWasmMemoryBuffer: () => false,
       installNativeStreamState: () => () => {},

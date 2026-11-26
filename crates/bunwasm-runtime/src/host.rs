@@ -666,16 +666,54 @@ thread_local! {
     static WATCH_BUFFER: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0; 64 * 1024]);
 }
 
-/// Opens `path` (following a final symlink), watches that node and closes the temporary
-/// descriptor; the watch follows the node's identity. Returns the id or the positive errno.
-pub fn fs_watch_open(path: &str, recursive: bool) -> Result<u32, i32> {
-    use std::os::fd::AsRawFd;
+/// Opens `path` (following a final symlink) and derives its full-width 64-bit `(dev, ino)`
+/// identity from that open descriptor before returning `(fd, identity)`. The caller owns `fd`
+/// and must release it with [`fs_watch_drop_fd`].
+pub fn fs_watch_resolve(path: &str) -> Result<(i32, Option<String>), i32> {
+    use std::os::fd::{AsRawFd, IntoRawFd};
     let file =
         std::fs::File::open(path).map_err(|error| error.raw_os_error().unwrap_or(WATCH_IO))?;
+    let identity = watch_fd_identity(&file, file.as_raw_fd());
+    Ok((file.into_raw_fd(), identity))
+}
+
+#[cfg(target_os = "wasi")]
+fn watch_fd_identity(_file: &std::fs::File, fd: i32) -> Option<String> {
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut stat) } != 0 || stat.st_ino == 0 {
+        return None;
+    }
+    let dev = stat.st_dev as u64;
+    let ino = stat.st_ino as u64;
+    Some(format!("{dev}:{ino}"))
+}
+
+#[cfg(all(unix, not(target_os = "wasi")))]
+fn watch_fd_identity(file: &std::fs::File, _fd: i32) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = file.metadata().ok()?;
+    let ino = meta.ino();
+    if ino == 0 {
+        return None;
+    }
+    let required = if meta.is_dir() { 0o500 } else { 0o400 };
+    if (meta.mode() & required) != required {
+        return None;
+    }
+    Some(format!("{}:{ino}", meta.dev()))
+}
+
+#[cfg(not(any(unix, target_os = "wasi")))]
+fn watch_fd_identity(_file: &std::fs::File, _fd: i32) -> Option<String> {
+    None
+}
+
+/// Registers a watch on an already-opened descriptor from [`fs_watch_resolve`].
+pub fn fs_watch_open_fd(fd: i32, recursive: bool) -> Result<u32, i32> {
     let flags = if recursive { WATCH_RECURSIVE } else { 0 };
     let mut id = 0u32;
     let errno = proc_call!(runtime_fs::watch_open(
-        file.as_raw_fd(),
+        fd,
         flags,
         ptr_mut(std::slice::from_mut(&mut id))
     ));
@@ -683,6 +721,25 @@ pub fn fs_watch_open(path: &str, recursive: bool) -> Result<u32, i32> {
         return Err(errno);
     }
     Ok(id)
+}
+
+/// Closes a temporary descriptor returned by [`fs_watch_resolve`].
+pub fn fs_watch_drop_fd(fd: i32) {
+    use std::os::fd::FromRawFd;
+    if fd >= 0 {
+        unsafe {
+            let _ = std::fs::File::from_raw_fd(fd);
+        }
+    }
+}
+
+/// Opens `path` (following a final symlink), watches that node and closes the temporary
+/// descriptor; the watch follows the node's identity. Returns the id or the positive errno.
+pub fn fs_watch_open(path: &str, recursive: bool) -> Result<u32, i32> {
+    let (fd, _) = fs_watch_resolve(path)?;
+    let result = fs_watch_open_fd(fd, recursive);
+    fs_watch_drop_fd(fd);
+    result
 }
 
 /// Non-consuming readiness for all process-local watches, including terminal records.
