@@ -3,6 +3,7 @@
 // word to the embedding IDE that the document really committed.
 import "../preview-websocket-client";
 import { CookieJar } from "./cookie-jar";
+import { installNewTabs } from "./new-tab";
 import { COOKIE_PATH, FRAME_MESSAGE, loopbackHost, SW_COOKIES, SW_COOKIES_ACK, SW_SHIM, type ScriptCookie } from "./protocol";
 
 const script = document.currentScript;
@@ -99,6 +100,11 @@ if (container) {
     value() { keep("ServiceWorkerRegistration.unregister()"); return Promise.resolve(false); },
   });
 }
+
+// ---- new tabs go through the IDE ----
+
+const wrapper = script?.getAttribute("data-wrapper");
+if (wrapper) installNewTabs(wrapper);
 
 // ---- tell the embedder ----
 

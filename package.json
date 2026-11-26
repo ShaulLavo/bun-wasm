@@ -99,6 +99,7 @@
     "web/src/preview-protocol.ts",
     "web/src/preview-origin/protocol.ts",
     "web/src/preview-origin/cookie-jar.ts",
+    "web/src/preview-origin/frame-watch.ts",
     "web/src/preview-origin/port-session.ts",
     "web/src/preview-origin/root-previews.ts",
     "web/src/preview-origin/frame-page.ts",

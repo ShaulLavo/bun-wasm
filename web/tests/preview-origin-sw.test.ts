@@ -4,7 +4,7 @@ import {
   type SessionReply, type SessionRequest,
 } from "../src/preview-origin/protocol";
 import { insertAfterDoctype } from "../src/preview-html";
-import { createPreviewOriginServiceWorker, scriptNonce, withoutFrameAncestors, type OriginClient } from "../src/preview-origin/sw-core";
+import { createPreviewOriginServiceWorker, withoutFrameAncestors, type OriginClient } from "../src/preview-origin/sw-core";
 
 const ORIGIN = `https://${"a".repeat(52)}-5173-pv.sprockt.dev`;
 const IDE = "https://bun.sprockt.dev";
@@ -248,26 +248,41 @@ test("a request aborted after it opened ends its exchange once and frees the slo
   ide.port.close();
 });
 
-test("the shim carries the nonce of a nonce-based policy, and a document that is not HTML crosses untouched", async () => {
+test("the shim tag passes every policy of the response or is left out, names the IDE's wrapper page, and a document that is not HTML crosses untouched", async () => {
   const { worker, attach } = setup();
   const ide = attach();
-  const policies: [string, string | undefined][] = [
-    ["script-src 'nonce-r4nd0m+/=' 'strict-dynamic'; object-src 'none'", "r4nd0m+/="],
-    ["default-src 'none'; script-src-elem 'nonce-abc_-123'; script-src 'nonce-other'", "abc_-123"],
-    ["default-src 'nonce-fallback'", "fallback"],
-    ["img-src 'self', script-src 'nonce-second'", "second"],
-    ["script-src 'self'; style-src 'nonce-style'", undefined],
-    ["script-src 'nonce-bad\"><script>x()</script>'", undefined],
+  await ide.next("attached");
+  const wrapper = `${IDE}/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fsprockt.dev&url=${encodeURIComponent(`${ORIGIN}/`)}&x="<`;
+  ide.reply({ t: "cookies", cookies: [], wrapper });
+  // What the shim tag carries: a nonce, none, or no tag at all (null) when a policy would block it.
+  const policies: [string | string[], string | null][] = [
+    ["script-src 'nonce-r4nd0m+/=' 'strict-dynamic'; object-src 'none'", ` nonce="r4nd0m+/="`],
+    ["default-src 'none'; script-src-elem 'nonce-abc_-123'; script-src 'nonce-other'", ` nonce="abc_-123"`],
+    ["default-src 'nonce-fallback'", ` nonce="fallback"`],
+    ["script-src 'self'; style-src 'nonce-style'", ""],
+    // Layered policies: a proxy's same-origin policy with its own nonce, and the app's nonce-only policy.
+    ["script-src 'self' 'nonce-proxy', script-src 'nonce-app' 'strict-dynamic'", ` nonce="app"`],
+    [["script-src 'nonce-app'", "script-src 'self' 'nonce-proxy'; img-src *"], ` nonce="app"`],
+    ["script-src 'nonce-one' 'nonce-both', default-src 'nonce-both' 'nonce-two'", ` nonce="both"`],
+    // No one tag passes these: none is written, and nobody's policy is widened.
+    ["script-src 'nonce-proxy', script-src 'nonce-app'", null],
+    ["script-src 'none'", null],
+    ["script-src 'sha256-RFWPLDbv2BY+rCkDzsE+0fr8ylGr2R2faWMhq4lfEQc='", null],
+    ["script-src 'nonce-bad\"><script>x()</script>'", null],
   ];
-  for (const [index, [policy, nonce]] of policies.entries()) {
-    expect(scriptNonce(policy)).toBe(nonce);
+  for (const [index, [policy, attribute]] of policies.entries()) {
     const pending = worker.fetch(request(`/page-${index}`, { mode: "navigate", destination: "iframe" }), "")!;
     const open = await ide.next("open", index);
-    respond(ide, open.id, [["content-type", "text/html"], ["content-security-policy", policy]], ["<!doctype html><p>page</p>"]);
-    const text = await (await pending).text();
-    expect(text).toStartWith(nonce ? `<!doctype html><script src="${SHIM_PATH}" nonce="${nonce}" data-bunwasm-preview="shim"` : `<!doctype html><script src="${SHIM_PATH}" data-bunwasm-preview="shim"`);
+    const policyHeaders = [policy].flat().map((value): [string, string] => ["content-security-policy", value]);
+    respond(ide, open.id, policyHeaders.concat([["content-type", "text/html"]]), ["<!doctype html><p>page</p>"]);
+    const response = await pending;
+    const text = await response.text();
+    // The app's policies cross as they came, apart from frame-ancestors.
+    expect(response.headers.get("content-security-policy")).toBe(`${[policy].flat().join(", ")}, frame-ancestors ${IDE}`);
+    if (attribute === null) expect(text).toBe("<!doctype html><p>page</p>");
+    else expect(text).toStartWith(`<!doctype html><script src="${SHIM_PATH}"${attribute} data-bunwasm-preview="shim" data-wrapper="${IDE}/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fsprockt.dev&amp;url=`);
+    if (attribute !== null) expect(text).toContain(`&amp;x=&quot;&lt;" data-cookies="[]"></script><p>page</p>`);
   }
-  expect(scriptNonce(null)).toBeUndefined();
   // Plain text has nowhere to put a script: it is the server's bytes, and the frame's embedder settles it (RootPreviews.watchFrame).
   const plain = worker.fetch(request("/notes.txt", { mode: "navigate", destination: "iframe" }), "")!;
   const open = await ide.next("open", policies.length);

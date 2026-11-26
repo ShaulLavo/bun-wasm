@@ -115,6 +115,19 @@ export function previewFrameLink(target: string, base: string, config: PreviewOr
   return link.href;
 }
 
+/**
+ * The wrapper page's URL for another preview URL. Every wrapper page takes the preview it shows in
+ * its `url` query parameter (`showPreviewFrame` reads it), so a wrapper URL for one preview is a
+ * template for all of them. Null when `wrapper` is no http(s) URL.
+ */
+export function wrapperLink(wrapper: string, target: string): string | null {
+  let link: URL;
+  try { link = new URL(wrapper); } catch { return null; }
+  if (link.protocol !== "https:" && link.protocol !== "http:") return null;
+  link.searchParams.set("url", target);
+  return link.href;
+}
+
 /** A name that never leaves this machine or a test network: `localhost`, a name under it, or the reserved `.test`. */
 function localName(hostname: string): boolean {
   return hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".test");
@@ -199,6 +212,19 @@ export function frameMessage(value: unknown): FrameMessage | null {
   };
 }
 
+// ---- IDE tab -> the other IDE tabs of its origin (BroadcastChannel) ----
+
+/** Where the tab that runs a dev server tells the others what the server answered to frame navigations. */
+export const NAVIGATION_CHANNEL = "bunwasm-preview-navigations";
+/** The response head a server sent for the navigation of a frame to `url`. `location` is its redirect target, if it is one. */
+export interface NavigationAnswer { url: string; status: number; location: string | null }
+
+export function navigationAnswer(value: unknown): NavigationAnswer | null {
+  if (!record(value) || !text(value.url) || !count(value.status)) return null;
+  if (value.location !== null && !text(value.location)) return null;
+  return { url: value.url, status: value.status, location: value.location };
+}
+
 // ---- service worker <-> relay frame and preview pages (ServiceWorker.postMessage) ----
 
 export const SW_ATTACH = "bunwasm-preview-attach";
@@ -223,7 +249,8 @@ export type SessionRequest =
 
 export type SessionReply =
   | { t: "pong"; n: number }
-  | { t: "cookies"; id?: number; cookies: ScriptCookie[] }
+  /** `wrapper` comes with the answer to `attached`: the IDE-origin page that shows a preview URL in a new tab. */
+  | { t: "cookies"; id?: number; cookies: ScriptCookie[]; wrapper?: string }
   | { t: "output"; id: number; output: PreviewHostOutput; cookies?: ScriptCookie[] }
   | { t: "finish"; id: number }
   | { t: "detach" };
@@ -236,7 +263,9 @@ export type SocketRequest =
   | { type: "open"; url: string; method: string; headers: [string, string][] }
   | { type: "data"; chunk: Uint8Array<ArrayBuffer> }
   | { type: "ping" }
-  | { type: "end" };
+  | { type: "end" }
+  /** An `open` that is not well formed: the socket is refused, never dispatched. */
+  | { type: "invalid" };
 
 /**
  * How often a preview page pings an open socket's IDE end. The page counts pings, not seconds, so
@@ -252,13 +281,26 @@ function text(value: unknown): value is string { return typeof value === "string
 function count(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
 function token(value: unknown): value is string { return typeof value === "string" && /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$/.test(value); }
 /** A header as HTTP/1.1 writes it: a token name, and a value without control characters. */
-function header(pair: unknown): boolean {
-  if (!Array.isArray(pair) || pair.length !== 2) return false;
-  const [name, value]: unknown[] = pair;
-  return typeof name === "string" && /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,256}$/.test(name) && text(value) && /^[\t\x20-\x7e\x80-\xff]*$/.test(value);
+function header(pair: unknown): [string, string] | null {
+  if (!Array.isArray(pair) || pair.length !== 2) return null;
+  const name: unknown = pair[0];
+  const value: unknown = pair[1];
+  const valid = typeof name === "string" && /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,256}$/.test(name) && text(value) && /^[\t\x20-\x7e\x80-\xff]*$/.test(value);
+  return valid ? [name, value] : null;
 }
-function pairs(value: unknown): value is [string, string][] {
-  return Array.isArray(value) && value.length <= MAX_HEADERS && value.every(header);
+/**
+ * The header list rebuilt as a dense array of fresh pairs, or null. Every index is read: a hole in
+ * a sparse array (structured clone keeps them, and `every` skips them) is no header.
+ */
+function pairs(value: unknown): [string, string][] | null {
+  if (!Array.isArray(value) || value.length > MAX_HEADERS) return null;
+  const headers: [string, string][] = [];
+  for (let index = 0; index < value.length; index++) {
+    const pair = header(value[index]);
+    if (!pair) return null;
+    headers.push(pair);
+  }
+  return headers;
 }
 function bytes(value: unknown): value is Uint8Array<ArrayBuffer> {
   return value instanceof Uint8Array && value.buffer instanceof ArrayBuffer && value.byteLength <= MAX_BODY;
@@ -275,8 +317,9 @@ function hostInput(value: unknown): PreviewHostInput | null {
 function openRequest(value: Record<string, unknown>): SessionRequest | null {
   if (!count(value.id)) return null;
   const invalid: SessionRequest = { t: "invalid", id: value.id };
-  const { url, method, headers, body, credentials } = value;
-  if (!text(url) || !token(method) || !pairs(headers)) return invalid;
+  const { url, method, body, credentials } = value;
+  const headers = pairs(value.headers);
+  if (!text(url) || !token(method) || !headers) return invalid;
   if (body !== null && !(body instanceof ArrayBuffer && body.byteLength <= MAX_BODY)) return invalid;
   // A request says whether it carries cookies. An absent or unknown value is never read as "include".
   if (credentials !== "omit" && credentials !== "include") return invalid;
@@ -306,6 +349,8 @@ export function socketRequest(value: unknown): SocketRequest | null {
   if (value.type === "end") return { type: "end" };
   if (value.type === "ping") return { type: "ping" };
   if (value.type === "data") return bytes(value.chunk) ? { type: "data", chunk: value.chunk } : null;
-  if (value.type !== "open" || !text(value.url) || !token(value.method) || !pairs(value.headers)) return null;
-  return { type: "open", url: value.url, method: value.method, headers: value.headers };
+  if (value.type !== "open") return null;
+  const headers = pairs(value.headers);
+  if (!text(value.url) || !token(value.method) || !headers) return { type: "invalid" };
+  return { type: "open", url: value.url, method: value.method, headers };
 }

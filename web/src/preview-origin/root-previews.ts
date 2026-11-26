@@ -6,11 +6,15 @@ import type { PreviewServer } from "waffle/browser/preview";
 import type { PreviewHostRelay } from "waffle/browser/preview-host";
 import { Previews, type PreviewState } from "../preview.js";
 import { CookieJar } from "./cookie-jar.js";
+import { FrameWatcher, withoutFragment, type FrameWatch } from "./frame-watch.js";
 import { PortSession } from "./port-session.js";
 import {
-  frameMessage, isPreviewOrigin, loopbackHost, previewFrameLink, previewOrigin, previewOriginId, RELAY_MESSAGE, RELAY_PATH, relayMessage,
-  type FrameMessage, type PreviewOriginConfig,
+  frameMessage, isPreviewOrigin, loopbackHost, NAVIGATION_CHANNEL, navigationAnswer, previewFrameLink, previewOrigin, previewOriginId,
+  RELAY_MESSAGE, RELAY_PATH, relayMessage,
+  type FrameMessage, type NavigationAnswer, type PreviewOriginConfig,
 } from "./protocol.js";
+
+export type { FrameWatch } from "./frame-watch.js";
 
 export interface RootPreviewsOptions {
   config: PreviewOriginConfig;
@@ -25,21 +29,14 @@ export interface RootPreviewsOptions {
   ideOrigin?: string;
   /** Where the built new-tab wrapper page (`preview-frame.html`) lives. Defaults to this page's directory. */
   frameBase?: string;
-  /** An IDE with its own wrapper page (it calls `showPreviewFrame`) returns that page's URL for a preview URL. */
+  /**
+   * An IDE with its own wrapper page (it calls `showPreviewFrame`) returns that page's URL for a
+   * preview URL. The page takes the preview it shows in its `url` query parameter, as
+   * `showPreviewFrame` reads it: previews build their own new-tab links from one such URL.
+   */
   frameLink?(url: string): string;
   /** A hang cap for the relay frame and its service worker, never a speed limit. */
   relayTimeoutMs?: number;
-}
-
-/** What became of the document in a watched preview frame. */
-export interface FrameWatch {
-  /**
-   * A document of the server finished loading. `href` is its address when the document said so
-   * itself, and null when it could not: plain text, an image, a page whose policy keeps the shim out.
-   */
-  loaded(href: string | null): void;
-  /** The service worker answered in the server's place. A transient failure is worth another try. */
-  failed(transient: boolean): void;
 }
 
 interface Listening {
@@ -50,8 +47,6 @@ interface Listening {
   readonly ready: ReturnType<typeof Promise.withResolvers<PreviewState>>;
   /** Open WebSockets of this listener. They outlive any one port to the service worker. */
   readonly sockets: Set<{ close(): void }>;
-  /** How many frame navigations the server behind this listener has answered. */
-  navigations: number;
   state: "starting" | "ready" | "failed";
   origin?: string;
   relay?: PreviewHostRelay;
@@ -104,6 +99,9 @@ export class RootPreviews extends Previews {
   private readonly frameLink: RootPreviewsOptions["frameLink"];
   private readonly relayTimeoutMs: number;
   private readonly cookieStore: Storage | null;
+  private readonly watchers = new Set<FrameWatcher>();
+  /** Tells the workspace's other tabs what this tab's servers answered to frame navigations, and hears theirs. */
+  private readonly navigations: BroadcastChannel | null;
   private originId: Promise<string> | undefined;
   private rootDisposed = false;
 
@@ -138,6 +136,13 @@ export class RootPreviews extends Previews {
     this.cookieStore = options.persistCookies ? storage() : null;
     if (this.cookieStore) sweepCookies(this.cookieStore, Date.now());
     window.addEventListener("message", this.onWindowMessage);
+    this.navigations = typeof BroadcastChannel === "function" ? new BroadcastChannel(NAVIGATION_CHANNEL) : null;
+    if (this.navigations) this.navigations.onmessage = (event: MessageEvent<unknown>) => {
+      // Only pages of this IDE origin can post here. A tab hears every workspace's answers and matches them by URL.
+      const answer = navigationAnswer(event.data);
+      if (!answer) return;
+      for (const watcher of Array.from(this.watchers)) watcher.answered(answer);
+    };
   }
 
   /**
@@ -167,38 +172,37 @@ export class RootPreviews extends Previews {
     return Array.from(this.listening.values()).find(item => item.origin === origin);
   }
 
+  private onPreviewOrigin(url: string): boolean {
+    try { return isPreviewOrigin(new URL(url).origin, this.config); } catch { return false; }
+  }
+
+  /** A server of this tab sent a response head for a frame's navigation: this tab's watches and the other tabs' hear of it. */
+  private navigationAnswered(answer: NavigationAnswer): void {
+    for (const watcher of Array.from(this.watchers)) watcher.answered(answer);
+    try { this.navigations?.postMessage(answer); } catch { /* A closed channel: the other tabs settle by their frames' reports only. */ }
+  }
+
   /**
-   * Tells when the preview document in `frame` settled. Three things settle it:
-   *
-   * - the page's own `load` report (an HTML page carries the shim that sends it);
-   * - the service worker's error page, which reports that the server did not answer;
-   * - the frame's `load` event, for a document that cannot report (plain text, an image, a page
-   *   whose Content-Security-Policy keeps the shim out). That event also fires for the cold-load
-   *   page, so it counts only once this tab's server has answered a frame navigation since the
-   *   watch began or since the last error. A tab that shows another tab's server cannot know that
-   *   and takes the event as it is; an error report still follows it when there is one.
+   * Tells when the preview document in `frame` settled: by the page's own report, by the service
+   * worker's error report, or, for a document that cannot report, by the frame's `load` event once
+   * the server sent the final response of this frame's own navigation (frame-watch.ts). The frame
+   * may get its address before or after the watch begins.
    */
   watchFrame(frame: HTMLIFrameElement, watch: FrameWatch): () => void {
-    const listener = () => {
-      try { return this.listenerAt(new URL(frame.src).origin); } catch { return undefined; }
-    };
-    // What each server had answered when the watch began: the frame may get its address only afterwards.
-    const answered = new Map(Array.from(this.listening.values(), entry => [entry, entry.navigations]));
-    const stopReports = this.observeFrame(frame, (message) => {
-      if (message.event === "load") { watch.loaded(message.href); return; }
-      if (message.event !== "error") return;
-      const entry = listener();
-      if (entry) answered.set(entry, entry.navigations);
-      watch.failed(message.transient === true);
-    });
-    const domLoad = (event: Event) => {
-      const entry = listener();
-      if (!event.isTrusted || (entry && entry.navigations <= (answered.get(entry) ?? 0))) return;
-      if (entry) answered.set(entry, entry.navigations);
-      watch.loaded(null);
-    };
+    const watcher = new FrameWatcher({
+      address: () => {
+        const address = frame.src ? withoutFragment(frame.src) : null;
+        return address !== null && this.onPreviewOrigin(address) ? address : null;
+      },
+      isPreview: url => this.onPreviewOrigin(url),
+      runsServer: url => this.listenerAt(new URL(url).origin) !== undefined,
+    }, watch);
+    this.watchers.add(watcher);
+    const stopReports = this.observeFrame(frame, message => watcher.reported(message));
+    const domLoad = (event: Event) => { if (event.isTrusted) watcher.frameLoaded(); };
     frame.addEventListener("load", domLoad);
     return () => {
+      this.watchers.delete(watcher);
       stopReports();
       frame.removeEventListener("load", domLoad);
     };
@@ -286,7 +290,8 @@ export class RootPreviews extends Previews {
       sockets: entry.sockets,
       cookiesChanged: () => this.saveJar(entry),
       attached: () => this.attached(entry),
-      navigationServed: () => { entry.navigations++; },
+      navigationAnswered: answer => this.navigationAnswered(answer),
+      wrapper: this.linkFor(`${entry.origin}/`),
     });
     target.postMessage({ type: RELAY_MESSAGE, event: "attach" }, entry.origin, [channel.port2]);
   }
@@ -326,7 +331,6 @@ export class RootPreviews extends Previews {
       lifetime: new AbortController(),
       ready: Promise.withResolvers<PreviewState>(),
       sockets: new Set(),
-      navigations: 0,
       state: "starting",
     };
     this.registerRouter(port, server);
@@ -391,6 +395,8 @@ export class RootPreviews extends Previews {
     if (this.rootDisposed) return Promise.resolve();
     this.rootDisposed = true;
     window.removeEventListener("message", this.onWindowMessage);
+    this.navigations?.close();
+    this.watchers.clear();
     for (const [port, entry] of Array.from(this.listening)) {
       this.retire(entry);
       try { this.unregisterRouter(port, entry.server); } catch {}

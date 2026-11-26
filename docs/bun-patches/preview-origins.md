@@ -16,7 +16,9 @@ behavior.
 | `web/src/preview-origin/cookie-jar.ts` | RFC 6265 section 5 storage model, written from the specification |
 | `web/src/preview-origin/sw-core.ts`, `sw-exchange.ts`, `sw.ts` | The preview origin's service worker |
 | `web/src/preview-origin/relay.ts`, `bootstrap.ts`, `frame-page.ts`, `frame-entry.ts` | The relay page, the cold-load page and the new-tab wrapper |
-| `web/src/preview-origin/page-shim.ts` | Injected page script: cookies, service worker guard, frame reports |
+| `web/src/preview-origin/page-shim.ts`, `new-tab.ts` | Injected page script: cookies, service worker guard, frame reports, new tabs through the IDE's wrapper page |
+| `web/src/preview-origin/frame-watch.ts` | IDE page: when the document in a preview frame has settled |
+| `web/src/preview-origin/script-policy.ts` | Whether a response's Content-Security-Policy admits the page script, written from CSP Level 3 source matching |
 | `web/src/preview-origin/host.ts`, `site/preview-worker.ts` | The static preview host |
 | `web/src/preview-origin/workspace-identity.ts` | The workspace's stored preview identity |
 | `web/src/preview-html.ts` | Script insertion after the doctype, moved out of `web/src/sw-routing.ts` so both workers share it |
@@ -56,6 +58,14 @@ behavior.
   otherwise serve the app and its cookies outside the IDE.
 - A socket port has no disconnect signal outside Chromium, so the page pings the IDE tab (it counts
   unanswered pings, because a hidden page's timers are throttled) and the IDE drops a silent page.
-- A frame settles by its `load` event only once the tab's own server answered a frame navigation.
-  That event also fires for the cold-load page and for error pages, and a plain-text document or one
-  whose policy allows no script has no other way to say that it loaded.
+- A frame settles by its `load` event only once the server sent the final response of that frame's
+  own navigation (its address, followed through redirects). That event also fires for the initial
+  blank document, the cold-load page and error pages, and a plain-text document or one whose policy
+  keeps the script out has no other way to say that it loaded. A cross-origin frame cannot be tied
+  to a request more closely than by its address; the owner tab broadcasts its answers so that the
+  other tabs follow the same rule.
+- The page script's tag is written only when it passes every policy of the response. A blocked tag
+  would raise a violation report, and widening an app's policy is not ours to do.
+- Tabs the app opens are pointed at the IDE's wrapper page by rewriting the link for the browser's
+  own click, not by `preventDefault` and a scripted open: user activation, background tabs and
+  `rel` then behave as in any browser.

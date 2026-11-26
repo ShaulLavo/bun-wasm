@@ -87,7 +87,8 @@ test("a listener becomes ready only after its relay frame is up and the service 
   expect(previews.serves(5173)).toBe(true);
   expect(await previews.ready).toBe("ready");
   await settle();
-  expect(replies).toEqual([{ t: "cookies", cookies: [] }]);
+  // The answer names the wrapper page too, for new tabs the app opens itself.
+  expect(replies).toEqual([{ t: "cookies", cookies: [], wrapper: `${IDE}/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fsprockt.dev&url=${encodeURIComponent(`${origin}/`)}` }]);
   expect(previews.url(5173, "/dashboard?tab=1")).toBe(`${origin}/dashboard?tab=1`);
   const link = new URL(previews.linkUrl(5173, "/dashboard"));
   expect(link.origin + link.pathname).toBe(`${IDE}/sandbox/preview-frame.html`);
@@ -122,8 +123,9 @@ test("a restarted service worker gets a new port and the old one is revoked", as
   expect(frames[0]!.posted.length).toBe(2);
   const second = acknowledge(frames[0]!.posted[1]!.ports[0]!);
   await settle();
-  expect(first).toEqual([{ t: "cookies", cookies: [] }, { t: "detach" }]);
-  expect(second).toEqual([{ t: "cookies", cookies: [] }]);
+  const attached: SessionReply = { t: "cookies", cookies: [], wrapper: previews.linkFor(`${origin}/`) };
+  expect(first).toEqual([attached, { t: "detach" }]);
+  expect(second).toEqual([attached]);
   expect(previews.isListenerReady(5173, token)).toBe(true);
   // A forced drop behaves the same from the service worker's side.
   previews.dropAttachment(5173);
@@ -190,11 +192,17 @@ class FakePreviewFrame {
   element(): HTMLIFrameElement { return this as unknown as HTMLIFrameElement; }
 }
 
-/** A dev server that answers every request with a short plain-text page. */
+/** A dev server that answers every request with a short plain-text page, and `/old` with a redirect to `/notes.txt`. */
 const answering = (): PreviewServer => ({
   request: () => false,
   connect: (_port, sink) => ({
-    write() { void sink.data(new TextEncoder().encode("HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 2\r\n\r\nok")); },
+    write(request) {
+      const moved = new TextDecoder().decode(request).startsWith("GET /old ");
+      const response = moved
+        ? "HTTP/1.1 302 Found\r\nlocation: /notes.txt\r\ncontent-length: 0\r\n\r\n"
+        : "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 2\r\n\r\nok";
+      void sink.data(new TextEncoder().encode(response));
+    },
     close() {},
   }),
 });
@@ -208,7 +216,7 @@ function watch(previews: RootPreviews, frame: FakePreviewFrame) {
   return { events, stop };
 }
 
-test("a frame without the shim settles by its load event, once this tab's server answered its navigation", async () => {
+test("a frame without the shim settles by its load event, once this tab's server sent the final response of that frame's navigation", async () => {
   const { previews, origin } = await setup();
   const token = previews.registerListener(5173, answering());
   await settle();
@@ -217,72 +225,119 @@ test("a frame without the shim settles by its load event, once this tab's server
   const replies = acknowledge(port);
   expect(await previews.waitUntilRegistered(5173, token)).toBe("ready");
   const heads = () => replies.filter(reply => reply.t === "output" && reply.output.type === "head").length;
-  const request = async (id: number, path: string, mode: string) => {
+  const request = async (id: number, path: string, mode: string, dest = "iframe") => {
     const before = heads();
-    port.postMessage({ t: "open", id, url: `${origin}${path}`, method: "GET", headers: [["sec-fetch-mode", mode]], body: null, credentials: "include" });
+    port.postMessage({ t: "open", id, url: `${origin}${path}`, method: "GET", headers: [["sec-fetch-mode", mode], ["sec-fetch-dest", dest]], body: null, credentials: "include" });
     while (heads() === before) await Bun.sleep(1);
   };
 
-  const frame = new FakePreviewFrame(`${origin}/notes.txt`);
+  // A frame is watched before it has an address, as the sandbox does: Chromium fires `load` for its
+  // initial blank document, which says nothing about any preview.
+  const frame = new FakePreviewFrame("");
   const { events, stop } = watch(previews, frame);
-  // The cold-load page, or an error page whose report is still on its way: the server answered nothing yet.
   frame.load();
-  await request(1, "/app.js", "no-cors");
+  await request(1, "/notes.txt", "navigate");
   frame.load();
   expect(events).toEqual([]);
-  // Plain text carries no shim. The server answered the navigation, so the frame's load event settles it, once.
-  await request(2, "/notes.txt", "navigate");
+  frame.src = `${origin}/notes.txt#top`;
+  // The cold-load page, a script of the page, another frame's document, a top-level visit: none is this frame's navigation.
+  frame.load();
+  await request(2, "/app.js", "no-cors", "script");
+  await request(3, "/", "navigate");
+  await request(4, "/notes.txt", "navigate", "document");
+  frame.load();
+  expect(events).toEqual([]);
+  // Plain text carries no shim. The server answered this frame's own navigation, so its load event settles it, once.
+  await request(5, "/notes.txt", "navigate");
   frame.load();
   frame.load();
   expect(events).toEqual(["loaded null"]);
 
-  // The service worker answered for the server: a load event that follows is the error page's own.
-  deliver(frame, origin, { type: "bunwasm-preview-frame", event: "error", href: `${origin}/notes.txt`, transient: true });
+  // A redirect is followed to its final response: the load of anything before that does not count.
+  frame.src = `${origin}/old`;
+  await request(6, "/old", "navigate");
   frame.load();
-  expect(events).toEqual(["loaded null", "failed, try again"]);
+  expect(events).toEqual(["loaded null"]);
+  await request(7, "/notes.txt", "navigate");
+  frame.load();
+  expect(events).toEqual(["loaded null", "loaded null"]);
+
+  // The service worker answered for the server: a load event that follows is the error page's own.
+  frame.src = `${origin}/`;
+  deliver(frame, origin, { type: "bunwasm-preview-frame", event: "error", href: `${origin}/`, transient: true });
+  frame.load();
+  expect(events.slice(2)).toEqual(["failed, try again"]);
   // The retry reaches the server, and a page with the shim also says where it is.
-  await request(3, "/", "navigate");
+  await request(8, "/", "navigate");
   deliver(frame, origin, { type: "bunwasm-preview-frame", event: "commit", href: `${origin}/` });
   deliver(frame, origin, { type: "bunwasm-preview-frame", event: "load", href: `${origin}/` });
-  expect(events).toEqual(["loaded null", "failed, try again", `loaded ${origin}/`]);
+  expect(events.slice(2)).toEqual(["failed, try again", `loaded ${origin}/`]);
   deliver(frame, origin, { type: "bunwasm-preview-frame", event: "error", href: `${origin}/`, transient: false });
   expect(events.at(-1)).toBe("failed");
 
   // Another window, or another origin, says nothing about this frame.
   deliver({ contentWindow: {} }, origin, { type: "bunwasm-preview-frame", event: "load", href: `${origin}/` });
   deliver(frame, "https://evil.dev", { type: "bunwasm-preview-frame", event: "load", href: "https://evil.dev/" });
-  expect(events.length).toBe(4);
+  expect(events.length).toBe(5);
   stop();
   expect(frame.watched).toBe(false);
-  await request(4, "/", "navigate");
+  await request(9, "/", "navigate");
   frame.load();
   deliver(frame, origin, { type: "bunwasm-preview-frame", event: "load", href: `${origin}/` });
-  expect(events.length).toBe(4);
-
-  // A watch that begins before the frame has its address (the sandbox sets `src` afterwards) still
-  // counts only navigations answered from then on, whatever the server answered before.
-  const late = new FakePreviewFrame("");
-  const second = watch(previews, late);
-  late.src = `${origin}/notes.txt`;
-  late.load();
-  expect(second.events).toEqual([]);
-  await request(5, "/notes.txt", "navigate");
-  late.load();
-  expect(second.events).toEqual(["loaded null"]);
-  second.stop();
+  expect(events.length).toBe(5);
   await previews.dispose();
 });
 
-test("a tab that shows another tab's server takes the frame's load event as it is, and an error report after it", async () => {
-  const { previews, origin } = await setup();
+test("a tab that only shows another tab's server hears its answers and settles its own frame by them", async () => {
+  const owner = await setup();
+  const follower = await setup();
+  const { origin } = owner;
+  const token = owner.previews.registerListener(5173, answering());
+  await settle();
+  // Only the owner runs a server, so the one relay frame is its own.
+  expect(frames.length).toBe(1);
+  deliver(frames[0]!, origin, { type: RELAY_MESSAGE, event: "ready" });
+  const port = frames[0]!.posted[0]!.ports[0]!;
+  const replies = acknowledge(port);
+  expect(await owner.previews.waitUntilRegistered(5173, token)).toBe("ready");
+  const heads = () => replies.filter(reply => reply.t === "output" && reply.output.type === "head").length;
+  const navigate = async (id: number, path: string) => {
+    const before = heads();
+    port.postMessage({ t: "open", id, url: `${origin}${path}`, method: "GET", headers: [["sec-fetch-mode", "navigate"], ["sec-fetch-dest", "iframe"]], body: null, credentials: "include" });
+    while (heads() === before) await Bun.sleep(1);
+  };
+
+  const blank = new FakePreviewFrame("");
+  const untouched = watch(follower.previews, blank);
   const frame = new FakePreviewFrame(`${origin}/notes.txt`);
-  const { events, stop } = watch(previews, frame);
+  const { events, stop } = watch(follower.previews, frame);
+  // The load of the cold-load page, and another frame's answer: nothing yet.
+  blank.load();
+  await navigate(1, "/");
+  await settle();
+  expect(events).toEqual([]);
+  // The owner's answer may reach this tab after the document did.
+  frame.load();
+  expect(events).toEqual([]);
+  await navigate(2, "/notes.txt");
+  while (events.length === 0) await Bun.sleep(1);
+  expect(events).toEqual(["loaded null"]);
+  // One answer settles one document: the next needs its own answer and its own load.
+  await settle();
   frame.load();
   expect(events).toEqual(["loaded null"]);
+  await navigate(3, "/notes.txt");
+  while (events.length === 1) await Bun.sleep(1);
+  expect(events).toEqual(["loaded null", "loaded null"]);
   deliver(frame, origin, { type: "bunwasm-preview-frame", event: "error", href: `${origin}/notes.txt`, transient: true });
-  expect(events).toEqual(["loaded null", "failed, try again"]);
+  expect(events.at(-1)).toBe("failed, try again");
+  // The frame that never got an address heard all of it and settled nothing.
+  blank.load();
+  expect(untouched.events).toEqual([]);
   stop();
-  await previews.dispose();
+  untouched.stop();
+  await owner.previews.dispose();
+  await follower.previews.dispose();
 });
 
 test("an identity that cannot be read fails the listener and is asked for again next time", async () => {

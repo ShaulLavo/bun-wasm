@@ -3,7 +3,9 @@
 // select another server, port or owner. Malformed messages are dropped before they reach Waffle.
 import type { PreviewHostExchange, PreviewHostOutput, PreviewHostRelay } from "waffle/browser/preview-host";
 import type { CookieJar } from "./cookie-jar.js";
-import { MAX_EXCHANGES, sessionRequest, SOCKET_IDE_SILENCE_MS, socketRequest, type SessionReply, type SessionRequest } from "./protocol.js";
+import {
+  MAX_EXCHANGES, sessionRequest, SOCKET_IDE_SILENCE_MS, socketRequest, type NavigationAnswer, type SessionReply, type SessionRequest,
+} from "./protocol.js";
 
 export interface SessionBinding {
   /** The one grant this port reaches. */
@@ -19,8 +21,10 @@ export interface SessionBinding {
    * Without it a session owns its sockets and closes them with itself.
    */
   sockets?: Set<{ close(): void }>;
-  /** A response head went out for a navigation of a frame: the guest itself answered it. */
-  navigationServed?(): void;
+  /** The server's response head went out for the navigation of a frame. */
+  navigationAnswered?(answer: NavigationAnswer): void;
+  /** The IDE-origin page that shows a preview URL of this origin in a new tab (its `url` parameter). */
+  wrapper?: string;
   /** How long a socket may hear nothing from its page before it is let go. A hang cap, not a speed limit. */
   socketSilenceMs?: number;
 }
@@ -32,8 +36,12 @@ const supplied = (name: string) => /^(?:cookie|host)$/i.test(name);
 const headerValue = (headers: readonly [string, string][], wanted: string) => headers.find(([name]) => name.toLowerCase() === wanted)?.[1];
 type SocketOutput = PreviewHostOutput | { type: "pong" };
 
-function headEnd(bytes: Uint8Array): number {
-  return bytes.findIndex((_, at) => HEAD_END.every((byte, offset) => bytes[at + offset] === byte));
+/** Where the blank line that ends a head begins, searching from `from`, or -1. */
+function headEnd(bytes: Uint8Array, from: number): number {
+  for (let at = Math.max(0, from); at + HEAD_END.length <= bytes.length; at++) {
+    if (HEAD_END.every((byte, offset) => bytes[at + offset] === byte)) return at;
+  }
+  return -1;
 }
 
 function join(first: Uint8Array, second: Uint8Array): Uint8Array<ArrayBuffer> {
@@ -76,16 +84,23 @@ class SocketChannel {
     if (!request || this.closed) return;
     this.heard = Date.now();
     if (request.type === "ping") { this.send({ type: "pong" }); return; }
+    if (request.type === "invalid") { this.refuse(); return; }
     if (request.type === "open") { this.open(request); return; }
     // The page gave up before it opened anything: answer, so it may close its end, and let go.
     if (request.type === "end" && !this.exchange) { this.send({ type: "end" }); this.close(); return; }
     this.exchange?.onmessage?.(request);
   }
 
+  /** Answers a request that must not reach the server, and lets go. */
+  private refuse(): void {
+    this.send({ type: "error", message: "Invalid preview socket request" });
+    this.close();
+  }
+
   private open(request: Extract<ReturnType<typeof socketRequest>, { type: "open" }>): void {
     const { relay, jar } = this.binding;
     const url = ownUrl(request.url, relay.origin);
-    if (this.exchange || !url) { this.send({ type: "error", message: "Invalid preview socket request" }); this.close(); return; }
+    if (this.exchange || !url) { this.refuse(); return; }
     this.path = url.pathname;
     const headers = request.headers.filter(([name]) => !supplied(name) && name.toLowerCase() !== "origin");
     // Waffle translates exactly this origin to the guest's own.
@@ -104,20 +119,26 @@ class SocketChannel {
 
   /**
    * Nothing of the response head reaches the page until all of it is here and filtered: it may
-   * carry Set-Cookie. A head that never ends within the cap fails the upgrade.
+   * carry Set-Cookie. The head, with the blank line that ends it, may take MAX_SOCKET_HEAD bytes:
+   * the limit is on where the head ends, not on how the server's bytes were cut into chunks.
+   * Frame bytes that follow a head that fits are the socket's own and are not counted.
    */
   private output(output: PreviewHostOutput): void {
     if (output.type !== "data" || this.pendingHead === null) { this.send(output); return; }
+    // The end may straddle the two chunks, so the search backs up over the last bytes held.
+    const searched = this.pendingHead.length - (HEAD_END.length - 1);
     const bytes = join(this.pendingHead, output.chunk);
-    const end = headEnd(bytes);
-    if (end < 0 && bytes.length < MAX_SOCKET_HEAD) { this.pendingHead = bytes; return; }
-    this.pendingHead = null;
-    if (end < 0) {
+    const end = headEnd(bytes, searched);
+    const headLength = end < 0 ? bytes.length + 1 : end + HEAD_END.length;
+    if (headLength > MAX_SOCKET_HEAD) {
+      this.pendingHead = null;
       this.send({ type: "error", message: "The server's upgrade response head is too large" });
       this.close();
       return;
     }
-    this.send({ type: "data", chunk: this.withoutSetCookie(bytes, end + HEAD_END.length) });
+    if (end < 0) { this.pendingHead = bytes; return; }
+    this.pendingHead = null;
+    this.send({ type: "data", chunk: this.withoutSetCookie(bytes, headLength) });
   }
 
   /** The 101 response head may set cookies; they go into the jar, never to the page. */
@@ -204,10 +225,13 @@ export class PortSession {
     if (request && this.closed && this.confirmed) { this.release(); return; }
     if (!request || this.closed) return;
     switch (request.t) {
-      case "attached":
-        this.send(this.scriptCookies());
+      case "attached": {
+        const reply = this.scriptCookies();
+        if (this.binding.wrapper) reply.wrapper = this.binding.wrapper;
+        this.send(reply);
         this.binding.attached?.();
         return;
+      }
       case "ping": this.send({ t: "pong", n: request.n }); return;
       case "open": this.open(request); return;
       case "invalid": this.refuse(request.id, "Malformed preview request"); return;
@@ -246,11 +270,14 @@ export class PortSession {
     if (cookie) headers.push(["cookie", cookie]);
     const { id } = request;
     // The service worker says what kind of request this is. It decides nothing but when a frame counts as loaded.
-    const framedNavigation = headerValue(request.headers, "sec-fetch-mode") === "navigate";
+    const framedNavigation = headerValue(request.headers, "sec-fetch-mode") === "navigate"
+      && /^i?frame$/.test(headerValue(request.headers, "sec-fetch-dest") ?? "");
     const exchange: PreviewHostExchange = {
       onmessage: null,
       postMessage: (output, transfer = []) => {
-        if (output.type === "head" && framedNavigation) this.binding.navigationServed?.();
+        if (output.type === "head" && framedNavigation) {
+          this.binding.navigationAnswered?.({ url: url.href, status: output.status, location: headerValue(output.headers, "location") ?? null });
+        }
         this.output(id, url.pathname, credentialed, output, transfer);
       },
       close: () => { if (this.exchanges.delete(id)) this.send({ t: "finish", id }); },

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import {
-  frameMessage, isPreviewOrigin, parsePreviewHost, previewFrameLink, previewHostEnv, previewOrigin, previewOriginId, relayMessage,
+  frameMessage, isPreviewOrigin, navigationAnswer, parsePreviewHost, previewFrameLink, previewHostEnv, previewOrigin, previewOriginId, relayMessage,
   resolvePreviewOriginConfig, sessionRequest, socketRequest,
 } from "../src/preview-origin/protocol";
 
@@ -125,13 +125,41 @@ test("requests from the preview origin are rebuilt from known fields or dropped"
     { ...forged, headers: [["a", 5]] }, { ...forged, headers: [[5, "b"]] }, { ...forged, headers: [["a", " "]] },
   ]) expect(sessionRequest(malformed)).toEqual({ t: "invalid", id: 1 });
   expect(sessionRequest({ ...forged, headers: [["x-tab", "a\tb"], ["x-latin", "café"], ["x-empty", ""]] })).toMatchObject({ t: "open" });
-  expect(socketRequest({ type: "open", url: "wss://p.test/hmr", method: "GET", headers: [["a", "b\r\nc: d"]] })).toBeNull();
+  expect(socketRequest({ type: "open", url: "wss://p.test/hmr", method: "GET", headers: [["a", "b\r\nc: d"]] })).toEqual({ type: "invalid" });
+  expect(socketRequest({ type: "open", url: "wss://p.test/hmr", method: "GET /x", headers: [] })).toEqual({ type: "invalid" });
+  // A sparse list has holes that `every` and `filter` skip: each index is read, and a hole is no header.
+  const trailing: [string, string][] = [["a", "b"]];
+  trailing.length = 2;
+  const inner: [string, string][] = [["a", "b"]];
+  inner[2] = ["c", "d"];
+  const holes: [string, string][] = [];
+  holes.length = 3;
+  const halfPair = ["a", "b"];
+  delete halfPair[0];
+  for (const headers of [trailing, inner, holes, [halfPair]]) {
+    expect(sessionRequest({ ...forged, headers })).toEqual({ t: "invalid", id: 1 });
+    expect(socketRequest({ type: "open", url: "wss://p.test/hmr", method: "GET", headers })).toEqual({ type: "invalid" });
+  }
+  // What passes is rebuilt: a dense list of fresh pairs, without anything else hung on the arrays.
+  const decorated: [string, string][] = [["a", "b"]];
+  Object.assign(decorated, { grant: "x" });
+  const rebuilt = sessionRequest({ ...forged, headers: decorated });
+  expect(rebuilt).toMatchObject({ t: "open", headers: [["a", "b"]] });
+  expect(rebuilt?.t === "open" && rebuilt.headers !== decorated && rebuilt.headers[0] !== decorated[0] && Object.keys(rebuilt.headers)).toEqual(["0"]);
   expect(socketRequest({ type: "ping", extra: 1 })).toEqual({ type: "ping" });
   expect(sessionRequest({ t: "input", id: 3, input: { type: "pull", extra: 1 } })).toEqual({ t: "input", id: 3, input: { type: "pull" } });
   expect(sessionRequest({ t: "cookie", id: 2, line: "a=1", url: "https://p.test/x" })).toEqual({ t: "cookie", id: 2, line: "a=1", url: "https://p.test/x" });
   expect(socketRequest({ type: "open", url: "wss://p.test/hmr", method: "GET", headers: [], authorization: {} })).toEqual({ type: "open", url: "wss://p.test/hmr", method: "GET", headers: [] });
   expect(socketRequest({ type: "data", chunk: "text" })).toBeNull();
   expect(socketRequest({ type: "grant" })).toBeNull();
+});
+
+test("a navigation answer from another tab is taken by shape only", () => {
+  expect(navigationAnswer({ url: "https://p.test/a", status: 302, location: "/b", extra: 1 })).toEqual({ url: "https://p.test/a", status: 302, location: "/b" });
+  expect(navigationAnswer({ url: "https://p.test/a", status: 200, location: null })).toEqual({ url: "https://p.test/a", status: 200, location: null });
+  for (const bad of [null, "x", {}, { url: 5, status: 200, location: null }, { url: "https://p.test/", status: "200", location: null }, { url: "https://p.test/", status: 200 }, { url: "https://p.test/", status: 200, location: 5 }]) {
+    expect(navigationAnswer(bad)).toBeNull();
+  }
 });
 
 test("window messages are recognized by shape only", () => {

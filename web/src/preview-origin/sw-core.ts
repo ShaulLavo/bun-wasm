@@ -8,6 +8,7 @@ import {
   type ScriptCookie, type SessionReply, type SessionRequest,
 } from "./protocol";
 import { insertAfterDoctype } from "../preview-html";
+import { shimAdmission } from "./script-policy";
 import { HttpExchange, type ResponseHead } from "./sw-exchange";
 
 export interface OriginClient {
@@ -80,26 +81,6 @@ export function withoutFrameAncestors(value: string): string {
     .join(", ");
 }
 
-const SCRIPT_DIRECTIVES = ["script-src-elem", "script-src", "default-src"];
-
-/** The nonce that the directive governing script elements of one policy asks for, if it asks for one. */
-function policyNonce(policy: string): string | undefined {
-  const directives = new Map(policy.split(";").map((directive) => {
-    const [name = "", ...sources] = directive.trim().split(/\s+/);
-    return [name.toLowerCase(), sources] as const;
-  }));
-  const governing = SCRIPT_DIRECTIVES.map(name => directives.get(name)).find(sources => sources !== undefined);
-  return governing?.map(source => /^'nonce-([A-Za-z0-9+/_-]+={0,2})'$/.exec(source)?.[1]).find(nonce => nonce !== undefined);
-}
-
-/**
- * The nonce a response's Content-Security-Policy accepts for script elements. The injected shim
- * carries it, as the app's own scripts do, so a nonce-based policy does not keep the shim out.
- */
-export function scriptNonce(value: string | null): string | undefined {
-  return value?.split(",").map(policyNonce).find(nonce => nonce !== undefined);
-}
-
 export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
   const now = options.now ?? (() => Date.now());
   const attachWaitMs = options.attachWaitMs ?? 15_000;
@@ -117,6 +98,8 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
   const cookieAcks = new Map<number, () => void>();
   const shimClients = new Set<string>();
   let cookies: ScriptCookie[] = [];
+  /** The IDE-origin page that shows a preview URL in a new tab, as the attached IDE tab named it. */
+  let wrapper = "";
   let nextId = 1;
   let acquiring: Promise<Attachment | null> | null = null;
   // Requests and cookie writes leave in the order their events arrived.
@@ -163,6 +146,7 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
       case "finish": attachment.exchanges.get(reply.id)?.fail("Preview exchange closed"); return;
       case "cookies":
         cookies = reply.cookies;
+        if (typeof reply.wrapper === "string") wrapper = reply.wrapper;
         if (reply.id !== undefined) cookieWrites.get(reply.id)?.(reply.cookies);
         return;
       case "output": {
@@ -313,9 +297,18 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
     if (frameAncestors) headers.append("content-security-policy", frameAncestors);
   }
 
-  function shimTag(nonce: string | undefined): string {
-    const allowed = nonce ? ` nonce="${escapeHtml(nonce)}"` : "";
-    return `<script src="${SHIM_PATH}"${allowed} data-bunwasm-preview="shim" data-cookies="${escapeHtml(JSON.stringify(cookies))}"></script>`;
+  /**
+   * The page script's tag for a document with this Content-Security-Policy, or null when a policy
+   * would block it. A nonce-based policy gets its nonce, as the app's own scripts carry it. A blocked
+   * tag would only raise a violation, so none is written and nobody's policy is widened: such a
+   * document loads without the shim, and its embedder settles it from the frame (RootPreviews.watchFrame).
+   */
+  function shimTag(policy: string | null): string | null {
+    const admission = shimAdmission(policy, `${options.origin}${SHIM_PATH}`);
+    if (!admission.allowed) return null;
+    const nonce = admission.nonce ? ` nonce="${escapeHtml(admission.nonce)}"` : "";
+    const opener = wrapper ? ` data-wrapper="${escapeHtml(wrapper)}"` : "";
+    return `<script src="${SHIM_PATH}"${nonce} data-bunwasm-preview="shim"${opener} data-cookies="${escapeHtml(JSON.stringify(cookies))}"></script>`;
   }
 
   function buildResponse(context: RequestContext, head: ResponseHead, stream: ReadableStream<Uint8Array>): Response {
@@ -330,7 +323,8 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
     // the shim: its embedder learns that it loaded from the frame itself (RootPreviews.watchFrame).
     const html = context.navigation && !bodyless
       && (headers.get("content-type")?.toLowerCase().includes("text/html") ?? false) && !headers.get("content-encoding");
-    const body = bodyless ? null : html ? insertAfterDoctype(stream, shimTag(scriptNonce(headers.get("content-security-policy")))) : stream;
+    const shim = html ? shimTag(headers.get("content-security-policy")) : null;
+    const body = bodyless ? null : shim ? insertAfterDoctype(stream, shim) : stream;
     try {
       return new Response(body, { status: head.status, statusText: head.statusText, headers });
     } catch (error) {

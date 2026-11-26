@@ -2,19 +2,21 @@ import { expect, test } from "bun:test";
 import type { PreviewHostExchange, PreviewHostOpen, PreviewHostOutput } from "waffle/browser/preview-host";
 import { CookieJar } from "../src/preview-origin/cookie-jar";
 import { PortSession } from "../src/preview-origin/port-session";
-import type { SessionReply } from "../src/preview-origin/protocol";
+import type { NavigationAnswer, SessionReply } from "../src/preview-origin/protocol";
 
 const ORIGIN = `https://${"a".repeat(52)}-5173-pv.sprockt.dev`;
 const GRANT = Object.freeze({ owner: "owner-1", port: 5173, origin: ORIGIN, capability: "capability-that-never-leaves-the-ide" });
 const bytes = (value: string) => new TextEncoder().encode(value);
 const text = (value: Uint8Array) => new TextDecoder().decode(value);
 
+const WRAPPER = `https://bun.sprockt.dev/preview-frame.html?preview-origin=https%3A%2F%2Fsprockt.dev&url=${encodeURIComponent(`${ORIGIN}/`)}`;
+
 function setup(sockets?: Set<{ close(): void }>, socketSilenceMs?: number) {
   const dispatched: { open: PreviewHostOpen; exchange: PreviewHostExchange }[] = [];
   const jar = new CookieJar(new URL(ORIGIN).hostname, true);
   let cookieChanges = 0;
   let attached = 0;
-  let navigations = 0;
+  const navigations: NavigationAnswer[] = [];
   const channel = new MessageChannel();
   const session = new PortSession(channel.port1, {
     relay: {
@@ -27,7 +29,8 @@ function setup(sockets?: Set<{ close(): void }>, socketSilenceMs?: number) {
     socketSilenceMs,
     cookiesChanged: () => { cookieChanges++; },
     attached: () => { attached++; },
-    navigationServed: () => { navigations++; },
+    navigationAnswered: (answer) => { navigations.push(answer); },
+    wrapper: WRAPPER,
   });
   const replies: SessionReply[] = [];
   const waiters = new Set<() => void>();
@@ -40,7 +43,7 @@ function setup(sockets?: Set<{ close(): void }>, socketSilenceMs?: number) {
     while (!ready()) await new Promise<void>(resolve => { const wake = () => { waiters.delete(wake); resolve(); }; waiters.add(wake); });
   };
   const settle = () => Bun.sleep(10);
-  return { session, jar, dispatched, replies, remote, until, settle, counts: () => ({ cookieChanges, attached, navigations }) };
+  return { session, jar, dispatched, replies, remote, until, settle, navigations, counts: () => ({ cookieChanges, attached }) };
 }
 
 /** A page's end of one socket, opened through the session, with what the guest and the page each saw. */
@@ -99,7 +102,8 @@ test("Set-Cookie stops at the IDE: the jar keeps it, the page gets only what scr
   const f = setup();
   f.remote.postMessage({ t: "attached" });
   await f.until(() => f.replies.length === 1);
-  expect(f.replies[0]).toEqual({ t: "cookies", cookies: [] });
+  // The answer to `attached` also names the IDE's wrapper page, for tabs the app opens itself.
+  expect(f.replies[0]).toEqual({ t: "cookies", cookies: [], wrapper: WRAPPER });
   expect(f.counts().attached).toBe(1);
 
   f.remote.postMessage(open(1, "/login"));
@@ -231,17 +235,59 @@ test("an upgrade response head larger than the cap fails the socket, and none of
   f.session.close();
 });
 
-test("a head that ends in the chunk that crosses the cap is still filtered before it is forwarded", async () => {
-  const f = setup();
-  const socket = await openSocket(f);
-  socket.exchange.postMessage({ type: "data", chunk: bytes(`HTTP/1.1 101 Switching Protocols\r\nX-Pad: ${"a".repeat(60_000)}`) });
-  socket.exchange.postMessage({ type: "data", chunk: bytes(`\r\nX-More: ${"b".repeat(8_000)}\r\nSet-Cookie: sid=secret; Path=/; HttpOnly\r\n\r\nFRAME`) });
-  await eventually(() => socket.page.length === 2);
-  expect(socket.page[1]).toEndWith("\r\n\r\nFRAME");
-  expect(socket.page[1]).not.toContain("secret");
-  expect(f.jar.header("/")).toBe("sid=secret");
-  socket.port.close();
-  f.session.close();
+const HEAD_LIMIT = 64 * 1024;
+const HEAD_START = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n";
+const HEAD_COOKIE = "Set-Cookie: sid=secret; Path=/; HttpOnly\r\n";
+
+/** An upgrade response head of exactly `length` bytes, blank line included, with Set-Cookie as its last header. */
+function headOf(length: number): string {
+  const padding = length - HEAD_START.length - "X-Pad: \r\n".length - HEAD_COOKIE.length - 2;
+  return `${HEAD_START}X-Pad: ${"a".repeat(padding)}\r\n${HEAD_COOKIE}\r\n`;
+}
+
+/** Sends `stream` to the page's socket as the server would, cut into chunks at `cuts`. */
+function sendCut(socket: Awaited<ReturnType<typeof openSocket>>, stream: string, cuts: number[]): void {
+  const edges = [0].concat(cuts, stream.length);
+  for (const [index, from] of edges.slice(0, -1).entries()) {
+    socket.exchange.postMessage({ type: "data", chunk: bytes(stream.slice(from, edges[index + 1])) });
+  }
+}
+
+test("the head limit is where the head ends, however the server's bytes were cut into chunks", async () => {
+  const frames = `FRAME${"f".repeat(70_000)}`;
+  // One chunk, a cut inside the head, a cut inside the blank line, a cut right before and right after it.
+  const cutsFor = (length: number) => [[], [60_000], [length - 2], [length - 1], [length], [1, 2, 3, length - 3, length + 5]];
+  const fits = headOf(HEAD_LIMIT);
+  expect(bytes(fits).length).toBe(HEAD_LIMIT);
+  const forwarded = `${fits.replace(HEAD_COOKIE, "")}${frames}`;
+  for (const cuts of cutsFor(HEAD_LIMIT)) {
+    const f = setup();
+    const socket = await openSocket(f);
+    sendCut(socket, `${fits}${frames}`, cuts);
+    await eventually(() => socket.page.slice(1).join("").length >= forwarded.length);
+    // The head crossed complete and without its cookie, and the frame bytes after it are the socket's own.
+    expect(socket.page[0]).toBe("accepted");
+    expect(socket.page.slice(1).join("")).toBe(forwarded);
+    expect(f.jar.header("/")).toBe("sid=secret");
+    expect(socket.guest).toEqual([]);
+    socket.port.close();
+    f.session.close();
+  }
+  // One byte more, or four kibibytes more with the blank line in the very chunk that crosses the limit: refused every time.
+  for (const length of [HEAD_LIMIT + 1, 68 * 1024]) {
+    for (const cuts of cutsFor(length)) {
+      const f = setup();
+      const socket = await openSocket(f);
+      sendCut(socket, `${headOf(length)}${frames}`, cuts);
+      await eventually(() => socket.page.includes("error"));
+      await f.settle();
+      expect(socket.page).toEqual(["accepted", "error"]);
+      expect(socket.guest).toEqual(["end"]);
+      expect(f.jar.header("/")).toBeNull();
+      socket.port.close();
+      f.session.close();
+    }
+  }
 });
 
 test("a page that vanished without a word lets go of its guest connection", async () => {
@@ -309,21 +355,67 @@ test("a malformed request is refused by id: missing or unknown credentials, and 
   f.session.close();
 });
 
-test("the session reports each head it sends for a frame navigation, and for nothing else", async () => {
-  const f = setup();
-  f.remote.postMessage(open(1, "/page", { headers: [["sec-fetch-mode", "navigate"]] }));
-  f.remote.postMessage(open(2, "/api", { headers: [["sec-fetch-mode", "cors"]] }));
-  f.remote.postMessage(open(3, "/slow", { headers: [["Sec-Fetch-Mode", "navigate"]] }));
+test("a header list with a hole is refused on both paths, and what is dispatched is a rebuilt, dense list", async () => {
+  // Structured clone keeps the holes of a sparse array, and `every` and `filter` skip them.
+  const sparse = (headers: [string, string][], length: number) => { const list = headers.slice(); list.length = length; return list; };
+  const holeInside: [string, string][] = [["x-a", "1"]];
+  holeInside[2] = ["x-b", "2"];
+  const sockets = new Set<{ close(): void }>();
+  const f = setup(sockets);
+  f.remote.postMessage(open(1, "/trailing-hole", { headers: sparse([["accept", "*/*"]], 3) }));
+  f.remote.postMessage(open(2, "/inner-hole", { headers: holeInside }));
+  f.remote.postMessage(open(3, "/only-holes", { headers: sparse([], 2) }));
+  await f.until(() => f.replies.filter(reply => reply.t === "finish").length === 3);
+  expect(f.replies).toEqual([1, 2, 3].flatMap((id): SessionReply[] => [
+    { t: "output", id, output: { type: "error", message: "Malformed preview request" } }, { t: "finish", id },
+  ]));
+  for (const headers of [sparse([["Upgrade", "websocket"]], 2), holeInside]) {
+    const channel = new MessageChannel();
+    const page: string[] = [];
+    channel.port1.onmessage = (event: MessageEvent<{ type: string }>) => { page.push(event.data.type); };
+    f.remote.postMessage({ t: "socket" }, [channel.port2]);
+    channel.port1.postMessage({ type: "open", url: `${ORIGIN}/hmr`, method: "GET", headers });
+    await eventually(() => page.includes("error"));
+    expect(page).toEqual(["error"]);
+    channel.port1.close();
+  }
   await f.settle();
-  expect(f.counts().navigations).toBe(0);
+  expect(f.dispatched).toEqual([]);
+  expect(sockets.size).toBe(0);
+  // A well-formed list reaches Waffle as plain pairs, without whatever else the sender hung on its arrays.
+  const decorated: [string, string][] = [["accept", "*/*"]];
+  Object.assign(decorated, { extra: "x" });
+  Object.assign(decorated[0]!, { extra: "y" });
+  f.remote.postMessage(open(4, "/fine", { headers: decorated }));
+  await f.settle();
+  expect(f.dispatched.length).toBe(1);
+  expect(Object.keys(f.dispatched[0]!.open.headers)).toEqual(["0"]);
+  expect(Object.keys(f.dispatched[0]!.open.headers[0]!)).toEqual(["0", "1"]);
+  f.session.close();
+});
+
+test("the session reports the server's answer to each frame navigation, and to nothing else", async () => {
+  const f = setup();
+  const framed = (dest: string): [string, string][] => [["sec-fetch-mode", "navigate"], ["Sec-Fetch-Dest", dest]];
+  f.remote.postMessage(open(1, "/page?x=1", { headers: framed("iframe") }));
+  f.remote.postMessage(open(2, "/api", { headers: [["sec-fetch-mode", "cors"], ["sec-fetch-dest", "empty"]] }));
+  f.remote.postMessage(open(3, "/slow", { headers: framed("frame") }));
+  f.remote.postMessage(open(4, "/old", { headers: framed("iframe") }));
+  f.remote.postMessage(open(5, "/top", { headers: framed("document") }));
+  await f.settle();
+  expect(f.navigations).toEqual([]);
   f.dispatched[1]!.exchange.postMessage({ type: "head", status: 200, statusText: "OK", headers: [] });
+  f.dispatched[4]!.exchange.postMessage({ type: "head", status: 200, statusText: "OK", headers: [] });
   f.dispatched[0]!.exchange.postMessage({ type: "accepted" });
-  expect(f.counts().navigations).toBe(0);
+  expect(f.navigations).toEqual([]);
   f.dispatched[0]!.exchange.postMessage({ type: "head", status: 200, statusText: "OK", headers: [["content-type", "text/plain"]] });
-  expect(f.counts().navigations).toBe(1);
-  // A navigation the server never answers counts for nothing.
+  f.dispatched[3]!.exchange.postMessage({ type: "head", status: 302, statusText: "Found", headers: [["Location", "/new"]] });
+  // A navigation the server never answers is no answer.
   f.dispatched[2]!.exchange.postMessage({ type: "error", message: "refused" });
-  expect(f.counts().navigations).toBe(1);
+  expect(f.navigations).toEqual([
+    { url: `${ORIGIN}/page?x=1`, status: 200, location: null },
+    { url: `${ORIGIN}/old`, status: 302, location: "/new" },
+  ]);
   f.session.close();
 });
 
@@ -357,6 +449,6 @@ test("closing the session ends what is in flight and tells the service worker", 
   f.session.close();
   await f.until(() => f.replies.some(reply => reply.t === "detach"));
   expect(inputs).toEqual(["pull", "end"]);
-  expect(f.replies).toEqual([{ t: "cookies", cookies: [] }, { t: "pong", n: 4 }, { t: "detach" }]);
+  expect(f.replies).toEqual([{ t: "cookies", cookies: [], wrapper: WRAPPER }, { t: "pong", n: 4 }, { t: "detach" }]);
   f.remote.close();
 });

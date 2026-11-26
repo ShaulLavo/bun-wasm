@@ -97,6 +97,13 @@ gets a `403` page that says to open it from the IDE, from the static host and fr
 service worker alike, so the app and its cookies are never served to a tab outside the IDE. The new
 tab works while the IDE tab that runs the server stays open.
 
+Tabs the app opens itself go the same way. The IDE names its wrapper page when it attaches, and the
+injected script points a same-origin `target="_blank"` link, a Ctrl, Cmd, Shift or middle click on a
+same-origin link, and a same-origin `window.open` call at that page for the requested URL. The
+browser still performs its own click, so user activation and background tabs work as usual, and
+the link's `href` is the app's own again right after. An IDE with its own wrapper page must take
+the preview in its `url` query parameter, as `showPreviewFrame` does.
+
 ## Hosting
 
 The preview host serves four fixed files and nothing else (`handlePreviewOriginRequest`):
@@ -142,12 +149,19 @@ showPreviewFrame({ domain: "sprockt.dev" });
 ```
 
 `previews.watchFrame(frame, { loaded, failed })` tells when a preview frame settled. A cross-origin
-frame's `load` event fires for error pages too, so three things settle it: the page's own report
-(HTML pages get it with the injected script, which carries the nonce of a nonce-based
-Content-Security-Policy); the service worker's error page, which reports a failure and whether a
-retry is worth it; and, for a document that cannot report (plain text, an image, a page whose policy
-allows no script), the frame's `load` event once this tab's server has answered a frame navigation.
-A tab that shows another tab's server takes the `load` event as it is.
+frame's `load` event fires for its initial blank document, the cold-load page and error pages too,
+so three things settle it: the page's own report (HTML pages get it with the injected script); the
+service worker's error page, which reports a failure and whether a retry is worth it; and, for a
+document that cannot report (plain text, an image, a page whose policy keeps the script out), the
+frame's `load` event once the server sent the final response of that frame's own navigation: the
+response to the frame's address, followed through its redirects. The tab that runs the server
+tells the workspace's other tabs about those responses on a `BroadcastChannel`, so a tab that only
+shows the preview settles by the same rule.
+
+The injected script must pass every Content-Security-Policy of the response (a proxy's and the
+app's). Its tag carries a nonce that all policies asking for one accept. When no single tag can
+pass, for example with a hash-only policy, none is written and no policy is widened: the page
+loads without WebSocket and `document.cookie` support.
 
 ## Limits
 
@@ -155,6 +169,10 @@ A tab that shows another tab's server takes the `load` event as it is.
 - A response slower than WebKit's service-worker fetch limit (about 70 seconds before headers) is
   not held open by a loading page as mounted previews do.
 - An app's own service worker is not registered: the preview's worker carries every request.
+- A tab the app opens is the wrapper page, another origin: the app cannot script it, and
+  `window.opener` is not set. A form with `target="_blank"`, "open link in new tab" from the
+  browser's context menu, and a later navigation of an `about:blank` popup still reach the preview
+  origin directly and get the `403` page. A `target="_top"` link navigates the IDE tab itself.
 - The older loopback host (`?root-previews`, `PREVIEW_ORIGINS=1`) is unchanged and still serves the
   native runs that use it.
 

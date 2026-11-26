@@ -259,7 +259,7 @@ function app(name: string) {
       headers.append("set-cookie", "sid=secret-" + name + "; Path=/; HttpOnly");
       headers.append("set-cookie", "theme=dark-" + name + "; Path=/");
     }
-    return new Response('<!doctype html><title>' + name + '</title><script>' + probe + '</script><h1 id="path">path:' + url.pathname + '</h1><p id="asset"></p><p id="api"></p><img id="logo" src="/logo.svg"><script src="/assets/app.js"></script>', { headers });
+    return new Response('<!doctype html><title>' + name + '</title><script>' + probe + '</script><h1 id="path">path:' + url.pathname + '</h1><p><a id="blank" href="/report?from=link" target="_blank">report</a> <button id="open" onclick="window.open(\\'/report?from=open\\')">print</button></p><p id="asset"></p><p id="api"></p><img id="logo" src="/logo.svg"><script src="/assets/app.js"></script>', { headers });
   };
 }
 const websocket = { message(socket: { send(text: string): void }, message: string | Uint8Array) { socket.send("echo:" + String(message)); } };
@@ -269,19 +269,28 @@ console.log("servers-listening");
 `;
 
 /**
- * What the playground's Run button starts for the dock test. Its page allows scripts by nonce only,
- * `/plain` is no HTML at all, and `/locked` allows no script whatever: three documents that say
- * differently, or not at all, that they loaded.
+ * What the playground's Run button starts for the dock test. Its page carries two policies, as an
+ * app behind a proxy does: the proxy's same-origin policy with a nonce of its own, and the app's
+ * nonce-only policy. `/plain` is no HTML at all, `/locked` allows no script whatever, `/moved`
+ * redirects to `/plain`, and `/hang` never answers: documents that say differently, or not at
+ * all, that they loaded. `/log` lists the paths the server was asked for.
  */
 const DOCK_APP = `
 const probe = ${JSON.stringify(PROBE)};
+const asked: string[] = [];
 Bun.serve({ port: 3000, fetch(req: Request) {
   const path = new URL(req.url).pathname;
+  if (path === "/log") return Response.json(asked);
+  asked.push(path);
+  if (path === "/probe.js") return new Response(probe, { headers: { "content-type": "text/javascript" } });
+  if (path === "/hang") return new Promise<Response>(() => {});
+  if (path === "/moved") return new Response(null, { status: 302, headers: { location: "/plain?moved" } });
   if (path === "/plain") return new Response("plain text, no markup", { headers: { "content-type": "text/plain; charset=utf-8" } });
   if (path === "/locked") return new Response("<!doctype html><title>locked</title><h1>locked</h1>", { headers: { "content-type": "text/html", "content-security-policy": "script-src 'none'" } });
-  return new Response('<!doctype html><title>dock</title><script nonce="n0nce">' + probe + '</script><h1 id="path">dock:' + path + '</h1>', {
-    headers: { "content-type": "text/html", "content-security-policy": "script-src 'nonce-n0nce' 'unsafe-eval'", "set-cookie": "theme=dock; Path=/" },
-  });
+  const headers = new Headers({ "content-type": "text/html", "set-cookie": "theme=dock; Path=/" });
+  headers.append("content-security-policy", "script-src 'self' 'nonce-pr0xy' 'unsafe-eval'");
+  headers.append("content-security-policy", "script-src 'nonce-n0nce' 'unsafe-eval'");
+  return new Response('<!doctype html><title>dock</title><script nonce="n0nce" src="/probe.js"></script><h1 id="path">dock:' + path + '</h1>', { headers });
 } });
 console.log("dock-app-listening");
 `;
@@ -327,23 +336,52 @@ async function stopInPlayground(page: Page): Promise<void> {
   });
 }
 
-/** How a fresh frame at `url` settles, by the IDE page's own watch (RootPreviews.watchFrame). */
-function frameSettles(page: Page, url: string): Promise<string> {
-  return page.evaluate(target => new Promise<string>((resolve) => {
-    const previews = (Reflect.get(globalThis, "playground") as unknown as PlaygroundApi).previews;
+interface Settled {
+  /** How the frame sent to the URL settled. */
+  outcome: string;
+  /** What the watch of a frame that never got an address reported: its initial blank document says nothing. */
+  blank: string[];
+  /** What the watch of a frame at `/hang` reported: another frame's response is not its own. */
+  waiting: string[];
+}
+
+/**
+ * How a fresh frame at `url` settles, by the IDE page's own watch (RootPreviews.watchFrame). The
+ * frame is watched and inserted before it gets its address, as the sandbox's frame is, so its
+ * initial blank document loads under the watch. Two more frames are watched beside it.
+ */
+function frameSettles(page: Page, url: string, hang: string | null = "/hang"): Promise<Settled> {
+  return page.evaluate(([target, never]) => new Promise<Settled>((resolve) => {
+    const api = (Reflect.get(globalThis, "playground") ?? Reflect.get(globalThis, "sandbox")) as unknown as PlaygroundApi | undefined;
+    const previews = api?.previews;
     if (!previews) throw new Error("No previews");
-    const frame = document.createElement("iframe");
-    frame.setAttribute("aria-hidden", "true");
-    frame.style.display = "none";
-    const done = (outcome: string) => {
-      stop();
-      frame.remove();
-      resolve(outcome);
+    const watched = (settled: (outcome: string) => void) => {
+      const frame = document.createElement("iframe");
+      frame.setAttribute("aria-hidden", "true");
+      frame.style.display = "none";
+      const stop = previews.watchFrame(frame, { loaded: href => settled(`loaded ${href}`), failed: transient => settled(`failed ${transient}`) });
+      document.body.appendChild(frame);
+      return { frame, stop };
     };
-    const stop = previews.watchFrame(frame, { loaded: href => done(`loaded ${href}`), failed: transient => done(`failed ${transient}`) });
-    document.body.appendChild(frame);
-    frame.src = target;
-  }), url);
+    const blank: string[] = [];
+    const waiting: string[] = [];
+    const idle = watched(outcome => blank.push(outcome));
+    const hanging = watched(outcome => waiting.push(outcome));
+    const shown = watched((outcome) => {
+      for (const item of [idle, hanging, shown]) {
+        item.stop();
+        item.frame.remove();
+      }
+      resolve({ outcome, blank, waiting });
+    });
+    if (never !== null) hanging.frame.src = new URL(never, target).href;
+    shown.frame.src = target;
+  }), [url, hang] as const);
+}
+
+/** The paths the dock fixture's server was asked for, read through its page in the dock. */
+function dockRequests(page: Page): Promise<string[]> {
+  return inPreview(page, async () => (await (await fetch("/log")).json()) as string[], "no request log");
 }
 
 /** Starts the two fixture servers in the playground and returns their new-tab links, by port. */
@@ -374,6 +412,22 @@ async function openLink(context: BrowserContext, link: URL, errors: string[], la
   trackErrors(page, label, errors);
   await navigateTestPage(page, link.href);
   return page;
+}
+
+/**
+ * A real mouse click on an element of the preview in `page` (a wrapper tab, whose one frame fills it),
+ * and the tab the browser opens for it. The click carries user activation, as a visitor's does.
+ */
+async function clickForNewTab(context: BrowserContext, page: Page, selector: string): Promise<Page> {
+  await page.bringToFront();
+  const frame = await page.locator("iframe:not([aria-hidden])").boundingBox();
+  const inside = await inPreview(page, (query: string) => {
+    const box = document.querySelector(query)?.getBoundingClientRect();
+    return box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null;
+  }, `${selector} is not in the preview`, { argument: selector, accept: point => point !== null });
+  if (!frame || !inside) throw new Error(`Cannot place a click on ${selector}`);
+  const [opened] = await Promise.all([context.waitForEvent("page", { timeout: 60_000 }), page.mouse.click(frame.x + inside.x, frame.y + inside.y)]);
+  return opened;
 }
 
 function text(page: Page, selector: string, expected: string): Promise<string | null> {
@@ -413,6 +467,10 @@ for (const browserName of browsers) {
       expect(await follower.evaluate(() => Reflect.get(globalThis, "sandbox").role())).toBe("follower");
       expect((await sandboxFrameSrc(follower)).href).toBe(src.href);
       await previewShowing(follower, first);
+      // A document without the shim (Vite serves the stylesheet as text/css) in the tab that does not run
+      // the server: the follower hears the owner's answer to its frame's navigation and settles by that.
+      expect(await frameSettles(follower, `${src.origin}/src/App.css`, null)).toEqual({ outcome: "loaded null", blank: [], waiting: [] });
+      expect(await frameSettles(owner, `${src.origin}/src/App.css`, null)).toEqual({ outcome: "loaded null", blank: [], waiting: [] });
       const second = `preview-origin-shared-${browserName}-${Date.now()}`;
       await editSandboxFile(owner, second);
       await Promise.all([previewShowing(owner, second), previewShowing(follower, second)]);
@@ -491,6 +549,21 @@ for (const browserName of browsers) {
       expect(sorted((await requestEcho(other)).cookie)).toEqual(["sid=secret-two", "theme=dark-two"]);
       expect(await inPreview(other, () => document.cookie, "no cookie string")).toBe("theme=dark-two");
 
+      // The app's own new tabs: a real click on its `target="_blank"` link, and on a button that calls
+      // window.open, each opens the IDE's wrapper page for that URL, and the server gets the request.
+      for (const [selector, from] of [["#blank", "link"], ["#open", "open"]] as const) {
+        const opened = await clickForNewTab(context, tab, selector);
+        trackErrors(opened, `opened by ${selector}`, errors);
+        await opened.waitForURL(url => url.origin === one.origin && url.pathname === one.pathname && url.searchParams.get("url") === `${origin}/report?from=${from}`, { timeout: 60_000 });
+        await text(opened, "#path", "path:/report");
+        expect(sorted((await requestEcho(opened)).cookie)).toEqual(["client=1", "sid=secret-one", "theme=dark-one"]);
+        await opened.close();
+      }
+      // The link itself is as the app wrote it again.
+      expect(await inPreview(tab, () => document.querySelector("#blank")?.getAttribute("href"), "no link")).toBe("/report?from=link");
+      const reports = await inPreview(tab, async () => (await (await fetch("/api/log")).json()) as string[], "no log");
+      expect(reports.filter(line => line === "one GET /report").length).toBe(2);
+
       // A tab on the preview origin itself is outside the IDE. The IDE tab is attached and, in this
       // same-site layout, the origin's service worker also controls that tab in Chromium and Firefox;
       // it refuses the visit as the static host does (WebKit's tab gets no worker), and the server,
@@ -529,7 +602,8 @@ for (const browserName of browsers) {
       await ide.locator('.preview-dock[data-frame="loaded"]').waitFor({ timeout: 120_000 });
       const src = new URL((await ide.locator(".preview-dock iframe").getAttribute("src")) ?? "about:blank");
       expect(PREVIEW_HOST.exec(src.hostname)?.[1]).toBe("3000");
-      // The page allows scripts by nonce only. The shim carries that nonce, so the page has its cookies and reported its load.
+      // The page carries a proxy's policy and the app's nonce-only one. The shim's tag carries the one nonce
+      // that passes both, so the page has its cookies and reported its load.
       expect(await inPreview(ide, () => document.cookie, "no cookie string")).toBe("theme=dock");
 
       // The open button leads to the IDE's wrapper page, never to a tab on the preview origin itself.
@@ -541,9 +615,16 @@ for (const browserName of browsers) {
       await text(tab, "#path", "dock:/");
       await tab.close();
 
-      // Documents that cannot report settle too: plain text, and a page whose policy keeps every script out.
-      expect(await frameSettles(ide, `${src.origin}/plain`)).toBe("loaded null");
-      expect(await frameSettles(ide, `${src.origin}/locked`)).toBe("loaded null");
+      // Documents that cannot report settle too: plain text, a page whose policy keeps every script out, and
+      // plain text behind a redirect. Each settles by its own server response: the server was asked for it,
+      // the frame's initial blank document settled nothing, and neither did a frame still waiting for its own.
+      for (const [path, served] of [["/plain", "/plain"], ["/locked", "/locked"], ["/moved", "/plain"]] as const) {
+        const before = (await dockRequests(ide)).length;
+        expect(await frameSettles(ide, `${src.origin}${path}`)).toEqual({ outcome: "loaded null", blank: [], waiting: [] });
+        const asked = (await dockRequests(ide)).slice(before);
+        expect(asked).toContain(path);
+        expect(asked).toContain(served);
+      }
 
       // A frame's load event is no proof: it fires for the service worker's error page as well. A
       // server that answers nothing leaves the dock saying so, after its retries.
