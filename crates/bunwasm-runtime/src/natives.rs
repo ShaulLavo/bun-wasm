@@ -1886,6 +1886,37 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
             .set("logs", result.logs)
             .into())
     });
+    // `Bun.color` (js/bun_color.ts reads JavaScript inputs): (format, CSS text) or
+    // (format, undefined, r, g, b, a).
+    let st = state.clone();
+    t.add("color", move |a| {
+        use crate::{ColorInput, ColorValue};
+        let input = match a.opt_bytes(1) {
+            Some(text) => ColorInput::Css(text),
+            None => ColorInput::Rgba([
+                a.num(2)? as u8,
+                a.num(3)? as u8,
+                a.num(4)? as u8,
+                a.num(5)? as u8,
+            ]),
+        };
+        Ok(
+            match st
+                .transpiler
+                .color(input, a.str(0)?)
+                .map_err(NativeError::type_error)?
+            {
+                ColorValue::Null => Val::Null,
+                ColorValue::Text(text) => Val::Str(text),
+                ColorValue::Number(number) => Val::Num(number),
+                ColorValue::Array(items) => Val::Array(items.into_iter().map(Val::Num).collect()),
+                ColorValue::Object(fields) => fields
+                    .into_iter()
+                    .fold(Record::new(), |record, (key, value)| record.set(key, value))
+                    .into(),
+            },
+        )
+    });
     // `Bun.markdown.html`/`.ansi` (js/bun_markdown.ts reads the options): (mode, text, options JSON).
     let st = state.clone();
     t.add("markdown", move |a| {

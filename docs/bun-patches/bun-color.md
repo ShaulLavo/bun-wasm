@@ -1,0 +1,12 @@
+# Bun.color
+
+| Local source | Classification | Upstream source |
+| --- | --- | --- |
+| `crates/bunwasm-build/src/color.rs` parsing, conversion, output formats and `ansi256` | Adapted upstream implementation | Bun `src/css_jsc/color_js.rs` (`js_function_color`, `OUTPUT_COLOR_FORMAT_MAP`, `ansi256`, `zero_if_none`) at `29cd95a2f47461589f2ec47a978b4efccfcef9f4` |
+| `crates/bunwasm-runtime/src/js/bun_color.ts` input handling and argument errors | Adapted upstream implementation | `color_js.rs` (`color_int_from_js`, number, array and object inputs, format validation), same revision |
+| `bun_css` dependency of `bunwasm-build` | Upstream crate, used unchanged | Bun `src/css`, already linked through `bun_bundler` |
+| `Transpiler::color`, `ColorInput`, `ColorValue`, `natives.rs` `color` | Original adapter | None |
+
+`Bun.color(input, format)` parses CSS colors with Bun's own `bun_css` parser and formats them exactly as `color_js.rs` does: `css`, `hex`/`HEX`, `rgb`/`rgba`, `hsl`, `lab`, `number`, the array and object forms, and the ANSI escapes (`ansi-16`, `ansi-256`, `ansi-16m`, and `ansi`, which follows Bun's terminal color depth from `bun_core`). The JavaScript side reads inputs into RGBA the way `js_function_color` does. A number goes through `to_int64` (saturating, NaN is 0) and keeps its low 32 bits, with alpha only above 24 bits. An array-like (an array that is not a proxy, a typed array, or an ArrayBuffer, whose length is its byte length) must have 3 or 4 elements; its length is read once through the intrinsic getters, so an own `length` or a getter that grows the array changes nothing, and its elements are read from the object itself, so an ArrayBuffer's own index properties count; any other object, a function included, is read as `{ r, g, b, a }`. Each channel must be a number, cast to i32 with saturation and clamped to 0 to 255; alpha is any number, 0 and NaN included, times 255, and anything else is opaque. A symbol throws `Cannot convert a symbol to a string`, and any other value is parsed as CSS text. The browser engine cannot detect a proxy from JavaScript, so there a proxy around an array is read as the array. The JSValue builders become a small result enum crossing the `Transpiler` trait. Text that is not a color returns `null`, as in Bun. `Bun.color` is a writable, enumerable, non-configurable data property, as in Bun; a small wrapper loads the implementation on first call.
+
+`tests/fixtures/bun-probe-utils` compares eleven inputs and formats with native Bun on every engine.

@@ -1406,6 +1406,7 @@ dependencies = [
  "bun_bundler",
  "bun_collections",
  "bun_core",
+ "bun_css",
  "bun_dotenv",
  "bun_errno",
  "bun_event_loop",

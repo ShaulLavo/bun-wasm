@@ -17,6 +17,7 @@ bun_alloc = { path = "../../vendor/bun/src/bun_alloc" }
 bun_ast = { path = "../../vendor/bun/src/ast" }
 bun_bundler = { path = "../../vendor/bun/src/bundler" }
 bun_md = { path = "../../vendor/bun/src/md" }
+bun_css = { path = "../../vendor/bun/src/css" }
 bun_collections = { path = "../../vendor/bun/src/collections" }
 bun_core = { path = "../../vendor/bun/src/bun_core" }
 bun_dotenv = { path = "../../vendor/bun/src/dotenv" }

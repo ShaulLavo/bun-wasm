@@ -14,6 +14,7 @@ ok Bun.inspect: {
     },
   },
 }
+ok Bun.inspect escapes: [ "\u001B[0m", "tab\there", "\\u00ab", "\ud800" ]
 ok Bun.inspect.custom: custom!
 ok Bun.inspect.table: ┌───┬───┬───┐
 │   │ a │ b │
@@ -142,6 +143,39 @@ ok Bun.markdown.ansi: Hi
 
 em and code
 
+ok Bun.color: [
+  "#ff0000", "red", [ 0, 255, 0 ], {
+    r: 255,
+    g: 0,
+    b: 0,
+    a: 0.501960813999176,
+  }, "rgba(255, 0, 1, 0.49803922)", "lab(87.81854% -79.27111 80.994606)",
+  "#663399", null, "\u001B[38;5;21m", "\u001B[38;2;0;255;0m", 32896
+]
+ok Bun.color inputs: [
+  [ 3, 4, 5, 0 ], [ 3, 4, 5, 0 ], [ 3, 4, 5, 127 ], [ 3, 4, 5, 255 ], [
+    3, 4, 5, 0
+  ], [ 3, 4, 5, 255 ], [ 255, 255, 0, 255 ], [ 0, 1, 0, 255 ], [ 255, 0, 255,
+    255
+  ], [ 255, 255, 0, 255 ], [ 255, 255, 255, 255 ], [ 0, 0, 0, 255 ], [ 255,
+    255, 255, 255
+  ], [ 255, 255, 255, 255 ], [ 255, 255, 255, 255 ], [ 0, 0, 5, 255 ], [ 0,
+    0, 0, 255
+  ], [ 255, 0, 0, 255 ], [ 0, 0, 0, 255 ], "TypeError: Cannot convert a symbol to a string",
+  [ 1, 2, 3, 255 ], "TypeError: Expected [0] to be a integer for 'color'.", "Error: Expected array length 3 or 4",
+  "TypeError: Expected r to be a integer for 'color'.", [ 1, 2, 3, 255 ], [ 1, 255,
+    0, 255
+  ], "TypeError: Expected r to be a integer for 'color'.", "TypeError: Expected [0] to be a integer for 'color'.",
+  "TypeError: Expected b to be a integer for 'color'.", null, null
+]
+ok Bun.color array lengths: [
+  [ 1, 2, 3, 255 ], [ 10, 2, 3, 255 ], 4, [ 5, 6, 7, 255 ]
+]
+ok Bun.color is assignable: [
+  [ "function", undefined, true, true, false, 2, "color" ], false, "replaced", "#ff0000",
+  false
+]
+ok Bun.inspect escapes outside Latin-1: [ "€\u001b", "é\u001B", "Ā\u001f", "😀\u0001" ]
 ok structuredClone + Bun types: {
   d: 1970-01-01T00:00:00.000Z,
   m: Map(1) {

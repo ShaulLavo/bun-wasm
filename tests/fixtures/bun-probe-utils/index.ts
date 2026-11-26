@@ -28,6 +28,7 @@ await check("Bun.nanoseconds", () => {
   return typeof a === "number" && b >= a;
 });
 await check("Bun.inspect", () => Bun.inspect({ a: 1, nested: { list: [1, "two"], map: new Map([["k", 1]]) } }));
+await check("Bun.inspect escapes", () => Bun.inspect(["\x1b[0m", "tab\there", "\\u00ab", "\ud800"]));
 await check("Bun.inspect.custom", () => Bun.inspect({ [Bun.inspect.custom]: () => "custom!" }));
 await check("Bun.inspect.table", () => Bun.inspect.table([{ a: 1, b: 2 }, { a: 3, b: 4 }]));
 await check("Bun.deepEquals", () => [Bun.deepEquals({ a: [1] }, { a: [1] }), Bun.deepEquals({ a: 1 }, { a: 2 })]);
@@ -206,6 +207,42 @@ await check("Bun.CSRF decoding", () => {
 });
 await check("Bun.markdown.html", () => Bun.markdown.html("# Title\n\n| a | b |\n|---|---|\n| 1 | ~~2~~ |\n\n- [x] done\n", { headings: true }));
 await check("Bun.markdown.ansi", () => Bun.markdown.ansi("# Hi\n\n*em* and `code`", { colors: false }));
+await check("Bun.color", () => [
+  Bun.color("red", "hex"), Bun.color([255, 0, 0], "css"), Bun.color("#00ff00", "[rgb]"), Bun.color(0x80ff0000, "{rgba}"),
+  Bun.color({ r: 300, g: -5, b: 1, a: 0.5 }, "rgba"), Bun.color("hsl(120 100% 50%)", "lab"), Bun.color("rebeccapurple", "HEX"),
+  Bun.color("not a color", "hex"), Bun.color("blue", "ansi-256"), Bun.color("lime", "ansi-16m"), Bun.color("teal", "number"),
+]);
+await check("Bun.color inputs", () => {
+  const attempt = (run: () => unknown) => { try { return run(); } catch (error) { return `${(error as Error).name}: ${(error as Error).message}`; } };
+  const rgba = (input: unknown) => attempt(() => Bun.color(input as string, "[rgba]"));
+  return [
+    rgba({ r: 3, g: 4, b: 5, a: 0 }), rgba({ r: 3, g: 4, b: 5, a: NaN }), rgba({ r: 3, g: 4, b: 5, a: 0.5 }), rgba({ r: 3, g: 4, b: 5, a: "0.5" }),
+    rgba({ r: 3, g: 4, b: 5, a: -1 }), rgba({ r: 3, g: 4, b: 5, a: null }),
+    rgba([2 ** 31, Infinity, -(2 ** 31) - 1]), rgba([NaN, 1.9, -0.5]), rgba([300, -5, 2 ** 32 + 3]), rgba({ r: 2 ** 31, g: Infinity, b: -(2 ** 31) - 1 }),
+    rgba(Infinity), rgba(-Infinity), rgba(2 ** 64), rgba(2 ** 63), rgba(-1), rgba(2 ** 32 + 5), rgba(NaN), rgba(0xff0000 + 0.7), rgba(-(2 ** 70)),
+    attempt(() => Bun.color(Symbol("x") as unknown as string, "hex")), rgba(Object.assign(() => 1, { r: 1, g: 2, b: 3 })),
+    rgba(new ArrayBuffer(3)), rgba(new ArrayBuffer(5)), rgba(new DataView(new ArrayBuffer(3))), rgba(new Uint8Array([1, 2, 3])),
+    rgba(new Float64Array([1.5, 300, -1])), rgba({ length: 3, 0: 1, 1: 2, 2: 3 }), rgba(["1", 2, 3]), rgba({ r: 1, g: 2 }),
+    attempt(() => Bun.color(true as unknown as string, "hex")), attempt(() => Bun.color(5n as unknown as string, "hex")),
+  ];
+});
+await check("Bun.color array lengths", () => {
+  const grows = [1, 2, 3];
+  Object.defineProperty(grows, 0, { get() { grows.push(4); return 10; } });
+  const typed = Object.defineProperty(new Uint8Array([5, 6, 7]), "length", { value: 4 });
+  return [Bun.color(Object.assign(new ArrayBuffer(3), { 0: 1, 1: 2, 2: 3 }), "[rgba]"), Bun.color(grows, "[rgba]"), grows.length, Bun.color(typed, "[rgba]")];
+});
+await check("Bun.color is assignable", () => {
+  const before = Object.getOwnPropertyDescriptor(Bun, "color");
+  const flags = [typeof before?.value, before?.get, before?.writable, before?.enumerable, before?.configurable, Bun.color.length, Bun.color.name];
+  const deleted = Reflect.deleteProperty(Bun, "color");
+  const original = Bun.color;
+  Bun.color = (() => "replaced") as unknown as typeof Bun.color;
+  const seen = Bun.color("red");
+  Bun.color = original;
+  return [flags, deleted, seen, Bun.color("red", "hex"), Object.getOwnPropertyDescriptor(Bun, "color")?.configurable];
+});
+await check("Bun.inspect escapes outside Latin-1", () => Bun.inspect(["\u20ac\x1b", "\xe9\x1b", "\u0100\x7f\x1f", "\u{1F600}\x01"]));
 await check("structuredClone + Bun types", () => structuredClone({ d: new Date(0), m: new Map([[1, 2]]) }));
 await check("fetch data url", async () => await (await fetch("data:text/plain,hi%20bun")).text());
 await check("WebCrypto subtle digest", async () => Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("bun"))).toString("hex").slice(0, 16));
