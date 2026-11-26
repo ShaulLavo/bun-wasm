@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createRegistry, packageFixture, tarEntry } from "./registry.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
-const scratch = mkdtempSync("/work/tmp/bun-wasm-install-commands-");
+const scratch = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "bun-wasm-install-commands-"));
 const children = new Set<ReturnType<typeof spawn>>();
 let registry: Awaited<ReturnType<typeof createRegistry>>;
 let cleaned = false;
@@ -28,11 +29,16 @@ function project(name: string, files: Record<string, string>) {
   }
   return cwd;
 }
+// Extra guest environment for the guest engines, such as a host setting.
+let guestEnv: string[] = [];
 async function run(cwd: string, ...args: string[]) {
   const engine = process.env.INSTALL_ENGINE;
-  const env = { ...process.env, HOME: cwd, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(cwd, "cache") };
+  // Native Bun gets the project as its home. The guest engines get `HOME=/` below and keep the
+  // host's, where the launcher's compiled-module cache lives; a fresh one recompiles the guest.
+  const env = { ...process.env, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(cwd, "cache") };
+  if (engine === "native") env.HOME = cwd;
   const options = ["--wasm", resolve(root, process.env.BUN_WASM || "dist/bun.wasm"), "--dir", `${cwd}::/`,
-    "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache", "--"];
+    "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache"].concat(guestEnv.flatMap(value => ["--env", value]), ["--"]);
   const executable = engine === "native" ? process.env.NATIVE_BUN || "bun" : engine === "browser" ? process.execPath : process.env.BUN_WASM_LAUNCHER!;
   const nativeArgs = args[0] === "x" ? ["x", "--bun"].concat(args.slice(1)) : args;
   // Package scripts run in bash-web's shell guest (scripts/build-bash-web-shell.sh).
@@ -42,7 +48,8 @@ async function run(cwd: string, ...args: string[]) {
   let stdout = "", stderr = "";
   child.stdout?.on("data", bytes => { stdout += bytes; });
   child.stderr?.on("data", bytes => { stderr += bytes; });
-  const timer = setTimeout(() => child.kill("SIGKILL"), 60000);
+  // Hang cap only. A cold JSC guest compile can take about 30 s on loaded CI runners.
+  const timer = setTimeout(() => child.kill("SIGKILL"), 100000);
   try {
     const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
     return { code, stdout, stderr };
@@ -133,6 +140,20 @@ const cases: Record<string, () => Promise<void>> = {
     registry.setOffline(true);
     try { assert.match(await success(cwd, "x", "--no-install", "@fixture/string@1.0.0"), /string-bin/); }
     finally { registry.setOffline(false); }
+  },
+  async cacheOffKeepsBunx() {
+    // A host without an install cache still runs `bun x` from its isolated installation,
+    // as native Bun does; only archive and packument cache files are not written.
+    if (process.env.INSTALL_ENGINE === "native") return;
+    const cwd = project("cache-off", { "package.json": "{}" });
+    guestEnv = ["BUN_WASM_INSTALL_CACHE=off"];
+    try {
+      assert.match(await success(cwd, "x", "@fixture/string@1.0.0"), /string-bin/);
+      assert.deepEqual(readdirSync(join(cwd, "cache")), ["bunx"], "archive or packument cache files were written");
+      registry.setOffline(true);
+      try { assert.match(await success(cwd, "x", "--no-install", "@fixture/string@1.0.0"), /string-bin/); }
+      finally { registry.setOffline(false); }
+    } finally { guestEnv = []; }
   },
 };
 try {

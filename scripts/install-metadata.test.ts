@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installFixture as install } from "./install-fixture-command";
@@ -84,6 +84,30 @@ test("tarball downloads overlap and warm installs request nothing", async () => 
     const before = registry.trace.requests.length;
     await install(directory, registry.base, ["--frozen-lockfile"], 0, true);
     assert.equal(registry.trace.requests.length, before, "no-op install requested metadata or archives");
+  } finally {
+    await registry.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 60000);
+
+test("with the install cache off, a reinstall fetches every archive again and installs", async () => {
+  // As the browser page hosts run it, but with no browser cache in front of the registry.
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-cache-off-"));
+  const registry = await fixture("tarball");
+  const off = ["BUN_WASM_INSTALL_CACHE=off"];
+  try {
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "fixture", dependencies: registry.dependencies }));
+    await install(directory, registry.base, [], 0, true, off);
+    assert.ok(!existsSync(join(directory, "cache")), "the install cache was written");
+    const archives = () => registry.trace.requests.filter(path => path.startsWith("archives/")).length;
+    const first = archives();
+    rmSync(join(directory, "node_modules"), { recursive: true });
+    await install(directory, registry.base, ["--frozen-lockfile"], 0, true, off);
+    assert.equal(archives() - first, first, "every archive was fetched again");
+    for (const name of Object.keys(registry.dependencies)) {
+      assert.equal(JSON.parse(readFileSync(join(directory, "node_modules", name, "package.json"), "utf8")).name, name);
+    }
+    assert.ok(!existsSync(join(directory, "cache")), "the install cache was written");
   } finally {
     await registry.close();
     rmSync(directory, { recursive: true, force: true });
