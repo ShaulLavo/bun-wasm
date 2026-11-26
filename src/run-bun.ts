@@ -13,10 +13,13 @@ export interface RunBunOptions {
   readonly env?: Readonly<Record<string, string>>;
   /** Standard input. Omitted, the process reads end of file. A stream stays open until it ends. */
   readonly stdin?: string | Uint8Array | ReadableStream<Uint8Array>;
-  /** Receives each stdout chunk as it arrives, including bytes past the capture limit. */
-  readonly onStdout?: (chunk: Uint8Array) => void;
-  /** Receives each stderr chunk as it arrives, including bytes past the capture limit. */
-  readonly onStderr?: (chunk: Uint8Array) => void;
+  /**
+   * Receives each stdout chunk as it arrives, including bytes past the capture limit. It must
+   * return synchronously: a callback that throws or returns a promise fails the run.
+   */
+  readonly onStdout?: CommandOutputOptions["onChunk"];
+  /** Receives each stderr chunk as it arrives, like `onStdout`. */
+  readonly onStderr?: CommandOutputOptions["onChunk"];
   /** Bytes of each stream kept in the result. Defaults to 1 MiB; 0 keeps none. */
   readonly outputLimitBytes?: number;
   /** `"join"` (default) waits for children that outlive Bun; `"stop"` stops them when Bun exits. */
@@ -56,9 +59,9 @@ export interface BunProcess {
 const DEFAULT_EXECUTABLE = `${ENGINE_BIN.browser}/bun`;
 const DEFAULT_OUTPUT_LIMIT = 1024 * 1024;
 
-function output(limitBytes: number, onChunk?: (chunk: Uint8Array) => void): CommandOutputOptions {
-  if (!onChunk) return { limitBytes };
-  return { limitBytes, onChunk: chunk => { onChunk(chunk); return undefined; } };
+/** Waffle checks the callback itself, so it is passed through as given. */
+function output(limitBytes: number, onChunk: CommandOutputOptions["onChunk"]): CommandOutputOptions {
+  return onChunk ? { limitBytes, onChunk } : { limitBytes };
 }
 
 function runResult(result: CommandResult): BunRunResult {
