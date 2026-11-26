@@ -328,16 +328,38 @@
         native.fsWatchClose(id);
         return;
       }
-      flushBacklog(shared);
-      if (shared.closed) return;
-      dispatchPayload(shared, typeof chunk === "number" ? chunk : decode(chunk), ++shared.seq);
+      const payload = typeof chunk === "number" ? chunk : decode(chunk);
+      if (shared.backlog.length > 0) {
+        const records = typeof payload === "number" ? 1 : Math.max(1, payload.length);
+        const bytes = typeof chunk === "number" ? 8 : chunk.byteLength;
+        shared.backlog.push({ seq: ++shared.seq, payload, records, bytes });
+        shared.backlogRecords += records;
+        shared.backlogBytes += bytes;
+        backlogCount++;
+        flushBacklog(shared);
+        return;
+      }
+      dispatchPayload(shared, payload, ++shared.seq);
     }
 
     /** An unscoped provider error (no watch id) fails every watch. */
     function failAll(errno: number) {
+      let hasError = false;
+      let firstError: unknown;
       for (const shared of Array.from(sharedById.values())) {
-        if (!shared.closed) dispatchPayload(shared, errno, ++shared.seq);
+        if (shared.closed) continue;
+        try {
+          dispatchPayload(shared, errno, ++shared.seq);
+        } catch (error) {
+          if (!hasError) {
+            hasError = true;
+            firstError = error;
+          } else {
+            internal.nextTick(() => { throw error; });
+          }
+        }
       }
+      if (hasError) throw firstError;
     }
 
     // A listener that writes inside a watched tree refills the drain; yield to other I/O after

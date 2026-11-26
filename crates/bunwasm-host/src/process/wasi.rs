@@ -1066,6 +1066,9 @@ fn install_watches(
             else {
                 return Ok(FAULT);
             };
+            if overlaps(&buffer, &output) {
+                return Ok(INVAL);
+            }
             let (errno, written) = match caller.data_mut().watches.read(id as u32, buffer.len()) {
                 Read::Records(bytes) => {
                     memory

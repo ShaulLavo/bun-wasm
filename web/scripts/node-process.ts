@@ -260,7 +260,10 @@ function watchImports(memory: () => WebAssembly.Memory, descriptors: DescriptorT
       if (!entry) return EBADF;
       return entry.resource.kind === "file" || entry.resource.kind === "directory" ? ENOTSUP : EINVAL;
     }),
-    watch_read: guard((_id, buf, len, out) => fits([buf!, len! >>> 0], [out!, 4]) ? EBADF : EFAULT),
+    watch_read: guard((_id, buf, len, out) => {
+      if (!fits([buf!, len! >>> 0], [out!, 4])) return EFAULT;
+      return overlap([buf!, len! >>> 0], [out!, 4]) ? EINVAL : EBADF;
+    }),
     // No id ever exists, so nothing is ready: EAGAIN with out_id 0 once the spans are valid.
     watch_next: guard((outId, buf, len, out) => {
       if (!fits([outId!, 4], [buf!, len! >>> 0], [out!, 4])) return EFAULT;

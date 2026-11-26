@@ -779,12 +779,17 @@ test("writes under 1,500 watches reach their listeners through a few batched wat
   world.internal.native.fsWatchRead = () => { throw new Error("the hub reads through fsWatchNext"); };
   world.internal.native.fsWatchNext = () => { calls.next++; return next(); };
   world.internal.native.fsWatchClose = (id: number) => table.close(id);
-  const seen = new Set<string>();
-  const watchers = Array.from(handles.keys(), path => world.module.watch(path, (_type, name) => seen.add(`${path}/${name}`)));
+  const fired = new Set<string>();
+  const files = new Set<string>();
+  const watchers = Array.from(handles.keys(), path => world.module.watch(path, (type, name) => {
+    fired.add(path);
+    if (type === "rename") files.add(`${path}/${name}`);
+  }));
   try {
     for (const index of [3, 700, 1499]) backend.execute("writeFile", [`/app/d${index}/page.ts`, false], new Uint8Array([1]));
     expect(world.pump()).toBe(true);
-    expect(Array.from(seen).toSorted()).toEqual(["/app/d1499/page.ts", "/app/d3/page.ts", "/app/d700/page.ts"]);
+    expect(Array.from(fired).toSorted()).toEqual(["/app/d1499", "/app/d3", "/app/d700"]);
+    expect(Array.from(files).toSorted()).toEqual(["/app/d1499/page.ts", "/app/d3/page.ts", "/app/d700/page.ts"]);
     expect(calls.read).toBe(0);
     expect(calls.drain).toBeGreaterThan(0);
     expect(calls.next).toBeLessThan(10);
@@ -803,4 +808,19 @@ test("an unscoped watch_next error fails every watch, and an unknown id is relea
   expect(errors).toEqual(["/a EIO", "/b EIO"]);
   expect(world.pending()).toBe(0);
   for (const watcher of watchers) watcher.close();
+});
+
+test("an unhandled unscoped watch_next error still fails and closes remaining watches", () => {
+  const world = fixture();
+  const errors: string[] = [];
+  const first = world.module.watch("/a");
+  const second = world.module.watch("/b").on("error", (error: { code: string }) => errors.push(error.code));
+  world.internal.native.fsWatchReady = () => true;
+  world.internal.native.fsWatchNext = () => -29;
+  expect(() => world.pump()).toThrow("EIO");
+  expect(world.closed.toSorted()).toEqual([40, 41]);
+  expect(errors).toEqual(["EIO"]);
+  expect(world.pending()).toBe(0);
+  first.close();
+  second.close();
 });

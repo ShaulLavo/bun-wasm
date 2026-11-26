@@ -132,10 +132,10 @@ unqualified: no macOS run has exercised it. A WASI-level test also
 pins Wasmtime's `ino` to the host identity, so a Wasmtime change to it fails the tests. Each delivered
 notification bumps the network notification that `Slot::Poll` waits on, so a native guest wakes on the commit like a browser guest. Records,
 coalescing, the 128-record bound, overflow, end of stream and the errnos follow the Waffle ABI.
-Its `watch_next` (original) validates the three output spans as Waffle does (EFAULT, then EINVAL
-for overlap), clears the id word, and reads the open watches in id order starting after the one
-it last reported, so a busy watch can't starve the others; it returns `EAGAIN` when none has
-records, an end or a short first record.
+Its `watch_read` and `watch_next` validate their output spans as Waffle 0.0.155 does (EFAULT, then
+EINVAL for overlap). `watch_next` (original) clears the id word and reads the open watches in id
+order starting after the one it last reported, so a busy watch can't starve the others; it returns
+`EAGAIN` when none has records, an end or a short first record.
 `notify` reports a new directory before watching it and never reports entries that already
 exist inside it. So when a recursive watch drains a directory create, it walks that
 directory and reports each entry as a rename, as Node's recursive watcher does. A native
@@ -158,7 +158,8 @@ filesystem, with no Waffle filesystem service and no change source. It answers t
 checks the output range (EFAULT), the flags (EINVAL), the guest descriptor in the host's own
 descriptor table (EBADF) and its kind (EINVAL for pipes and terminals). A valid file or
 directory then reports ENOTSUP and writes no id. No id ever exists, so `watch_read` reports
-EFAULT for an out-of-range buffer and otherwise EBADF, and `watch_close` reports EBADF.
+EFAULT for an out-of-range buffer, EINVAL for overlapping buffer/length spans, and otherwise EBADF,
+and `watch_close` reports EBADF.
 `fs.watch` on this host throws `ENOTSUP`; there is no polling fallback. Local change: it
 validates against the Node host's `DescriptorTable` instead of `Wasi.descriptors`, because
 Waffle's `Wasi` methods are private and bound to its own table.

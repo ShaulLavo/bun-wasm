@@ -83,7 +83,7 @@ try {
   };
   assert.deepEqual([open(3, 0), open(3, 1), open(file, 0)], [ENOTSUP, ENOTSUP, ENOTSUP]);
   assert.deepEqual([open(3, 2), open(pipe, 0), open(99, 0), open(3, 0, PAGE - 2)], [EINVAL, EINVAL, EBADF, EFAULT]);
-  assert.deepEqual([guestFs.read(1, 512, 64, 128), guestFs.read(1, PAGE - 8, 64, 128), guestFs.read(1, 512, 64, PAGE - 2)], [EBADF, EFAULT, EFAULT]);
+  assert.deepEqual([guestFs.read(1, 512, 64, 128), guestFs.read(1, PAGE - 8, 64, 128), guestFs.read(1, 512, 64, PAGE - 2), guestFs.read(1, 512, 64, 520)], [EBADF, EFAULT, EFAULT, EINVAL]);
   assert.equal(guestFs.close(1), EBADF);
   // watch_next validates its spans, then reports nothing ready with out_id 0.
   const next = imports.runtime_fs!.watch_next as (outId: number, buf: number, len: number, out: number) => number;
