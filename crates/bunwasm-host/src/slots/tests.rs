@@ -1622,8 +1622,10 @@ impl Drop for Scratch {
     }
 }
 
+type WatchRecord = (u8, Option<String>);
+
 /// Reads one `runtime_fs.watch_read` result into (type, name) pairs.
-fn watch_records(f: &mut Fixture, id: i32) -> Result<Vec<(u8, Option<String>)>, i32> {
+fn watch_records(f: &mut Fixture, id: i32) -> Result<Vec<WatchRecord>, i32> {
     let errno = f.call("runtime_fs", "watch_read", (id, 4096, 2048, 64));
     if errno != 0 {
         return Err(errno);
@@ -1632,7 +1634,7 @@ fn watch_records(f: &mut Fixture, id: i32) -> Result<Vec<(u8, Option<String>)>, 
 }
 
 /// Reads one `runtime_fs.watch_next` result: the ready id and its records, or (errno, id).
-fn next_records(f: &mut Fixture) -> Result<(i32, Vec<(u8, Option<String>)>), (i32, i32)> {
+fn next_records(f: &mut Fixture) -> Result<(i32, Vec<WatchRecord>), (i32, i32)> {
     let errno = f.call("runtime_fs", "watch_next", (60, 4096, 2048, 64));
     let id = f.word(60);
     if errno != 0 {
@@ -1644,7 +1646,7 @@ fn next_records(f: &mut Fixture) -> Result<(i32, Vec<(u8, Option<String>)>), (i3
     ))
 }
 
-fn decode_records(mut bytes: Vec<u8>) -> Vec<(u8, Option<String>)> {
+fn decode_records(mut bytes: Vec<u8>) -> Vec<WatchRecord> {
     let mut records = Vec::new();
     while !bytes.is_empty() {
         let length = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
