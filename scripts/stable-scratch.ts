@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 // sccache keys each Rust compile by its working directory and every CARGO_* variable, including
 // CARGO_TARGET_DIR. A random mkdtemp target therefore never hits the compiler cache, so checks
-// that run Cargo in CI (RUNNER_TEMP is set, one job per runner) use one fixed, emptied directory
+// that run Cargo in GitHub Actions (RUNNER_TEMP is set, one job per runner) use one fixed, emptied directory
 // per check name instead. Do not run two copies of the same check at once in one runner temp
 // directory.
 //
@@ -14,7 +14,8 @@ import { join } from "node:path";
 export function stableScratch(name: string): string {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`Invalid stable scratch name: ${name}`);
   const runnerTemp = process.env.RUNNER_TEMP;
-  if (runnerTemp) {
+  // RUNNER_TEMP alone is not proof of CI: a developer can export it locally.
+  if (runnerTemp && process.env.GITHUB_ACTIONS === "true") {
     const scratch = join(runnerTemp, "bun-wasm-stable-scratch", name);
     rmSync(scratch, { recursive: true, force: true });
     mkdirSync(scratch, { recursive: true });
