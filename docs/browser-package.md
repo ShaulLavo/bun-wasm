@@ -12,17 +12,18 @@ Exports are explicit:
 
 - `bun-wasm`: adapter installation, engine types, verified guest loader, and asset metadata.
 - `bun-wasm/worker`: module-worker entry; bundle it as a worker, never import it into the page.
+- `bun-wasm/notification-worker`: helper worker that wakes `fs.watch` on filesystem commits.
 - `bun-wasm/asset`: guest metadata and the verified loader without any worker or demo code.
 
 ### Installation and ownership
 
 Registered programs launch ordinary Waffle processes through the generic `runtime_proc` bridge.
-Supply the bundler-produced worker URL. The default browser engine loads the published immutable
-guest through `BUN_WASM_ASSET`, verifying its decompressed size and SHA-256 before compilation.
-No module or asset override is needed for that default. QuickJS and JSC are explicit opt-ins and
-require their matching compiled module or verified asset descriptor; the browser descriptor must
-not be used for them. Guest bytes remain outside the package. No legacy Bun-specific process
-controller is used.
+Supply the bundler-produced worker URLs. The default `browser` engine loads the published immutable
+guest through `BUN_WASM_ASSET`, verifying its uncompressed size and SHA-256 before compilation.
+No `module` or `asset` override is needed for that default. QuickJS, JSC and the experimental
+SpiderMonkey engine are explicit opt-ins and require their matching compiled module or verified
+paired asset descriptor; the browser descriptor must not be used for them. Guest bytes remain
+outside the package. No legacy Bun-specific process controller is used.
 
 ```ts
 import { installBunAdapters } from "bun-wasm";
@@ -33,13 +34,13 @@ import notificationWorkerUrl from "bun-wasm/notification-worker?worker&url";
 const installation = await installBunAdapters(runtime, {
   workerUrl: bunWorkerUrl,
   notificationWorkerUrl, // one helper per Bun process; wakes fs.watch on filesystem commits
-  engine: "browser", // default; quickjs/jsc need their matching guest module or descriptor
+  engine: "browser", // default; quickjs, jsc and spidermonkey need their matching paired guest
   // module: offlineCompiledModule,
   // wasmUrl: "https://your-immutable-store/<sha256>/bun.wasm.gz",
-  // asset: { url, sha256, bytes },
+  // asset: { kind: "single", core: { url: "/bun-browser.wasm", sha256, bytes } },
 });
 
-// Registers bun:quickjs, bun:jsc, bun:browser and the selected engine at its real bun/node paths.
+// Registers bun:quickjs, bun:jsc, bun:browser (plus bun:spidermonkey when selected) and the selected engine's executable paths.
 // Optional executables: ["/opt/bun/browser"] chooses other paths; [] leaves programs caller-owned.
 // Ordinary Waffle spawn requests select these registered executable paths.
 
@@ -48,10 +49,11 @@ installation.dispose(); // idempotent; unregisters only this installation's adap
 // Installing again on the same Runtime works. A second simultaneous installation is rejected.
 ```
 
-Executable locations are defined by `src/executable-paths.ts`: browser uses `/bin/{bun,node}`,
-QuickJS uses `/opt/bun/quickjs/bin/{bun,node}`, and JSC uses `/opt/bun/jsc/bin/{bun,node}`.
-Each install defaults to the selected engine's two files; `executables` overrides them. The demo
-registers all six files once and prepends its root engine's directory to inherited `PATH`.
+Executable locations are defined by `src/executable-paths.ts`: browser uses `/bin/{bun,node,nodejs}`,
+QuickJS uses `/opt/bun/quickjs/bin/{bun,node,nodejs}`, JSC uses `/opt/bun/jsc/bin/{bun,node,nodejs}`,
+and opt-in SpiderMonkey uses `/opt/bun/spidermonkey/bin/{bun,node,nodejs}`.
+Each install defaults to the selected engine's three files; `executables` overrides them. The demo
+registers each configured engine's files and prepends its root engine's directory to inherited `PATH`.
 Bun.spawn and Bun.which share live executable-access lookup: slash-containing names bypass PATH,
 entries are searched in order, and an empty entry means cwd. Absolute paths always mean exactly
 that registered program. A Preview1 root uses its supplied module directly, without an implicit
@@ -183,19 +185,20 @@ bun test ./tests/package/*.test.ts
 bun run build
 ```
 
-To repeat the public default's real-process acceptance after rebuilding the matching browser guest,
-explicitly opt into network downloads. The gate compares the build receipt with the descriptor and
-checks that each real guest scenario fetches the public immutable URL, never the local artifact.
-Its generic byte-fixture control stays artifact-free. The inherited-fd controls use a real
-filesystem file: the external root consumes its prefix, the child reads the shared cursor at fd4,
-and fd3 remains the inherited output descriptor. Browser profiles, listener and scratch bundles
-are removed on exit.
+To run the real-process acceptance suite against a locally rebuilt matching browser guest, pass its
+absolute artifact path. Its generic byte-fixture control stays artifact-free. The inherited-fd
+controls use a real filesystem file: the external root consumes its prefix, the child reads the
+shared cursor at fd4, and fd3 remains the inherited output descriptor. Browser profiles, listener
+and scratch bundles are removed on exit.
 
 ```sh
 BUN_WASM_RUNTIME_PROC_ARTIFACT="$PWD/dist/bun-browser.wasm" \
-BUN_WASM_RUNTIME_PROC_PUBLISHED_DEFAULT=1 \
   bun web/tests/bun-runtime-proc-browser.ts chromium firefox webkit
 ```
+
+Setting `BUN_WASM_RUNTIME_PROC_PUBLISHED_DEFAULT=1` checks that the local artifact receipt matches
+`BUN_WASM_ASSET` by byte count and SHA-256, that real guest scenarios fetch `BUN_WASM_ASSET`, and
+that `generic-control` and `start-failed` make zero guest requests.
 
 ### Required full-build interruption acceptance
 
