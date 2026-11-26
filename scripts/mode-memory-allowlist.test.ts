@@ -179,18 +179,24 @@ function inferFunctionReturnKind(fn: ts.FunctionLikeDeclaration): ReceiverKind {
   return inferred;
 }
 
+function inferCallableReturnKind(type: ts.TypeNode | undefined, initializer: ts.Expression | undefined): ReceiverKind {
+  const fromType = classifyFunctionTypeReturn(type);
+  if (fromType !== "unknown") return fromType;
+  const init = initializer ? unwrap(initializer) : undefined;
+  if (init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init))) {
+    return inferFunctionReturnKind(init);
+  }
+  return "unknown";
+}
+
 function registerVariableStatement(env: LexicalEnv, stmt: ts.VariableStatement): void {
   const isConst = Boolean(stmt.declarationList.flags & ts.NodeFlags.Const);
   for (const decl of stmt.declarationList.declarations) {
     if (!ts.isIdentifier(decl.name)) continue;
     const name = decl.name.text;
     addBinding(env, name, decl.initializer, isConst, classifyTypeNode(decl.type));
-    const fnTypeRet = classifyFunctionTypeReturn(decl.type);
-    if (fnTypeRet !== "unknown") env.fnReturns.set(name, fnTypeRet);
-    if (decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer))) {
-      const ret = inferFunctionReturnKind(decl.initializer);
-      if (ret !== "unknown") env.fnReturns.set(name, ret);
-    }
+    const ret = inferCallableReturnKind(decl.type, decl.initializer);
+    if (ret !== "unknown") env.fnReturns.set(name, ret);
   }
 }
 
@@ -222,8 +228,8 @@ function registerParameters(env: LexicalEnv, params: readonly ts.ParameterDeclar
   for (const param of params) {
     if (!ts.isIdentifier(param.name)) continue;
     addBinding(env, param.name.text, param.initializer, false, classifyTypeNode(param.type));
-    const fnTypeRet = classifyFunctionTypeReturn(param.type);
-    if (fnTypeRet !== "unknown") env.fnReturns.set(param.name.text, fnTypeRet);
+    const ret = inferCallableReturnKind(param.type, param.initializer);
+    if (ret !== "unknown") env.fnReturns.set(param.name.text, ret);
   }
 }
 
@@ -621,6 +627,7 @@ test("mode=memory detector catches static, dynamic, split, spread, computed, and
   expect(findModeMemoryUses("probe.ts", 'switch (kind) { case 1: const p = new URLSearchParams(); p.set("mode", "memory"); break; }')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'function makeHeaders() { return new Headers(); }\nfunction inner(makeHeaders: () => unknown) { const params = makeHeaders(); params.set("mode", "memory"); }')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'function makeHeaders() { return new Headers(); }\nfunction inner(makeHeaders: () => URLSearchParams) { const q = makeHeaders(); q.set("mode", "memory"); }')).toHaveLength(1);
+  expect(findModeMemoryUses("probe.ts", 'function makeParams() { return new URLSearchParams(); }\nfunction probe(makeParams = () => new URLSearchParams()) { makeParams().set("mode", "memory"); }')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'new URLSearchParams({ mode: "memory" });')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'new URLSearchParams({ ["mode"]: "memory" });')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'const options = { mode: "memory" }; new URLSearchParams(options);')).toHaveLength(1);
