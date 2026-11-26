@@ -105,9 +105,10 @@ impl Module {
 /// name appears nowhere in the module's own tokens, strings or comments, every printed
 /// occurrence of it is one the record put there.
 ///
-/// Most fresh names start with [`RESERVED`] and are ASCII identifiers. Such a name occurs in
-/// the text only inside the identifier run that starts at an occurrence of the prefix, so
-/// those runs are collected once, sorted and deduplicated, the first time one is needed.
+/// Most fresh names start with [`RESERVED`] and are short ASCII identifiers. Such a name
+/// occurs in the text only inside the identifier run that starts at an occurrence of the
+/// prefix, so the first [`INDEXED`] bytes of those runs are collected once, sorted and
+/// deduplicated, the first time one is needed. Longer names search the text.
 struct Names<'source> {
     taken: HashSet<String>,
     source: &'source str,
@@ -117,6 +118,10 @@ struct Names<'source> {
 
 /// The prefix of the record's own generated names.
 const RESERVED: &str = "__bunwasm";
+
+/// How much of each identifier run [`Names`] indexes: every generated name is shorter, and
+/// it bounds the scan and the comparisons per occurrence, also when runs repeat back to back.
+const INDEXED: usize = 64;
 
 /// The distinct identifier runs starting with [`RESERVED`] in the source and, when it
 /// differs, in its decoded spelling, as sorted byte ranges.
@@ -129,13 +134,15 @@ fn identifier_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
 }
 
-/// Sorted, distinct ranges of the identifier runs that start at each [`RESERVED`] in `text`.
+/// Sorted, distinct ranges of the first [`INDEXED`] bytes of the identifier runs that start at
+/// each [`RESERVED`] in `text`.
 fn reserved_runs(text: &str) -> Vec<(usize, usize)> {
     let mut runs: Vec<(usize, usize)> = text
         .match_indices(RESERVED)
         .map(|(start, _)| {
             let length = text.as_bytes()[start..]
                 .iter()
+                .take(INDEXED)
                 .take_while(|&&byte| identifier_byte(byte))
                 .count();
             (start, start + length)
@@ -184,7 +191,8 @@ impl<'source> Names<'source> {
 
     /// Whether `name` is a substring of the source or its decoded spelling.
     fn occurs(&self, name: &str) -> bool {
-        if !name.starts_with(RESERVED) || !name.bytes().all(identifier_byte) {
+        let indexed = name.len() <= INDEXED && name.bytes().all(identifier_byte);
+        if !name.starts_with(RESERVED) || !indexed {
             return self.source.contains(name) || self.decoded.contains(name);
         }
         let reserved = self.reserved.get_or_init(|| Reserved {
@@ -1452,6 +1460,37 @@ mod source_memory_tests {
         let mut metadata = Names::with_taken(std::collections::HashSet::new(), &comment);
         assert_eq!(metadata.fresh("$Bun_import_meta"), "$Bun_import_meta");
         assert!(metadata.reserved.get().is_none());
+    }
+
+    #[test]
+    fn back_to_back_prefixes_index_bounded_runs() {
+        use super::{INDEXED, RESERVED};
+        let arena = Arena::new();
+        let ast = js_ast::Ast::empty_in(&arena);
+        let mut source = RESERVED.repeat(5_000);
+        source.push_str("_ns0_0");
+        let mut names = Names::new(&ast, &source);
+        assert_eq!(names.fresh("__bunwasm_m"), "__bunwasm_m");
+        assert_eq!(names.fresh("__bunwasm_ns0_0"), "__bunwasm_ns0_0$1");
+        let index = names.reserved.get().expect("indexed");
+        // Each occurrence indexes at most INDEXED bytes, and the repeated runs collapse into a
+        // few distinct spellings, so the work per occurrence is bounded.
+        assert!(
+            index
+                .source
+                .iter()
+                .all(|&(start, end)| end - start <= INDEXED)
+        );
+        assert!(
+            index.source.len() <= INDEXED / RESERVED.len() + 2,
+            "{}",
+            index.source.len()
+        );
+        // A name longer than the indexed prefix searches the text.
+        let long = format!("{}x", RESERVED.repeat(8));
+        let spelled = format!("{long} {RESERVED}");
+        let mut text = Names::new(&ast, &spelled);
+        assert_eq!(text.fresh(&long), format!("{long}$1"));
     }
 
     #[test]
