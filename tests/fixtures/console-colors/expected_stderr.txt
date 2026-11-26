@@ -1,0 +1,27 @@
+[0m[31m{
+  [0merr[2m:[0m [0m[33mtrue[0m[0m[2m,[0m
+} e[0m
+[0m[31ma single string[0m
+[0m[33m2[0m
+{
+  [0mwarn[2m:[0m [0m[33mtrue[0m[0m[2m,[0m
+} w
+[0m[31masserted[0m
+[0m[1m12 |[0m console[0m[3m[1m.table[0m([{ a: [0m[33m1[0m, b: [0m[32m"two"[0m }, { a: [0m[33m3[0m, b: [0m[32m"four"[0m }])[0m[2m;[0m
+[0m[1m13 |[0m console[0m[3m[1m.dir[0m({ dir: [[0m[33m1[0m, [0m[33m2[0m] })[0m[2m;[0m
+[0m[1m14 |[0m console[0m[3m[1m.dir[0m({ plain: [0m[33m1[0m }, { colors: [0m[33mfalse[0m })[0m[2m;[0m
+[0m[1m15 |[0m console[0m[3m[1m.assert[0m([0m[33mfalse[0m, [0m[32m"asserted"[0m)[0m[2m;[0m
+[0m[1m16 |[0m [0m[35mfunction[0m inner() {
+[0m[1m17 |[0m   [0m[35mconst[0m error = [0m[35mnew[0m [0m[1mRangeError[0m([0m[32m"bad range"[0m)[0m[2m;[0m
+                         [31m[1m^[0m
+[0m[31mRangeError[0m[2m:[0m [1mbad range[0m
+ extra[0m[2m:[0m {
+  [0mn[2m:[0m [0m[33m1[0m[0m[2m,[0m
+  [0ms[2m:[0m [0m[32m[0m[32m"two"[0m[0m[0m[2m,[0m
+}[0m[2m,[0m
+  code[0m[2m:[0m [32m"ERR_X"[0m
+
+[0m      [2mat [0m[0m[1m[3minner[0m[2m ([0m[0m[36m/index.ts[0m[2m:[0m[33m17[0m[2m:[33m21[0m[2m)[0m
+[0m      [2mat [0m[0m[36m/index.ts[0m[2m:[0m[33m21[0m[2m:[33m1[0m
+[0m
+[2mBun vVERSION (PLATFORM)[0m

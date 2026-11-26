@@ -1,12 +1,12 @@
 {
   "repository": "https://github.com/oven-sh/bun",
-  "commit": "9510e74152073d850a18758ca41114d8f214ffa6",
+  "commit": "a7733435cf40429e3b35c36072769df2052b80f1",
   "files": [
     {
       "path": "src/js/node/tls.ts",
-      "blob": "0b7a288cd183e9f82bd50297bfefe2ac170bcfad",
-      "sha256": "21ab39bc77fc6258d4e9809aabc38791139c06a304f170cd359d1bafed3e269d",
-      "bytes": 69523,
+      "blob": "8d08f24e8d1b33dc18bf31516771a54ad3545265",
+      "sha256": "4dd6017064eb98a0be07b4406bbbfd6aa46a6c7073db081d7b90eaa24e5a262b",
+      "bytes": 69496,
       "classification": "ported identity helpers only"
     },
     {
@@ -18,9 +18,9 @@
     },
     {
       "path": "src/js/internal/tls.ts",
-      "blob": "924c7ac3577ca644965c4f51a97e2a7ddd634752",
-      "sha256": "e872d4be583c56c6f58959ad8e1fa686e098bf4010f1b1abb4026ffdc96c0ee2",
-      "bytes": 18732,
+      "blob": "a16c1b31c4950e6d816a2e1b45cfb55d1d22ee5d",
+      "sha256": "408e85206b62a884457eb155978e16e95decad59a63ee8ca857969844154e1db",
+      "bytes": 19451,
       "classification": "deferred, not copied"
     },
     {
@@ -39,16 +39,16 @@
     },
     {
       "path": "LICENSE.md",
-      "blob": "7d8765cceccec1bc89752468ad7810c2db3321c3",
-      "sha256": "5dd765c71f5302163a58d2985f43565f41e3bb5546934492b178a23835820cea",
-      "bytes": 14502,
+      "blob": "3e1b37f1c940c9f37da76d82a38b1246b9952061",
+      "sha256": "362fe32c954ec829240bd7429c53d705eef08c6bfa45ffc2d02005f857cba4dd",
+      "bytes": 14778,
       "classification": "read only, no copied implementation"
     },
     {
       "path": "packages/bun-usockets/root_certs.der",
-      "blob": "b1252b28fe33dfdc6e32730db437a1f07cc6299b",
-      "sha256": "9c211f519356eff61365ff890856135b1b8ee298775b144ce6089782ae603f90",
-      "bytes": 129635,
+      "blob": "98710962de60450a84c29cf2e9cba460bd91843b",
+      "sha256": "8f6217fc19d21cbc22c06064283f59a2a1004408813e919d2ceac8987d404ea3",
+      "bytes": 127583,
       "classification": "unchanged, native lane owns trust data"
     },
     {

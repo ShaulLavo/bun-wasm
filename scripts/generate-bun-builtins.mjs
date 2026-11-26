@@ -16,7 +16,7 @@ const revision = readFileSync(join(root, "scripts/sync-bun.sh"), "utf8").match(/
 if (!revision) throw new Error("Missing pinned Bun source revision");
 const hash = text => createHash("sha256").update(text).digest("hex");
 const blob = readFileSync(join(build, "codegen/InternalModuleRegistryConstants.bin"));
-if (blob.subarray(0, 8).toString() !== "BUNBLTNS" || blob.readUInt32LE(8) !== 1) {
+if (blob.subarray(0, 8).toString() !== "BUNBLTNS" || blob.readUInt32LE(8) !== 2) {
   throw new Error("Unsupported Bun builtin registry format");
 }
 const count = blob.readUInt32LE(16);

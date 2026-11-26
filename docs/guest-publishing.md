@@ -1,6 +1,6 @@
 # Bun guest artifact publishing
 
-The package's matching `bun.wasm` guest is published as an immutable, hash-addressed R2 object. The public descriptor is generated only after an upload is read back through the custom domain and verified.
+The package's matching browser guest (`dist/bun-browser.wasm`, `kind: "single"`) is published as an immutable, hash-addressed R2 object under `<sha256>/bun.wasm.gz`. The public descriptor is generated only after an upload is read back through the custom domain and verified.
 
 ## Durable Cloudflare resources
 
@@ -76,15 +76,25 @@ cf auth whoami >/dev/null
 Generate a descriptor without publishing:
 
 ```sh
-bun scripts/guest-artifact.ts /path/to/bun.wasm --output src/guest-asset.generated.ts
+bun scripts/guest-artifact.ts dist/bun-browser.wasm --output src/guest-asset.generated.ts
 ```
 
-Publish a matching guest and generate its descriptor after verification:
+Publish the matching browser guest (for example after updating `vendor/bun`) and regenerate `src/guest-asset.generated.ts` in one command after building or staging all three matching engine builds in `dist/` (or pass `--dist /path/to/dist`):
 
 ```sh
-CLOUDFLARE_ACCOUNT_ID=<account-id> \
+export CLOUDFLARE_ACCOUNT_ID="your-account-id"
+cf auth whoami >/dev/null && \
 CLOUDFLARE_API_TOKEN="$(python3 -c "import json; print(json.load(open('$HOME/.config/cloudflare/config/default.json'))['oauth_token'])")" \
-bun scripts/publish-guest.ts /path/to/bun.wasm --output src/guest-asset.generated.ts
+bun scripts/publish-guest.ts dist/bun-browser.wasm --output src/guest-asset.generated.ts
+```
+
+Publish a standalone single-module WASM artifact (such as `shell-engine.wasm` for `bash-web`) to `<sha256>/<name>.gz` with the same metadata, read-back, and CORS verification. Reserved Bun guest names, Bun guest/engine WASM signatures, and `--output` are rejected here so Bun guests always pass full-build acceptance:
+
+```sh
+export CLOUDFLARE_ACCOUNT_ID="your-account-id"
+cf auth whoami >/dev/null && \
+CLOUDFLARE_API_TOKEN="$(python3 -c "import json; print(json.load(open('$HOME/.config/cloudflare/config/default.json'))['oauth_token'])")" \
+bun scripts/publish-guest.ts /path/to/shell-engine.wasm --name shell-engine.wasm
 ```
 
 Publication first snapshots all three matching real engine builds from `dist/` (or `--dist`) into a private, read-only directory. The requested upload must match a snapshot artifact. The [required full-build interruption matrix](browser-package.md#required-full-build-interruption-acceptance) fetches only that snapshot in Chromium, Firefox and WebKit. Each browser records the SHA-256 and byte count of the exact buffers it compiles; all receipts must match the snapshot manifest. The upload is then prepared from those verified snapshot bytes, never by rereading the live build directory. Concurrent rebuilds cannot replace the tested guest. Missing builds, failed proofs, mismatched receipts and unsafe cleanup prevent storage access and descriptor changes.

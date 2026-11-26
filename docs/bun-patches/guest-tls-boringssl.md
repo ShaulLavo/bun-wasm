@@ -5,7 +5,7 @@ Classification: original adapter and test-only probe.
 Upstream is `oven-sh/boringssl` commit
 `41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f`. The declarations follow
 `include/openssl/ssl.h`, `bio.h`, and `err.h`. No upstream source is copied or
-patched. Bun remains pinned to `9510e74152073d850a18758ca41114d8f214ffa6`.
+patched. Bun is pinned to `a7733435cf40429e3b35c36072769df2052b80f1`, which itself pins a later BoringSSL commit; this pin did not move with it.
 
 ## Link the existing TLS library
 

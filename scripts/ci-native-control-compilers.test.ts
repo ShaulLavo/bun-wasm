@@ -287,7 +287,7 @@ test("compiler resource units are milliseconds and input operation counts, with 
   const child = Bun.spawnSync([process.execPath, "-e", ""]);
   const usage = child.resourceUsage;
   if (!usage) throw new Error("The actual-host resource reading is required for this conversion control");
-  expect(compilerResources({ ...usage, cpuTime: { ...usage.cpuTime, total: 2500 }, ops: { ...usage.ops, in: 7 } })).toEqual({ cpuMs: 2.5, blockInputOps: 7 });
+  expect(compilerResources({ ...usage, cpuTime: { ...usage.cpuTime, total: 2500n }, ops: { ...usage.ops, in: 7 } })).toEqual({ cpuMs: 2.5, blockInputOps: 7 });
 });
 
 test("trace-disabled direct semantics execution creates no progress file", async () => {

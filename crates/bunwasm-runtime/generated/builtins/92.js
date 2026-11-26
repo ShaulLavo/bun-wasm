@@ -1,393 +1,472 @@
-// Generated from Bun 9510e74152073d850a18758ca41114d8f214ffa6, src/js/internal/streams/iter/push.ts.
+// Generated from Bun a7733435cf40429e3b35c36072769df2052b80f1, src/js/internal/streams/iter/classic.ts.
 (function (intrinsics) {
 "use strict";
-var $, { isNativeError } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 205) || intrinsics.createInternalModuleById(205), { validateAbortSignal, validateInteger } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 122) || intrinsics.createInternalModuleById(122), { drainableProtocol, kSyncWriteAccepted, kSyncWriteAcceptedOnFalse } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 96) || intrinsics.createInternalModuleById(96), { kPushDefaultHWM, kResolvedPromise, clampHWM, onSignalAbort, toUint8Array, convertChunks, parsePullArgs, validateBackpressure } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 97) || intrinsics.createInternalModuleById(97), { pull: pullWithTransforms } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 91) || intrinsics.createInternalModuleById(91), { RingBuffer } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 93) || intrinsics.createInternalModuleById(93), PromiseWithResolvers = intrinsics.Promise.withResolvers.bind(intrinsics.Promise), { asyncDispose: SymbolAsyncDispose, asyncIterator: SymbolAsyncIterator, dispose: SymbolDispose } = Symbol;
-function isError(e) {
-    return isNativeError(e) || e instanceof Error;
+var $, { aggregateTwoErrors } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 21) || intrinsics.createInternalModuleById(21), { validateInteger, validateObject } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 127) || intrinsics.createInternalModuleById(127), eos = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 88) || intrinsics.createInternalModuleById(88), { addAbortSignal: addAbortSignalNoValidate } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 82) || intrinsics.createInternalModuleById(82), { toAsyncStreamable: kToAsyncStreamable, kValidatedSource, kSyncWriteAccepted, drainableProtocol } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 101) || intrinsics.createInternalModuleById(101), { validateBackpressure, toUint8Array } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 102) || intrinsics.createInternalModuleById(102), destroyImpl = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 84) || intrinsics.createInternalModuleById(84), { asyncIterator: SymbolAsyncIterator, iterator: SymbolIterator, asyncDispose: SymbolAsyncDispose, dispose: SymbolDispose } = Symbol, PromiseWithResolvers = intrinsics.Promise.withResolvers.bind(intrinsics.Promise), Readable, Writable;
+function lazyReadable() {
+    if (Readable === intrinsics.undefined)
+        Readable = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 109) || intrinsics.createInternalModuleById(109);
+    return Readable;
 }
-class PushQueue {
-    #slots = new RingBuffer;
-    #pendingWrites = new RingBuffer;
-    #pendingReads = new RingBuffer;
-    #pendingDrains = [];
-    #writerState = "open";
-    #consumerState = "active";
-    #error = null;
-    #bytesWritten = 0;
-    #pendingEnd = null;
-    #highWaterMark;
-    #backpressure;
-    #signal;
-    #abortHandler;
-    constructor(options = { __proto__: null }) {
-        let { highWaterMark = kPushDefaultHWM, backpressure = "strict", signal } = options;
-        if (validateInteger(highWaterMark, "options.highWaterMark"), validateBackpressure(backpressure), signal !== intrinsics.undefined)
-            validateAbortSignal(signal, "options.signal");
-        if (this.#highWaterMark = clampHWM(highWaterMark), this.#backpressure = backpressure, this.#signal = signal, this.#abortHandler = intrinsics.undefined, this.#signal)
-            this.#abortHandler = () => {
-                this.fail(isError(this.#signal.reason) ? this.#signal.reason : intrinsics.makeAbortError("Aborted"));
-            }, onSignalAbort(this.#signal, this.#abortHandler);
-    }
-    get desiredSize() {
-        if (this.#writerState !== "open" || this.#consumerState !== "active")
-            return null;
-        return Math.max(0, this.#highWaterMark - this.#slots.length);
-    }
-    canWriteSync() {
-        if (this.#writerState !== "open")
-            return !1;
-        if (this.#consumerState !== "active")
-            return !1;
-        if ((this.#backpressure === "strict" || this.#backpressure === "block") && this.#slots.length >= this.#highWaterMark)
-            return !1;
-        return !0;
-    }
-    writeSync(chunks) {
-        if (this.#writerState !== "open")
-            return !1;
-        if (this.#consumerState !== "active")
-            return !1;
-        if (this.#slots.length >= this.#highWaterMark)
-            switch (this.#backpressure) {
-                case "strict":
-                    return !1;
-                case "block":
-                    return !1;
-                case "drop-oldest":
-                    if (this.#slots.length > 0)
-                        this.#slots.shift();
-                    break;
-                case "drop-newest":
-                    for (let i = 0; i < chunks.length; i++)
-                        this.#bytesWritten += chunks[i].byteLength;
-                    return !0;
-            }
-        this.#slots.push(chunks);
-        for (let i = 0; i < chunks.length; i++)
-            this.#bytesWritten += chunks[i].byteLength;
-        return this.#resolvePendingReads(), !0;
-    }
-    async writeAsync(chunks, signal) {
-        if (this.#writerState === "closed")
-            throw intrinsics.makeErrorWithCode(130, "Writer is closed");
-        if (this.#writerState === "closing")
-            throw intrinsics.makeErrorWithCode(130, "Writer is closing");
-        if (this.#writerState === "errored")
-            throw this.#error;
-        if (this.#consumerState !== "active")
-            throw this.#consumerState === "thrown" && this.#error ? this.#error : intrinsics.makeErrorWithCode(130, "Stream closed by consumer");
-        if (signal?.throwIfAborted(), this.writeSync(chunks))
-            return;
-        switch (this.#backpressure) {
-            case "strict":
-                if (this.#pendingWrites.length >= this.#highWaterMark)
-                    throw intrinsics.makeErrorWithCode(131, "Backpressure violation: too many pending writes. Await each write() call to respect backpressure.");
-                return this.#createPendingWrite(chunks, signal);
-            case "block":
-                return this.#createPendingWrite(chunks, signal);
-            default:
-                throw intrinsics.makeErrorWithCode(129, "Unexpected: writeSync should have handled non-strict policy");
-        }
-    }
-    #createPendingWrite(chunks, signal) {
-        let { promise, resolve, reject } = PromiseWithResolvers(), entry = { __proto__: null, chunks, resolve, reject };
-        if (this.#pendingWrites.push(entry), signal) {
-            let onAbort = () => {
-                let idx = this.#pendingWrites.indexOf(entry);
-                if (idx !== -1)
-                    this.#pendingWrites.removeAt(idx);
-                reject(signal.reason ?? intrinsics.makeAbortError("Aborted"));
-            };
-            entry.resolve = function () {
-                signal.removeEventListener("abort", onAbort), resolve();
-            }, entry.reject = function (reason) {
-                signal.removeEventListener("abort", onAbort), reject(reason);
-            }, signal.addEventListener("abort", onAbort, { __proto__: null, once: !0 });
-        }
-        return promise;
-    }
-    end() {
-        if (this.#writerState === "errored")
-            return -2;
-        if (this.#writerState === "closing")
-            return -3;
-        if (this.#writerState === "closed")
-            return this.#bytesWritten;
-        if (this.#cleanup(), this.#rejectPendingWrites(intrinsics.makeErrorWithCode(130, "Writer closed")), this.#resolvePendingDrains(!1), this.#slots.length === 0)
-            return this.#writerState = "closed", this.#resolvePendingReads(), this.#bytesWritten;
-        return this.#writerState = "closing", -3;
-    }
-    endDrained() {
-        if (this.#writerState !== "closing")
-            return;
-        if (this.#writerState = "closed", this.#pendingEnd)
-            this.#pendingEnd.resolve(this.#bytesWritten), this.#pendingEnd = null;
-    }
-    fail(reason) {
-        if (this.#writerState === "errored" || this.#writerState === "closed")
-            return;
-        let wasClosing = this.#writerState === "closing";
-        if (this.#writerState = "errored", this.#error = reason ?? intrinsics.makeErrorWithCode(129, "Failed"), this.#cleanup(), this.#rejectPendingReads(this.#error), this.#rejectPendingDrains(this.#error), wasClosing) {
-            if (this.#pendingEnd)
-                this.#pendingEnd.reject(this.#error), this.#pendingEnd = null;
-        }
+function lazyWritable() {
+    if (Writable === intrinsics.undefined)
+        Writable = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 113) || intrinsics.createInternalModuleById(113);
+    return Writable;
+}
+var fromReadableCache = new WeakMap, MAX_DRAIN_BATCH = 128, { normalizeAsyncValue } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 95) || intrinsics.createInternalModuleById(95), { isUint8Array } = intrinsics.getInternalField(intrinsics.internalModuleRegistry, 208) || intrinsics.createInternalModuleById(208);
+async function normalizeBatch(raw) {
+    let batch = [];
+    for (let i = 0; i < raw.length; i++) {
+        let value = raw[i];
+        if (isUint8Array(value))
+            batch.push(value);
         else
-            this.#rejectPendingWrites(this.#error);
+            for await (let normalized of normalizeAsyncValue(value))
+                batch.push(normalized);
     }
-    get totalBytesWritten() {
-        return this.#bytesWritten;
-    }
-    get error() {
-        return this.#error;
-    }
-    get backpressurePolicy() {
-        return this.#backpressure;
-    }
-    get writerState() {
-        return this.#writerState;
-    }
-    get pendingEndPromise() {
-        return this.#pendingEnd?.promise ?? null;
-    }
-    setPendingEnd(pending) {
-        this.#pendingEnd = pending;
-    }
-    forceEnqueue(chunks) {
-        this.#slots.push(chunks);
-        for (let i = 0; i < chunks.length; i++)
-            this.#bytesWritten += chunks[i].byteLength;
-        this.#resolvePendingReads();
-    }
-    waitForDrain() {
-        let { promise, resolve, reject } = PromiseWithResolvers();
-        return this.#pendingDrains.push({ __proto__: null, resolve, reject }), promise;
-    }
-    async read() {
-        if (this.#slots.length > 0) {
-            let result = this.#drain();
-            if (this.#resolvePendingWrites(), this.#writerState === "closing" && this.#slots.length === 0)
-                this.endDrained();
-            return { __proto__: null, value: result, done: !1 };
-        }
-        if (this.#writerState === "closing")
-            return this.endDrained(), { __proto__: null, value: intrinsics.undefined, done: !0 };
-        if (this.#writerState === "closed")
-            return { __proto__: null, value: intrinsics.undefined, done: !0 };
-        if (this.#writerState === "errored" && this.#error)
-            throw this.#error;
-        let { promise, resolve, reject } = PromiseWithResolvers();
-        return this.#pendingReads.push({ __proto__: null, resolve, reject }), promise;
-    }
-    consumerReturn() {
-        if (this.#consumerState !== "active")
-            return;
-        if (this.#consumerState = "returned", this.#cleanup(), this.#resolvePendingReads(), this.#rejectPendingWrites(intrinsics.makeErrorWithCode(130, "Stream closed by consumer")), this.#writerState === "closing" && this.#pendingEnd)
-            this.#pendingEnd.reject(intrinsics.makeErrorWithCode(130, "Stream closed by consumer")), this.#pendingEnd = null;
-        this.#resolvePendingDrains(!1);
-    }
-    consumerThrow(error) {
-        if (this.#consumerState !== "active")
-            return;
-        if (this.#consumerState = "thrown", this.#error = error, this.#cleanup(), this.#rejectPendingReads(error), this.#rejectPendingWrites(error), this.#writerState === "closing" && this.#pendingEnd)
-            this.#pendingEnd.reject(error), this.#pendingEnd = null;
-        this.#rejectPendingDrains(error);
-    }
-    #drain() {
-        if (this.#slots.length === 1)
-            return this.#slots.shift();
-        let result = [];
-        for (let i = 0; i < this.#slots.length; i++) {
-            let slot = this.#slots.get(i);
-            for (let j = 0; j < slot.length; j++)
-                result.push(slot[j]);
-        }
-        return this.#slots.clear(), result;
-    }
-    #resolvePendingReads() {
-        while (this.#pendingReads.length > 0)
-            if (this.#slots.length > 0) {
-                let pending = this.#pendingReads.shift(), result = this.#drain();
-                this.#resolvePendingWrites(), pending.resolve({ __proto__: null, value: result, done: !1 });
-            }
-            else if (this.#writerState === "closing" && this.#slots.length === 0)
-                this.endDrained(), this.#pendingReads.shift().resolve({ __proto__: null, value: intrinsics.undefined, done: !0 });
-            else if (this.#writerState === "closed")
-                this.#pendingReads.shift().resolve({ __proto__: null, value: intrinsics.undefined, done: !0 });
-            else if (this.#writerState === "errored" && this.#error)
-                this.#pendingReads.shift().reject(this.#error);
-            else if (this.#consumerState === "returned")
-                this.#pendingReads.shift().resolve({ __proto__: null, done: !0, value: intrinsics.undefined });
-            else
-                break;
-    }
-    #resolvePendingWrites() {
-        while (this.#pendingWrites.length > 0 && this.#slots.length < this.#highWaterMark) {
-            let pending = this.#pendingWrites.shift();
-            this.#slots.push(pending.chunks);
-            for (let i = 0; i < pending.chunks.length; i++)
-                this.#bytesWritten += pending.chunks[i].byteLength;
-            pending.resolve();
-        }
-        if (this.#slots.length < this.#highWaterMark)
-            this.#resolvePendingDrains(!0);
-    }
-    #resolvePendingDrains(canWrite) {
-        let drains = this.#pendingDrains;
-        this.#pendingDrains = [];
-        for (let i = 0; i < drains.length; i++)
-            drains[i].resolve(canWrite);
-    }
-    #rejectPendingDrains(error) {
-        let drains = this.#pendingDrains;
-        this.#pendingDrains = [];
-        for (let i = 0; i < drains.length; i++)
-            drains[i].reject(error);
-    }
-    #rejectPendingReads(error) {
-        while (this.#pendingReads.length > 0)
-            this.#pendingReads.shift().reject(error);
-    }
-    #rejectPendingWrites(error) {
-        while (this.#pendingWrites.length > 0)
-            this.#pendingWrites.shift().reject(error);
-    }
-    #cleanup() {
-        if (this.#signal && this.#abortHandler)
-            this.#signal.removeEventListener("abort", this.#abortHandler), this.#abortHandler = intrinsics.undefined;
-    }
+    return batch.length > 0 ? batch : null;
 }
-class PushWriter {
-    #queue;
-    #syncWriteAccepted = !1;
-    constructor(queue) {
-        this.#queue = queue;
+var nop = () => { };
+async function* createBatchedAsyncIterator(stream, normalize) {
+    let callback = nop;
+    function next(resolve) {
+        if (this === stream)
+            callback(), callback = nop;
+        else
+            callback = resolve;
     }
-    [kSyncWriteAccepted]() {
-        return this.#syncWriteAccepted;
-    }
-    [drainableProtocol]() {
-        let desired = this.desiredSize;
-        if (desired === null)
-            return null;
-        if (desired > 0)
-            return intrinsics.Promise.resolve(!0);
-        return this.#queue.waitForDrain();
-    }
-    get desiredSize() {
-        return this.#queue.desiredSize;
-    }
-    get [kSyncWriteAcceptedOnFalse]() {
-        return this.#queue.backpressurePolicy === "block";
-    }
-    write(chunk, options) {
-        if (!options?.signal && this.#queue.canWriteSync()) {
-            let bytes = toUint8Array(chunk);
-            return this.#queue.writeSync([bytes]), kResolvedPromise;
-        }
-        let bytes = toUint8Array(chunk);
-        return this.#queue.writeAsync([bytes], options?.signal);
-    }
-    writev(chunks, options) {
-        if (!intrinsics.Array.isArray(chunks))
-            throw intrinsics.makeErrorWithCode(112, "chunks", "Array", chunks);
-        if (!options?.signal && this.#queue.canWriteSync()) {
-            let bytes = convertChunks(chunks);
-            return this.#queue.writeSync(bytes), kResolvedPromise;
-        }
-        let bytes = convertChunks(chunks);
-        return this.#queue.writeAsync(bytes, options?.signal);
-    }
-    writeSync(chunk) {
-        this.#syncWriteAccepted = !1;
-        let bytes = toUint8Array(chunk), result = this.#queue.writeSync([bytes]);
-        if (!result && this.#queue.backpressurePolicy === "block" && this.#queue.desiredSize === 0)
-            return this.#queue.forceEnqueue([bytes]), this.#syncWriteAccepted = !0, !1;
-        return this.#syncWriteAccepted = result, result;
-    }
-    writevSync(chunks) {
-        if (this.#syncWriteAccepted = !1, !intrinsics.Array.isArray(chunks))
-            throw intrinsics.makeErrorWithCode(112, "chunks", "Array", chunks);
-        let bytes = convertChunks(chunks), result = this.#queue.writeSync(bytes);
-        if (!result && this.#queue.backpressurePolicy === "block" && this.#queue.desiredSize === 0)
-            return this.#queue.forceEnqueue(bytes), this.#syncWriteAccepted = !0, !1;
-        return this.#syncWriteAccepted = result, result;
-    }
-    end(_options) {
-        let result = this.#queue.end();
-        if (result === -2)
-            return intrinsics.Promise.reject(this.#queue.error);
-        if (result === -3) {
-            let pendingEndPromise = this.#queue.pendingEndPromise;
-            if (pendingEndPromise !== null)
-                return pendingEndPromise;
-            let { promise, resolve, reject } = PromiseWithResolvers();
-            return this.#queue.setPendingEnd({ __proto__: null, promise, resolve, reject }), promise;
-        }
-        return intrinsics.Promise.resolve(result);
-    }
-    endSync() {
-        let result = this.#queue.end();
-        if (result === -2)
-            return -1;
-        if (result === -3)
-            return -1;
-        return result;
-    }
-    fail(reason) {
-        this.#queue.fail(reason);
-    }
-    [SymbolAsyncDispose]() {
-        let state = this.#queue.writerState;
-        if (state === "closing")
-            return this.#queue.pendingEndPromise ?? intrinsics.Promise.resolve();
-        if (state === "open")
-            this.fail();
-        return intrinsics.Promise.resolve();
-    }
-    [SymbolDispose]() {
-        this.fail();
-    }
-}
-function createReadable(queue) {
-    return {
-        __proto__: null,
-        [SymbolAsyncIterator]() {
-            return {
-                __proto__: null,
-                async next() {
-                    return queue.read();
-                },
-                async return() {
-                    return queue.consumerReturn(), { __proto__: null, value: intrinsics.undefined, done: !0 };
-                },
-                async throw(error) {
-                    return queue.consumerThrow(error), { __proto__: null, value: intrinsics.undefined, done: !0 };
+    stream.on("readable", next);
+    let error, cleanup = eos(stream, { writable: !1 }, (err) => {
+        error = err ? aggregateTwoErrors(error, err) : null, callback(), callback = nop;
+    });
+    try {
+        while (!0) {
+            let chunk = stream.destroyed ? null : stream.read();
+            if (chunk !== null) {
+                let batch = [chunk];
+                while (batch.length < MAX_DRAIN_BATCH && stream._readableState?.length > 0) {
+                    let c = stream.read();
+                    if (c === null)
+                        break;
+                    batch.push(c);
                 }
-            };
+                if (normalize !== null) {
+                    let result = await normalize(batch);
+                    if (result !== null)
+                        yield result;
+                }
+                else
+                    yield batch;
+            }
+            else if (error)
+                throw error;
+            else if (error === null)
+                return;
+            else
+                await new intrinsics.Promise(next);
         }
-    };
-}
-function parseArgs(args) {
-    let result = parsePullArgs(args);
-    if (result.options === intrinsics.undefined)
-        result.options = { __proto__: null };
-    return result;
-}
-function push(...args) {
-    let { transforms, options } = parseArgs(args), queue = new PushQueue(options), writer = new PushWriter(queue), rawReadable = createReadable(queue), readable;
-    if (transforms.length > 0) {
-        let signal = options.signal;
-        if (signal)
-            readable = pullWithTransforms(rawReadable, ...transforms, { __proto__: null, signal });
+    }
+    catch (err) {
+        throw error = aggregateTwoErrors(error, err), error;
+    }
+    finally {
+        if (error === intrinsics.undefined || stream._readableState?.autoDestroy)
+            destroyImpl.destroyer(stream, null);
         else
-            readable = pullWithTransforms(rawReadable, ...transforms);
+            stream.off("readable", next), cleanup();
+    }
+}
+function fromReadable(readable) {
+    if (readable == null || typeof readable !== "object")
+        throw intrinsics.makeErrorWithCode(112, "readable", "Readable", readable);
+    let cached = fromReadableCache.get(readable);
+    if (cached !== intrinsics.undefined)
+        return cached;
+    if (typeof readable[kToAsyncStreamable] === "function") {
+        let result = readable[kToAsyncStreamable]();
+        return fromReadableCache.set(readable, result), result;
+    }
+    if (typeof readable.read !== "function" || typeof readable.on !== "function")
+        throw intrinsics.makeErrorWithCode(112, "readable", "Readable", readable);
+    let state = readable._readableState, normalize = state && (state.objectMode || state.encoding) ? normalizeBatch : null, iter = createBatchedAsyncIterator(readable, normalize);
+    return iter[kValidatedSource] = !0, iter.stream = readable, fromReadableCache.set(readable, iter), iter;
+}
+var kNullPrototype = { __proto__: null };
+function toReadable(source, options = kNullPrototype) {
+    if (typeof source?.[SymbolAsyncIterator] !== "function")
+        throw intrinsics.makeErrorWithCode(112, "source", "AsyncIterable", source);
+    validateObject(options, "options");
+    let { highWaterMark = 65536, signal } = options;
+    validateInteger(highWaterMark, "options.highWaterMark", 0);
+    let ReadableCtor = lazyReadable(), iterator = source[SymbolAsyncIterator](), backpressure, pumping = !1, done = !1, readable = new ReadableCtor({
+        __proto__: null,
+        highWaterMark,
+        read() {
+            if (backpressure) {
+                let { resolve } = backpressure;
+                backpressure = null, resolve();
+            }
+            else if (!pumping && !done)
+                pumping = !0, pump();
+        },
+        destroy(err, cb) {
+            if (done = !0, backpressure)
+                backpressure.resolve(), backpressure = null;
+            if (typeof iterator.return === "function")
+                iterator.return().then(() => cb(err), (e) => cb(e || err));
+            else
+                cb(err);
+        }
+    });
+    if (signal)
+        addAbortSignalNoValidate(signal, readable);
+    async function pump() {
+        try {
+            while (!done) {
+                let { value: batch, done: iterDone } = await iterator.next();
+                if (iterDone) {
+                    done = !0, readable.push(null);
+                    return;
+                }
+                for (let i = 0; i < batch.length; i++)
+                    if (!readable.push(batch[i])) {
+                        if (backpressure = PromiseWithResolvers(), await backpressure.promise, done)
+                            return;
+                    }
+            }
+        }
+        catch (err) {
+            done = !0, readable.destroy(err);
+        }
+    }
+    return readable;
+}
+function toReadableSync(source, options = kNullPrototype) {
+    if (typeof source?.[SymbolIterator] !== "function")
+        throw intrinsics.makeErrorWithCode(112, "source", "Iterable", source);
+    validateObject(options, "options");
+    let { highWaterMark = 65536 } = options;
+    validateInteger(highWaterMark, "options.highWaterMark", 0);
+    let ReadableCtor = lazyReadable(), iterator = source[SymbolIterator](), hasBatch = !1, batch, batchIndex = 0;
+    return new ReadableCtor({
+        __proto__: null,
+        highWaterMark,
+        read() {
+            for (;;) {
+                if (hasBatch) {
+                    while (batchIndex < batch.length)
+                        if (!this.push(batch[batchIndex++]))
+                            return;
+                    batch = intrinsics.undefined, hasBatch = !1, batchIndex = 0;
+                }
+                let result = iterator.next(), { done } = result;
+                if (done) {
+                    this.push(null);
+                    return;
+                }
+                batch = result.value, hasBatch = !0;
+            }
+        },
+        destroy(err, cb) {
+            if (batch = intrinsics.undefined, hasBatch = !1, typeof iterator.return === "function")
+                iterator.return();
+            cb(err);
+        }
+    });
+}
+var fromWritableCache = new WeakMap;
+function fromWritable(writable, options = kNullPrototype) {
+    if (writable == null || typeof writable.write !== "function" || typeof writable.on !== "function")
+        throw intrinsics.makeErrorWithCode(112, "writable", "Writable", writable);
+    validateObject(options, "options");
+    let { backpressure = "strict" } = options;
+    if (validateBackpressure(backpressure), writable.writableObjectMode)
+        throw intrinsics.makeErrorWithCode(129, "Cannot create a stream/iter Writer from an object-mode Writable");
+    if (backpressure === "drop-oldest")
+        throw intrinsics.makeErrorWithCode(113, "options.backpressure", backpressure, "drop-oldest is not supported for classic stream.Writable");
+    let cachedByBackpressure = fromWritableCache.get(writable);
+    if (cachedByBackpressure !== intrinsics.undefined) {
+        let cached = cachedByBackpressure.get(backpressure);
+        if (cached !== intrinsics.undefined)
+            return cached;
     }
     else
-        readable = rawReadable;
-    return { __proto__: null, writer, readable };
+        cachedByBackpressure = new Map, fromWritableCache.set(writable, cachedByBackpressure);
+    let hwm = writable.writableHighWaterMark ?? 16384, totalBytes = 0, waiters = [], listenersInstalled = !1, onDrain, onError;
+    function installListeners() {
+        if (listenersInstalled)
+            return;
+        listenersInstalled = !0, onDrain = () => {
+            let pending = waiters;
+            waiters = [];
+            for (let i = 0; i < pending.length; i++)
+                pending[i].resolve();
+        }, onError = (err) => {
+            let pending = waiters;
+            waiters = [];
+            for (let i = 0; i < pending.length; i++)
+                pending[i].reject(err);
+        }, writable.on("drain", onDrain), writable.on("error", onError);
+    }
+    function cleanup(err) {
+        let pending = waiters;
+        waiters = [];
+        for (let i = 0; i < pending.length; i++)
+            pending[i].reject(err ?? intrinsics.makeAbortError());
+        if (!listenersInstalled)
+            return;
+        listenersInstalled = !1, writable.removeListener("drain", onDrain), writable.removeListener("error", onError);
+    }
+    function waitForDrain() {
+        let { promise, resolve, reject } = PromiseWithResolvers();
+        return waiters.push({ __proto__: null, resolve, reject }), installListeners(), promise;
+    }
+    function isWritable() {
+        return !(writable.destroyed ?? !1) && !(writable.writableFinished ?? !1) && !(writable.writableEnded ?? !1);
+    }
+    function isFull() {
+        return (writable.writableLength ?? 0) >= hwm;
+    }
+    function writeChunks(chunks) {
+        let ok = !0;
+        for (let i = 0; i < chunks.length; i++) {
+            let bytes = toUint8Array(chunks[i]);
+            totalBytes += bytes.byteLength, ok = writable.write(bytes);
+        }
+        return ok;
+    }
+    let writer = {
+        __proto__: null,
+        get desiredSize() {
+            if (!isWritable())
+                return null;
+            return Math.max(0, hwm - (writable.writableLength ?? 0));
+        },
+        writeSync(_chunk) {
+            return !1;
+        },
+        writevSync(_chunks) {
+            return !1;
+        },
+        write(chunk) {
+            if (!isWritable())
+                return intrinsics.Promise.reject(intrinsics.makeErrorWithCode(222));
+            let bytes;
+            try {
+                bytes = toUint8Array(chunk);
+            }
+            catch (err) {
+                return intrinsics.Promise.reject(err);
+            }
+            if (backpressure === "strict" && isFull())
+                return intrinsics.Promise.reject(intrinsics.makeErrorWithCode(131, "Backpressure violation: buffer is full. Await each write() call to respect backpressure."));
+            if (backpressure === "drop-newest" && isFull())
+                return totalBytes += bytes.byteLength, intrinsics.Promise.resolve();
+            if (totalBytes += bytes.byteLength, writable.write(bytes))
+                return intrinsics.Promise.resolve();
+            if (backpressure === "block")
+                return waitForDrain();
+            return intrinsics.Promise.resolve();
+        },
+        writev(chunks) {
+            if (!intrinsics.Array.isArray(chunks))
+                throw intrinsics.makeErrorWithCode(112, "chunks", "Array", chunks);
+            if (!isWritable())
+                return intrinsics.Promise.reject(intrinsics.makeErrorWithCode(222));
+            if (backpressure === "strict" && isFull())
+                return intrinsics.Promise.reject(intrinsics.makeErrorWithCode(131, "Backpressure violation: buffer is full. Await each write() call to respect backpressure."));
+            if (backpressure === "drop-newest" && isFull()) {
+                for (let i = 0; i < chunks.length; i++)
+                    totalBytes += toUint8Array(chunks[i]).byteLength;
+                return intrinsics.Promise.resolve();
+            }
+            let ok = !0;
+            if (typeof writable.cork === "function" && typeof writable.uncork === "function") {
+                writable.cork();
+                try {
+                    ok = writeChunks(chunks);
+                }
+                finally {
+                    writable.uncork();
+                }
+            }
+            else
+                ok = writeChunks(chunks);
+            if (ok)
+                return intrinsics.Promise.resolve();
+            if (backpressure === "block")
+                return waitForDrain();
+            return intrinsics.Promise.resolve();
+        },
+        endSync() {
+            return -1;
+        },
+        end() {
+            if ((writable.writableFinished ?? !1) || (writable.destroyed ?? !1))
+                return cleanup(), intrinsics.Promise.resolve(totalBytes);
+            let { promise, resolve, reject } = PromiseWithResolvers();
+            if (!(writable.writableEnded ?? !1))
+                writable.end();
+            return eos(writable, { writable: !0, readable: !1 }, (err) => {
+                if (cleanup(err), err)
+                    reject(err);
+                else
+                    resolve(totalBytes);
+            }), promise;
+        },
+        fail(reason) {
+            if (cleanup(reason), typeof writable.destroy === "function")
+                writable.destroy(reason);
+        },
+        [SymbolAsyncDispose]() {
+            if (isWritable()) {
+                if (cleanup(), typeof writable.destroy === "function")
+                    writable.destroy();
+            }
+            return intrinsics.Promise.resolve();
+        },
+        [SymbolDispose]() {
+            if (isWritable()) {
+                if (cleanup(), typeof writable.destroy === "function")
+                    writable.destroy();
+            }
+        }
+    };
+    return writer[drainableProtocol] = function () {
+        if (!isWritable())
+            return null;
+        if ((writable.writableLength ?? 0) < hwm)
+            return intrinsics.Promise.resolve(!0);
+        let { promise, resolve } = PromiseWithResolvers();
+        return waiters.push({
+            __proto__: null,
+            resolve() {
+                resolve(!0);
+            },
+            reject() {
+                resolve(!1);
+            }
+        }), installListeners(), promise;
+    }, cachedByBackpressure.set(backpressure, writer), writer;
+}
+function toWritable(writer) {
+    if (typeof writer?.write !== "function")
+        throw intrinsics.makeErrorWithCode(112, "writer", "Writer", writer);
+    let WritableCtor = lazyWritable(), hasWriteSync = typeof writer.writeSync === "function", hasWritev = typeof writer.writev === "function", hasWritevSync = hasWritev && typeof writer.writevSync === "function", hasEnd = typeof writer.end === "function", hasEndSync = hasEnd && typeof writer.endSync === "function", hasFail = typeof writer.fail === "function", hasSyncWriteAccepted = typeof writer[kSyncWriteAccepted] === "function";
+    function syncWriteAccepted() {
+        return hasSyncWriteAccepted && writer[kSyncWriteAccepted]();
+    }
+    function finishAfterSyncBackpressure(cb) {
+        let ondrain;
+        try {
+            if (typeof writer[drainableProtocol] === "function")
+                ondrain = writer[drainableProtocol]();
+        }
+        catch (err) {
+            cb(err);
+            return;
+        }
+        if (ondrain !== null && ondrain !== intrinsics.undefined) {
+            ondrain.then((drained) => {
+                if (drained === !1) {
+                    cb(intrinsics.makeErrorWithCode(130, "Stream closed by consumer"));
+                    return;
+                }
+                cb();
+            }, cb);
+            return;
+        }
+        queueMicrotask(cb);
+    }
+    function _write(chunk, encoding, cb) {
+        let bytes = typeof chunk === "string" ? intrinsics.Buffer.from(chunk, encoding) : chunk;
+        if (hasWriteSync)
+            try {
+                if (writer.writeSync(bytes)) {
+                    queueMicrotask(cb);
+                    return;
+                }
+                if (syncWriteAccepted()) {
+                    finishAfterSyncBackpressure(cb);
+                    return;
+                }
+            }
+            catch { }
+        try {
+            writer.write(bytes).then(() => cb(), cb);
+        }
+        catch (err) {
+            cb(err);
+        }
+    }
+    function _writev(entries, cb) {
+        let chunks = [];
+        for (let i = 0; i < entries.length; i++) {
+            let { chunk, encoding } = entries[i];
+            chunks[i] = typeof chunk === "string" ? intrinsics.Buffer.from(chunk, encoding) : chunk;
+        }
+        if (hasWritevSync)
+            try {
+                if (writer.writevSync(chunks)) {
+                    queueMicrotask(cb);
+                    return;
+                }
+                if (syncWriteAccepted()) {
+                    finishAfterSyncBackpressure(cb);
+                    return;
+                }
+            }
+            catch { }
+        try {
+            writer.writev(chunks).then(() => cb(), cb);
+        }
+        catch (err) {
+            cb(err);
+        }
+    }
+    function _final(cb) {
+        if (!hasEnd) {
+            queueMicrotask(cb);
+            return;
+        }
+        if (hasEndSync)
+            try {
+                if (writer.endSync() >= 0) {
+                    queueMicrotask(cb);
+                    return;
+                }
+            }
+            catch { }
+        try {
+            writer.end().then(() => cb(), cb);
+        }
+        catch (err) {
+            cb(err);
+        }
+    }
+    function _destroy(err, cb) {
+        if (err && hasFail)
+            writer.fail(err);
+        cb();
+    }
+    let writableOptions = {
+        __proto__: null,
+        highWaterMark: Number.MAX_SAFE_INTEGER,
+        write: _write,
+        final: _final,
+        destroy: _destroy
+    };
+    if (hasWritev)
+        writableOptions.writev = _writev;
+    return new WritableCtor(writableOptions);
 }
 $ = {
-    push
+    createBatchedAsyncIterator,
+    normalizeBatch,
+    fromReadable,
+    fromWritable,
+    toReadable,
+    toReadableSync,
+    toWritable
 };
 return $;
 })

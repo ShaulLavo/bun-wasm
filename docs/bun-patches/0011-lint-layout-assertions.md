@@ -1,27 +1,25 @@
 ## 0011 lint layout assertions
 
-Class **Port**. Upstream `src/sema/types.rs` at Bun revision
-`9510e74152073d850a18758ca41114d8f214ffa6` asserts that `TypeArguments` is
-16 bytes. The enum occupies two pointer-sized words, so it is 8 bytes on
-wasm32. The patch retains the size guard as `2 * size_of::<usize>()`.
-It changes no representation or type-checking behavior. Compiling the unchanged
-semantic checker for wasm32 reproduced the original constant-evaluation failure;
-its dependent linter crates compile after the assertion is made portable.
+Class **Port**. Upstream `src/lint/rule.rs` at Bun revision
+`a7733435cf40429e3b35c36072769df2052b80f1` asserts that `Message` is five
+pointer-sized words. Its two strings occupy four pointer-sized words, followed
+by eight bytes for the flag, key, and padding. That is 40 bytes on 64-bit
+targets and 24 on wasm32, rather than five words on every target. The patch
+states the size as `4 * size_of::<usize>() + 8`. It changes no representation
+or lint behavior. The original assertion failed during the wasm32 linter check;
+all native rule crates, formatter, and driver pass `cargo check` with it.
 
-
-The same patch updates the size assertion for `src/lint/rule.rs::Message`.
-Its two strings occupy four pointer-sized words, followed by eight bytes for the
-flag, key, and padding. That is 40 bytes on 64-bit targets and 24 on wasm32,
-rather than five words on every target. The original assertion failed during
-the wasm32 linter check; all native rule crates, formatter, and driver pass
-`cargo check` after both size guards are made portable.
-
+Until Bun 1.4.5 the patch also made the `TypeArguments` size assertion in
+`src/sema/types.rs` pointer-width aware, because that enum was two pointer-sized
+words. Since 1.4.5 it holds up to three type ids inline and is 16 bytes on
+64-bit and wasm32 alike, so upstream's `== 16` passes unchanged and that hunk
+is gone.
 
 
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [0011](#0011-lint-layout-assertions) | Port | Make semantic type-argument and lint-message size assertions pointer-width aware. |
+| [0011](#0011-lint-layout-assertions) | Port | Make the lint-message size assertion pointer-width aware. |
 
 [Ledger scope and pinned revisions](scope.md).

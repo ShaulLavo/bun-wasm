@@ -1,45 +1,31 @@
 const LATIN: EncodedSlice<'static> = EncodedSlice::latin1(b"abcd");
 const DETACHED: EncodedSlice<'static> = LATIN.detach_lifetime();
 
-fn check_flags(value: EncodedSlice<'_>, utf8: bool, global: bool, utf16: bool) {
+fn check_flags(value: EncodedSlice<'_>, utf8: bool, utf16: bool) {
     assert_eq!(value.is_utf8(), utf8);
-    assert_eq!(value.is_globally_allocated(), global);
     assert_eq!(value.is_16bit(), utf16);
 }
 
-fn high_address(address: usize, flags: u8) {
+fn high_address(address: usize, utf8: bool, utf16: bool) {
     let raw = core::ptr::without_provenance(address);
     let mut value = EncodedSlice::from_tagged_ptr(raw, 8);
-    if flags & 1 != 0 {
+    if utf8 {
         value.mark(PROBE_UTF8);
     }
-    if flags & 2 != 0 {
-        value.mark(PROBE_GLOBAL);
-    }
-    if flags & 4 != 0 {
+    if utf16 {
         value.mark(PROBE_UTF16);
     }
     assert_eq!(
         value.untagged_ptr(),
         raw,
-        "address {address:#x}, flags {flags}"
+        "address {address:#x}, utf8 {utf8}, utf16 {utf16}"
     );
-    check_flags(value, flags & 1 != 0, flags & 2 != 0, flags & 4 != 0);
+    check_flags(value, utf8, utf16);
     assert_eq!(value.trunc(3).untagged_ptr(), raw);
     assert_eq!(value.trunc(3).len, 3);
-    check_flags(
-        value.trunc(3),
-        flags & 1 != 0,
-        flags & 2 != 0,
-        flags & 4 != 0,
-    );
+    check_flags(value.trunc(3), utf8, utf16);
     assert_eq!(value.detach_lifetime().untagged_ptr(), raw);
-    check_flags(
-        value.detach_lifetime(),
-        flags & 1 != 0,
-        flags & 2 != 0,
-        flags & 4 != 0,
-    );
+    check_flags(value.detach_lifetime(), utf8, utf16);
 }
 
 #[inline(never)]
@@ -47,12 +33,17 @@ extern "C" fn by_value(value: String) -> String {
     value
 }
 
+/// Bun has no UTF-16 borrowing `String` constructor; this is the arm its views build.
+fn utf16_string(words: &[u16]) -> String {
+    String::wrap(Tag::EncodedSlice, EncodedSlice::utf16(words))
+}
+
 fn ffi_roundtrip() {
     let words = [65u16, 66, 67];
     let values = [
         String::ascii(b"abc"),
         String::borrow_utf8(b"abc"),
-        String::borrow_utf16(&words),
+        utf16_string(&words),
     ];
     for value in values {
         // The EncodedSlice arm is active for each of these constructors.
@@ -62,30 +53,17 @@ fn ffi_roundtrip() {
         let after = unsafe { result.value.encoded };
         assert_eq!(after.untagged_ptr(), before.untagged_ptr());
         assert_eq!(after.len, before.len);
-        check_flags(
-            after,
-            before.is_utf8(),
-            before.is_globally_allocated(),
-            before.is_16bit(),
-        );
-    }
-}
-
-fn global_bytes() {
-    for mut value in [EncodedSlice::latin1(b"abc"), EncodedSlice::utf8(b"abc")] {
-        value.mark(PROBE_GLOBAL);
-        let sub = value.substring_with_len(1, 2);
-        assert_eq!(sub.slice(), b"b");
-        check_flags(sub, value.is_utf8(), true, false);
+        check_flags(after, before.is_utf8(), before.is_16bit());
     }
 }
 
 #[cfg(target_pointer_width = "64")]
 fn native_tagged_pointer() {
     let address = 0x1234usize;
-    let tagged = (address | (7usize << 61)) as *const u8;
+    // Bits 61 and 63. Bit 62 belongs to C++ (`Zig::isTaggedExternalPtr`) and is never set here.
+    let tagged = (address | (5usize << 61)) as *const u8;
     let value = EncodedSlice::from_tagged_ptr(tagged, 5);
-    check_flags(value, true, true, true);
+    check_flags(value, true, true);
     assert_eq!(value._unsafe_ptr_do_not_use, tagged);
     assert_eq!(value.trunc(2)._unsafe_ptr_do_not_use, tagged);
     assert_eq!(value.detach_lifetime()._unsafe_ptr_do_not_use, tagged);
@@ -101,7 +79,7 @@ fn constructors() {
     assert_eq!(DETACHED.slice(), b"abcd");
     assert!(EncodedSlice::EMPTY.is_empty());
     assert_eq!(EncodedSlice::EMPTY.untagged_ptr(), b"".as_ptr());
-    check_flags(EncodedSlice::EMPTY, false, false, false);
+    check_flags(EncodedSlice::EMPTY, false, false);
     assert_eq!(EncodedSlice::EMPTY.slice(), b"");
     assert_eq!(EncodedSlice::EMPTY.byte_slice(), b"");
     assert_eq!(String::EMPTY.tag, Tag::Empty);
@@ -113,17 +91,15 @@ fn constructors() {
         EncodedSlice::latin1(bytes),
         EncodedSlice::utf8(bytes),
         EncodedSlice::utf16(&words),
-        EncodedSlice::utf16_global(&words),
     ];
     for (index, value) in cases.into_iter().enumerate() {
         let utf8 = index == 1;
-        let utf16 = index >= 2;
-        let global = index == 3;
-        check_flags(value, utf8, global, utf16);
-        check_flags(value.trunc(2), utf8, global, utf16);
-        check_flags(value.detach_lifetime(), utf8, global, utf16);
-        check_flags(value.substring(1), utf8, global, utf16);
-        check_flags(value.substring_with_len(1, 3), utf8, global, utf16);
+        let utf16 = index == 2;
+        check_flags(value, utf8, utf16);
+        check_flags(value.trunc(2), utf8, utf16);
+        check_flags(value.detach_lifetime(), utf8, utf16);
+        check_flags(value.substring(1), utf8, utf16);
+        check_flags(value.substring_with_len(1, 3), utf8, utf16);
         assert_eq!(value.substring_with_len(1, 3).len, 2);
         assert_eq!(value.trunc(99).len, 4);
         assert_eq!(value.substring(99).len, 0);
@@ -215,11 +191,8 @@ mod high_memory {
 
     fn strings() {
         let latin1 = place(LATIN1, &[b'c', b'a', b'f', 0xe9]);
-        let mut value = EncodedSlice::latin1(latin1);
-        check_flags(value, false, false, false);
-        same(value, LATIN1, latin1);
-        value.mark(PROBE_GLOBAL);
-        check_flags(value, false, true, false);
+        let value = EncodedSlice::latin1(latin1);
+        check_flags(value, false, false);
         same(value, LATIN1, latin1);
         same(value.substring(1), LATIN1 + 1, &latin1[1..]);
         same(value.trunc(2), LATIN1, &latin1[..2]);
@@ -227,39 +200,30 @@ mod high_memory {
 
         let utf8 = place(UTF8, "\u{6771}\u{4eac} \u{2713}".as_bytes());
         let value = EncodedSlice::utf8(utf8);
-        check_flags(value, true, false, false);
+        check_flags(value, true, false);
         same(value, UTF8, utf8);
         same(value.substring_with_len(3, 6), UTF8 + 3, &utf8[3..6]);
 
         let utf16 = place_utf16(UTF16, "\u{1f98a}\u{e9}");
         let bytes = place(UTF16, &[0x3e, 0xd8, 0x8a, 0xdd, 0xe9, 0x00]);
-        for (value, global) in [
-            (EncodedSlice::utf16(utf16), false),
-            (EncodedSlice::utf16_global(utf16), true),
-        ] {
-            check_flags(value, false, global, true);
-            same(value, UTF16, bytes);
-            assert_eq!(value.utf16_slice(), &[0xd83e, 0xdd8a, 0xe9]);
-            assert_eq!(value.substring(2).untagged_ptr().addr(), UTF16 + 4);
-            assert_eq!(value.substring(2).utf16_slice(), &[0xe9]);
-        }
+        let value = EncodedSlice::utf16(utf16);
+        check_flags(value, false, true);
+        same(value, UTF16, bytes);
+        assert_eq!(value.utf16_slice(), &[0xd83e, 0xdd8a, 0xe9]);
+        assert_eq!(value.substring(2).untagged_ptr().addr(), UTF16 + 4);
+        assert_eq!(value.substring(2).utf16_slice(), &[0xe9]);
 
         for value in [
             String::ascii(&latin1[..3]),
             String::borrow_utf8(utf8),
-            String::borrow_utf16(utf16),
+            utf16_string(utf16),
         ] {
             // SAFETY: each constructor selects the EncodedSlice arm.
             let before = unsafe { value.value.encoded };
             let after = unsafe { by_value(value).value.encoded };
             assert!(before.untagged_ptr().addr() >= BOUNDARY);
             same(after, before.untagged_ptr().addr(), before.byte_slice());
-            check_flags(
-                after,
-                before.is_utf8(),
-                before.is_globally_allocated(),
-                before.is_16bit(),
-            );
+            check_flags(after, before.is_utf8(), before.is_16bit());
         }
     }
 
@@ -359,7 +323,6 @@ fn main() {
     high_memory::run();
     constructors();
     ffi_roundtrip();
-    global_bytes();
     #[cfg(target_pointer_width = "64")]
     native_tagged_pointer();
     for address in [
@@ -375,8 +338,8 @@ fn main() {
         0xffff_fff0,
         0xffff_ffff,
     ] {
-        for flags in 0..8 {
-            high_address(address, flags);
+        for (utf8, utf16) in [(false, false), (true, false), (false, true), (true, true)] {
+            high_address(address, utf8, utf16);
         }
     }
     // The top of the maximum is usable, and nothing past it is.
@@ -393,6 +356,6 @@ fn main() {
         (12, 4, 16, 4)
     );
     println!(
-        "PASS: constructors, substrings, truncation, detach, sentinels, 88 synthetic pointer/flag cases"
+        "PASS: constructors, substrings, truncation, detach, sentinels, 44 synthetic pointer/flag cases"
     );
 }

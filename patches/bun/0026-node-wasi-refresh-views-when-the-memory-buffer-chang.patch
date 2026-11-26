@@ -1,7 +1,7 @@
-From 3c9628afb01bba6f9136fde8642c92911f45a62c Mon Sep 17 00:00:00 2001
+From 3fa923b754422a2ca6e200692f386b69d865ae7a Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sat, 14 Nov 2026 07:34:13 +0200
-Subject: [PATCH 26/26] node:wasi refresh views when the memory buffer changes
+Subject: [PATCH 26/28] node:wasi refresh views when the memory buffer changes
 
 ---
  src/js/node/wasi.ts | 5 +++--

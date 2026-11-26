@@ -1,0 +1,4 @@
+[0m[1mbun test [0m[2mvVERSION[0m
+log inside a test {
+  [0mn[2m:[0m [0m[33m1[0m[0m[2m,[0m
+}

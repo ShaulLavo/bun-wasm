@@ -480,7 +480,9 @@
       this.outerMaxDepth = undefined;
       this.quoteStrings = !!options.quoteStrings;
       this.colors = !!options.colors;
-      this.errorLabel = options.errorLabel || "error";
+      // ConsoleObject.rs ErrorDisplayLevel: "normal" (console.log), "warn" or "full" (console.error,
+      // uncaught errors and `bun test`). Only colours tell normal and full apart.
+      this.errorLevel = options.errorLevel || "normal";
       this.quoteKeys = false;
       this.estimatedLineLength = 0;
       this.alwaysNewlineScope = false;
@@ -1659,39 +1661,65 @@
     return lines.length ? lines : null;
   }
 
+  // Bun's `<tag>` markup on a template's literal parts. Without colours the tags just go, which
+  // keeps the plain path free of other modules (harnesses evaluate this file on its own).
+  function markup(f) {
+    return f.colors ? internal.require("pretty_output").markup(true) : withoutTags;
+  }
+
+  function withoutTags(strings, ...values) {
+    let out = strings[0].replace(/<\/?\w*>/g, "");
+    for (let i = 0; i < values.length; i++) out += String(values[i]) + strings[i + 1].replace(/<\/?\w*>/g, "");
+    return out;
+  }
+
+  // One source line, `<r><b>12 |<r> code`; colours highlight the code and mark a clamped line.
+  function excerptLine(f, n, pad, text) {
+    const clamped = text.slice(0, 1024);
+    const code = f.colors ? internal.require("js_highlight").highlight(clamped, true) : clamped;
+    const truncated = f.colors && clamped.length !== text.length ? markup(f)`<r><d> | ... truncated <r>` : "";
+    return spaces(pad - digitCount(n)) + markup(f)`<r><b>${n} |<r> ` + code + truncated + "\n";
+  }
+
   function writeExcerpt(f, lines, frame) {
     const pad = digitCount(lines[lines.length - 1].n);
-    for (const { n, text } of lines.slice(0, -1)) {
-      f.write(spaces(pad - digitCount(n)) + n + " | " + text.slice(0, 1024) + "\n");
-    }
+    for (const { n, text } of lines.slice(0, -1)) f.write(excerptLine(f, n, pad, text));
     const last = lines[lines.length - 1];
     if (last.text.length === 0) return false;
-    const clamped = last.text.slice(0, 1024);
-    f.write(spaces(pad - digitCount(last.n)) + last.n + " | " + clamped + "\n");
-    if (clamped.length !== last.text.length) {
+    f.write(excerptLine(f, last.n, pad, last.text));
+    if (last.text.length > 1024) {
       f.write("\n");
       return true;
     }
     const col = Math.max(0, frame.column - 1);
-    if (clamped.length < 512 || col > 512) {
-      f.write(spaces(pad + 3 + col) + "^\n");
+    if (last.text.length < 512 || col > 512) {
+      f.write(spaces(pad + 3 + col) + markup(f)`<red><b>^<r>\n`);
     } else {
       f.write("\n");
     }
     return true;
   }
 
-  // `label` is the display level: "error", or "warn" for console.warn.
-  function errorNameAndMessage(name, message, code, label = "error") {
+  // ErrorDisplayLevelFormatter: the error's name (or "error"/"warn") and its colon.
+  function errorLabel(f, name, colon = true) {
+    let out = "";
+    if (f.colors) out = f.errorLevel === "warn" ? "\u001b[0m\u001b[33m" : f.errorLevel === "full" ? "\u001b[0m\u001b[31m" : "\u001b[0m";
+    out += name !== "" ? name : f.errorLevel === "warn" ? "warn" : "error";
+    if (!colon) return out + (f.colors ? "\u001b[0m" : "");
+    return out + markup(f)`<r><d>:<r> `;
+  }
+
+  // VirtualMachine.rs print_error_name_and_message.
+  function errorNameAndMessage(f, name, message, code) {
     if (name !== "" && message !== "") {
-      if (name !== "Error") return name + ": " + message + "\n";
       const prefixed = code !== undefined && message.length > code.length + 3 && message.startsWith(code + ": ");
-      if (prefixed) return code + ": " + message.slice(code.length + 2) + "\n";
-      return label + ": " + message + "\n";
+      if (name !== "Error") return errorLabel(f, name) + markup(f)`<b>${message}<r>\n`;
+      if (prefixed) return errorLabel(f, code) + markup(f)`<b>${message.slice(code.length + 2)}<r>\n`;
+      return errorLabel(f, "") + markup(f)`<b>${message}<r>\n`;
     }
-    if (name !== "") return name + ": \n";
-    if (message !== "") return label + ": " + message + "\n";
-    return label + "\n";
+    if (name !== "") return errorLabel(f, name) + "\n";
+    if (message !== "") return errorLabel(f, "") + markup(f)`<b>${message}<r>\n`;
+    return errorLabel(f, "", false) + "\n";
   }
 
   function stringProp(err, key) {
@@ -1712,8 +1740,42 @@
     return label ? label + " (" + loc + ")" : loc;
   }
 
-  function formatFrame(frame) {
-    return "      at " + frameText(frame) + "\n";
+  function formatFrame(f, frame) {
+    if (!f.colors) return "      at " + frameText(frame) + "\n";
+    const m = markup(f);
+    const name = frame.name || (frame.anonymousFunction === true ? "<anonymous>" : "");
+    if (!name) return m`<r>      <d>at <r>${coloredSource(frame)}\n`;
+    return m`<r>      <d>at <r>${coloredName(name)}<d> (<r>${coloredSource(frame)}<d>)<r>\n`;
+  }
+
+  // ZigStackFrame.rs NameFormatter for function frames: anonymous ones dim, named ones bold italic.
+  function coloredName(name) {
+    if (name === "<anonymous>" || name === "async <anonymous>") return "\u001b[0m\u001b[2m" + name + "\u001b[0m";
+    if (name.startsWith("new ")) return name;
+    return "\u001b[0m\u001b[1m\u001b[3m" + name + "\u001b[0m";
+  }
+
+  // ZigStackFrame.rs SourceURLFormatter: the working directory dim, the rest of the path cyan,
+  // then `:line:column` in yellow.
+  function coloredSource(frame) {
+    const file = internal.hotDisplayName?.(frame.file) ?? frame.file;
+    const root = workingDirectory();
+    let path = file;
+    if (root.length > 1 && file.startsWith(root)) {
+      path = "\u001b[2m" + root.replace(/\/+$/, "") + "/\u001b[0m\u001b[36m" + file.slice(root.length).replace(/^\/+/, "");
+    }
+    return "\u001b[0m\u001b[36m" + path + "\u001b[0m\u001b[2m:\u001b[0m\u001b[33m" + frame.line + "\u001b[0m\u001b[2m:\u001b[33m" + frame.column + "\u001b[0m";
+  }
+
+  // Bun's top-level directory, with its trailing slash.
+  function workingDirectory() {
+    let cwd = "/";
+    try {
+      cwd = typeof native.cwd === "function" ? native.cwd() : "/";
+    } catch {
+      return "/";
+    }
+    return cwd.endsWith("/") ? cwd : cwd + "/";
   }
 
   // VirtualMachine::print_errorlike_object, writing into the formatter.
@@ -1763,12 +1825,12 @@
     const message = stringProp(err, "message");
     const code = errorCode(err);
     // console.warn shows an error without its source lines.
-    const lines = f.errorLabel === "warn" ? null : sourceExcerpt(top);
+    const lines = f.errorLevel === "warn" ? null : sourceExcerpt(top);
     if (lines !== null) writeExcerpt(f, lines, top);
-    f.write(errorNameAndMessage(name, message, code, f.errorLabel));
+    f.write(errorNameAndMessage(f, name, message, code));
 
     const toAppend = printErrorProperties(f, err, code, prevHadErrors);
-    for (const frame of frames) f.write(formatFrame(frame));
+    for (const frame of frames) f.write(formatFrame(f, frame));
     printAppendedErrors(f, toAppend);
   }
 
@@ -1811,7 +1873,7 @@
     }
     if (code !== undefined) {
       printedAny = true;
-      f.write(spaces(longest - 4) + " code: " + quoteJSON(code) + "\n");
+      f.write(spaces(longest - 4) + markup(f)` code<r><d>:<r> <green>${quoteJSON(code)}<r>\n`);
     }
     if (printedAny) f.write("\n");
     if (!sawCause) appendOwnCause(err, toAppend);
@@ -1848,9 +1910,9 @@
     f.disableInspectCustom = true;
     try {
       const text = keyText(key);
-      f.write(spaces(longest - text.length) + " " + text + ": ");
+      f.write(spaces(longest - text.length) + markup(f)` ${text}<r><d>:<r> `);
       f.format(tagOf(value, { hideGlobal: true, disableCustom: true }), value);
-      f.write(",\n");
+      f.write(markup(f)`<r><d>,<r>\n`);
     } finally {
       f.depth -= 1;
       f.maxDepth = saved.maxDepth;
@@ -1865,7 +1927,7 @@
   function printAppendedErrors(f, toAppend) {
     for (const err of toAppend) {
       if (f.visited.has(err)) {
-        f.write("\n[Circular]");
+        f.write("\n" + markup(f)`<r><cyan>[Circular]<r>`);
         continue;
       }
       f.enter();
@@ -1875,7 +1937,7 @@
       f.depth += 1;
       try {
         if (f.depth > f.errorChainMaxDepth()) {
-          f.write("[Error ...]");
+          f.write(markup(f)`<r><cyan>[Error ...]<r>`);
         } else {
           printErrorInstance(f, err);
         }
@@ -1900,7 +1962,7 @@
 
   // Non-Error thrown values (`throw "str"`, `throw {a: 1}`, ...).
   function formatThrownValue(f, value) {
-    f.write(errorNameAndMessage("", thrownMessage(value), undefined, f.errorLabel));
+    f.write(errorNameAndMessage(f, "", thrownMessage(value), undefined));
     f.format(tagOf(value, { hideGlobal: true, disableCustom: true }), value);
     f.write("\n");
   }
@@ -1988,7 +2050,7 @@
       orderedProperties: false,
       indent: opts.indent,
       colors: opts.colors,
-      errorLabel: opts.level === "warn" ? "warn" : "error",
+      errorLevel: opts.level === "warn" ? "warn" : opts.level === "error" ? "full" : "normal",
     });
     if (args.length === 0) return "";
     f.remaining = Array.prototype.slice.call(args, 1);
@@ -2005,9 +2067,10 @@
   }
 
   /** Bun's error printing (console.log(err) and uncaught exceptions). */
+  // Uncaught errors and `bun test` failures print at the "full" level: red when colours are on.
   function formatError(err, options) {
     const opts = options || {};
-    const f = new Formatter({ maxDepth: opts.depth === undefined ? 2 : opts.depth, quoteStrings: false });
+    const f = new Formatter({ maxDepth: opts.depth === undefined ? 2 : opts.depth, quoteStrings: false, colors: opts.colors, errorLevel: "full" });
     if (isObjectLike(err) && isErrorInstance(err)) {
       f.visited.add(err);
       printErrorLike(f, err);

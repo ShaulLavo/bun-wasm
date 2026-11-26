@@ -40,7 +40,7 @@ for (const [name, type, ctx] of [["desktop-chromium", chromium, { viewport: { wi
   await waitFor(page, /sum: 6/);
   await run(page, "bun test");
   await waitFor(page, /5 pass 0 fail/);
-  await run(page, "bun run db.ts");
+  await run(page, "bun run sqlite.ts");
   await waitFor(page, /open todo/);
   await run(page, "bun build math.ts --outdir out --minify && cat out/math.js");
   await waitFor(page, /export\{n as fib/);

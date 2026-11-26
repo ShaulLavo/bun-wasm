@@ -166,7 +166,7 @@ impl Driver {
             .map(|_| bake_types::ReactFastRefresh {
                 import_source: b"react-refresh/runtime".as_slice().into(),
             });
-        bake_types::Framework::new(Default::default(), None, refresh, false)
+        bake_types::Framework::new(Default::default(), None, refresh, Vec::new())
     }
 
     fn bundle(&mut self, entries: EntryPointList, changed: &[Box<[u8]>]) -> Result<(), String> {
@@ -324,9 +324,8 @@ impl Driver {
         for (path, log) in &self.resolution_logs {
             if log.has_errors() {
                 self.graph.client_graph.insert_failure(
-                    incremental_graph::InsertFailureKey::AbsPath(path),
+                    incremental_graph::InsertFailureKey::AbsPath(path, bake_types::Graph::Client),
                     log,
-                    false,
                 )?;
             }
         }

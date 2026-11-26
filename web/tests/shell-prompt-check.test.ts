@@ -118,7 +118,7 @@ const transcriptCallers = [
   "web/tests/browser-prepare-context.ts", "web/tests/browser-solid-stack.ts", "web/tests/browser-stack.mjs", "web/tests/browser-subprocess.ts",
   "web/tests/browser-tools.ts", "web/tests/browser-worker-modules.ts", "web/tests/next-framework-browser.ts",
   "web/tests/browser-playground-stdin.ts", "web/tests/browser-vite-react.ts", "web/tests/browser-next-dev.ts", "web/tests/browser-next-production.ts",
-  "web/tests/shell-stop-check.ts", "scripts/deploy-upgrade-browser.test.ts",
+  "web/tests/shell-stop-check.ts", "scripts/deploy-upgrade-browser.test.ts", "scripts/playground-demos-browser.test.ts",
 ];
 const nonTranscriptCallers = [
   // The coverage selector declares input paths; it never reads a playground transcript.

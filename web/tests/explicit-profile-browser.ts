@@ -67,7 +67,7 @@ function serve(root: string): number {
 }
 
 async function ready(page: Page, base: string, engine: string, profile: string): Promise<void> {
-  await page.goto(`${base}?engine=${engine}&profile=${profile}&mode=memory&prompt=off`);
+  await page.goto(`${base}?engine=${engine}&profile=${profile}&prompt=off`);
   await page.waitForFunction(() => typeof playground !== "undefined", undefined, { timeout: 60_000 });
   assert.equal(await page.evaluate(() => playground.profile), profile);
 }
@@ -134,7 +134,7 @@ async function workerTemplateDefault(page: Page, base: string, engine: string, t
   const observe = (request: import("playwright").Request) => requests.push(new URL(request.url()).pathname);
   page.on("request", observe);
   try {
-    await page.goto(`${base}?template=${template}&engine=${engine}&mode=memory&prompt=off`);
+    await page.goto(`${base}?template=${template}&engine=${engine}&prompt=off`);
     await page.waitForFunction(() => typeof playground !== "undefined", undefined, { timeout: 60_000 });
     assert.equal(new URL(page.url()).searchParams.has("profile"), false);
     assert.deepEqual(await page.evaluate(() => ({ engine: playground.engine, profile: playground.profile })), { engine, profile: "shared-group" });
@@ -164,7 +164,7 @@ async function mismatch(base: string, root: string): Promise<void> {
     if (!await file.exists()) return route.fulfill({ status: 404 });
     return route.fulfill({ body: Buffer.from(await file.arrayBuffer()), contentType: "application/wasm" });
   });
-  await page.goto(`${base}?engine=quickjs&profile=shared-group&mode=memory&prompt=off`);
+  await page.goto(`${base}?engine=quickjs&profile=shared-group&prompt=off`);
   await page.waitForFunction(() => document.querySelector("#status")?.textContent?.includes("profile mismatch"), undefined, { timeout: 60_000 });
   assert.equal(await page.evaluate(() => typeof playground), "undefined");
   const split = ["/bun.wasm", "/bun.wasm.gz", "/quickjs.wasm", "/quickjs.wasm.gz"];
@@ -188,7 +188,7 @@ async function poisonedCache(page: Page, base: string, root: string, engine: "qu
   }, { base, core, hash });
   const requests: string[] = [];
   page.on("request", request => requests.push(new URL(request.url()).pathname));
-  await page.goto(`${base}?engine=${engine}&profile=shared-group&mode=memory&prompt=off`);
+  await page.goto(`${base}?engine=${engine}&profile=shared-group&prompt=off`);
   await page.waitForFunction(() => document.querySelector("#status")?.textContent?.includes("integrity mismatch"), undefined, { timeout: 60_000 });
   assert.equal(requests.some(path => path.endsWith(".wasm.gz") || path.endsWith(".wasm")), false, "a poisoned verified cache refuses execution without a profile retry");
   console.log(JSON.stringify({ poisonedCache: "refused", profileFallback: false }));

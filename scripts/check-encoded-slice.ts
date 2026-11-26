@@ -31,7 +31,7 @@ function method(text: string, name: string): string {
   return text.slice(match.index, end + 6);
 }
 
-const methods = ["from_tagged_ptr", "detach_lifetime", "is_empty", "is_16bit", "is_utf8", "is_globally_allocated", "mark", "untagged", "latin1", "utf8", "utf16", "utf16_global", "untagged_ptr", "slice", "utf16_slice", "byte_slice", "substring_with_len", "substring", "trunc"];
+const methods = ["from_tagged_ptr", "detach_lifetime", "is_empty", "is_16bit", "is_utf8", "mark", "untagged", "latin1", "utf8", "utf16", "untagged_ptr", "slice", "utf16_slice", "byte_slice", "substring_with_len", "substring", "trunc"];
 const representation = source.includes("fn with_flag(") ? ["flags", "with_flag", "addr"] : ["tagged_ptr"];
 const encodedImpl = section(source, "impl<'a> EncodedSlice<'a> {", "\n}\n");
 const selected = methods.concat(representation).map((name) => method(encodedImpl, name)).join("\n");
@@ -40,7 +40,7 @@ const ffiMacro = section(opaque, "#[macro_export]\nmacro_rules! assert_ffi_layou
 const empty = /    pub const EMPTY: Self = [^;]+;/.exec(encodedImpl)?.[0];
 if (!empty) throw new Error("Missing actual EncodedSlice::EMPTY");
 const stringImpl = section(source, "impl String {\n", "\n}\n");
-const stringMethods = ["wrap", "borrow_utf8", "borrow_utf16", "ascii"].map((name) => method(stringImpl, name)).join("\n");
+const stringMethods = ["wrap", "borrow_utf8", "ascii"].map((name) => method(stringImpl, name)).join("\n");
 const sentinels = section(source, "impl String {\n", "\n    #[inline]").trimEnd();
 const tagStart = source.lastIndexOf("#[repr(u8)]", source.indexOf("pub enum Tag"));
 const typeStart = source.lastIndexOf("#[repr(C)]", source.indexOf("pub struct EncodedSlice"));
@@ -68,7 +68,7 @@ ${selected}
 ${sentinels}
 ${stringMethods}
 }
-${probe.replaceAll("PROBE_MAX_MEMORY", String(maxMemoryBytes())).replaceAll("PROBE_UTF8", `${flagPrefix}_UTF8${flagSuffix}`).replaceAll("PROBE_GLOBAL", `${flagPrefix}_GLOBAL${flagSuffix}`).replaceAll("PROBE_UTF16", `${flagPrefix}_UTF16${flagSuffix}`)}
+${probe.replaceAll("PROBE_MAX_MEMORY", String(maxMemoryBytes())).replaceAll("PROBE_UTF8", `${flagPrefix}_UTF8${flagSuffix}`).replaceAll("PROBE_UTF16", `${flagPrefix}_UTF16${flagSuffix}`)}
 `;
 
 function run(command: string, args: string[], input?: string): string {

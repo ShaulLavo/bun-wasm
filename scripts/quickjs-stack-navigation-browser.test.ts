@@ -12,7 +12,7 @@ setDefaultTimeout(120_000);
 
 const consumers = [
   { name: "quickjs", prefix: "quickjs-stack-navigation", open: openQuickjsStackPage },
-  { name: "browser", prefix: "playground-navigation", open: (page: Page, url: string) => openPlaygroundPage(page, `${url}?engine=browser&prompt=off&mode=memory`) },
+  { name: "browser", prefix: "playground-navigation", open: (page: Page, url: string) => openPlaygroundPage(page, `${url}?engine=browser&prompt=off`) },
 ];
 
 test("tools navigation retains its explicit load condition", async () => {
@@ -60,7 +60,7 @@ async function heldResource(engine: BrowserType, consumer: Consumer): Promise<vo
     timer = setTimeout(release, 5_000);
     await consumer.open(page, "http://stack.test/");
     await requested;
-    expect(page.url()).toBe(`http://stack.test/?engine=${consumer.name}&prompt=off&mode=memory`);
+    expect(page.url()).toBe(`http://stack.test/?engine=${consumer.name}&prompt=off`);
     expect(await page.textContent("#status")).toBe("ready");
     expect(await page.evaluate(() => document.readyState)).toBe("interactive");
     expect(await page.evaluate(() => Boolean(Reflect.get(globalThis, "playground")))).toBe(true);
@@ -89,7 +89,7 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
   try {
     browser = await engine.launch();
     const page = await browser.newPage();
-    const target = `${server.url}?engine=${consumer.name}&prompt=off&mode=memory`;
+    const target = `${server.url}?engine=${consumer.name}&prompt=off`;
     const timeout = new errors.TimeoutError("fixture navigation timeout");
     const realGoto = page.goto.bind(page);
     if (mode === "timeout") page.goto = async () => { navigations++; throw timeout; };
@@ -211,7 +211,7 @@ async function isolatedDocument(engine: BrowserType, consumer: Consumer, withCon
     expect(rejected).toEqual([]);
     expect(continued).toEqual(withContextRoute ? ["/"] : []);
     expect(documents).toBe(1);
-    expect(page.url()).toBe(`${server.url}?engine=${consumer.name}&prompt=off&mode=memory`);
+    expect(page.url()).toBe(`${server.url}?engine=${consumer.name}&prompt=off`);
     expect(await page.evaluate(() => crossOriginIsolated)).toBe(true);
     expect(await page.evaluate(() => fetch("/later").then(response => response.text()))).toBe("later");
     // The route is really gone: a second navigation to the same URL runs no recorded handler.

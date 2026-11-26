@@ -1,4 +1,4 @@
-// Generated from Bun 9510e74152073d850a18758ca41114d8f214ffa6, src/js/thirdparty/vercel_fetch.js.
+// Generated from Bun a7733435cf40429e3b35c36072769df2052b80f1, src/js/thirdparty/vercel_fetch.js.
 (function (intrinsics) {
 "use strict";
 var $;
