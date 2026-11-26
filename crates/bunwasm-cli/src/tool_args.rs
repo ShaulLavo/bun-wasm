@@ -5,6 +5,10 @@
 pub struct ToolGlobals {
     pub cwd_before: Option<String>,
     pub bunfig: Option<String>,
+    /// For `bun check`: where among the forwarded arguments the short-flag chain from directly
+    /// before `check` is. Its `b` letters are Bun's `--bun`, and it is a chain even when what
+    /// remains reads like a compiler option: `bun -bt check` rejects `-t`.
+    pub check_chain: Option<usize>,
 }
 
 /// Bun's long flags whose value is the next argument (`AUTO_PARAMS` in upstream
@@ -143,23 +147,14 @@ fn is_chain_of_check(arg: &str) -> bool {
     }
 }
 
-/// What the checker gets for a chain directly before `check`: the whole chain without Bun's `b`
-/// (`--bun` there, as upstream), for the checker's own parser to accept or reject, as upstream's
-/// parses the whole command line. A `p` that ends the chain takes `check` as its value, as there.
+/// What the checker gets for a chain directly before `check`: the chain itself, for the checker's
+/// own parser to accept or reject, as upstream's parses the whole command line. A `p` that ends
+/// the chain takes `check` as its value, as there.
 fn check_chain(chain: &str) -> Vec<String> {
-    let letters = &chain[1..];
-    let (flags, value) = match letters.find('p') {
-        Some(at) => letters.split_at(at),
-        None => (letters, ""),
-    };
-    let flags: String = flags.chars().filter(|letter| *letter != 'b').collect();
-    if flags.is_empty() && value.is_empty() {
-        return Vec::new();
-    }
-    let forwarded = format!("-{flags}{value}");
+    let value = chain.find('p').map_or("", |at| &chain[at..]);
     match value {
-        "p" => vec![forwarded, "check".to_owned()],
-        _ => vec![forwarded],
+        "p" => vec![chain.to_owned(), "check".to_owned()],
+        _ => vec![chain.to_owned()],
     }
 }
 
@@ -200,7 +195,10 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
             flag if flag.starts_with("--config=") || flag.starts_with("-c=") => {
                 globals.bunfig = Some(flag.split_once('=')?.1.to_owned());
             }
-            _ if is_of_check => for_check.extend(check_chain(arg)),
+            _ if is_of_check => {
+                globals.check_chain = Some(for_check.len());
+                for_check.extend(check_chain(arg));
+            }
             flag if evaluates(flag) => return None,
             flag if takes_next_argument(flag) => at += 1,
             flag if is_check_option(flag) => {
@@ -277,13 +275,13 @@ mod tests {
                 &["-papp", "check", "--no-pretty"][..],
                 &["-papp", "--no-pretty"][..],
             ),
-            (&["-bpapp", "check", "app"], &["-papp", "app"]),
+            (&["-bpapp", "check", "app"], &["-bpapp", "app"]),
             (&["-p=app", "check"], &["-p=app"]),
-            (&["-bhpmissing", "check"], &["-hpmissing"]),
-            (&["-bvhpx", "check"], &["-vhpx"]),
-            (&["-hb", "check"], &["-h"]),
-            (&["-bhp", "check"], &["-hp", "check"]),
-            (&["-bp", "check"], &["-p", "check"]),
+            (&["-bhpmissing", "check"], &["-bhpmissing"]),
+            (&["-bvhpx", "check"], &["-bvhpx"]),
+            (&["-hb", "check"], &["-hb"]),
+            (&["-bhp", "check"], &["-bhp", "check"]),
+            (&["-bp", "check"], &["-bp", "check"]),
             (&["-x", "check"], &["-x"]),
             (&["--project=app", "check"], &["--project=app"]),
             (&["--help", "check"], &["--help"]),
@@ -307,6 +305,11 @@ mod tests {
             assert_eq!(command, "check");
             assert_eq!(forwarded, expected, "{args:?}");
         }
+        let (_, forwarded, globals) = select(&["--no-pretty", "-bt", "check", "es2022"]).unwrap();
+        assert_eq!(forwarded, ["--no-pretty", "-bt", "es2022"]);
+        assert_eq!(globals.check_chain, Some(1));
+        let (_, _, globals) = select(&["--no-pretty", "check", "-t", "es2022"]).unwrap();
+        assert_eq!(globals.check_chain, None);
         let (_, forwarded, _) =
             select(&["--no-warnings", "--tsconfig-override", "x", "lint"]).unwrap();
         assert_eq!(forwarded, ["--no-warnings"]);

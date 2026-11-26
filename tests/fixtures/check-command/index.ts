@@ -89,6 +89,7 @@ const chains: [string[], number, string][] = [
   [["-bvhpx", "check"], 1, "'-v'"],
   [["-hx", "check"], 1, "'-x'"],
   [["-x", "check"], 1, "'-x'"],
+  [["-bt", "check", "es2022", "x.ts"], 1, "'-t'"],
   [["check", "-h", "-v"], 1, "'-v'"],
   [["check", "-h", "-p"], 1, "--project"],
   [["-bp", "check"], 1, "TS5058"],

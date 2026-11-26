@@ -31,6 +31,7 @@ fn main() {
             &forwarded,
             typescript_libs::BUNDLED,
             globals.cwd_before.as_deref(),
+            globals.check_chain,
         );
         std::process::exit(code);
     }

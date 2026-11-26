@@ -42,11 +42,17 @@ struct Options {
 const WITH_VALUE: &[&str] = &["cwd", "threads", "project", "tsconfig-override"];
 
 /// Returns the flags, or the usage error to print.
-fn parse_flags(args: &[String]) -> Result<Flags, String> {
+/// `bun_chain`: the index of the short-flag chain that stood before `check`, whose `b` letters
+/// are Bun's `--bun` and which is read as a chain even if the rest looks like `-t`.
+fn parse_flags(args: &[String], bun_chain: Option<usize>) -> Result<Flags, String> {
     let mut flags = Flags::default();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         at += 1;
+        if bun_chain == Some(at - 1) {
+            at = chain_before_check(&mut flags, args, at, arg)?;
+            continue;
+        }
         match arg.as_str() {
             "--" => {
                 flags.paths.extend_from_slice(&args[at..]);
@@ -105,6 +111,19 @@ fn long_or_short(
         return Ok(at);
     }
     short_chain(flags, args, at, shorts)
+}
+
+/// The chain from before `check`: Bun's `b` letters, then the checker's chain rules for the rest.
+fn chain_before_check(
+    flags: &mut Flags,
+    args: &[String],
+    at: usize,
+    arg: &str,
+) -> Result<usize, String> {
+    let shorts = arg.strip_prefix('-').unwrap_or(arg);
+    let (letters, value) = shorts.split_at(shorts.find('p').unwrap_or(shorts.len()));
+    let letters: String = letters.chars().filter(|letter| *letter != 'b').collect();
+    short_chain(flags, args, at, &(letters + value))
 }
 
 /// A chain of `bun check`'s own letters, as upstream's parser reads it: `-b`, `-h`, `-papp`,
@@ -245,8 +264,9 @@ pub(super) fn run(
     args: &[String],
     libs: bun_sema_driver::host::BundledLibs,
     cwd_before: Option<&str>,
+    bun_chain: Option<usize>,
 ) -> i32 {
-    let flags = match parse_flags(args) {
+    let flags = match parse_flags(args, bun_chain) {
         Ok(flags) => flags,
         Err(message) => return usage_error(&message),
     };

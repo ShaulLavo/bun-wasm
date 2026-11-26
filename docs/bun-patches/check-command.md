@@ -20,8 +20,10 @@ to run, so `bun -- --entry.ts check` runs `--entry.ts`. A bare `-` runs standard
 `check`; the CLI now does this for `bun -` as it did for `bun run -`. Of the flags
 before `check`, the checker gets the options that upstream's check command parses
 anywhere on the command line, when they fit in one argument: a short-flag chain directly before
-it, without Bun's `b` (`-bhpapp` reaches the checker as `-hpapp`), so the checker's
-parser accepts or rejects it as upstream's parses the whole command line, `--project=…`,
+it, passed unchanged with its position (`ToolGlobals::check_chain`), so the checker's
+parser treats its `b` letters as Bun's `--bun` and applies chain rules to the rest
+(`bun -bt check` rejects `-t`, which alone after `check` would be `--target`), as
+upstream's parses the whole command line, `--project=…`,
 `--tsconfig-override` in either form, `--threads=…`, `--no-pretty`, `--all`,
 `--timing`, `--no-script`, `--no-emit`, `-h` and `--help`. Bun's other flags there,
 such as `--title=check` or `--no-warnings`, stay Bun's, and `-b`/`--build` there are
