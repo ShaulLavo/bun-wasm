@@ -20,13 +20,13 @@ const s = session("bun-wasm-web-engine-bench-");
 // Seeded examples (src/examples.ts) and a few runtime features, with a marker of success.
 const examples = [
   ["index.ts", "bun run index.ts", /cwd: \/home\/user/],
-  ["files.ts", "bun run files.ts", /json: \{/],
+  ["bun-file.ts", "bun run bun-file.ts", /json: \{/],
   ["node-fs.ts", "bun run node-fs.ts", /out\/file-3\.txt file-3 /],
   ["timers.ts", "bun run timers.ts", /slept with Bun\.sleep/],
   ["jsx.tsx", "bun run jsx.tsx", /ship it<\/li>/],
   ["math.ts", "bun run math.ts", /fib\(20\) = 6765/],
   ["bun test", "bun test", /5 pass\s+0 fail/],
-  ["db.ts", "bun run db.ts", /open todo/],
+  ["sqlite.ts", "bun run sqlite.ts", /open todo/],
   ["bun build", "bun build math.ts --outdir out --minify && cat out/math.js", /export\{\w+ as fib/],
   ["bun -e", "bun -e 'console.log({ sum: [1,2,3].reduce((a,b)=>a+b) }, typeof Bun.version)'", /sum: 6[\s\S]*string/],
   ["Bun.sleepSync", "bun -e 'const t = performance.now(); Bun.sleepSync(100); console.log(\"slept\", performance.now() - t >= 95)'", /slept true/],

@@ -3,7 +3,7 @@ import type { Terminal } from "@xterm/xterm";
 import { copyTerminal } from "./terminal-copy";
 
 /** Copies the terminal's text, scrollback included, and shows the outcome for 2.5 s. Shared by both pages. */
-export function CopyButton(handle: Handle<{ term?: Terminal }>) {
+export function CopyButton(handle: Handle<{ term?: Terminal; id?: string }>) {
   let text = "Copy";
   let reset: ReturnType<typeof setTimeout> | undefined;
   handle.signal.addEventListener("abort", () => clearTimeout(reset));
@@ -16,6 +16,6 @@ export function CopyButton(handle: Handle<{ term?: Terminal }>) {
     reset = setTimeout(() => { text = "Copy"; void handle.update(); }, 2500);
   });
   return () => (
-    <button id="copy-terminal" type="button" title="Copy terminal output, including scrollback" aria-live="polite" mix={copy}>{text}</button>
+    <button id={handle.props.id ?? "copy-terminal"} class="copy-terminal" type="button" title="Copy terminal output, including scrollback" aria-live="polite" mix={copy}>{text}</button>
   );
 }

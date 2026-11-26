@@ -1,4 +1,4 @@
-import { mapProgramFiles, parseProgramFiles, programKind, programProfile, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
+import { mapProgramFiles, pairedEngineKinds, parseProgramFiles, programKind, programProfile, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
@@ -39,41 +39,82 @@ export function decodeGuest(input: Uint8Array): Uint8Array {
   return bytes;
 }
 
+export function validateArtifactName(name: string): string {
+  if (!/^[a-z0-9][a-z0-9._-]*\.wasm$/.test(name) || name.includes("..")) {
+    throw new Error(`Invalid WASM artifact name: ${name}`);
+  }
+  return name;
+}
+
 export function describeGuest(input: Uint8Array, origin = GUEST_ORIGIN, name = "bun.wasm"): GuestFileDescriptor {
+  const validName = validateArtifactName(name);
   const base = new URL(origin);
   if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash || base.pathname !== "/") {
     throw new Error("Guest origin must be a plain HTTPS origin");
   }
   const bytes = decodeGuest(input);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
-  return { url: `${base.origin}/${sha256}/${name}.gz`, sha256, bytes: bytes.byteLength };
+  return { url: `${base.origin}/${sha256}/${validName}.gz`, sha256, bytes: bytes.byteLength };
 }
 
-function prepareFile(input: Uint8Array, origin: string, name: string): GuestFile {
+export function prepareArtifact(input: Uint8Array, origin = GUEST_ORIGIN, name = "bun.wasm"): GuestFile {
+  const validName = validateArtifactName(name);
   const bytes = decodeGuest(input);
-  const descriptor = describeGuest(bytes, origin, name);
-  return { descriptor, key: `${descriptor.sha256}/${name}.gz`, gzip: gzipSync(bytes, { level: 9 }) };
+  const descriptor = describeGuest(bytes, origin, validName);
+  return { descriptor, key: `${descriptor.sha256}/${validName}.gz`, gzip: gzipSync(bytes, { level: 9 }) };
 }
 
 export function prepareGuest(input: ProgramFiles<Uint8Array>, origin = GUEST_ORIGIN): GuestArtifact {
   const coreBytes = decodeGuest(input.core);
   if (programKind(new WebAssembly.Module(Uint8Array.from(coreBytes))) !== input.kind) throw new Error("Guest program does not match core engine declaration");
-  const core = prepareFile(coreBytes, origin, input.kind === "single" ? "bun.wasm" : programProfile(input.kind).core);
+  const core = prepareArtifact(coreBytes, origin, input.kind === "single" ? "bun.wasm" : programProfile(input.kind).core);
   if (input.kind === "single") return { files: { kind: "single", core }, descriptor: { kind: "single", core: core.descriptor } };
   const sideBytes = decodeGuest(input.side);
   verifyProgramSide(input.kind, new WebAssembly.Module(Uint8Array.from(sideBytes)));
-  const side = prepareFile(sideBytes, origin, programProfile(input.kind).side);
+  const side = prepareArtifact(sideBytes, origin, programProfile(input.kind).side);
   const files = { kind: input.kind, core, side };
   return { files, descriptor: mapProgramFiles(files, file => file.descriptor) };
 }
 
+export function parseGuestFileDescriptor(value: unknown): GuestFileDescriptor {
+  if (!value || typeof value !== "object" || !("url" in value) || typeof value.url !== "string"
+    || !("sha256" in value) || typeof value.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.sha256)
+    || !("bytes" in value) || typeof value.bytes !== "number" || !Number.isSafeInteger(value.bytes) || value.bytes < 8) {
+    throw new TypeError("Invalid guest file descriptor");
+  }
+  return { url: value.url, sha256: value.sha256, bytes: value.bytes };
+}
+
 export function parseGuestDescriptor(value: unknown): GuestDescriptor {
-  return parseProgramFiles(value, file => {
-    if (!file || typeof file !== "object" || !("url" in file) || typeof file.url !== "string"
-      || !("sha256" in file) || typeof file.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(file.sha256)
-      || !("bytes" in file) || typeof file.bytes !== "number" || !Number.isSafeInteger(file.bytes) || file.bytes < 8) throw new TypeError("Invalid guest file descriptor");
-    return { url: file.url, sha256: file.sha256, bytes: file.bytes };
-  });
+  return parseProgramFiles(value, parseGuestFileDescriptor);
+}
+
+const BUN_GUEST_IMPORT_MODULES = new Set(["bun_package_scripts"]);
+const BUN_GUEST_EXPORTS = new Set(
+  ["bun_wasm_host_slots", "bun_core_bind_engine", "bunwasm_ready", "bunwasm_alloc", "bunwasm_call", "bunwasm_describe"]
+    .concat(pairedEngineKinds.flatMap(kind => {
+      const profile = programProfile(kind);
+      const names: string[] = [profile.run];
+      return names.concat(profile.initialize, profile.initializeMemory);
+    })),
+);
+
+export function assertStandaloneArtifactModule(module: WebAssembly.Module): void {
+  if (programKind(module) !== "single") {
+    throw new Error("Standalone artifact must be a single-module WASM file, not a Bun paired core");
+  }
+  if (WebAssembly.Module.imports(module).some(entry => BUN_GUEST_IMPORT_MODULES.has(entry.module))) {
+    throw new Error("Bun guest modules must use the default Bun guest publication path without --name");
+  }
+  if (WebAssembly.Module.exports(module).some(entry => BUN_GUEST_EXPORTS.has(entry.name))) {
+    throw new Error("Bun guest or engine modules must use the default Bun guest publication path without --name");
+  }
+}
+
+export async function readArtifactFile(path: string, origin = GUEST_ORIGIN, name = "bun.wasm"): Promise<GuestFile> {
+  const bytes = decodeGuest(await readFile(path));
+  assertStandaloneArtifactModule(new WebAssembly.Module(Uint8Array.from(bytes)));
+  return prepareArtifact(bytes, origin, name);
 }
 
 export async function readGuestArtifact(path: string, origin = GUEST_ORIGIN): Promise<GuestArtifact> {
