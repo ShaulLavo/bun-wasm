@@ -241,6 +241,10 @@ test("ioBeginPump skips idle hot turns and wakes immediately on process, watch, 
     TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask,
     SLOT_NAMES: [], Atomics, AggregateError,
     createScriptEvaluation: () => ({}),
+    transferArrayBuffers: () => {},
+    isWasmMemoryBuffer: () => false,
+    bindSharedObjectHost: () => ({}),
+    hostCrypto: () => ({}),
     Date: Object.assign(function FakeDate() { return new Date(now); }, { now: () => now }),
   });
   const proto = (hostClass as { prototype: { valueNatives: (m: unknown) => Record<string, (...a: unknown[]) => unknown> } }).prototype;
