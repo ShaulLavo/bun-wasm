@@ -280,10 +280,11 @@ impl Roots {
         self.walk_in(start, path, follow, directories, None, false)
     }
 
-    fn check_scope(&self, guest: &str, scope: Option<&ProbeScope<'_>>) -> Result<(), i32> {
+    fn check_scope(&self, current: &str, scope: Option<&ProbeScope<'_>>) -> Result<(), i32> {
         let Some(scope) = scope else {
             return Ok(());
         };
+        let guest = if current.is_empty() { "/" } else { current };
         let (root, _) = self.mount(guest).ok_or(NOENT)?;
         if !scope.allows(root, guest) {
             return Err(PERM);
@@ -318,16 +319,14 @@ impl Roots {
             if from_start {
                 start_remaining -= 1;
             }
+            let step_scope = if from_start { None } else { scope };
             // The component before a mark is no longer last, so it must be a directory.
             if part == DIRECTORY {
                 continue;
             }
             if part == ".." {
                 current.truncate(current.rfind('/').unwrap_or(0));
-                if !from_start {
-                    let step = if current.is_empty() { "/" } else { &current };
-                    self.check_scope(step, scope)?;
-                }
+                self.check_scope(&current, step_scope)?;
                 continue;
             }
             let parent = current.len();
@@ -337,7 +336,6 @@ impl Roots {
             if last && !follow {
                 break;
             }
-            let step_scope = if from_start { None } else { scope };
             match self.kind_in(&current, step_scope) {
                 Kind::Link(target) => {
                     links += 1;
