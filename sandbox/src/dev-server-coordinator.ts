@@ -1082,12 +1082,16 @@ export class DevServerCoordinator {
     }
     if (!stillWanted()) return { ok: false, error: RESTART_NOT_WANTED };
     if (this.needsRuntimeRecycleBeforeRestart()) {
+      // The target is checked until it passes once, right before retirement stops it. After that
+      // it is gone by design, and ownership, reset and cancellation alone gate disposal and reopen.
+      let targetConfirmed = false;
+      const targetStillWanted = () => targetConfirmed || (targetConfirmed = stillWanted());
       const retired = await this.host.retireRuntime({
         mode: "reopen",
         stopReason: "restarting",
         timeoutMs: this.stopWaitMs,
         signal: controller.signal,
-        shouldBegin: () => this.isActiveOwnerAttempt(attemptId) && stillWanted(),
+        shouldBegin: () => this.isActiveOwnerAttempt(attemptId) && targetStillWanted(),
         shouldReopen: () => this.isActiveOwnerAttempt(attemptId),
       });
       if (!retired.ok) {

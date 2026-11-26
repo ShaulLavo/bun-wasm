@@ -736,9 +736,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     return true;
   }
 
-  /** A command is installing or starting, or a reset is replacing the workspace. */
+  /** A command is installing or starting, a reset is replacing the workspace, or a retirement
+   * has none usable yet. */
   private listingBlocked(): boolean {
     if (this.resetting || this.localResetting || this.coordinator?.hasActiveResetIntent()) return true;
+    if (this.runtimeRecycling !== null || !this.isWorkspaceUsable(this.workspace)) return true;
     return this.run !== null && this.restartableRun() === null;
   }
 
@@ -1775,6 +1777,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     } finally {
       if (this.lifecycleTransition === slotPromise) this.lifecycleTransition = null;
       releaseSlot();
+      // Listings that waited for a usable workspace run once retirement leaves one.
+      this.runDeferredListing();
     }
   }
 

@@ -329,6 +329,33 @@ test("deferred listing work survives a Reset template that stops the install and
   } finally { await f.cleanup(); }
 });
 
+test("a deferred file-tree refresh waits for the workspace a retirement reopens", async () => {
+  const f = await fixture();
+  try {
+    await method<Reconcile>(f.sandbox, "handleWatchReconcile")("fs-overflow");
+    // The install wrote this; the tree may show it only after a listing that ran on a usable workspace.
+    f.page.fixture.files.set("/home/user/app/installed.txt", "x");
+    // Hold disposal so the stopped install exits while the retirement has no workspace.
+    const disposing = deferred<void>();
+    const hold = deferred<void>();
+    const runtime = f.page.runtime;
+    runtime.dispose = async () => { disposing.resolve(); await hold.promise; };
+    const retired = method<(options: { mode: "reopen"; stopReason: string; timeoutMs: number }) => Promise<unknown>>(f.sandbox, "retireRuntime")({
+      mode: "reopen",
+      stopReason: "restarting",
+      timeoutMs: 5_000,
+    });
+    await Promise.race([disposing.promise, Bun.sleep(2_000)]);
+    expect(Reflect.get(f.sandbox, "workspace")).toBeNull();
+    f.install.done.resolve({ code: 137 });
+    for (let i = 0; i < 5; i++) await turn();
+    hold.resolve();
+    await retired;
+    for (let i = 0; i < 5; i++) await turn();
+    expect(f.sandbox.files).toContain("installed.txt");
+  } finally { await f.cleanup(); }
+});
+
 test("a retirement says the cause it was given, once", async () => {
   const f = await fixture();
   try {

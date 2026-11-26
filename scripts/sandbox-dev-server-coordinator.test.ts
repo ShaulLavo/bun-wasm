@@ -178,6 +178,8 @@ function makeTab(
       h.devActive = false;
       h.retiredCount++;
       h.stopReasons.push(opts.stopReason);
+      // Like Sandbox.retireRuntime, ask again after stopping the run, before disposing.
+      if (opts.mode === "reopen" && opts.shouldBegin && !opts.shouldBegin()) return { ok: false, reason: "other" };
       if (h.workspace) (h.workspace.runtime as any).disposed = true;
       h.workspace = null;
       if (opts.mode === "reopen") {
@@ -344,6 +346,22 @@ test("an automatic restart does nothing once its target ended, even queued behin
   expect(first.ok).toBe(true);
   expect(second.ok).toBe(false);
   expect(owner.retiredCount).toBe(1);
+  expect(owner.stopReasons).toEqual(["restarting"]);
+  expect(owner.launches).toBe(launches + 1);
+  owner.coordinator.stop();
+});
+
+test("an automatic restart relaunches after stopping its target, which then no longer runs", async () => {
+  const locks = new TestLockManager();
+  const hub = new TestBroadcastHub();
+  const owner = makeTab("tab-owner", locks, hub, new MemoryClaimsStore(), createSharedResetState());
+  await owner.coordinator.attemptElection();
+  await wait();
+  expect(owner.coordinator.role).toBe("owner");
+  const launches = owner.launches;
+  // The target is the serving run; retirement stops it, so it is gone when retirement re-checks.
+  const result = await owner.coordinator.restartOwnedDevServer(() => owner.devActive);
+  expect(result).toEqual({ ok: true });
   expect(owner.stopReasons).toEqual(["restarting"]);
   expect(owner.launches).toBe(launches + 1);
   owner.coordinator.stop();
