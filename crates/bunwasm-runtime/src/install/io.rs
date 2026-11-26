@@ -72,6 +72,15 @@ impl Registry {
     }
 
     fn safe_text(&self, message: &str) -> bool {
+        // Every authentication marker and every URL contains ':', so most strings (names,
+        // versions, ranges) need only the secret check, without allocating.
+        if !message.contains(':') {
+            // Replacing a secret that is itself the placeholder changes nothing.
+            return !self
+                .secrets
+                .iter()
+                .any(|secret| secret != "[redacted]" && message.contains(secret.as_str()));
+        }
         !has_embedded_auth(message) && self.redact(message) == message
     }
 
@@ -241,21 +250,25 @@ pub fn read(path: &Path, format: &str, parser: &dyn Transpiler) -> Result<Value>
 }
 
 pub fn write(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomically(path, bytes).map_err(|e| e.to_string())
+}
+
+/// `write`, keeping the I/O error so callers can tell its kind.
+pub(super) fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut random = [0u8; 16];
-    getrandom::fill(&mut random).map_err(|e| e.to_string())?;
+    getrandom::fill(&mut random).map_err(|e| std::io::Error::other(e.to_string()))?;
     let temp = path.with_extension(format!("bun-wasm-tmp-{:x}", u128::from_le_bytes(random)));
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&temp)
-        .map_err(|e| e.to_string())?;
+        .open(&temp)?;
     let written = file.write_all(bytes);
     drop(file);
     let result = written.and_then(|()| fs::rename(&temp, path));
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }
-    result.map_err(|e: std::io::Error| e.to_string())
+    result
 }
 
 pub fn cache_dir() -> PathBuf {
@@ -273,6 +286,44 @@ pub fn fetch(url: &str, tarball: bool, refresh: bool, registry: &Registry) -> Re
 
 fn cache_path(url: &str) -> PathBuf {
     cache_dir().join(format!("{:x}", Sha256::digest(url.as_bytes())))
+}
+
+/// The install cache directory, created at most once per `Downloads`: each filesystem call
+/// is a host round trip in the browser. A write that fails with `NotFound` because the
+/// directory has since disappeared creates it again and retries once; any other failure
+/// leaves the entry absent, as before.
+#[derive(Default)]
+pub(super) struct CacheWriter {
+    created: bool,
+}
+
+impl CacheWriter {
+    /// Writes `bytes` as the cache file for `url`.
+    pub(super) fn store(&mut self, url: &str, bytes: &[u8]) {
+        self.store_with(url, bytes, write_atomically);
+    }
+
+    /// `store` with the atomic write it uses passed in, so tests can make it fail.
+    pub(super) fn store_with(
+        &mut self,
+        url: &str,
+        bytes: &[u8],
+        mut write: impl FnMut(&Path, &[u8]) -> std::io::Result<()>,
+    ) {
+        if !self.created && fs::create_dir_all(cache_dir()).is_err() {
+            return;
+        }
+        self.created = true;
+        let path = cache_path(url);
+        let Err(error) = write(&path, bytes) else {
+            return;
+        };
+        // Only a write that found no cache directory is retried; any other error stands.
+        let missing = error.kind() == std::io::ErrorKind::NotFound && !cache_dir().exists();
+        if missing && fs::create_dir_all(cache_dir()).is_ok() {
+            let _ = write(&path, bytes);
+        }
+    }
 }
 
 /// Tarballs are immutable; metadata stays fresh for five minutes.
@@ -326,6 +377,7 @@ pub struct Downloads {
     /// One read buffer for every response: a read that finds nothing allocates nothing,
     /// and bodies grow only by the bytes that arrived.
     scratch: Vec<u8>,
+    cache: CacheWriter,
 }
 
 impl Downloads {
@@ -336,6 +388,7 @@ impl Downloads {
             pending: Vec::new(),
             pumped: None,
             scratch: Vec::new(),
+            cache: CacheWriter::default(),
         }
     }
 
@@ -539,7 +592,9 @@ impl Download {
         completed?;
         let bytes = std::mem::take(&mut self.body);
         trace::time(store, || {
-            store_cache(&self.url, &bytes, self.tarball, registry)
+            if cacheable(&bytes, self.tarball, registry) {
+                others.cache.store(&self.url, &bytes);
+            }
         });
         Ok(bytes)
     }
@@ -614,12 +669,6 @@ impl Download {
 fn response_status(head: &[u8]) -> Result<u64> {
     let head: Value = serde_json::from_slice(head).map_err(|e| e.to_string())?;
     Ok(head["status"].as_u64().unwrap_or(0))
-}
-
-fn store_cache(url: &str, bytes: &[u8], tarball: bool, registry: &Registry) {
-    if cacheable(bytes, tarball, registry) && fs::create_dir_all(cache_dir()).is_ok() {
-        let _ = write(&cache_path(url), bytes);
-    }
 }
 
 fn idle_timeout() -> Duration {
@@ -813,18 +862,18 @@ pub fn archive_manifest(bytes: &[u8]) -> Result<Value> {
     manifest.ok_or_else(|| "Tarball has no package.json".into())
 }
 
-/// Extracts into `destination`. `tick` runs once per entry so other downloads keep moving
-/// during long extractions.
+/// Extracts into `destination`, an existing empty directory. `tick` runs once per entry so
+/// other downloads keep moving during long extractions.
 pub fn extract(bytes: &[u8], destination: &Path, tick: &mut dyn FnMut()) -> Result<()> {
-    let mut directories = BTreeSet::new();
+    let mut directories = Directories::new(destination);
     let mut buffer = Vec::new();
     visit_archive(bytes, |entry, path| {
         tick();
         let target = destination.join(path);
         if entry.header().entry_type().is_dir() {
-            return create_directory(&target);
+            return directories.create(&target);
         }
-        ensure_parent(&mut directories, &target)?;
+        directories.create_parent(&target)?;
         // Grows to the largest file seen, exactly, and never past `EXTRACT_CHUNK`.
         let wanted = (entry.size() as usize).clamp(1, EXTRACT_CHUNK);
         if buffer.len() < wanted {
@@ -833,6 +882,42 @@ pub fn extract(bytes: &[u8], destination: &Path, tick: &mut dyn FnMut()) -> Resu
         }
         write_entry(entry, &target, &mut buffer)
     })
+}
+
+/// The directories extraction created, so each costs one `mkdir` and files in them none.
+struct Directories {
+    known: BTreeSet<PathBuf>,
+}
+
+impl Directories {
+    fn new(root: &Path) -> Self {
+        Self {
+            known: BTreeSet::from([root.to_path_buf()]),
+        }
+    }
+
+    fn create_parent(&mut self, target: &Path) -> Result<()> {
+        self.create(target.parent().unwrap())
+    }
+
+    /// `fs::create_dir_all` that skips the directories it already made or saw. Under a known
+    /// parent it tries one `mkdir`; otherwise, or if that fails, it runs `create_dir_all` on
+    /// the same path, so every error is the one `create_dir_all` reports.
+    fn create(&mut self, path: &Path) -> Result<()> {
+        if self.known.contains(path) {
+            return Ok(());
+        }
+        let parent_known = path
+            .parent()
+            .is_some_and(|parent| self.known.contains(parent));
+        if !parent_known || create_directory(path).is_err() {
+            trace::time("extract-mkdir", || fs::create_dir_all(path)).map_err(|e| e.to_string())?;
+        }
+        if self.known.len() < 1024 {
+            self.known.insert(path.to_path_buf());
+        }
+        Ok(())
+    }
 }
 
 /// Each write is a host filesystem call in the browser, so files up to this size are
@@ -871,20 +956,13 @@ fn fill(entry: &mut impl Read, buffer: &mut [u8]) -> std::io::Result<usize> {
     Ok(filled)
 }
 
+/// One `mkdir` whose parent exists. An existing directory is fine, as with `create_dir_all`.
 fn create_directory(path: &Path) -> Result<()> {
-    trace::time("extract-mkdir", || fs::create_dir_all(path)).map_err(|e| e.to_string())
-}
-
-fn ensure_parent(directories: &mut BTreeSet<PathBuf>, target: &Path) -> Result<()> {
-    let parent = target.parent().unwrap();
-    if directories.contains(parent) {
-        return Ok(());
-    }
-    create_directory(parent)?;
-    if directories.len() < 1024 {
-        directories.insert(parent.to_path_buf());
-    }
-    Ok(())
+    trace::time("extract-mkdir", || match fs::create_dir(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        result => result,
+    })
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -914,6 +992,39 @@ mod tests {
             assert!(!cacheable(&bytes, false, &registry));
         }
         assert!(!cacheable(b"{", false, &registry));
+    }
+
+    #[test]
+    fn the_colon_free_fast_path_agrees_with_full_redaction() {
+        let registry = Registry::configured(&json!({
+            "url": "https://registry.invalid",
+            "username": "user",
+            "password": "pass-word"
+        }))
+        .unwrap();
+        for text in [
+            "^1.2.3",
+            "left-pad",
+            "my pass-word here",
+            "dXNlcjpwYXNzLXdvcmQ=",
+            "//registry.invalid/:_authToken=abc",
+            "https://registry.invalid/a/-/a-1.0.0.tgz",
+            "https://registry.invalid/a.tgz?token=1",
+            "",
+        ] {
+            let full = !has_embedded_auth(text) && registry.redact(text) == text;
+            assert_eq!(registry.safe_text(text), full, "{text:?}");
+        }
+        // A secret that is the placeholder itself: replacing it changes nothing.
+        let placeholder = Registry::configured(&json!({
+            "url": "https://registry.invalid",
+            "token": "[redacted]"
+        }))
+        .unwrap();
+        for text in ["see [redacted] here", "plain"] {
+            let full = !has_embedded_auth(text) && placeholder.redact(text) == text;
+            assert_eq!(placeholder.safe_text(text), full, "{text:?}");
+        }
     }
 
     /// A reader that offers `available` bytes in total, then reports `then`.
@@ -1074,6 +1185,47 @@ mod archive_tests {
             archive.append(&header, *bytes).unwrap();
         }
         archive.into_inner().unwrap().finish().unwrap()
+    }
+
+    fn extracted(entries: &[(&str, tar::EntryType, &[u8])]) -> (PathBuf, Result<()>) {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let index = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("bun-wasm-extract-{}-{index}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        let result = extract(&archive(entries), &root, &mut || {});
+        (root, result)
+    }
+
+    #[test]
+    fn extraction_creates_directories_once_and_reports_create_dir_all_errors() {
+        use tar::EntryType::{Directory, Regular};
+        let (root, result) = extracted(&[
+            ("package/lib/", Directory, b""),
+            ("package/lib/a.js", Regular, b"a"),
+            ("package/deep/er/b.js", Regular, b"b"),
+        ]);
+        result.unwrap();
+        assert_eq!(fs::read(root.join("lib/a.js")).unwrap(), b"a");
+        assert_eq!(fs::read(root.join("deep/er/b.js")).unwrap(), b"b");
+        fs::remove_dir_all(root).unwrap();
+        for conflict in ["package/clash/inner.js", "package/clash/deeper/inner.js"] {
+            let (root, result) = extracted(&[
+                ("package/clash", Regular, b"file"),
+                (conflict, Regular, b"x"),
+            ]);
+            let parent = Path::new(conflict)
+                .strip_prefix("package")
+                .unwrap()
+                .parent()
+                .unwrap();
+            let expected = fs::create_dir_all(root.join(parent))
+                .unwrap_err()
+                .to_string();
+            assert_eq!(result.unwrap_err(), expected, "{conflict}");
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

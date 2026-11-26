@@ -1,0 +1,9 @@
+{
+  "owner": "browser-guest",
+  "path": "scripts/embed-browser.test.ts",
+  "inputs": [
+    "src/run-bun.ts",
+    "tests/embed/main.ts",
+    "web/src/bun-launcher.ts"
+  ]
+}

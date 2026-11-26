@@ -1,0 +1,9 @@
+{
+  "owner": "browser-guest",
+  "path": "scripts/cjs-reread-browser.test.ts",
+  "inputs": [
+    "crates/bunwasm-runtime/src/engine_host.rs",
+    "crates/bunwasm-runtime/src/modules.rs",
+    "web/src/module-records.ts"
+  ]
+}

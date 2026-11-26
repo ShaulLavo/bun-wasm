@@ -22,7 +22,7 @@ import { DescriptorTable } from "waffle/core/descriptors";
 import { createFilesystemIdentity } from "waffle/fs";
 import { installRuntimeSharedObjects } from "../src/shared-objects/runtime";
 import { createSharedObjects } from "../src/shared-objects/service";
-import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
+import { answerNotificationRelayDrop, isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 /** The shared signal words of the process a request roots. */
 const signalsOf = (request: RunRequest) => workerProcessState(request.runtimeProcess!).signals;
@@ -62,7 +62,7 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
     onmessage: ((event: MessageEvent) => void) | null = null;
     terminated = 0;
     postMessage(value: RunRequest) {
-      if (isNotificationBridgeRequest(value)) return;
+      if (answerNotificationRelayDrop(this, value) || isNotificationBridgeRequest(value)) return;
       // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
       request ??= value; worker ??= this; const pid = pidOf(value); requests.set(pid, value); workers.set(pid, this);
       pending.get(pid)?.(value); posted();
@@ -381,6 +381,7 @@ test("concurrent roots on one runtime inherit independent engine PATHs without r
     terminated = false;
     constructor() { workers.push(this); }
     postMessage(request: RunRequest) {
+      if (answerNotificationRelayDrop(this, request)) return;
       if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
       this.request = request; requests.set(pidOf(request), request);
     }
@@ -457,6 +458,7 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
     terminated = false;
     constructor() { workers.push(this); }
     postMessage(request: RunRequest) {
+      if (answerNotificationRelayDrop(this, request)) return;
       if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
       this.request = request;
     }

@@ -10,7 +10,7 @@ import { workerProcessState } from "waffle/proc/worker-client";
 import type { RunRequest } from "../src/bun-executor";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { importingModule, rootFixture } from "./process-root-fixture";
-import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
+import { answerNotificationRelayDrop, isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 
@@ -74,7 +74,7 @@ test("spawn requests keep their explicit executable without root-specific rewrit
     readonly notification: boolean;
     constructor(url: string | URL) { this.notification = isNotificationWorkerUrl(url); }
     postMessage(value: RunRequest) {
-      if (this.notification || isNotificationBridgeRequest(value)) return;
+      if (answerNotificationRelayDrop(this, value) || this.notification || isNotificationBridgeRequest(value)) return;
       requests.push(value);
     }
     terminate() {}

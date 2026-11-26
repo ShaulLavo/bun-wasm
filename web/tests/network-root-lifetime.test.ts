@@ -6,7 +6,7 @@ import type { RuntimeNetwork, RuntimeNetworkHelper } from "waffle";
 import { startRun } from "../src/runner";
 import type { RunRequest, WorkerMessage } from "../src/bun-executor";
 import { processRuntimeFixture, fixtureFilesystemConnection } from "./process-runtime-fixture";
-import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
+import { answerNotificationRelayDrop, isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 function fixture(constructionFailure = false, directory?: Promise<{ handle: number; release(): void }>) {
   const previousWorker = globalThis.Worker;
@@ -29,6 +29,7 @@ function fixture(constructionFailure = false, directory?: Promise<{ handle: numb
       if (!this.relay) workers.push(this);
     }
     postMessage(request: unknown) {
+      if (answerNotificationRelayDrop(this, request)) return;
       if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
       posted.resolve(request as RunRequest);
     }
