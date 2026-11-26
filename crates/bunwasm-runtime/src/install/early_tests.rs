@@ -2,11 +2,13 @@
 use std::{collections::BTreeMap, fs, path::Path, process::Command};
 
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::{
-    Package, Resolver, early::Early, install_packages, installed_source_path, io,
-    resolve::test_support::archive, trace,
+    Package, Resolver,
+    early::Early,
+    install_packages, installed_source_path, io,
+    resolve::test_support::{archive_entries, cache_archive, seed_cache},
+    trace,
 };
 
 fn package(name: &str, chain: &[&str], meta: Value) -> Package {
@@ -61,16 +63,6 @@ fn child() -> bool {
     std::env::var_os("BUN_WASM_EARLY_CHILD").is_some()
 }
 
-fn seed(packages: &[&Package]) {
-    fs::create_dir_all(io::cache_dir()).unwrap();
-    for package in packages {
-        let meta = json!({"name": package.name, "version": package.version});
-        let cache =
-            io::cache_dir().join(format!("{:x}", Sha256::digest(package.tarball.as_bytes())));
-        fs::write(cache, archive(&meta)).unwrap();
-    }
-}
-
 fn registry() -> io::Registry {
     io::Registry::new("http://registry.invalid").unwrap()
 }
@@ -93,7 +85,7 @@ fn nested_packages_wait_for_their_ancestors() {
     let outer = plain("outer", &["outer"]);
     let nested = plain("inner", &["outer", "inner"]);
     let lone = plain("lone", &["missing", "lone"]);
-    seed(&[&outer, &nested, &lone]);
+    seed_cache(&[&outer, &nested, &lone]);
     let mut early = Early::new(false);
     early.added(&outer, None, &registry());
     early.added(&nested, Some("outer"), &registry());
@@ -133,7 +125,7 @@ fn reconciliation_removes_what_the_final_graph_dropped_or_changed() {
     let dropped = plain("dropped", &["dropped"]);
     let changed = plain("changed", &["changed"]);
     let inside = plain("inside", &["changed", "inside"]);
-    seed(&[&kept, &dropped, &changed, &inside]);
+    seed_cache(&[&kept, &dropped, &changed, &inside]);
     let mut early = Early::new(false);
     for (package, parent) in [
         (&kept, None),
@@ -167,7 +159,7 @@ fn the_install_phase_skips_early_installs_and_counts_them() {
     }
     let first = package("first", &["first"], json!({"bin": "cli.js"}));
     let second = plain("second", &["second"]);
-    seed(&[&first, &second]);
+    seed_cache(&[&first, &second]);
     let mut resolver = Resolver::new(registry(), json!({}), false);
     let mut early = Early::new(false);
     early.added(&first, None, &registry());
@@ -215,7 +207,7 @@ fn a_final_graph_that_hoists_differently_replaces_early_installs() {
     let user = plain("user", &["user"]);
     let inside = versioned("shared", "1.0.0", &["user", "shared"]);
     let final_root = versioned("shared", "2.0.0", &["shared"]);
-    seed(&[&early_root, &user, &final_root]);
+    seed_cache(&[&early_root, &user, &final_root]);
     let mut early = Early::new(false);
     early.added(&early_root, None, &registry());
     early.added(&user, None, &registry());
@@ -242,7 +234,7 @@ fn an_interrupted_early_install_leaves_only_complete_packages() {
     }
     let done = plain("done", &["done"]);
     let cut = plain("cut", &["cut"]);
-    seed(&[&done, &cut]);
+    seed_cache(&[&done, &cut]);
     let mut early = Early::new(false);
     early.added(&done, None, &registry());
     assert_eq!(drain(&mut early), 1);
@@ -288,14 +280,8 @@ fn extraction_pauses_whenever_resolution_has_its_response() {
         ("package/lib/b.js".into(), b"b".to_vec()),
         ("package/lib/c.js".into(), b"c".to_vec()),
     ];
-    fs::create_dir_all(io::cache_dir()).unwrap();
-    let cache = io::cache_dir().join(format!("{:x}", Sha256::digest(parent.tarball.as_bytes())));
-    fs::write(
-        cache,
-        super::resolve::test_support::archive_entries(&entries),
-    )
-    .unwrap();
-    seed(&[&child]);
+    cache_archive(&parent.tarball, &archive_entries(&entries));
+    seed_cache(&[&child]);
     let mut early = Early::new(false);
     early.added(&parent, None, &registry());
     early.added(&child, Some("parent"), &registry());
@@ -328,13 +314,7 @@ fn settling_finishes_a_paused_extraction() {
         ),
         ("package/a.js".into(), b"a".to_vec()),
     ];
-    fs::create_dir_all(io::cache_dir()).unwrap();
-    let cache = io::cache_dir().join(format!("{:x}", Sha256::digest(parent.tarball.as_bytes())));
-    fs::write(
-        cache,
-        super::resolve::test_support::archive_entries(&entries),
-    )
-    .unwrap();
+    cache_archive(&parent.tarball, &archive_entries(&entries));
     let mut early = Early::new(false);
     early.added(&parent, None, &registry());
     assert!(early.work(&mut io::Downloads::new(0), &registry(), &mut || true));

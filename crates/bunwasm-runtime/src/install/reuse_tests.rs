@@ -2,11 +2,12 @@
 use std::{fs, path::Path, process::Command};
 
 use serde_json::json;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 
 use super::{
     Archives, Package, Resolver, install_packages, installed_source_path, io,
-    resolve::test_support::archive, trace,
+    resolve::test_support::{cache_file, seed_cache},
+    trace,
 };
 
 fn package(name: &str, chain: &[&str]) -> Package {
@@ -49,16 +50,6 @@ fn in_child(name: &str, variable: &str) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-fn seed_cache(packages: &[&Package]) {
-    fs::create_dir_all(io::cache_dir()).unwrap();
-    for package in packages {
-        let meta = json!({"name": package.name, "version": package.version});
-        let cache =
-            io::cache_dir().join(format!("{:x}", Sha256::digest(package.tarball.as_bytes())));
-        fs::write(cache, archive(&meta)).unwrap();
-    }
 }
 
 fn resolver(packages: &[&Package]) -> Resolver {
@@ -229,8 +220,7 @@ fn an_archive_that_failed_is_not_reused() {
     let mut optional = package("tool", &["a-optional"]);
     let mut required = package("tool", &["b-required"]);
     seed_cache(&[&required]);
-    let cached = io::cache_dir().join(format!("{:x}", Sha256::digest(required.tarball.as_bytes())));
-    let bytes = fs::read(cached).unwrap();
+    let bytes = fs::read(cache_file(&required.tarball)).unwrap();
     optional.optional = true;
     optional.integrity = integrity(b"other bytes");
     required.integrity = integrity(&bytes);

@@ -1,4 +1,6 @@
-use super::{Resolver, Value, json, lock_info};
+use sha2::{Digest, Sha256};
+
+use super::{Package, Resolver, Value, io, json, lock_info};
 
 pub(super) fn lock_snapshot(manifest: &Value, resolver: &Resolver) -> Value {
     let mut locked = json!({"packages": {}, "workspaces": {"": manifest}});
@@ -41,4 +43,23 @@ pub(in super::super) fn archive(meta: &Value) -> Vec<u8> {
         .append_data(&mut header, "package/package.json", bytes.as_slice())
         .unwrap();
     archive.into_inner().unwrap().finish().unwrap()
+}
+
+/// The install cache file for `url`.
+pub(in super::super) fn cache_file(url: &str) -> std::path::PathBuf {
+    io::cache_dir().join(format!("{:x}", Sha256::digest(url.as_bytes())))
+}
+
+/// Writes `archive` into the install cache as the response for `url`.
+pub(in super::super) fn cache_archive(url: &str, archive: &[u8]) {
+    std::fs::create_dir_all(io::cache_dir()).unwrap();
+    std::fs::write(cache_file(url), archive).unwrap();
+}
+
+/// Caches an archive holding only a `package.json` for each package.
+pub(in super::super) fn seed_cache(packages: &[&Package]) {
+    for package in packages {
+        let meta = json!({"name": package.name, "version": package.version});
+        cache_archive(&package.tarball, &archive(&meta));
+    }
 }
