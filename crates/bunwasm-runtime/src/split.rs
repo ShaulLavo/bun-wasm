@@ -92,7 +92,10 @@ fn source(state: &State, args: Args<'_>) -> NativeResult {
     if matches!(mode, "module" | "record") && state.is_builtin_name(name) {
         return Ok(Val::Array(vec!["builtin".into(), "".into()]));
     }
-    let (code, format) = state.load_source(name)?;
+    let (code, format) = match mode {
+        "cjs" => state.load_source_once(name)?,
+        _ => state.load_source(name)?,
+    };
     if mode == "cjs" {
         let (code, line) = modules::cjs_wrapper(&code);
         return Ok(Val::Array(vec![code.into(), line.into()]));

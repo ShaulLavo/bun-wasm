@@ -436,6 +436,37 @@ impl State {
     /// Read, transpile and classify a file. Ordinary results stay cached while
     /// content is unchanged; binary-qualified loaders requalify on every load.
     pub fn load_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
+        self.fresh_source.take();
+        let loaded = self.read_source(path)?;
+        let stdin = self.main_arg.borrow().as_str() == "-" && self.main.borrow().as_str() == path;
+        let cacheable =
+            !oxc_memory::depends_on_binary(path) && !rolldown_memory::depends_on_binary(path);
+        if loaded.1 == Format::Cjs && cacheable && !stdin {
+            *self.fresh_source.borrow_mut() = Some(path.to_owned());
+        }
+        Ok(loaded)
+    }
+
+    /// The source a CommonJS compile step evaluates. Every load checks a file's format first
+    /// (`moduleFormat`, `hostModuleRecord`), and that check's read stands for the compile right
+    /// after it, as Bun reads a module once per load. Any other load or a path change in
+    /// between, or another file, reads again.
+    pub fn load_source_once(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
+        let fresh = self.fresh_source.take().is_some_and(|fresh| fresh == path);
+        if fresh && let Some(hit) = self.sources.borrow().get(path) {
+            return Ok(hit.clone());
+        }
+        self.load_source(path)
+    }
+
+    /// A path changed through this process's natives: forget remembered resolutions and the
+    /// read a pending compile would reuse.
+    pub fn paths_changed(&self) {
+        self.resolver.forget_found();
+        self.fresh_source.take();
+    }
+
+    fn read_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
         if let Some(code) = self.load_text_module(path)? {
             return Ok((Rc::from(code), Format::Esm));
         }
@@ -1048,6 +1079,40 @@ mod tests {
         // A missing line or file keeps the column.
         assert_eq!(state.source_column(callee, path, 3, 9), 9);
         assert_eq!(state.source_column(callee, "/missing.js", 1, 9), 9);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_compile_reuses_the_read_of_the_format_check_just_before_it() {
+        let dir = std::env::temp_dir().join(format!("bunwasm-read-once-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("lib.cjs");
+        let other = dir.join("other.cjs");
+        let path = file.to_str().unwrap();
+        let other_path = other.to_str().unwrap();
+        let state = State::new(
+            Vec::new(),
+            Box::new(crate::transpiler::PassthroughTranspiler),
+        );
+        let compile = || state.load_source_once(path).unwrap().0.to_string();
+        std::fs::write(&file, "module.exports = 1;").unwrap();
+        std::fs::write(&other, "module.exports = 0;").unwrap();
+        assert_eq!(state.load_source(path).unwrap().1, Format::Cjs);
+        // Written by another process after the check: this load's compile keeps what the check
+        // read, without reading the file again. The next compile reads it.
+        std::fs::write(&file, "module.exports = 2;").unwrap();
+        assert_eq!(compile(), "module.exports = 1;");
+        assert_eq!(compile(), "module.exports = 2;");
+        // Another file's load in between: the compile reads again.
+        state.load_source(path).unwrap();
+        state.load_source(other_path).unwrap();
+        std::fs::write(&file, "module.exports = 3;").unwrap();
+        assert_eq!(compile(), "module.exports = 3;");
+        // So does a path change made through this process's natives.
+        state.load_source(path).unwrap();
+        std::fs::write(&file, "module.exports = 4;").unwrap();
+        state.paths_changed();
+        assert_eq!(compile(), "module.exports = 4;");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

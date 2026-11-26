@@ -144,6 +144,9 @@ pub(crate) struct State {
     sources: RefCell<HashMap<String, (Rc<str>, modules::Format)>>,
     /// Content digest of each file the caches above and below were built from.
     source_digests: RefCell<HashMap<String, u64>>,
+    /// The CommonJS file the latest `load_source` read, until another load or a path change:
+    /// the compile step right after a format check reuses that read (`load_source_once`).
+    fresh_source: RefCell<Option<String>>,
     #[cfg(feature = "engine-host")]
     source_imports: RefCell<HashMap<String, Rc<[transpiler::ModuleImport]>>>,
     #[cfg(feature = "engine-host")]
@@ -197,6 +200,7 @@ impl State {
             main_arg: RefCell::new(String::new()),
             sources: RefCell::new(HashMap::new()),
             source_digests: RefCell::new(HashMap::new()),
+            fresh_source: RefCell::new(None),
             #[cfg(feature = "engine-host")]
             source_imports: RefCell::new(HashMap::new()),
             #[cfg(feature = "engine-host")]
@@ -382,6 +386,9 @@ fn new_state(
         transpiler,
     );
     state.mode = mode;
+    if mode == RunMode::Hot {
+        state.resolver.remember_imports(false);
+    }
     let state = Rc::new(state);
     *state.main.borrow_mut() = main_path.clone();
     if let Entry::File(arg) = entry {
