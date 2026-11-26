@@ -37,6 +37,7 @@ for (const browserName of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webki
   test(`${browserName}: Run cannot slip into a preparing demo, and Stop cancels it`, () => withBrowser(browserName, runStopRace));
   test(`${browserName}: Restart belongs to the launch's own process, and a failed preview stops spinning`, () => withBrowser(browserName, attributionAndFailure));
   test(`${browserName}: a second Stop kills a server that ignores Ctrl-C, and Stop at any moment leaves Run usable`, () => withBrowser(browserName, forcedStop));
+  test(`${browserName}: a demo switch leaves nothing of the old launch, not even a detached child spawned during it`, () => withBrowser(browserName, detachedChildOnSwitch));
 }
 
 type Shell = { shell: { submit(command: string): Promise<void> }; editor: { open(path: string): Promise<void> } };
@@ -134,6 +135,46 @@ async function idleRun(page: Page): Promise<void> {
     const run = document.querySelector<HTMLButtonElement>("#run");
     return run?.getAttribute("data-state") === "run" && !run.disabled;
   }, undefined, { timeout: HANG_MS });
+}
+
+/** Bytes of a file, or -1 when it does not exist. */
+async function fileSize(page: Page, path: string): Promise<number> {
+  return page.evaluate(async path => {
+    const bytes = await (Reflect.get(globalThis, "playground") as unknown as PageApi).fs.readFile(path).catch(() => undefined);
+    return bytes ? bytes.length : -1;
+  }, path);
+}
+
+/**
+ * A demo switch stops the running launch: Ctrl-C first, SIGKILL after it is ignored. Here the
+ * running server answers Ctrl-C by spawning a detached Bun child (a job of its own) during the
+ * switch. Nothing of the old launch may survive: the child is attributed to it and killed too.
+ */
+async function detachedChildOnSwitch(browser: Browser, url: string): Promise<void> {
+  const context = await browser.newContext();
+  try {
+    const page = await open(context, url);
+    await writeHome(page, {
+      "heartbeat.ts": "import { appendFileSync } from 'node:fs';\nappendFileSync('/home/user/heartbeat.txt', '.');\nsetInterval(() => appendFileSync('/home/user/heartbeat.txt', '.'), 100);\n",
+      "spawner.ts": "process.on('SIGINT', () => {\n  Bun.spawn([process.execPath, 'run', `${import.meta.dir}/heartbeat.ts`], { detached: true, stdio: ['ignore', 'ignore', 'ignore'] });\n  console.log('SPAWNED' + '_CHILD');\n});\nBun.serve({ port: 3005, fetch: () => new Response('<h1>spawner</h1>', { headers: { 'content-type': 'text/html' } }) });\nconsole.log('SPAWNER' + '_UP');\n",
+    });
+    await page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as Shell).editor.open("/home/user/spawner.ts"));
+    await page.locator("#run").click();
+    await terminalIncludes(page, "SPAWNER_UP");
+
+    // Switching to a demo interrupts the server (which spawns the child), then kills it.
+    expect(await runDemo(page, "test", OUTPUT.test!)).toContain("5 pass");
+    // The child ran (its first write landed) and then stopped writing.
+    await page.waitForFunction(async () => {
+      const bytes = await (Reflect.get(globalThis, "playground") as unknown as PageApi).fs.readFile("/home/user/heartbeat.txt").catch(() => undefined);
+      return bytes !== undefined;
+    }, undefined, { timeout: HANG_MS });
+    const settled = await fileSize(page, "/home/user/heartbeat.txt");
+    await page.waitForTimeout(1500);
+    expect(await fileSize(page, "/home/user/heartbeat.txt")).toBe(settled);
+  } finally {
+    await context.close();
+  }
 }
 
 async function forcedStop(browser: Browser, url: string): Promise<void> {

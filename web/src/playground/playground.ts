@@ -71,6 +71,8 @@ export type Launch = {
   sent: boolean;
   /** Stop already sent Ctrl-C once; the next Stop kills. */
   interrupted: boolean;
+  /** Stop killed its jobs; any of its processes that starts later is killed too. */
+  forced: boolean;
 };
 type Phase =
   | { readonly kind: "idle" }
@@ -83,7 +85,7 @@ const SIGKILL = 9;
 
 function newLaunch(path: string, demo?: Demo): Launch {
   const id = crypto.randomUUID().slice(0, 8);
-  return { id, path, argument: demo ? path.slice(HOME.length + 1) : path, demo, jobs: new Set(), sent: false, interrupted: false };
+  return { id, path, argument: demo ? path.slice(HOME.length + 1) : path, demo, jobs: new Set(), sent: false, interrupted: false, forced: false };
 }
 
 function launchSubcommand(path: string): string {
@@ -414,9 +416,14 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     this.shell?.interrupt();
   }
 
-  /** SIGKILL for every job the launch's processes run in; Waffle records 137 for each. */
+  /**
+   * SIGKILL for every job the launch's processes run in, including detached children in jobs of
+   * their own; Waffle records 137 for each. The launch stays attributable and marked forced, so
+   * a process of it that is still starting is killed the moment it starts (see attribute()).
+   */
   private async forceStop(launch: Launch): Promise<void> {
     const { runtime } = this;
+    launch.forced = true;
     if (!runtime || launch.jobs.size === 0) {
       this.shell?.interrupt();
       return;
@@ -425,9 +432,16 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     await Promise.all(Array.from(launch.jobs, job => processes.killJob(job, SIGKILL)));
   }
 
+  /** A process of a force-stopped launch that started after the kill is killed on arrival. */
+  private async killLateJob(job: number): Promise<void> {
+    const processes = await this.runtime?.processes();
+    await processes?.killJob(job, SIGKILL);
+  }
+
   /** Every phase change re-renders, since Run, Stop and the demo buttons all read it. */
   private setPhase(phase: Phase): void {
-    if (this.phase.kind === "launched" && phase !== this.phase) this.liveLaunches.delete(this.phase.launch.id);
+    // A launch stays in liveLaunches after it loses the phase: its processes (a detached child
+    // still starting during a demo switch) must stay attributable until its submission ends.
     if (phase.kind === "launched") {
       this.liveLaunches.set(phase.launch.id, phase.launch);
       this.lastLaunch = phase.launch;
@@ -463,6 +477,9 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       await shell.submit(launch.demo ? command : `${LAUNCH_ENV}=${launch.id} ${command}`);
     } finally {
       this.submitting--;
+      // Its command ended. A force-stopped launch stays known, so a straggler of it is still
+      // killed when it starts; any other launch is no longer attributable.
+      if (!launch.forced) this.liveLaunches.delete(launch.id);
       if (this.lastLaunch === launch) this.lastLaunch = undefined;
       this.settle(launch);
       // canRun also depends on `submitting`, which settle() does not cover when Stop already
@@ -562,6 +579,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     if (!launch) return;
     this.helperLaunches.set(helper, launch);
     launch.jobs.add(process.job);
+    if (launch.forced) void this.killLateJob(process.job).catch(this.report);
   }
 
   /** Phones show one pane at a time in the examples workspace. */
