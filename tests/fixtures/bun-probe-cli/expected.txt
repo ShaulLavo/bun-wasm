@@ -1,0 +1,12 @@
+ok bun --version: true
+ok bun --revision: true
+ok bun -e: 2 object
+ok bun -p: [ 2, 4 ]
+ok bun run script: [ "hello from script", "chained" ]
+ok bun <file>: hi 3
+ok bun run - (stdin): from stdin script
+ok bun test filter: [ 0, true, true ]
+ok bun test failure exit: [ 1, true, true, true ]
+ok bun build --target=bun: built 1
+ok bun --help: true
+ok unknown command message: [ true, true ]

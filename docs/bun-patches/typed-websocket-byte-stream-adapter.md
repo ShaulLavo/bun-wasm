@@ -78,3 +78,7 @@ state validation change, not an annotation-only or whole-program parity claim.
 No final guest/native-socket/browser acceptance is claimed. Historical guests are
 not build evidence for this source. OS transport stays in Waffle; this change
 only adapts the JavaScript WebSocket API to the existing byte connection.
+
+## Close without a status code
+
+`WebSocket.close()` with no code sends a close frame with an empty body, so the server reports 1005, as browsers and native Bun do; a reason without a code sends 1000. The peer's `close(null)` sends that empty frame, and server sockets keep their default of 1000. `scripts/runtime-websocket.test.ts` pins the new syntax hash, and the `server.stop` check of `tests/fixtures/bun-probe-serve` compares the close codes with native Bun.

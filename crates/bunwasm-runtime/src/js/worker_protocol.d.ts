@@ -398,4 +398,4 @@ declare namespace BunWasm {
   }
   interface GuestProcess { emit(event: string, value: unknown): boolean; removeListener(event: string, listener: EventListener): unknown; }
 }
-interface Blob { _bytes(): Uint8Array; }
+interface Blob { _bytes(): Uint8Array; _isLazy(): boolean; }

@@ -1,0 +1,27 @@
+ok Bun.stdin.text: from stdin
+ok Bun.write + Bun.file: [ 9, true, 9, "text/plain;charset=utf-8", "hello bun" ]
+ok Bun.file json/bytes/arrayBuffer: [
+  {
+    list: [ 1, 2 ],
+  }, 14, 14, "application/json;charset=utf-8"
+]
+ok Bun.file stream: 9
+ok Bun.file slice: bun
+ok Bun.file writer: ab
+ok Bun.write Response + copy: from response
+ok Bun.file delete + missing: [ false, "ENOENT" ]
+ok Bun.stdout writer: function
+ok Bun.spawn bun child: [ "child 2", 0 ]
+ok Bun.spawnSync: [ 3, "err", false ]
+ok Bun.spawn stdin pipe: piped through child
+ok $ echo text: hello from shell
+ok $ interpolation: it's a $test
+ok $ pipes + env: PIPED
+ok $ json + lines: [
+  {
+    ok: true,
+  }, [ "a", "b" ]
+]
+ok $ nothrow + exitCode: 3
+ok $ throws ShellError: [ "ShellError", 1 ]
+ok $ cwd: true

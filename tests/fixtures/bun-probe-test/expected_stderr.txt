@@ -1,0 +1,24 @@
+
+probe.test.ts:
+(pass) math > adds
+(pass) math > each 1 + 1 = 2
+(pass) math > each 2 + 3 = 5
+(pass) math > each object a
+(pass) math > each object b
+(pass) mocks > mock() records calls
+(pass) mocks > spyOn wraps and restores
+(pass) snapshots > file snapshot
+(pass) snapshots > inline snapshot
+(pass) async and modifiers > awaits promises
+(skip) async and modifiers > skipped
+(todo) async and modifiers > todo later
+(pass) async and modifiers > conditional
+(pass) async and modifiers > expect.assertions
+(pass) async and modifiers > asymmetric matchers
+
+ 13 pass
+ 1 skip
+ 1 todo
+ 0 fail
+ 2 snapshots, 31 expect() calls
+Ran 15 tests across 1 file. [TIME]

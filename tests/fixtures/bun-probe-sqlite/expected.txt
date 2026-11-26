@@ -1,0 +1,54 @@
+ok create + insert: [
+  {
+    changes: 1,
+    lastInsertRowid: 1,
+  }, {
+    changes: 1,
+    lastInsertRowid: 2,
+  }
+]
+ok query all/get/values: [
+  [
+    {
+      id: 1,
+      name: "Ada",
+    }, {
+      id: 2,
+      name: "Grace",
+    }
+  ], {
+    name: "Grace",
+  }, [
+    [ "Ada", "ada@x" ], [ "Grace", "grace@x" ]
+  ]
+]
+ok named params strict: {
+  name: "Ada",
+}
+ok transaction: [ 2, {
+    n: 4,
+  } ]
+ok transaction rollback: [ "UNIQUE constraint failed: users.email", {
+    n: 4,
+  } ]
+ok .as(Class): [ true, [ "ADA", "GRACE" ] ]
+ok iterate: [ "Ada", "Grace", "Linus", "Ken" ]
+ok blob + bigint: [
+  {
+    data: Uint8Array(3) [ 1, 2, 3 ],
+  }, {
+    n: 9007199254740993n,
+  }
+]
+ok run changes/lastInsertRowid: {
+  changes: 2,
+  lastInsertRowid: 1,
+}
+ok file database: {
+  v: "persisted",
+}
+ok serialize/deserialize: {
+  n: 4,
+}
+ok syntax error: near "selec": syntax error
+ok using + close: closed

@@ -1,0 +1,10 @@
+ok Bun.build basic: [ true, 1, true, true ]
+ok Bun.build minify: function t(r){return"hello "+r}export{t as greet};
+ok Bun.build splitting outdir: [ true, [ "chunk:chunk-HASH.js", "chunk:chunk-HASH.js", "entry-point:index-HASH.js" ] ]
+ok run built output: <div>hello bun</div> config built
+ok Bun.build sourcemap + target node: [ true, [ "entry-point:greet.js", "sourcemap:greet.js.map" ] ]
+ok Bun.build external + format cjs: true
+ok Bun.build error: [ false, true, true ]
+ok Bun.build css + html: [ true, [ "asset:chunk-HASH.css", "entry-point:chunk-HASH.js", "entry-point:index.html" ] ]
+ok bun build CLI --minify: function t(r){return"hello "+r}export{t as greet};
+ok bun build CLI --outdir --splitting: [ 0, [ "greet.js", "lazy-HASH.js", "lazy.js" ] ]
