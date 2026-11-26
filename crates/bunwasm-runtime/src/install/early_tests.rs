@@ -1,5 +1,5 @@
 //! Packages installed while resolution waits: order, eligibility and reconciliation.
-use std::{collections::BTreeMap, fs, process::Command};
+use std::{collections::BTreeMap, fs, path::Path, process::Command};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -186,4 +186,87 @@ fn the_install_phase_skips_early_installs_and_counts_them() {
     );
     assert_eq!(manifests.keys().collect::<Vec<_>>(), ["first", "second"]);
     assert!(second.path().join("package.json").is_file());
+}
+
+fn versioned(name: &str, version: &str, chain: &[&str]) -> Package {
+    let mut package = plain(name, chain);
+    package.version = version.into();
+    package.meta["version"] = version.into();
+    package.tarball = format!("https://registry.invalid/{name}/-/{name}-{version}.tgz");
+    package
+}
+
+fn installed_version(package: &Package) -> String {
+    let manifest = fs::read(package.path().join("package.json")).unwrap();
+    serde_json::from_slice::<Value>(&manifest).unwrap()["version"]
+        .as_str()
+        .unwrap()
+        .into()
+}
+
+#[test]
+fn a_final_graph_that_hoists_differently_replaces_early_installs() {
+    if !child() {
+        return in_child("a_final_graph_that_hoists_differently_replaces_early_installs");
+    }
+    // Resolution first placed shared@1 at the root, but the final graph put shared@2 there
+    // and moved shared@1 under `user`.
+    let early_root = versioned("shared", "1.0.0", &["shared"]);
+    let user = plain("user", &["user"]);
+    let inside = versioned("shared", "1.0.0", &["user", "shared"]);
+    let final_root = versioned("shared", "2.0.0", &["shared"]);
+    seed(&[&early_root, &user, &final_root]);
+    let mut early = Early::new(false);
+    early.added(&early_root, None, &registry());
+    early.added(&user, None, &registry());
+    assert_eq!(drain(&mut early), 2);
+    let mut resolver = Resolver::new(registry(), json!({}), false);
+    resolver.early = Some(early);
+    for package in [&final_root, &user, &inside] {
+        resolver.packages.insert(package.key(), package.clone());
+    }
+    let (installed, _) = install_packages(&mut resolver).unwrap();
+    assert_eq!(installed, 3);
+    assert_eq!(installed_version(&final_root), "2.0.0");
+    assert_eq!(installed_version(&inside), "1.0.0");
+    assert_eq!(
+        fs::read(installed_source_path(&final_root.path())).unwrap(),
+        super::installed_source(&final_root)
+    );
+}
+
+#[test]
+fn an_interrupted_early_install_leaves_only_complete_packages() {
+    if !child() {
+        return in_child("an_interrupted_early_install_leaves_only_complete_packages");
+    }
+    let done = plain("done", &["done"]);
+    let cut = plain("cut", &["cut"]);
+    seed(&[&done, &cut]);
+    let mut early = Early::new(false);
+    early.added(&done, None, &registry());
+    assert_eq!(drain(&mut early), 1);
+    // The run stops while `cut` is being extracted: its staging directory holds part of it,
+    // and nothing exists at its final path.
+    let staging = Path::new("node_modules/.cut.bun-wasm-tmp");
+    fs::create_dir_all(staging).unwrap();
+    fs::write(staging.join("partial.js"), b"half").unwrap();
+    drop(early);
+    assert!(
+        !cut.path().exists(),
+        "a package appears only by a complete rename"
+    );
+
+    // The next install sees node_modules and checks what is there.
+    let mut resolver = Resolver::new(registry(), json!({}), false);
+    for package in [&done, &cut] {
+        resolver.packages.insert(package.key(), package.clone());
+    }
+    trace::start();
+    let (installed, _) = install_packages(&mut resolver).unwrap();
+    assert_eq!(installed, 1, "the completed early install is kept");
+    assert_eq!(trace::calls("extract"), 1);
+    assert!(cut.path().join("package.json").is_file());
+    assert!(!cut.path().join("partial.js").exists());
+    assert!(!staging.exists());
 }
