@@ -440,7 +440,7 @@ fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
     if state.is_builtin_name(path) {
         return Ok(Record::new().set("format", "builtin").into());
     }
-    let (code, format) = state.probe_source(path)?;
+    let (code, format) = state.load_source(path)?;
     if format != modules::Format::Esm {
         return Ok(Record::new().set("format", format.name()).into());
     }
@@ -482,7 +482,7 @@ fn module_record(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
     if state.is_builtin_name(path) {
         return Ok(Record::new().set("format", "builtin").into());
     }
-    let (code, format) = state.probe_source(path)?;
+    let (code, format) = state.load_source(path)?;
     if format != modules::Format::Esm {
         return Ok(Record::new().set("format", format.name()).into());
     }

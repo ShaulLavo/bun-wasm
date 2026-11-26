@@ -440,8 +440,10 @@ impl State {
         self.read_source(path)
     }
 
-    /// [`Self::load_source`] for a format check (`moduleFormat`, `hostModuleRecord`): when the
-    /// file is CommonJS, its compile right after may reuse this read ([`Self::load_source_once`]).
+    /// [`Self::load_source`] for `require()`'s format check (`moduleFormat`): when the file is
+    /// CommonJS, the compile that follows in the same synchronous step may reuse this read
+    /// ([`Self::load_source_once`]). Import graphs are prepared across promise callbacks, so
+    /// their checks (`hostModuleRecord`, the split engines' module sources) never arm it.
     pub fn probe_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
         let loaded = self.load_source(path)?;
         let stdin = self.main_arg.borrow().as_str() == "-" && self.main.borrow().as_str() == path;
@@ -453,11 +455,11 @@ impl State {
         Ok(loaded)
     }
 
-    /// The source a CommonJS compile step evaluates. A compile right after its file's format
-    /// check reuses that check's read, as Bun reads a module once per load. Any other load, a
-    /// path change through the natives, or a check of another file in between reads again,
-    /// and that read arms nothing: a later compile, such as a retry after the file changed,
-    /// reads the file as it is then.
+    /// The source a CommonJS compile step evaluates. A `require()` compile right after its
+    /// file's format check, with no guest code in between, reuses that check's read, as Bun
+    /// reads a module once per load. Any other load, a path change through the natives, a check
+    /// of another file, or a compile with no check just before it reads the file as it is now,
+    /// and that read arms nothing.
     pub fn load_source_once(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
         let fresh = self.fresh_source.take().is_some_and(|fresh| fresh == path);
         if fresh && let Some(hit) = self.sources.borrow().get(path) {
