@@ -1,10 +1,10 @@
 {
-  // The preview hosts of the IDEs on sprockt.dev: <id>-<port>-pv.sprockt.dev (docs/preview-origins.md).
+  // The preview hosts for bun.shaulavo.dev: <id>-<port>-pv.shaulavo.dev (docs/preview-origins.md).
   // A separate Worker, so a preview host can never be answered with one of the IDE's static files:
   // every request runs the Worker first, and it serves only dist/__preview-origin.
   //
   // `bun run deploy` does not deploy this. It needs a proxied wildcard DNS record `*` on the zone, and the
-  // site built with BUN_WASM_PREVIEW_ORIGIN=sprockt.dev, before `wrangler deploy --config wrangler.preview.jsonc`.
+  // site built with BUN_WASM_PREVIEW_ORIGIN=shaulavo.dev, before `wrangler deploy --config wrangler.preview.jsonc`.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "bun-wasm-preview",
   "compatibility_date": "2026-10-15",
@@ -17,9 +17,9 @@
     "not_found_handling": "none"
   },
   "vars": {
-    "PREVIEW_DOMAIN": "sprockt.dev",
-    "IDE_ORIGINS": "https://bun.sprockt.dev,https://sprockt.dev"
+    "PREVIEW_DOMAIN": "shaulavo.dev",
+    "IDE_ORIGINS": "https://bun.shaulavo.dev,https://sprockt.dev"
   },
-  // The pattern cannot match sprockt.dev or bun.sprockt.dev; the Worker checks the full name shape.
-  "routes": [{ "pattern": "*-pv.sprockt.dev/*", "zone_name": "sprockt.dev" }]
+  // The pattern cannot match shaulavo.dev or bun.shaulavo.dev; the Worker checks the full name shape.
+  "routes": [{ "pattern": "*-pv.shaulavo.dev/*", "zone_name": "shaulavo.dev" }]
 }

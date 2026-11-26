@@ -3,8 +3,8 @@ import type { PreviewServer } from "waffle/browser/preview";
 import { previewOrigin, previewOriginId, RELAY_INSPECT_QUERY, RELAY_MESSAGE, RELAY_PATH, type FrameDocument, type SessionReply } from "../src/preview-origin/protocol";
 import { RootPreviews } from "../src/preview-origin/root-previews";
 
-const IDE = "https://bun.sprockt.dev";
-const config = { domain: "sprockt.dev" };
+const IDE = "https://bun.shaulavo.dev";
+const config = { domain: "shaulavo.dev" };
 
 /** The windows of the page's frames, in document order, as `window.frames` lists them. */
 let pageWindows: unknown[] = [];
@@ -94,7 +94,7 @@ test("a listener becomes ready only after its relay frame is up and the service 
   expect(await previews.ready).toBe("ready");
   await settle();
   // The answer names the wrapper page too, for new tabs the app opens itself.
-  expect(replies).toEqual([{ t: "cookies", cookies: [], wrapper: `${IDE}/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fsprockt.dev&url=${encodeURIComponent(`${origin}/`)}` }]);
+  expect(replies).toEqual([{ t: "cookies", cookies: [], wrapper: `${IDE}/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fshaulavo.dev&url=${encodeURIComponent(`${origin}/`)}` }]);
   expect(previews.url(5173, "/dashboard?tab=1")).toBe(`${origin}/dashboard?tab=1`);
   const link = new URL(previews.linkUrl(5173, "/dashboard"));
   expect(link.origin + link.pathname).toBe(`${IDE}/sandbox/preview-frame.html`);

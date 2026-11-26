@@ -15,7 +15,7 @@ const judged: Phase[] = ["startup", "install", "dev", "render", "click"];
 
 test("options default to the owner's sandbox and resolve the output directory", () => {
   const options = liveSmokeOptions(["--output=out"]);
-  expect(options.base.href).toBe("https://bun.sprockt.dev/");
+  expect(options.base.href).toBe("https://bun.shaulavo.dev/");
   expect(options.output).toBe(`${process.cwd()}/out`);
   expect(options.timeoutMs).toBe(300_000);
   expect(options.installTimeoutMs).toBe(600_000);

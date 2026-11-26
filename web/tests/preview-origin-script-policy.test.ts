@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { policyEngine, shimAdmission, type PolicyEngine } from "../src/preview-origin/script-policy";
 
-const ORIGIN = `https://${"a".repeat(52)}-5173-pv.sprockt.dev`;
+const ORIGIN = `https://${"a".repeat(52)}-5173-pv.shaulavo.dev`;
 const SHIM = `${ORIGIN}/__bunwasm-preview/ws.js`;
 // Where the engines agree, Chromium stands for all three; the tests of the upgrade name each engine.
 const admission = (header: string | null, shim = SHIM, engine: PolicyEngine | null = "chromium") => shimAdmission(header, shim, engine);
@@ -9,7 +9,7 @@ const OPEN = { allowed: true } as const;
 const BLOCKED = { allowed: false } as const;
 
 test("a response without a script policy admits the shim as it is", () => {
-  for (const header of [null, "", "img-src 'self'", "frame-ancestors https://bun.sprockt.dev", "img-src *, style-src 'self'"]) {
+  for (const header of [null, "", "img-src 'self'", "frame-ancestors https://bun.shaulavo.dev", "img-src *, style-src 'self'"]) {
     expect(admission(header)).toEqual(OPEN);
   }
 });
@@ -27,11 +27,11 @@ test("the directive that governs script elements decides: script-src-elem, then 
 
 test("a source list admits the shim's own URL by 'self', a wildcard, a scheme or a matching host source", () => {
   for (const sources of [
-    "'self'", "*", "https:", "http:", "*.sprockt.dev", "https://*.sprockt.dev", `${ORIGIN}`, `${ORIGIN}:443`, `${new URL(ORIGIN).host}:*`,
+    "'self'", "*", "https:", "http:", "*.shaulavo.dev", "https://*.shaulavo.dev", `${ORIGIN}`, `${ORIGIN}:443`, `${new URL(ORIGIN).host}:*`,
     `${ORIGIN}/__bunwasm-preview/`, `${ORIGIN}/__bunwasm-preview/ws.js`, "'unsafe-inline' 'self'", "'nonce-n' 'self'",
   ]) expect(admission(`script-src ${sources}`)).toMatchObject(OPEN);
   for (const sources of [
-    "'none'", "'unsafe-inline'", "'unsafe-eval'", "data:", "blob:", "wss:", "https://cdn.example", "*.example.com", "sprockt.dev",
+    "'none'", "'unsafe-inline'", "'unsafe-eval'", "data:", "blob:", "wss:", "https://cdn.example", "*.example.com", "shaulavo.dev",
     `${ORIGIN}:8443`, `${ORIGIN}/assets/`, `${ORIGIN}/__bunwasm-preview/other.js`,
     "'sha256-RFWPLDbv2BY+rCkDzsE+0fr8ylGr2R2faWMhq4lfEQc='",
   ]) expect(admission(`script-src ${sources}`)).toEqual(BLOCKED);
@@ -92,7 +92,7 @@ test("the engine is read from the service worker's user agent", () => {
 test("an http host source covers the same host over https when scheme and port upgrade together", () => {
   const host = new URL(ORIGIN).hostname;
   // The shim is https on the default port. Browsers let http:80 stand for https:443.
-  for (const source of [`http://${host}:80`, `http://${host}`, `http://${host}:443`, `http://*.sprockt.dev:80`, `HTTP://${host}:80/__bunwasm-preview/`]) {
+  for (const source of [`http://${host}:80`, `http://${host}`, `http://${host}:443`, `http://*.shaulavo.dev:80`, `HTTP://${host}:80/__bunwasm-preview/`]) {
     expect(admission(`script-src ${source}`)).toEqual(OPEN);
   }
   // Only one of the two would upgrade, or the port is another one altogether.

@@ -4,7 +4,7 @@ import { IphoneBus } from "./iphone-bus";
 import { controlResponse, observeIphoneResponse, recordServed } from "./iphone-server";
 import { decodedSha256, liveSiteURL, proxyLiveRequest, type LiveServed } from "./iphone-live-proxy";
 
-const site = "https://bun.sprockt.dev/";
+const site = "https://bun.shaulavo.dev/";
 const loopback = "http://127.0.0.1:4000";
 type Seen = { url: string; headers: Headers; decompress: unknown };
 function upstreamOf(reply: (url: string) => Response, seen: Seen[]): typeof fetch {
@@ -82,7 +82,7 @@ test("redirects stay on loopback and the base URL is a bare https site root", as
   const moved = await proxyLiveRequest(new Request(loopback + "/playground"), site, upstream);
   expect(moved.status).toBe(307);
   expect(moved.headers.get("location")).toBe(loopback + "/playground/?a=1");
-  expect(() => liveSiteURL("https://bun.sprockt.dev/playground/")).toThrow();
+  expect(() => liveSiteURL("https://bun.shaulavo.dev/playground/")).toThrow();
   expect(liveSiteURL(site)).toBe(site);
 });
 

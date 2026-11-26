@@ -2,14 +2,14 @@ import { expect, test } from "bun:test";
 import { namesNewTab, newTabLink, openLink, opensAside } from "../src/preview-origin/new-tab";
 import { wrapperLink } from "../src/preview-origin/protocol";
 
-const ORIGIN = `https://${"a".repeat(52)}-5173-pv.sprockt.dev`;
-const WRAPPER = `https://bun.sprockt.dev/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fsprockt.dev&url=${encodeURIComponent(`${ORIGIN}/`)}`;
+const ORIGIN = `https://${"a".repeat(52)}-5173-pv.shaulavo.dev`;
+const WRAPPER = `https://bun.shaulavo.dev/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fshaulavo.dev&url=${encodeURIComponent(`${ORIGIN}/`)}`;
 const link = (destination: string | URL | undefined, base = `${ORIGIN}/reports/list`) => newTabLink(WRAPPER, destination, base, ORIGIN);
 const target = (wrapped: string | null) => (wrapped === null ? null : new URL(wrapped).searchParams.get("url"));
 
 test("a page of the app's own origin opens through the IDE's wrapper page, at the URL the app asked for", () => {
   const wrapped = link("/report?id=7&x=a b#totals");
-  expect(wrapped).toStartWith("https://bun.sprockt.dev/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fsprockt.dev&url=");
+  expect(wrapped).toStartWith("https://bun.shaulavo.dev/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fshaulavo.dev&url=");
   expect(target(wrapped)).toBe(`${ORIGIN}/report?id=7&x=a%20b#totals`);
   // Relative to the document's base, as the browser resolves a link or a window.open argument.
   expect(target(link("print"))).toBe(`${ORIGIN}/reports/print`);
@@ -20,7 +20,7 @@ test("a page of the app's own origin opens through the IDE's wrapper page, at th
 
 test("anything that is not a page of this origin opens as the app wrote it", () => {
   for (const destination of [
-    undefined, "", "about:blank", "https://example.com/", `https://${"b".repeat(52)}-5173-pv.sprockt.dev/`, `http://${new URL(ORIGIN).host}/`,
+    undefined, "", "about:blank", "https://example.com/", `https://${"b".repeat(52)}-5173-pv.shaulavo.dev/`, `http://${new URL(ORIGIN).host}/`,
     `blob:${ORIGIN}/3f1c`, "data:text/html,<p>x</p>", "javascript:void 0", "mailto:a@example.com", "https://[bad",
   ]) expect(link(destination)).toBeNull();
 });

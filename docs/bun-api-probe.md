@@ -22,7 +22,7 @@ Each fixture prints one `ok <check>: <value>` or `FAIL <check>: <error>` line pe
 ```sh
 bun web/build.ts                       # or point --url at a deployed playground
 bun scripts/bun-api-probe.ts --engines quickjs,jsc,browser,spidermonkey --out results.json
-bun scripts/bun-api-probe.ts --url https://bun.sprockt.dev/playground/ --network
+bun scripts/bun-api-probe.ts --url https://bun.shaulavo.dev/playground/ --network
 ```
 
 It also runs checks the native launcher cannot: `Bun.$` with coreutils (`mkdir`, `ls`, `tr`, `rm`) and redirects, and with `--network`, `bun init`, `bun add react` with server rendering, `bunx` and `fetch` over HTTPS.

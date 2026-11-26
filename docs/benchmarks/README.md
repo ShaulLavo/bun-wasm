@@ -31,7 +31,7 @@ Warm repeats of every command follow, then a reload and its first `bun`.
 cd web && bun run build
 bun tests/bench-commands.ts                       # local preview, Chromium
 LATENCY_MS=70 bun tests/bench-commands.ts         # each response 70 ms late, like the live site from Europe
-bun tests/bench-commands.ts --url https://bun.sprockt.dev/playground/ --browser firefox
+bun tests/bench-commands.ts --url https://bun.shaulavo.dev/playground/ --browser firefox
 bun tests/bench-commands.ts --network --output /work/tmp/bun-wasm-bench.json
 ```
 

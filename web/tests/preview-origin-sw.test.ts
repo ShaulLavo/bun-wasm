@@ -6,8 +6,8 @@ import {
 import { insertAfterDoctype } from "../src/preview-html";
 import { createPreviewOriginServiceWorker, withoutFrameAncestors, type OriginClient } from "../src/preview-origin/sw-core";
 
-const ORIGIN = `https://${"a".repeat(52)}-5173-pv.sprockt.dev`;
-const IDE = "https://bun.sprockt.dev";
+const ORIGIN = `https://${"a".repeat(52)}-5173-pv.shaulavo.dev`;
+const IDE = "https://bun.shaulavo.dev";
 
 /** The IDE page's end of an attached port: it records requests and answers them by hand. */
 class Ide {
@@ -294,7 +294,7 @@ test("the shim tag passes every policy of the response or is left out, names the
   const { worker, attach } = setup();
   const ide = attach();
   await ide.next("attached");
-  const wrapper = `${IDE}/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fsprockt.dev&url=${encodeURIComponent(`${ORIGIN}/`)}&x="<`;
+  const wrapper = `${IDE}/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fshaulavo.dev&url=${encodeURIComponent(`${ORIGIN}/`)}&x="<`;
   ide.reply({ t: "cookies", cookies: [], wrapper });
   // What the shim tag carries: a nonce, none, or no tag at all (null) when a policy would block it.
   const policies: [string | string[], string | null][] = [
@@ -322,7 +322,7 @@ test("the shim tag passes every policy of the response or is left out, names the
     // The app's policies cross as they came, apart from frame-ancestors.
     expect(response.headers.get("content-security-policy")).toBe(`${[policy].flat().join(", ")}, frame-ancestors ${IDE}`);
     if (attribute === null) expect(text).toBe("<!doctype html><p>page</p>");
-    else expect(text).toStartWith(`<!doctype html><script src="${SHIM_PATH}"${attribute} data-bunwasm-preview="shim" data-wrapper="${IDE}/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fsprockt.dev&amp;url=`);
+    else expect(text).toStartWith(`<!doctype html><script src="${SHIM_PATH}"${attribute} data-bunwasm-preview="shim" data-wrapper="${IDE}/sandbox/preview-frame.html?preview-origin=https%3A%2F%2Fshaulavo.dev&amp;url=`);
     if (attribute !== null) expect(text).toContain(`&amp;x=&quot;&lt;" data-cookies="[]"></script><p>page</p>`);
   }
   // Plain text has nowhere to put a script: it is the server's bytes, and the frame's embedder settles it (RootPreviews.watchFrame).

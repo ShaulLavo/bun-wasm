@@ -123,6 +123,6 @@ The package borrows the page's Waffle `Runtime` and never creates or disposes it
 - `src/`: the `bun-wasm` package: adapter installer and guest loader.
 - `web/`: the playground: worker, WASI shim, network bridge and terminal.
 - `sandbox/`: multi-framework dev-server sandbox.
-- `site/`: deploys the sandbox and playground to bun.sprockt.dev.
+- `site/`: deploys the sandbox and playground to bun.shaulavo.dev.
 - `patches/bun/`: the patch series for `oven-sh/bun`.
 - `tests/`: end-to-end fixtures, run on QuickJS, JSC and the browser engine.

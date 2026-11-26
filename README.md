@@ -4,8 +4,8 @@ Bun v1.4.5's Rust toolchain compiled to `wasm32-wasip1`, paired with a Bun-compa
 
 ## Try it
 
-- [Sandbox](https://bun.sprockt.dev/) runs Next.js, Nuxt, SvelteKit, Astro, Vite and eight more starters in your tab. Pick one, install it and edit live.
-- [Playground](https://bun.sprockt.dev/playground/) opens an editor, a terminal and one-click Bun API demos with a live server preview. Press Run.
+- [Sandbox](https://bun.shaulavo.dev/) runs Next.js, Nuxt, SvelteKit, Astro, Vite and eight more starters in your tab. Pick one, install it and edit live.
+- [Playground](https://bun.shaulavo.dev/playground/) opens an editor, a terminal and one-click Bun API demos with a live server preview. Press Run.
 
 ```console
 user@bun:~$ bun -e 'console.log(2 ** 10)'

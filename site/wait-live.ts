@@ -1,11 +1,11 @@
-// After `wrangler deploy`: waits until https://bun.sprockt.dev serves this build's files at their
+// After `wrangler deploy`: waits until https://bun.shaulavo.dev serves this build's files at their
 // plain URLs. A cache-busting query string doesn't prove the edge has dropped the old copy, and
 // checks run right after a deploy otherwise hit stale pages.
 import { join } from "node:path";
 import { templates } from "../sandbox/src/template-catalog";
 import { projectTemplates } from "../web/src/playground/project-templates";
 
-const origin = "https://bun.sprockt.dev";
+const origin = "https://bun.shaulavo.dev";
 const dist = join(import.meta.dir, "dist");
 const hashedEntries = Array.from(new Bun.Glob("{,__bunwasm/,playground/,playground/__bunwasm/}entry-*").scanSync(dist)).sort();
 const chunkFiles = Array.from(new Bun.Glob("{,__bunwasm/,playground/,playground/__bunwasm/}chunks/*.js").scanSync(dist)).sort();

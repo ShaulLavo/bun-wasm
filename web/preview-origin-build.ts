@@ -3,7 +3,7 @@
 //   <out>/__preview-origin/{sw.js,relay.html,bootstrap.html,top.html}   served by the preview host
 //   <out>/preview-frame.html                                            the IDE-origin new-tab wrapper
 //
-// BUN_WASM_PREVIEW_ORIGIN=<domain> (for example "sprockt.dev") makes the built pages use preview
+// BUN_WASM_PREVIEW_ORIGIN=<domain> (for example "shaulavo.dev") makes the built pages use preview
 // origins. Without it they keep mounted `/__preview/` previews unless a local run asks otherwise.
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";

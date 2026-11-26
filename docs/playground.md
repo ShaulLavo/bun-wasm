@@ -184,7 +184,7 @@ Build the playground, copy `web/dist` to a macOS machine, and serve it with COOP
 Run `bun web/tests/browser-startup-safari.ts <playground-url>` on macOS to check fresh startup, three durable reloads, newest-tab ownership, and recovery of the displaced tab.
 Set `SAFARI_IOS=1` for the iPhone 17 Pro simulator, `SAFARI_OUTPUT=<path>` for the JSON report, and `SAFARI_SCREENSHOT=<path>` for the error screenshot.
 If the simulator is shut down, run `xcrun simctl boot "iPhone 17 Pro"` and `xcrun simctl bootstatus "iPhone 17 Pro" -b` before starting the driver.
-Set `SAFARI_SEED_URL=https://bun.sprockt.dev/playground/` to import a workspace created by the live build before testing the candidate.
+Set `SAFARI_SEED_URL=https://bun.shaulavo.dev/playground/` to import a workspace created by the live build before testing the candidate.
 The test uses its own Safari automation session and driver. It preserves normal browser profiles.
 
 The filesystem lifecycle regression uses the actual page adapter and persistence worker without
