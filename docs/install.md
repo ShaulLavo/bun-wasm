@@ -58,6 +58,10 @@ dependencies and preserves the full lockfile.
 
 Tarballs and packuments are cached in `$BUN_INSTALL_CACHE_DIR`, or
 `$HOME/.bun/install/cache/bun-wasm` (relative to cwd when HOME is absent).
+`BUN_WASM_INSTALL_CACHE=off` turns that cache off: nothing is read from it or
+written to it. The sandbox and the playground set it, because in the browser the
+cache lives in the IndexedDB workspace, where writing and reading archives back
+costs more than fetching them again through the browser's caches.
 Packuments expire after five minutes; integrity-checked tarballs do not expire.
 The browser persists successful unauthenticated tarballs up to its 4 MiB
 cache-only capture budget in Cache Storage under `bun-wasm-install-v1`, after

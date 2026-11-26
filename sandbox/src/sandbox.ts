@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { createRuntime, openIdleWorkspace, storedWorkspaces, type Runtime } from "waffle";
 import { FilesystemClient } from "waffle/fs/client";
 import { memoryGroupPolicy } from "../../web/src/host-memory-policy";
+import { PAGE_INSTALL_ENV } from "../../web/src/install-cache";
 import { parseMemoryProfile, type ProgramMemoryProfile } from "../../web/src/program-profile";
 import { templateProfile } from "../../web/src/playground/program-profile";
 import { installBunSharedObjects } from "../../src/shared-objects";
@@ -1947,6 +1948,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       LINES: String(term.rows),
       TMPDIR: "/tmp",
       PORT: String(PORT),
+      ...PAGE_INSTALL_ENV,
       BUN_WASM_STARTUP: "1",
       CI: "true",
       ...previewHostEnv(this.previewOrigins),
