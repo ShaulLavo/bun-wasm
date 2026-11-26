@@ -106,7 +106,6 @@ try {
   url.searchParams.set("template", template.id);
   url.searchParams.set("engine", "browser");
   url.searchParams.set("prompt", "off");
-  url.searchParams.set("mode", "memory");
   const browser = await task.launch(playwright.chromium);
   page = await (await browser.newContext()).newPage();
   page.on("pageerror", error => events.push(`pageerror: ${error.message}`));

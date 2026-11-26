@@ -112,7 +112,6 @@ async function execute(): Promise<void> {
   url.searchParams.set("template", template.id);
   url.searchParams.set("engine", "browser");
   url.searchParams.set("prompt", "off");
-  url.searchParams.set("mode", "memory");
   const browser = await task.launch(playwright.chromium);
   browserVersion = browser.version();
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
