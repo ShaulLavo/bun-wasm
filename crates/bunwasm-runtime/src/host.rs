@@ -440,6 +440,7 @@ mod runtime_fs {
         pub fn watch_read(id: i32, buf: i32, len: i32, out_len: i32) -> i32;
         pub fn watch_ready() -> i32;
         pub fn watch_close(id: i32) -> i32;
+        pub fn path_probe(fd: i32, paths: i32, len: i32, kind: i32, found: i32) -> i32;
     }
 }
 
@@ -795,6 +796,111 @@ fn watch_read_into(id: u32, buf: &mut [u8]) -> Result<usize, (i32, usize)> {
 /// `watch_close`: 0, or the positive errno (8 for an unknown or closed id).
 pub fn fs_watch_close(id: u32) -> i32 {
     proc_call!(runtime_fs::watch_close(id as i32))
+}
+
+/// What [`probe`] looks for, as `runtime_fs.path_probe` numbers it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProbeKind {
+    File = 1,
+    Directory = 2,
+}
+
+/// Most pathnames one `runtime_fs.path_probe` call takes.
+#[cfg(target_arch = "wasm32")]
+const PROBE_LIMIT: usize = 64;
+
+/// The index of the first of `paths` that names a regular file or a directory (`kind`), each
+/// looked up as `std::fs::metadata` does (every link followed). The answer is the same as one stat
+/// per path in order, but a module resolver's candidates (extensions, `node_modules` in every
+/// ancestor) cost one filesystem request per 64 instead of one each
+/// (`runtime_fs.path_probe`, docs/host-abi.md).
+pub fn probe(paths: &[String], kind: ProbeKind) -> Option<usize> {
+    let mut start = 0;
+    while start < paths.len() {
+        let end = paths.len().min(start + probe_batch());
+        if let Some(found) = probe_batch_of(&paths[start..end], kind) {
+            return Some(start + found);
+        }
+        start = end;
+    }
+    None
+}
+
+/// Whether `path` names a `kind` node, by one stat.
+fn probe_one(path: &str, kind: ProbeKind) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| match kind {
+        ProbeKind::File => meta.is_file(),
+        ProbeKind::Directory => meta.is_dir(),
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn probe_batch() -> usize {
+    PROBE_LIMIT
+}
+
+/// Host builds (unit tests) stat each path.
+#[cfg(not(target_arch = "wasm32"))]
+fn probe_batch() -> usize {
+    usize::MAX
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn probe_batch_of(paths: &[String], kind: ProbeKind) -> Option<usize> {
+    paths.iter().position(|path| probe_one(path, kind))
+}
+
+/// One `runtime_fs.path_probe` for up to [`PROBE_LIMIT`] absolute paths below one preopen. Paths
+/// that are relative, hold a NUL or sit below different preopens are stat'ed one by one, as is a
+/// batch the host rejects; both give the same answer.
+#[cfg(target_arch = "wasm32")]
+fn probe_batch_of(paths: &[String], kind: ProbeKind) -> Option<usize> {
+    let Some((fd, list)) = probe_list(paths) else {
+        return paths.iter().position(|path| probe_one(path, kind));
+    };
+    let mut found = u32::MAX;
+    let errno = proc_call!(runtime_fs::path_probe(
+        fd,
+        ptr(&list),
+        list.len() as i32,
+        kind as i32,
+        ptr_mut(std::slice::from_mut(&mut found))
+    ));
+    if errno != 0 {
+        return paths.iter().position(|path| probe_one(path, kind));
+    }
+    (found != u32::MAX).then_some(found as usize)
+}
+
+/// The preopen descriptor all of `paths` resolve below and their NUL-terminated relative names,
+/// or `None` when they don't share one.
+#[cfg(target_arch = "wasm32")]
+fn probe_list(paths: &[String]) -> Option<(i32, Vec<u8>)> {
+    use std::ffi::{CStr, CString, c_char};
+    unsafe extern "C" {
+        fn __wasilibc_find_abspath(
+            path: *const c_char,
+            prefix: *mut *const c_char,
+            relative: *mut *const c_char,
+        ) -> i32;
+    }
+    let mut shared = None;
+    let mut list = Vec::new();
+    for path in paths {
+        if !path.starts_with('/') {
+            return None;
+        }
+        let absolute = CString::new(path.as_str()).ok()?;
+        let (mut prefix, mut relative) = (std::ptr::null(), std::ptr::null());
+        // SAFETY: a NUL-terminated path; the results point into it or into libc's preopen table.
+        let fd = unsafe { __wasilibc_find_abspath(absolute.as_ptr(), &mut prefix, &mut relative) };
+        if fd < 0 || *shared.get_or_insert(fd) != fd {
+            return None;
+        }
+        // SAFETY: libc returned a NUL-terminated string inside `absolute`, alive here.
+        list.extend_from_slice(unsafe { CStr::from_ptr(relative) }.to_bytes_with_nul());
+    }
+    Some((shared?, list))
 }
 
 /// `runtime_proc.signal(sig, mode)` (docs/host-abi.md, "Signal dispositions"). A selected default
