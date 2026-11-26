@@ -20,7 +20,7 @@ function fixture() {
     evidence.receive({ kind, target, port: 5173, generation, realm: "worker", sequence, ask: 1, channel: 3, clientURL: "http://localhost/app", ...(kind === "claim-reply" && extra.reply === "head" ? { status: 200 } : {}), ...extra });
   };
   const page = (kind: string, extra: RoutingRow = {}) => row(kind, { generation: "page", realm: "page", realmURL: "http://localhost/app", router: 4, replyPort: 5, request: 7, ...extra });
-  const native = () => evidence.request({ kind: "request", url, page: 1, request: 1 });
+  const native = () => evidence.request({ kind: "request", url, page: 1, request: 1, navigation: true });
   const first = () => JSON.stringify(evidence.summaries()[1]);
   return { evidence, row, page, native, first };
 }
@@ -212,6 +212,44 @@ test("a loading redirect is distinct from the completed native response matching
   f.evidence.request({ kind: "response", page: 1, request: 2, url, status: 200, fromServiceWorker: true });
   f.evidence.request({ kind: "requestfinished", page: 1, request: 2, url });
   expect(() => f.evidence.qualify([target])).not.toThrow();
+});
+
+const loadingUrl = "http://localhost/__preview/.loading/123e4567-e89b-12d3-a456-426614174000";
+type Abort = { errorText?: string; navigation?: boolean; loading?: "complete" | "unfinished" | "other-preview" | "missing" | "late"; extraAbort?: boolean };
+// Firefox reports the first navigation as aborted and then navigates to the loading page itself.
+function abortedThenCompleted(abort: Abort): ReturnType<typeof fixture> {
+  const f = fixture();
+  complete(f);
+  const request = (row: RoutingRow) => f.evidence.request(row);
+  const loadingPage = (id: number) => {
+    const loading = abort.loading ?? "complete";
+    const address = loading === "other-preview" ? "http://localhost/other/__preview/.loading/123e4567-e89b-12d3-a456-426614174000" : loadingUrl;
+    request({ kind: "request", page: 1, request: id, url: address, navigation: true });
+    request({ kind: "response", page: 1, request: id, url: address, status: 200, fromServiceWorker: false });
+    if (loading !== "unfinished") request({ kind: "requestfinished", page: 1, request: id, url: address });
+  };
+  // The fixture's own native request 1 is the aborted navigation.
+  request({ kind: "requestfailed", page: 1, request: 1, url, navigation: abort.navigation ?? true, errorText: abort.errorText ?? "NS_BINDING_ABORTED" });
+  if (abort.extraAbort) {
+    request({ kind: "request", page: 1, request: 4, url, navigation: true });
+    request({ kind: "requestfailed", page: 1, request: 4, url, navigation: true, errorText: "NS_BINDING_ABORTED" });
+  }
+  if (!["missing", "late"].includes(abort.loading ?? "complete")) loadingPage(2);
+  request({ kind: "request", page: 1, request: 3, url, navigation: true });
+  if (abort.loading === "late") loadingPage(2);
+  request({ kind: "response", page: 1, request: 3, url, status: 200, fromServiceWorker: true });
+  request({ kind: "requestfinished", page: 1, request: 3, url });
+  return f;
+}
+
+test("an aborted navigation followed by the loading page is the loading redirect", () => {
+  expect(() => abortedThenCompleted({}).evidence.qualify([target])).not.toThrow();
+});
+
+test("an aborted navigation without a finished loading page in this preview stays a routing failure", () => {
+  for (const abort of [{ errorText: "NS_ERROR_NET_RESET" }, { navigation: false }, { loading: "missing" }, { loading: "late" }, { loading: "unfinished" }, { loading: "other-preview" }, { extraAbort: true }] as Abort[]) {
+    expect(() => abortedThenCompleted(abort).evidence.qualify([target])).toThrow("coverage missing");
+  }
 });
 
 test("native completion rejects a different status and duplicate matching response lifecycles", () => {

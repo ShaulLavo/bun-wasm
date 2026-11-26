@@ -231,7 +231,7 @@ export class StorageLifetime {
     page.on("pageerror", error => this.event("pageerror", { page: id, ...errorObject(error) }));
     page.on("request", request => {
       const detail = requestDetail(request, true);
-      this.routing.request({ kind: "request", page: id, request: detail.request, url: detail.url });
+      this.routing.request({ kind: "request", page: id, request: detail.request, url: detail.url, navigation: detail.navigation });
       this.event("request", detail);
     });
     page.on("response", response => {
@@ -244,7 +244,11 @@ export class StorageLifetime {
       this.routing.request({ kind: "requestfinished", page: id, request: detail.request, url: detail.url });
       this.event("requestfinished", detail);
     });
-    page.on("requestfailed", request => this.event("requestfailed", { ...requestDetail(request), failure: request.failure() }));
+    page.on("requestfailed", request => {
+      const detail = requestDetail(request);
+      this.routing.request({ kind: "requestfailed", page: id, request: detail.request, url: detail.url, navigation: detail.navigation, errorText: request.failure()?.errorText ?? null });
+      this.event("requestfailed", { ...detail, failure: request.failure() });
+    });
     page.on("framenavigated", frame => this.event("navigation", { page: id, ...frameDetail(frame) }));
     page.on("crash", () => this.event("page-crash", { page: id }));
     page.on("close", () => this.event("page-close", { page: id }));
