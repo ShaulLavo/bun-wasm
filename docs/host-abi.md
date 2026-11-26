@@ -565,6 +565,40 @@ the group's life. Exhaustion returns `-EAGAIN` (`-6`) without mutation, even if
 earlier IDs have been freed. Region exhaustion is checked before reserving a
 chunk or charging backing growth.
 
+## Filesystem watch descriptor natives
+
+Every JS engine's native table (`crates/bunwasm-runtime/src/natives.rs`) installs the
+following descriptor-scoped watch primitives together alongside `fsWatchReady`,
+`fsWatchRead`, and `fsWatchClose`:
+
+- `fsWatchResolve(path: string) -> [fd: number, identity: string] | number`:
+  Opens `path` once (following a final symlink) and derives the opened descriptor's
+  full-width 64-bit `(dev, ino)` identity string (`"<dev>:<ino>"`, or `""` when `ino == 0`
+  or unavailable). Returns a negative WASI errno on open failure. On success, **ownership of
+  `fd` transfers to the JS caller**, which must close it via `fsWatchDropFd(fd)` inside a
+  `try/finally` entered immediately after reading `resolved[0]` by index.
+- `fsWatchOpenFd(fd: number, recursive: boolean) -> number`:
+  Registers a watch on the already-opened descriptor `fd` via `runtime_fs.watch_open(fd, flags, out_id_ptr)`.
+  Returns a positive watch id or a negative WASI errno. Does not close `fd`.
+- `fsWatchDropFd(fd: number) -> void`:
+  Closes the temporary descriptor returned by `fsWatchResolve` (`fd_close`).
+
+How hosts implement the underlying WASI calls:
+
+- On `wasm32-wasip1`, `crates/bunwasm-runtime/src/host.rs` opens the file with
+  `std::fs::File::open(path)` (WASI `path_open`), reads `dev()` and `ino()` directly from
+  that descriptor through `std::os::wasi::fs::MetadataExt` (WASI `fd_filestat_get`), calls
+  `runtime_fs.watch_open` with the raw descriptor, and drops `File::from_raw_fd(fd)`
+  (WASI `fd_close`).
+- The native Wasmtime launcher (`crates/bunwasm-host/src/fs_watch.rs` and
+  `crates/bunwasm-host/src/process/wasi.rs`) serves `path_open`, `fd_filestat_get`,
+  `fd_close`, and `runtime_fs.watch_open` against the host filesystem using the same
+  descriptor identity (`dev`, `ino`).
+- The browser host (`web/`) serves `path_open`, `fd_filestat_get`, `fd_close`, and
+  `runtime_fs.watch_open` through Waffle's WASI preview1 and `GuestWatchTable` layer, with
+  `fsWatchWord` and `fsWatchReady` wired directly to the session's shared watch cell and
+  table readiness.
+
 ## Hosts
 
 - `crates/bunwasm-host` (`bun-wasm` binary): native launcher on wasmtime,

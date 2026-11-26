@@ -49,39 +49,31 @@ function fixture(options: { resolve?: (path: string) => { dev?: bigint; ino: big
   let nextFd = 100;
   let openResult: number | undefined;
   let net: unknown;
-  const resolveNatives = options.resolve
-    ? {
-        fsWatchResolve(path: string): [number, string] | number {
-          const resolved = options.resolve!(path);
-          if (typeof resolved === "number") return resolved;
-          const fd = nextFd++;
-          fdToPath.set(fd, path);
-          const identity = resolved.ino === 0n ? "" : `${resolved.dev ?? 0n}:${resolved.ino}`;
-          return [fd, identity];
-        },
-        fsWatchOpenFd(fd: number, recursive: boolean) {
-          if (openResult !== undefined) return openResult;
-          const id = nextId++;
-          opened.push({ path: fdToPath.get(fd) ?? "", recursive, id, fd });
-          queued.set(id, []);
-          return id;
-        },
-        fsWatchDropFd(fd: number) {
-          droppedFds.push(fd);
-          fdToPath.delete(fd);
-        },
-      }
-    : {};
   const internal: any = {
     native: {
       hostCaps: {},
-      ...resolveNatives,
-      fsWatchOpen(path: string, recursive: boolean) {
+      fsWatchResolve(path: string): [number, string] | number {
+        const fd = nextFd++;
+        fdToPath.set(fd, path);
+        if (!options.resolve) return [fd, ""];
+        const resolved = options.resolve(path);
+        if (typeof resolved === "number") {
+          fdToPath.delete(fd);
+          return resolved;
+        }
+        const identity = resolved.ino === 0n ? "" : `${resolved.dev ?? 0n}:${resolved.ino}`;
+        return [fd, identity];
+      },
+      fsWatchOpenFd(fd: number, recursive: boolean) {
         if (openResult !== undefined) return openResult;
         const id = nextId++;
-        opened.push({ path, recursive, id });
+        opened.push({ path: fdToPath.get(fd) ?? "", recursive, id, fd });
         queued.set(id, []);
         return id;
+      },
+      fsWatchDropFd(fd: number) {
+        droppedFds.push(fd);
+        fdToPath.delete(fd);
       },
       fsWatchReady() {
         traffic.readiness++;
@@ -152,7 +144,9 @@ function providerFixture() {
   let batch: WatchBatch = { kind: "events", events: [] };
   const table = new GuestWatchTable({ cells, get revoked() { return revoked; }, open: () => 1,
     read() { if (failed) throw new FilesystemError(29); return batch; }, close() { closed++; } });
-  world.internal.native.fsWatchOpen = (_path: string, recursive: boolean) => id = table.open(1, recursive);
+  world.internal.native.fsWatchResolve = () => [1, ""];
+  world.internal.native.fsWatchOpenFd = (fd: number, recursive: boolean) => id = table.open(fd, recursive);
+  world.internal.native.fsWatchDropFd = () => {};
   world.internal.native.fsWatchReady = () => table.ready();
   world.internal.native.fsWatchRead = (watch: number) => {
     try {
@@ -238,8 +232,9 @@ test("a write committed before the pump reaches change listeners before a socket
   world.commit(world.opened[0]!.id, chunk(record("change", "page.tsx")));
   world.pump();
   expect(log).toEqual(["change page.tsx", "request"]);
-  expect(world.effects).toEqual({ stats: 1, timers: 0, scans: 0 });
-  expect(world.opened).toEqual([{ path: "/app", recursive: true, id: 40 }]);
+  expect(world.effects).toEqual({ stats: 0, timers: 0, scans: 0 });
+  expect(world.opened).toEqual([{ path: "/app", recursive: true, id: 40, fd: 100 }]);
+  expect(world.droppedFds).toEqual([100]);
   watcher.close();
 });
 
@@ -534,4 +529,85 @@ test("unhandled overflow on one shared subscriber still delivers to remaining su
   expect(world.pending()).toBe(0);
   expect(a).toBeDefined();
   expect(b).toBeDefined();
+});
+
+test("repeated joins bound the shared backlog and preserve provider overflow", () => {
+  let nextId = 1;
+  const queues = new Map<number, (Uint8Array | number)[]>();
+  const overflowed = new Set<number>();
+  const CAPACITY = 128;
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 777n }) });
+  world.internal.native.fsWatchOpenFd = () => {
+    const id = nextId++;
+    queues.set(id, []);
+    return id;
+  };
+  world.internal.native.fsWatchReady = () =>
+    Array.from(queues.entries()).some(([id, q]) => overflowed.has(id) || q.length > 0);
+  world.internal.native.fsWatchRead = (id: number) => {
+    if (overflowed.has(id)) return chunk(record("overflow"));
+    const q = queues.get(id);
+    if (!q || q.length === 0) return -6;
+    const batch = Buffer.concat(q.splice(0, q.length) as Uint8Array[]);
+    return batch;
+  };
+  world.internal.native.fsWatchClose = (id: number) => {
+    queues.delete(id);
+    overflowed.delete(id);
+    return 0;
+  };
+
+  const emitCreate = (name: string) => {
+    for (const [id, q] of queues) {
+      if (overflowed.has(id)) continue;
+      if (q.length + 3 > CAPACITY) {
+        q.length = 0;
+        overflowed.add(id);
+      } else {
+        q.push(record("rename", name), record("change", name), record("change", name));
+      }
+    }
+  };
+
+  const eventsA: string[] = [];
+  const errorsA: string[] = [];
+  const a = world.module.watch("/dir", (_ev, name) => eventsA.push(String(name)));
+  a.on("error", (err: { code: string }) => errorsA.push(err.code));
+
+  for (let i = 0; i < 512; i++) {
+    emitCreate(`f${i}`);
+    const dup = world.module.watch("/dir");
+    dup.close();
+  }
+  expect(world.pump()).toBe(true);
+  expect(errorsA).toEqual(["EOVERFLOW"]);
+  expect(eventsA.length).toBeLessThan(300);
+});
+
+test("a throwing iterator on the fsWatchResolve tuple still drops the resolved descriptor", () => {
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 55n }) });
+  const poisoned = [100, "1:55"] as [number, string];
+  Object.defineProperty(poisoned, Symbol.iterator, {
+    value() { throw new Error("iterator boom"); },
+  });
+  world.internal.native.fsWatchResolve = () => poisoned;
+  const watcher = world.module.watch("/dir");
+  expect(world.droppedFds).toEqual([100]);
+  watcher.close();
+
+  // Throwing when reading index 1 inside the protected scope also drops the descriptor.
+  const badIdentity = [101] as unknown as [number, string];
+  Object.defineProperty(badIdentity, 1, {
+    get() { throw new Error("identity boom"); },
+  });
+  world.internal.native.fsWatchResolve = () => badIdentity;
+  expect(() => world.module.watch("/dir")).toThrow("identity boom");
+  expect(world.droppedFds).toEqual([100, 101]);
+});
+
+test("watch requires fsWatchResolve, fsWatchOpenFd, and fsWatchDropFd instead of falling back to fsWatchOpen", () => {
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 66n }) });
+  delete world.internal.native.fsWatchResolve;
+  expect(() => world.module.watch("/dir")).toThrow();
+  expect(world.opened).toHaveLength(0);
 });

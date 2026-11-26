@@ -10,11 +10,14 @@ imports (`watch_open`, `watch_ready`, `watch_read`, `watch_close`; Waffle `docs/
 "Guest filesystem watches"). `fsWatchResolve(path)` opens the path once (following a final
 symlink) and derives its full-width 64-bit `(dev, ino)` identity from that open descriptor.
 Watchers on the exact same live `(dev, ino, recursive, path)` share one underlying watch
-registration via `fsWatchOpenFd(fd, recursive)` (or open independent registrations when
-descriptor identity is unavailable) while keeping independent `ResourceFrame`, encoding,
-`ref`/`unref`, abort signal, registration cursor and listener state; before a late subscriber
-joins a shared watch, any events already queued on that watch are captured into a sequence-gated
-backlog so the late subscriber only receives events after it registered. Closing the last
+registration via `fsWatchOpenFd(fd, recursive)` (with `fsWatchDropFd(fd)` releasing the
+descriptor in a `finally` entered immediately after reading `resolved[0]` by index; see
+`docs/host-abi.md`, "Filesystem watch descriptor natives") while keeping independent
+`ResourceFrame`, encoding, `ref`/`unref`, abort signal, registration cursor and listener state;
+before a late subscriber joins a shared watch, any events already queued on that watch are
+captured into a bounded sequence-gated backlog (capped by records and bytes, opening an
+independent registration instead of draining further when saturated so provider overflow is
+preserved) so the late subscriber only receives events after it registered. Closing the last
 subscriber releases the native id. There is no timer and no tree scan. The hub registers one
 `watch: true` I/O waiter with no `runtime_proc` subscriptions, so the idle loop sleeps in the
 network host poll and `ioPending()` does not scan every open watcher. The Bun web executor arms

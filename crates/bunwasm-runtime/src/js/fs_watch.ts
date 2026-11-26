@@ -1,13 +1,11 @@
 (function (internal: BunWasm.Internal & {
   native: {
     /** Opens `path` once and returns `[fd, "dev:ino"]` (full 64-bit identity) or a negative errno. */
-    fsWatchResolve?(path: string): [number, string] | number;
+    fsWatchResolve(path: string): [number, string] | number;
     /** Registers a watch on an open descriptor from `fsWatchResolve`, or returns a negative errno. */
-    fsWatchOpenFd?(fd: number, recursive: boolean): number;
+    fsWatchOpenFd(fd: number, recursive: boolean): number;
     /** Closes a temporary descriptor from `fsWatchResolve`. */
-    fsWatchDropFd?(fd: number): void;
-    /** A process-local watch id, or a negative WASI errno (runtime_fs.watch_open). */
-    fsWatchOpen(path: string, recursive: boolean): number;
+    fsWatchDropFd(fd: number): void;
     /** Whole records, 0 at end of stream, or a negative WASI errno (-6 when nothing is pending). */
     fsWatchRead(id: number): Uint8Array | number;
     fsWatchClose(id: number): number;
@@ -126,9 +124,14 @@
   }
 
   return function createWatch(fs: FileSystem) {
+    const MAX_BACKLOG_RECORDS = 128;
+    const MAX_BACKLOG_BYTES = 16 * 1024;
+
     interface BacklogEntry {
       readonly seq: number;
-      readonly chunk: Uint8Array | number;
+      readonly payload: readonly WatchRecord[] | number;
+      readonly records: number;
+      readonly bytes: number;
     }
 
     interface SharedWatch {
@@ -136,6 +139,8 @@
       readonly key: string | undefined;
       readonly subscribers: Set<FSWatcher>;
       readonly backlog: BacklogEntry[];
+      backlogRecords: number;
+      backlogBytes: number;
       seq: number;
       closed: boolean;
     }
@@ -182,6 +187,8 @@
       if (shared.backlog.length > 0) {
         backlogCount -= shared.backlog.length;
         shared.backlog.length = 0;
+        shared.backlogRecords = 0;
+        shared.backlogBytes = 0;
       }
       sharedById.delete(shared.id);
       detachKey(shared);
@@ -189,27 +196,42 @@
       releaseHubIfEmpty();
     }
 
-    /** Drain any events already queued on `shared` into its backlog so a late subscriber starts
-     * strictly after them. Returns false if `shared` is ending, errored, or overflowed and must
-     * not accept new subscribers. */
-    function captureBoundary(shared: SharedWatch): boolean {
-      if (typeof native.fsWatchReady === "function" && !native.fsWatchReady()) return true;
+    function backlogFull(shared: SharedWatch): boolean {
+      return shared.backlogRecords >= MAX_BACKLOG_RECORDS || shared.backlogBytes >= MAX_BACKLOG_BYTES;
+    }
+
+    /** Drain any events already queued on `shared` into its bounded backlog so a late subscriber
+     * starts strictly after them. Returns `"saturated"` if draining would exceed the backlog budget
+     * (leaving further records in the provider queue), or `"closed"` if `shared` is ending/errored. */
+    function captureBoundary(shared: SharedWatch): "joined" | "saturated" | "closed" {
+      if (backlogFull(shared)) return "saturated";
+      if (typeof native.fsWatchReady === "function" && !native.fsWatchReady()) return "joined";
       while (!shared.closed) {
         const chunk = native.fsWatchRead(shared.id);
-        if (chunk === AGAIN) return true;
-        shared.backlog.push({ seq: ++shared.seq, chunk });
+        if (chunk === AGAIN) return "joined";
+        const isNumber = typeof chunk === "number";
+        const decoded = isNumber ? undefined : decode(chunk);
+        const payload = isNumber ? chunk : decoded!;
+        const records = isNumber ? 1 : Math.max(1, decoded!.length);
+        const bytes = isNumber ? 8 : chunk.byteLength;
+        shared.backlog.push({ seq: ++shared.seq, payload, records, bytes });
+        shared.backlogRecords += records;
+        shared.backlogBytes += bytes;
         backlogCount++;
         internal.markWatchDirty?.();
-        if (chunk === 0 || typeof chunk === "number" || decode(chunk).some(r => r.type === "overflow")) {
+        if (chunk === 0 || isNumber || decoded!.some(r => r.type === "overflow")) {
           detachKey(shared);
-          return false;
+          return "closed";
         }
+        if (backlogFull(shared)) return "saturated";
       }
-      return false;
+      return "closed";
     }
 
     function createShared(id: number, key: string | undefined): SharedWatch {
-      const shared: SharedWatch = { id, key, subscribers: new Set(), backlog: [], seq: 0, closed: false };
+      const shared: SharedWatch = {
+        id, key, subscribers: new Set(), backlog: [], backlogRecords: 0, backlogBytes: 0, seq: 0, closed: false,
+      };
       sharedById.set(id, shared);
       if (key !== undefined) sharedByKey.set(key, shared);
       internal.markWatchDirty?.();
@@ -219,32 +241,25 @@
     /** Acquire a shared or fresh native watch from a single resolved descriptor so the sharing key
      * always names the exact opened inode (full 64-bit dev:ino) with no stat-to-open TOCTOU race. */
     function acquireShared(path: string, recursive: boolean): { shared: SharedWatch; since: number } {
-      if (
-        typeof native.fsWatchResolve === "function" &&
-        typeof native.fsWatchOpenFd === "function" &&
-        typeof native.fsWatchDropFd === "function"
-      ) {
-        const resolved = native.fsWatchResolve(path);
-        if (typeof resolved === "number") throw watchError(-resolved, path, true);
-        const [fd, identity] = resolved;
-        try {
-          const key = identity ? `${identity}:${recursive ? 1 : 0}:${path}` : undefined;
-          const existing = key !== undefined ? sharedByKey.get(key) : undefined;
-          if (existing && !existing.closed && captureBoundary(existing)) {
-            return { shared: existing, since: existing.seq };
-          }
-          const id = native.fsWatchOpenFd(fd, recursive);
-          if (id < 0) throw watchError(-id, path, true);
-          return { shared: createShared(id, key), since: 0 };
-        } finally {
-          native.fsWatchDropFd(fd);
+      const resolved = native.fsWatchResolve(path);
+      if (typeof resolved === "number") throw watchError(-resolved, path, true);
+      const fd = resolved[0];
+      try {
+        const identity = resolved[1];
+        const key = identity ? `${identity}:${recursive ? 1 : 0}:${path}` : undefined;
+        const existing = key !== undefined ? sharedByKey.get(key) : undefined;
+        let shareKey = key;
+        if (existing && !existing.closed) {
+          const boundary = captureBoundary(existing);
+          if (boundary === "joined") return { shared: existing, since: existing.seq };
+          if (boundary === "saturated") shareKey = undefined;
         }
+        const id = native.fsWatchOpenFd(fd, recursive);
+        if (id < 0) throw watchError(-id, path, true);
+        return { shared: createShared(id, shareKey), since: 0 };
+      } finally {
+        native.fsWatchDropFd(fd);
       }
-      // Without descriptor-derived identity, keep registrations independent rather than sharing.
-      fs.statSync(path);
-      const id = native.fsWatchOpen(path, recursive);
-      if (id < 0) throw watchError(-id, path, true);
-      return { shared: createShared(id, undefined), since: 0 };
     }
 
     function fanOut(subscribers: readonly FSWatcher[], seq: number, deliver: (watcher: FSWatcher) => void) {
@@ -266,18 +281,17 @@
       if (hasError) throw firstError;
     }
 
-    function dispatchChunk(shared: SharedWatch, chunk: Uint8Array | number, seq: number) {
+    function dispatchPayload(shared: SharedWatch, payload: readonly WatchRecord[] | number, seq: number) {
       const subscribers = Array.from(shared.subscribers);
-      if (chunk === 0) {
+      if (payload === 0) {
         fanOut(subscribers, seq, watcher => watcher.close());
         return;
       }
-      if (typeof chunk === "number") {
-        fanOut(subscribers, seq, watcher => watcher._deliverErrno(-chunk));
+      if (typeof payload === "number") {
+        fanOut(subscribers, seq, watcher => watcher._deliverErrno(-payload));
         return;
       }
-      const records = decode(chunk);
-      fanOut(subscribers, seq, watcher => watcher._deliverRecords(records));
+      fanOut(subscribers, seq, watcher => watcher._deliverRecords(payload));
     }
 
     function drainShared(shared: SharedWatch): boolean {
@@ -285,14 +299,17 @@
       while (!shared.closed && shared.backlog.length > 0) {
         const entry = shared.backlog.shift()!;
         backlogCount--;
+        shared.backlogRecords -= entry.records;
+        shared.backlogBytes -= entry.bytes;
         progressed = true;
-        dispatchChunk(shared, entry.chunk, entry.seq);
+        dispatchPayload(shared, entry.payload, entry.seq);
       }
       while (!shared.closed) {
         const chunk = native.fsWatchRead(shared.id);
         if (chunk === AGAIN) break;
         progressed = true;
-        dispatchChunk(shared, chunk, ++shared.seq);
+        const payload = typeof chunk === "number" ? chunk : decode(chunk);
+        dispatchPayload(shared, payload, ++shared.seq);
       }
       return progressed;
     }

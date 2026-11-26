@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "wasi", feature(wasi_ext))]
+
 // Register the native lint ABI used by the linked upstream drivers.
 use bunwasm_lint_native as _;
 

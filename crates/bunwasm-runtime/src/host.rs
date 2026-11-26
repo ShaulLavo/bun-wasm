@@ -670,26 +670,26 @@ thread_local! {
 /// identity from that open descriptor before returning `(fd, identity)`. The caller owns `fd`
 /// and must release it with [`fs_watch_drop_fd`].
 pub fn fs_watch_resolve(path: &str) -> Result<(i32, Option<String>), i32> {
-    use std::os::fd::{AsRawFd, IntoRawFd};
+    use std::os::fd::IntoRawFd;
     let file =
         std::fs::File::open(path).map_err(|error| error.raw_os_error().unwrap_or(WATCH_IO))?;
-    let identity = watch_fd_identity(&file, file.as_raw_fd());
+    let identity = watch_fd_identity(&file);
     Ok((file.into_raw_fd(), identity))
 }
 
 #[cfg(target_os = "wasi")]
-fn watch_fd_identity(_file: &std::fs::File, fd: i32) -> Option<String> {
-    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstat(fd, &mut stat) } != 0 || stat.st_ino == 0 {
+fn watch_fd_identity(file: &std::fs::File) -> Option<String> {
+    use std::os::wasi::fs::MetadataExt;
+    let meta = file.metadata().ok()?;
+    let ino = meta.ino();
+    if ino == 0 {
         return None;
     }
-    let dev = stat.st_dev as u64;
-    let ino = stat.st_ino as u64;
-    Some(format!("{dev}:{ino}"))
+    Some(format!("{}:{ino}", meta.dev()))
 }
 
 #[cfg(all(unix, not(target_os = "wasi")))]
-fn watch_fd_identity(file: &std::fs::File, _fd: i32) -> Option<String> {
+fn watch_fd_identity(file: &std::fs::File) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
     let meta = file.metadata().ok()?;
     let ino = meta.ino();
@@ -704,7 +704,7 @@ fn watch_fd_identity(file: &std::fs::File, _fd: i32) -> Option<String> {
 }
 
 #[cfg(not(any(unix, target_os = "wasi")))]
-fn watch_fd_identity(_file: &std::fs::File, _fd: i32) -> Option<String> {
+fn watch_fd_identity(_file: &std::fs::File) -> Option<String> {
     None
 }
 
