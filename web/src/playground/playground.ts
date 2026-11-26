@@ -92,12 +92,13 @@ function launchSubcommand(path: string): string {
   return /\.(test|spec)\.[cm]?[jt]sx?$/.test(path) ? "test" : "run";
 }
 
+const CHECK_DEMO_DIR = `${HOME}/check-demo`;
 const CHECK_DEMO_PATHS = new Set((findDemo("check")?.files ?? []).map(file => `${HOME}/${file}`));
 
 /** Builds the shell command for a playground Run or demo launch. */
 export function launchCommand(launch: Pick<Launch, "path" | "argument" | "demo">, examplesWorkspace = true): string {
   if (launch.demo?.command) return launch.demo.command;
-  if (examplesWorkspace && CHECK_DEMO_PATHS.has(launch.path)) return `bun check --cwd ${shellWord(HOME)}`;
+  if (examplesWorkspace && CHECK_DEMO_PATHS.has(launch.path)) return `bun check --cwd ${shellWord(CHECK_DEMO_DIR)}`;
   return `bun ${launchSubcommand(launch.path)} ${shellWord(launch.argument)}`;
 }
 

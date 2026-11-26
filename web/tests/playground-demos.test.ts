@@ -16,28 +16,30 @@ test("every demo runs a seeded example and restores only seeded files", () => {
 test("demo ids from the address resolve, unknown ones do not", () => {
   expect(demo("serve")?.file).toBe("serve.ts");
   expect(demo("test")?.files).toEqual(["math.test.ts", "math.ts"]);
-  expect(demo("check")?.file).toBe("src/check.ts");
-  expect(demo("check")?.files).toEqual(["src/check.ts", "tsconfig.json"]);
-  expect(demo("check")?.command).toBe("bun check");
+  expect(demo("check")?.file).toBe("check-demo/src/check.ts");
+  expect(demo("check")?.files).toEqual(["check-demo/src/check.ts", "check-demo/tsconfig.json"]);
+  expect(demo("check")?.command).toBe("bun check --cwd check-demo");
   expect(demo("nope")).toBeUndefined();
   expect(demo(null)).toBeUndefined();
 });
 
-test("the bun check demo isolates its tsconfig to src/ and has a type error on line 1", () => {
-  const tsconfig = JSON.parse(examples["tsconfig.json"]!) as { compilerOptions: Record<string, unknown>; include: string[] };
+test("the bun check demo keeps its tsconfig in check-demo/ so root ~ stays clean", () => {
+  expect(Object.keys(examples)).not.toContain("tsconfig.json");
+  expect(Object.keys(examples)).not.toContain("jsconfig.json");
+  const tsconfig = JSON.parse(examples["check-demo/tsconfig.json"]!) as { compilerOptions: Record<string, unknown>; include: string[] };
   expect(tsconfig).toEqual({
     compilerOptions: { strict: true, lib: ["es2022"], noEmit: true },
     include: ["src"],
   });
-  expect(examples["src/check.ts"]?.split("\n")[0]).toBe('export const total: number = "three";');
+  expect(examples["check-demo/src/check.ts"]?.split("\n")[0]).toBe('export const total: number = "three";');
 });
 
-test("launchCommand runs bun check for the check demo and its files in the examples workspace", () => {
+test("launchCommand runs bun check against check-demo/ for the check demo and its files", () => {
   const check = demo("check")!;
-  expect(launchCommand({ path: "/home/user/src/check.ts", argument: "src/check.ts", demo: check })).toBe("bun check");
-  expect(launchCommand({ path: "/home/user/src/check.ts", argument: "/home/user/src/check.ts" }, true)).toBe("bun check --cwd /home/user");
-  expect(launchCommand({ path: "/home/user/tsconfig.json", argument: "/home/user/tsconfig.json" }, true)).toBe("bun check --cwd /home/user");
-  expect(launchCommand({ path: "/home/user/src/check.ts", argument: "/home/user/src/check.ts" }, false)).toBe("bun run /home/user/src/check.ts");
+  expect(launchCommand({ path: "/home/user/check-demo/src/check.ts", argument: "check-demo/src/check.ts", demo: check })).toBe("bun check --cwd check-demo");
+  expect(launchCommand({ path: "/home/user/check-demo/src/check.ts", argument: "/home/user/check-demo/src/check.ts" }, true)).toBe("bun check --cwd /home/user/check-demo");
+  expect(launchCommand({ path: "/home/user/check-demo/tsconfig.json", argument: "/home/user/check-demo/tsconfig.json" }, true)).toBe("bun check --cwd /home/user/check-demo");
+  expect(launchCommand({ path: "/home/user/check-demo/src/check.ts", argument: "/home/user/check-demo/src/check.ts" }, false)).toBe("bun run /home/user/check-demo/src/check.ts");
   expect(launchCommand({ path: "/home/user/math.test.ts", argument: "math.test.ts", demo: demo("test") })).toBe("bun test math.test.ts");
   expect(launchCommand({ path: "/home/user/serve.ts", argument: "serve.ts", demo: demo("serve") })).toBe("bun run serve.ts");
 });

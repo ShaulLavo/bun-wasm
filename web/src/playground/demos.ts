@@ -18,13 +18,13 @@ const files: Record<DemoId, readonly string[]> = {
   sqlite: ["sqlite.ts"],
   test: ["math.test.ts", "math.ts"],
   build: ["build.ts", "jsx.tsx", "math.ts"],
-  check: ["src/check.ts", "tsconfig.json"],
+  check: ["check-demo/src/check.ts", "check-demo/tsconfig.json"],
   shell: ["shell.ts"],
   file: ["bun-file.ts"],
 };
 
 const commands: Partial<Record<DemoId, string>> = {
-  check: "bun check",
+  check: "bun check --cwd check-demo",
 };
 
 export const demos: readonly Demo[] = Object.entries(files).map(([id, needed]) => {

@@ -22,14 +22,16 @@ loads a different module at runtime; `?trace` logs every WASI call to the worker
 The examples workspace shows a demo bar: Bun.serve, bun:sqlite, bun test, Bun.build, bun check,
 Bun.$ and Bun.file. A click stops any running command, restores the demo's files if they were
 deleted (edits are kept), opens the file and runs it from `~` (it runs `cd ~`, clears the screen and
-echoes `bun run serve.ts`, or `bun check` for the type-check demo, which downloads `bun-tools.wasm`
-once on demand). Restoring is one exclusive-create call, so it never replaces a file another tab
-wrote meanwhile, and an existing file is always the visitor's. When a demo's code changes in a way
-an old copy would get wrong, the demo gets a new file name (main's `db.ts` became `sqlite.ts` and
-`files.ts` became `bun-file.ts`), so old workspaces simply gain the new file.
-While a demo prepares, Run stays out and Stop cancels it. Demos resolve their files from
-`import.meta.dir`, so they work from any shell directory, and the SQLite demos use in-memory
-databases: every tab runs its own processes, and SQLite here allows one writer per file.
+echoes `bun run serve.ts`, or `bun check --cwd check-demo` for the type-check demo, which downloads
+`bun-tools.wasm` once on demand). Restoring is one exclusive-create call, so it never replaces a
+file another tab wrote meanwhile, and an existing file is always the visitor's. When a demo's code
+changes in a way an old copy would get wrong, the demo gets a new file name (main's `db.ts` became
+`sqlite.ts` and `files.ts` became `bun-file.ts`), so old workspaces simply gain the new file.
+While a demo prepares, Run stays out and Stop cancels it. Script demos resolve their files from
+`import.meta.dir`, and the `bun check` demo runs with its own `check-demo` project directory
+(`--cwd`), so every demo works from any shell directory without adding a root `tsconfig.json` at
+`~`. The SQLite demos use in-memory databases: every tab runs its own processes, and SQLite here
+allows one writer per file.
 
 While a command runs, Run becomes Stop (Ctrl-C; a second Stop forces it). A server started there
 opens in a preview above the terminal. Each Run or demo launch carries a unique
