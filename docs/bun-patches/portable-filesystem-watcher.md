@@ -5,17 +5,21 @@ Class **Host feature**, **original adapter** in `src/js/fs_watch.ts`, wired by
 `src/js/internal/fs/watch.ts` at `cd95fa7a13b3f13be73e512b38ec111c1c228084`
 wraps a private native filesystem watcher that these engines cannot call.
 
-Each watcher owns one process-local watch id from Waffle's `runtime_fs` imports
-(`watch_open`, `watch_ready`, `watch_read`, `watch_close`; Waffle `docs/host-abi.md`, "Guest
-filesystem watches", frozen in wave 2026-10-29 `waffle/guest-watch/DESIGN.md`
-revision 2). The `fsWatchOpen(path, recursive)` native opens the path with symlink
-follow after the existing `statSync` check, registers the watch on that descriptor
-and closes it; the watch follows the node's identity. There is no timer and no tree
-scan. The watcher registers one I/O waiter with no runtime_proc subscriptions, so the
-idle loop sleeps in the network host poll. The Bun web executor arms Waffle's
-notification set for that poll (`NetHost.attachNotifications`), which wakes it when a
-filesystem commit is pending for a guest watch. Each step drains `fsWatchRead`
-(one reused 64 KiB buffer) until `EAGAIN`. A record is `u8` type (1 change,
+Each watcher subscribes through a single process-local watch hub over Waffle's `runtime_fs`
+imports (`watch_open`, `watch_ready`, `watch_read`, `watch_close`, plus optional `watch_next` /
+direct `GuestWatchTable.readNext`; Waffle `docs/host-abi.md`, "Guest filesystem watches"). The
+`fsWatchOpen(path, recursive)` native opens the path with symlink follow after the existing
+`statSync` check, registers the watch on that descriptor and closes it; the watch follows the
+node's identity. Watchers on the exact same live `(dev, ino, recursive, path)` share one
+underlying watch registration while keeping independent `ResourceFrame`, encoding, `ref`/`unref`,
+abort signal and listener state; closing the last subscriber releases the native id. There is no
+timer and no tree scan. The hub registers one `watch: true` I/O waiter with no `runtime_proc`
+subscriptions, so the idle loop sleeps in the network host poll and `ioPending()` does not scan
+every open watcher. The Bun web executor arms Waffle's notification set for that poll
+(`NetHost.attachNotifications`), which wakes it when a filesystem commit is pending for a guest
+watch. When `fsWatchNext` is available (via Browser host direct table access or `runtime_fs.watch_next`),
+the hub drains only ready watch ids in O(ready) calls; otherwise it drains each shared watch's
+`fsWatchRead` (one reused 64 KiB buffer) until `EAGAIN`. A record is `u8` type (1 change,
 2 rename, 3 overflow), three zero bytes, a little-endian `u32` name length
 (`0xffffffff` for the watched root and overflow), then the UTF-8 relative name
 padded to 4 bytes. Root events report the watched path's basename, as before.
@@ -29,12 +33,15 @@ Node does for an exhausted inotify limit. A throwing `change` listener becomes a
 `error` event and releases the watch. Events can coalesce, and the adapter promises
 no OS event count.
 
-`net.js` delegates each turn to the original TypeScript adapter `io_pump.ts`.
-It queries the non-consuming `runtime_fs.watch_ready() -> i32` once when the
-turn contains watches. Zero means no watch read can make progress; nonzero means
-records, an end or an error may be available. Idle turns skip every per-watch
-read, avoiding host allocation traffic proportional to the watch count. The
-decision belongs to that turn, including during a reentrant pump. A write racing
+`net.js` keeps watch waiters and non-watch waiters in separate sets and delegates each turn to
+the original TypeScript adapter `io_pump.ts`, avoiding per-turn array copies and sorting.
+It queries the non-consuming `fsWatchReady()` once when watch waiters exist (calling Waffle's
+`GuestWatchTable.ready()` directly on the Browser engine, or `runtime_fs.watch_ready()` on Wasm
+engines). Zero means no watch read can make progress; nonzero means records, an end or an error
+may be available. Idle turns skip every watch read, avoiding host allocation traffic proportional
+to the watch count. On the Browser engine, `EngineHost.pump()` skips a second `pumpIo()` call in
+the same turn when `loop_scheduler.ts` already pumped I/O before continuing with `next === 0`.
+The readiness decision belongs to that turn, including during a reentrant pump. A write racing
 a negative query wakes the normal notification path and is delivered next turn.
 There is no timer, forced collection or old-host fallback.
 

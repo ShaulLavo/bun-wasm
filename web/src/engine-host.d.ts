@@ -37,6 +37,10 @@ export interface EngineHostOptions {
     caps: Record<string, boolean>;
     onNews(cb: () => void): void;
   };
+  /** Optional direct filesystem watch readiness check on the Browser engine, avoiding Wasm round trips. */
+  fsWatchReady?: () => boolean;
+  /** Optional direct ready-only watch drain on the Browser engine, avoiding Wasm round trips and idle scans. */
+  fsWatchNext?: () => [number, Uint8Array | number] | null | undefined;
   /**
    * The process wake word that pipe and child changes publish on (Waffle's worker process state).
    * While the program waits on I/O, the event loop wakes on it instead of only rescanning.

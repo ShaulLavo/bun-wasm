@@ -596,6 +596,8 @@ class EngineHost {
       net.onNews(() => this.schedule(0));
     }
     if (this.o.terminal) native.terminalSetRawMode = raw => this.o.terminal.setRawMode(raw);
+    if (this.o.fsWatchReady && native.fsWatchReady) native.fsWatchReady = this.o.fsWatchReady;
+    if (this.o.fsWatchNext) native.fsWatchNext = this.o.fsWatchNext;
     native.engine = "host";
     // Name the host's engine only where the host reports it: Node's real V8 version.
     // Browser workers expose no engine version, so they add no key.
@@ -1292,12 +1294,13 @@ class EngineHost {
       return this.schedule(0);
     }
     if (this.testComplete) return this.finish();
+    this.internal.ioPumped = false;
     let next = step(() => this.guard(() => this.internal.runTimers(), 0));
     if (this.exited) return;
     // Network handles (net.js waiters): step them; the networking host's
     // onNews wakes the loop when something changes.
     const io = this.guard(() => this.internal.ioPending(), 0);
-    if (io > 0 && step(() => this.guard(() => this.internal.pumpIo(), false)) && next !== 0) next = 0;
+    if (io > 0 && !(next === 0 && this.internal.ioPumped) && step(() => this.guard(() => this.internal.pumpIo(), false)) && next !== 0) next = 0;
     if (this.o.debug) this.o.debug(`pump next=${next} pending=${this.pendingAsync} io=${io}`);
     this.flush();
     if (this.exited) return;

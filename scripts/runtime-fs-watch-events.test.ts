@@ -369,3 +369,65 @@ test("a construction failure after registration releases the watch and its waite
   expect(world.opened.map(({ id }) => id)).toEqual(world.closed);
   expect([world.closed.length, world.pending()]).toEqual([1, 0]);
 });
+
+test("watchers on the same node, path and recursive flag share one native watch", () => {
+  const world = fixture();
+  const seenA: unknown[][] = [];
+  const seenB: unknown[][] = [];
+  const a = world.module.watch("/shared/file.txt", "utf8", (...args) => seenA.push(args));
+  const b = world.module.watch("/shared/file.txt", "buffer", (...args) => seenB.push(args));
+  const c = world.module.watch("/shared/file.txt", { recursive: true });
+  expect(world.opened).toHaveLength(2);
+  expect(world.pending()).toBe(1);
+  world.commit(world.opened[0]!.id, chunk(record("change", null)));
+  expect(world.pump()).toBe(true);
+  expect(seenA).toEqual([["change", "file.txt"]]);
+  const bName = seenB[0]?.[1];
+  expect(Buffer.isBuffer(bName) && bName.toString()).toBe("file.txt");
+  a.close();
+  expect(world.closed).toEqual([]);
+  expect(world.pending()).toBe(1);
+  world.commit(world.opened[0]!.id, chunk(record("rename", null)));
+  expect(world.pump()).toBe(true);
+  expect(seenA).toHaveLength(1);
+  expect(seenB).toHaveLength(2);
+  b.unref();
+  c.unref();
+  expect(world.pending()).toBe(0);
+  b.ref();
+  expect(world.pending()).toBe(1);
+  b.close();
+  expect(world.closed).toEqual([world.opened[0]!.id]);
+  c.close();
+  expect(world.closed).toEqual([world.opened[0]!.id, world.opened[1]!.id]);
+  expect(world.pending()).toBe(0);
+});
+
+test("fsWatchNext drains only ready watches without calling fsWatchRead on idle watchers", () => {
+  const world = fixture();
+  const readyQueue: [number, Uint8Array | number][] = [];
+  let nextCalls = 0;
+  world.internal.native.fsWatchReady = () => {
+    world.traffic.readiness++;
+    return readyQueue.length > 0;
+  };
+  world.internal.native.fsWatchNext = () => {
+    nextCalls++;
+    return readyQueue.shift() ?? null;
+  };
+  const seen: string[] = [];
+  const watchers = Array.from({ length: 1500 }, (_, index) =>
+    world.module.watch(`/app/${index}`, (_event, name) => seen.push(`${index}:${name}`)));
+  try {
+    expect(world.pump()).toBe(false);
+    expect(nextCalls).toBe(0);
+    expect(world.traffic.reads).toBe(0);
+    readyQueue.push([world.opened[777]!.id, chunk(record("change", "hit.ts"))]);
+    expect(world.pump()).toBe(true);
+    expect(seen).toEqual(["777:hit.ts"]);
+    expect(nextCalls).toBe(2);
+    expect(world.traffic.reads).toBe(0);
+  } finally {
+    for (const watcher of watchers) watcher.close();
+  }
+});

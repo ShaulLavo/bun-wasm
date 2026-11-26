@@ -105,6 +105,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
   let nested: import("./nested/host.js").NestedHost | undefined;
   let groupMemory: WebAssembly.Memory | undefined;
   let netHost: NetHost | null = null;
+  let wasiWatches: (() => unknown) | undefined;
   let sharedObjects: SharedObjectService | undefined;
   let terminal: BunTerminal | undefined;
   const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
@@ -163,6 +164,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     async instantiated(context) {
       packages.instantiated(context, groupMemory);
       const { instance, wasi, fs, checkActive, notifications } = context;
+      wasiWatches = () => { checkActive(); return wasi.filesystemWatches; };
       // No guest code runs until this member holds every pre-attached buffer; a failed grant fails the start.
       if (sharedObjects) { await sharedObjects.ready; checkActive(); }
       netHost = req.net ? new NetHost(req.net, (net, transfer = []) => host.postMessage({ type: "net", req: net }, transfer), (path, bytes) => fs.writeFile(path, bytes), { shared: true }) : null;
@@ -213,7 +215,42 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
           error instanceof RuntimeWorkerSignal || isProcessExecutionTerminated(error) || observedProcessExit(error) !== null,
         onWasmCallTrap: telemetry ? (_error, index) => publishBrowserCallTrap(instance, index, telemetry, message => host.postMessage(message)) : undefined,
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
-        sharedObjects, net, terminal, processWake: runtimeState?.wake, onExit: code => finish({ code }),
+        sharedObjects, net, terminal, processWake: runtimeState?.wake,
+        fsWatchReady: () => {
+          const table = wasiWatches?.() as { ready?(): boolean } | undefined;
+          return table?.ready ? table.ready() : false;
+        },
+        fsWatchNext: () => {
+          type WatchNextResult =
+            | { readonly kind: "records"; readonly id: number; readonly records: readonly Uint8Array[]; readonly length: number }
+            | { readonly kind: "short"; readonly id: number; readonly needed: number }
+            | { readonly kind: "watch_error"; readonly id: number; readonly errno: number }
+            | { readonly kind: "error"; readonly errno: number };
+          const table = wasiWatches?.() as { readNext?(capacity: number): WatchNextResult } | undefined;
+          if (!table) return null;
+          if (typeof table.readNext !== "function") return undefined;
+          let result: WatchNextResult;
+          try {
+            result = table.readNext(65536);
+            if (result.kind === "short") result = table.readNext(result.needed);
+          } catch (error) {
+            if (typeof error === "object" && error !== null && "errno" in error && error.errno === 6) return null;
+            return undefined;
+          }
+          if (result.kind === "error") return result.errno === 6 ? null : undefined;
+          if (result.kind === "watch_error") return [result.id, -result.errno];
+          if (result.kind === "short") return [result.id, -42];
+          if (!result.length) return [result.id, 0];
+          if (result.records.length === 1) return [result.id, result.records[0]!];
+          const merged = new Uint8Array(result.length);
+          let at = 0;
+          for (const part of result.records) {
+            merged.set(part, at);
+            at += part.length;
+          }
+          return [result.id, merged];
+        },
+        onExit: code => finish({ code }),
       });
     },
   };
