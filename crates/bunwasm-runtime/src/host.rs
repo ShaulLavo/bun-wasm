@@ -748,9 +748,22 @@ pub fn fs_watch_ready() -> bool {
 }
 
 /// One `watch_read`: whole records (empty at end of stream), or the positive errno
-/// (6 when nothing is pending). A record that doesn't fit grows the buffer and retries.
-pub fn fs_watch_read(id: u32) -> Result<Vec<u8>, i32> {
+/// (6 when nothing is pending). When `max_bytes` is `None`, a record that doesn't fit grows
+/// the buffer and retries; when `Some(limit)`, reads at most `limit` bytes and returns
+/// `ENOBUFS` (42) without consuming if the next record exceeds `limit`.
+pub fn fs_watch_read(id: u32, max_bytes: Option<usize>) -> Result<Vec<u8>, i32> {
     WATCH_BUFFER.with_borrow_mut(|buf| {
+        if let Some(limit) = max_bytes {
+            if limit == 0 {
+                return Err(WATCH_NOBUFS);
+            }
+            if buf.len() < limit {
+                buf.resize(limit, 0);
+            }
+            return watch_read_into(id, &mut buf[..limit])
+                .map(|len| buf[..len].to_vec())
+                .map_err(|(errno, _)| errno);
+        }
         let mut read = watch_read_into(id, buf);
         while let Err((WATCH_NOBUFS, needed)) = read {
             if needed <= buf.len() {
@@ -922,7 +935,9 @@ mod signal_tests {
     #[test]
     fn filesystem_watches_report_enosys_without_the_runtime_fs_imports() {
         assert_eq!(fs_watch_open(env!("CARGO_MANIFEST_DIR"), true), Err(52));
-        assert_eq!(fs_watch_read(1), Err(52));
+        assert_eq!(fs_watch_read(1, None), Err(52));
+        assert_eq!(fs_watch_read(1, Some(64)), Err(52));
+        assert_eq!(fs_watch_read(1, Some(0)), Err(WATCH_NOBUFS));
         assert_eq!(fs_watch_close(1), 52);
     }
 

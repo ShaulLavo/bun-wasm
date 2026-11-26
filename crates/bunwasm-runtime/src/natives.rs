@@ -2441,7 +2441,10 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     });
     t.add("fsWatchReady", |_| Ok(host::fs_watch_ready().into()));
     t.add("fsWatchRead", |a| {
-        Ok(match host::fs_watch_read(a.u32(0)?) {
+        let max_bytes = a
+            .opt_num(1)
+            .map(|n| n.clamp(0.0, 16.0 * 1024.0 * 1024.0) as usize);
+        Ok(match host::fs_watch_read(a.u32(0)?, max_bytes) {
             Ok(bytes) if bytes.is_empty() => 0.into(),
             Ok(bytes) => Val::Bytes(bytes),
             Err(errno) => (-errno).into(),

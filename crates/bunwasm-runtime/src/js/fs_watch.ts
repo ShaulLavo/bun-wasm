@@ -6,8 +6,8 @@
     fsWatchOpenFd(fd: number, recursive: boolean): number;
     /** Closes a temporary descriptor from `fsWatchResolve`. */
     fsWatchDropFd(fd: number): void;
-    /** Whole records, 0 at end of stream, or a negative WASI errno (-6 when nothing is pending). */
-    fsWatchRead(id: number): Uint8Array | number;
+    /** Whole records, 0 at end of stream, or a negative WASI errno (-6 EAGAIN, -42 ENOBUFS). */
+    fsWatchRead(id: number, maxBytes?: number): Uint8Array | number;
     fsWatchClose(id: number): number;
   };
   hasWatchBacklog?: () => boolean;
@@ -126,6 +126,7 @@
   return function createWatch(fs: FileSystem) {
     const MAX_BACKLOG_RECORDS = 128;
     const MAX_BACKLOG_BYTES = 16 * 1024;
+    const NOBUFS = -42;
 
     interface BacklogEntry {
       readonly seq: number;
@@ -201,14 +202,23 @@
     }
 
     /** Drain any events already queued on `shared` into its bounded backlog so a late subscriber
-     * starts strictly after them. Returns `"saturated"` if draining would exceed the backlog budget
-     * (leaving further records in the provider queue), or `"closed"` if `shared` is ending/errored. */
+     * starts strictly after them. Passes the remaining record and byte budgets to `fsWatchRead`
+     * so excess records stay queued in the provider; returns `"saturated"` when the budget is
+     * exhausted, or `"closed"` if `shared` is ending/errored. */
     function captureBoundary(shared: SharedWatch): "joined" | "saturated" | "closed" {
       if (backlogFull(shared)) return "saturated";
       if (typeof native.fsWatchReady === "function" && !native.fsWatchReady()) return "joined";
       while (!shared.closed) {
-        const chunk = native.fsWatchRead(shared.id);
+        const remainingRecords = MAX_BACKLOG_RECORDS - shared.backlogRecords;
+        const remainingBytes = MAX_BACKLOG_BYTES - shared.backlogBytes;
+        if (remainingRecords <= 0 || remainingBytes < 8) return "saturated";
+        // Every encoded watch record is at least 8 bytes, so capping the provider read at
+        // min(remainingBytes, remainingRecords * 8) strictly bounds both records and bytes
+        // before anything is consumed from the provider.
+        const cap = Math.min(remainingBytes, remainingRecords * 8);
+        const chunk = native.fsWatchRead(shared.id, cap);
         if (chunk === AGAIN) return "joined";
+        if (chunk === NOBUFS) return "saturated";
         const isNumber = typeof chunk === "number";
         const decoded = isNumber ? undefined : decode(chunk);
         const payload = isNumber ? chunk : decoded!;
@@ -223,7 +233,6 @@
           detachKey(shared);
           return "closed";
         }
-        if (backlogFull(shared)) return "saturated";
       }
       return "closed";
     }

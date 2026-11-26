@@ -582,6 +582,11 @@ following descriptor-scoped watch primitives together alongside `fsWatchReady`,
   Returns a positive watch id or a negative WASI errno. Does not close `fd`.
 - `fsWatchDropFd(fd: number) -> void`:
   Closes the temporary descriptor returned by `fsWatchResolve` (`fd_close`).
+- `fsWatchRead(id: number, maxBytes?: number) -> Uint8Array | number`:
+  Reads whole encoded watch records (or `0` at end of stream, or a negative WASI errno).
+  Without `maxBytes`, grows the read buffer on `ENOBUFS` (`-42`); with `maxBytes`, caps the
+  underlying `runtime_fs.watch_read` buffer to `maxBytes` and returns `-42` (`ENOBUFS`)
+  without consuming records if the next record exceeds that cap.
 
 How hosts implement the underlying WASI calls:
 

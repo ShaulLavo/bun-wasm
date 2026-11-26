@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { resourceFrames } from "./resource-frame-source";
 import { GuestWatchTable } from "../web/node_modules/waffle/fs/guest-watch.ts";
+import { MemoryBackend } from "../web/node_modules/waffle/fs/backend.ts";
+import { WatchService } from "../web/node_modules/waffle/fs/watch-service.ts";
 import { FilesystemError } from "../web/node_modules/waffle/core/filesystem.ts";
 import type { WatchBatch } from "../web/node_modules/waffle/fs/watch.ts";
 
@@ -610,4 +612,104 @@ test("watch requires fsWatchResolve, fsWatchOpenFd, and fsWatchDropFd instead of
   delete world.internal.native.fsWatchResolve;
   expect(() => world.module.watch("/dir")).toThrow();
   expect(world.opened).toHaveLength(0);
+});
+
+test("captureBoundary bounds both records (<=128) and bytes (<=16384) against a real Waffle WatchService", () => {
+  function realWaffleHub() {
+    const backend = new MemoryBackend();
+    const service = new WatchService(backend);
+    backend.execute("mkdirp", ["/short"], new Uint8Array());
+    backend.execute("mkdirp", ["/long"], new Uint8Array());
+    const root = backend.execute("preopen", ["/"], new Uint8Array()) as number;
+    const handles = new Map<string, number>([
+      ["/short", (backend.execute("resolve", [root, "short"], new Uint8Array()) as { node: number }).node],
+      ["/long", (backend.execute("resolve", [root, "long"], new Uint8Array()) as { node: number }).node],
+    ]);
+    const table = new GuestWatchTable({
+      cells: backend.shared.watch.cells,
+      revoked: false,
+      open: (handle, recursive) => service.open(1, handle, recursive, () => false),
+      read: (id) => service.read(1, id),
+      close: (id) => service.close(1, id),
+    });
+    const world = fixture();
+    let opens = 0;
+    let capturedBytes = 0;
+    let capturedRecords = 0;
+    let capturePhase = true;
+    world.internal.native.fsWatchResolve = (path: string): [number, string] => {
+      const handle = handles.get(path)!;
+      return [handle, `1:${handle}`];
+    };
+    world.internal.native.fsWatchOpenFd = (fd: number, recursive: boolean) => {
+      opens++;
+      return table.open(fd, recursive);
+    };
+    world.internal.native.fsWatchDropFd = () => {};
+    world.internal.native.fsWatchReady = () => table.ready();
+    world.internal.native.fsWatchRead = (id: number, maxBytes?: number) => {
+      try {
+        const result = table.read(id, maxBytes ?? 65536);
+        if (result.kind === "error") return -result.errno;
+        if (result.kind === "short") return -42;
+        if (capturePhase) {
+          capturedRecords += result.records.length;
+          capturedBytes += result.length;
+        }
+        return result.length ? Buffer.concat(result.records) : 0;
+      } catch (error) {
+        if (error instanceof FilesystemError) return -error.errno;
+        throw error;
+      }
+    };
+    world.internal.native.fsWatchClose = (id: number) => table.close(id);
+    return {
+      backend, world, table,
+      opens: () => opens,
+      captured: () => ({ records: capturedRecords, bytes: capturedBytes }),
+      endCapture: () => { capturePhase = false; },
+    };
+  }
+
+  // Record cap repro: 42 short creates + join, then 42 more short creates + join.
+  const shortRun = realWaffleHub();
+  const shortSeen = new Set<string>();
+  const aShort = shortRun.world.module.watch("/short", (_type: string, name: string) => {
+    shortSeen.add(name);
+  });
+  for (let i = 0; i < 42; i++) shortRun.backend.execute("writeFile", [`/short/f${i}`, false], new Uint8Array([1]));
+  const dup1 = shortRun.world.module.watch("/short");
+  dup1.close();
+  for (let i = 42; i < 84; i++) shortRun.backend.execute("writeFile", [`/short/f${i}`, false], new Uint8Array([1]));
+  const dup2 = shortRun.world.module.watch("/short");
+  dup2.close();
+  expect(shortRun.captured().records).toBeLessThanOrEqual(128);
+  expect(shortRun.captured().bytes).toBeLessThanOrEqual(16 * 1024);
+  expect(shortRun.opens()).toBeGreaterThan(1);
+  shortRun.endCapture();
+  // Pumping delivers both the buffered backlog and every excess record that stayed queued in Waffle.
+  shortRun.world.pump();
+  for (let i = 0; i < 84; i++) expect(shortSeen.has(`f${i}`)).toBe(true);
+  aShort.close();
+
+  // Byte cap repro: 28 creates + join, then 42 creates + join with 200-char name prefixes.
+  const longRun = realWaffleHub();
+  const prefix = "a".repeat(200);
+  const longSeen = new Set<string>();
+  const aLong = longRun.world.module.watch("/long", (_type: string, name: string) => {
+    longSeen.add(name);
+  });
+  for (let i = 0; i < 28; i++) longRun.backend.execute("writeFile", [`/long/${prefix}${i}`, false], new Uint8Array([1]));
+  const ldup1 = longRun.world.module.watch("/long");
+  ldup1.close();
+  for (let i = 28; i < 70; i++) longRun.backend.execute("writeFile", [`/long/${prefix}${i}`, false], new Uint8Array([1]));
+  const ldup2 = longRun.world.module.watch("/long");
+  ldup2.close();
+  expect(longRun.captured().bytes).toBeLessThanOrEqual(16 * 1024);
+  expect(longRun.captured().records).toBeLessThanOrEqual(128);
+  expect(longRun.opens()).toBeGreaterThan(1);
+  longRun.endCapture();
+  longRun.world.pump();
+  for (let i = 0; i < 70; i++) expect(longSeen.has(`${prefix}${i}`)).toBe(true);
+  aLong.close();
 });
