@@ -72,7 +72,7 @@ original callback directly, matching Node v22.14.0 `lib/fs.js` `watch()` and
 The fixture checks raw listener identity, single registration, `once`, `off`,
 removal by the original callback, and callback receiver on both overloads.
 The [promise-based watcher](fs-promises-watch.md) wraps this callback watcher.
-`watchFile` remains unsupported and has a separate stat-sampling contract.
+`watchFile` is the separate [stat-polling watcher](fs-watch-file.md).
 
 The adapter validates filename encodings before reading the filesystem or opening
 a watch. Both string and object options reject unknown encodings with
