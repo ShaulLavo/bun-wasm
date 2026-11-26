@@ -20,6 +20,8 @@ export type EditorHost = {
   readFile(path: string, existingLease?: unknown, signal?: AbortSignal): Promise<EditorReadResult>;
   /** Optional file listing used for active-file deletion fallback. */
   listFiles?(existingLease?: unknown, signal?: AbortSignal): Promise<string[]>;
+  /** True while listing must wait (a command is installing); the host calls chooseFallbackFile() after. */
+  deferListing?(): boolean;
   /** Persists one save and tells the dev server; `revision` identifies the edit being saved. */
   save(
     path: string,
@@ -442,9 +444,14 @@ export class Editor {
     this.host.changed();
   }
 
+  /** Opens another file when the active one is gone; the host calls it once a deferred listing may run. */
+  chooseFallbackFile(): Promise<void> {
+    return this.ensureActiveBufferValid();
+  }
+
   private async ensureActiveBufferValid(existingLease?: unknown, signal?: AbortSignal): Promise<void> {
     if (this.path !== "" || signal?.aborted || this.host.isResetting?.()) return;
-    if (!this.host.listFiles) return;
+    if (!this.host.listFiles || this.host.deferListing?.()) return;
     const openRev = this.openRevision;
     const files = await this.host.listFiles(existingLease, signal);
     if (signal?.aborted || this.host.isResetting?.() || openRev !== this.openRevision) return;
