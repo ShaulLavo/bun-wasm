@@ -8,8 +8,7 @@ use std::path::Path;
 
 use bun_lint_driver::{Environment, Outcome, Script, Stream, bunfig, cli, fmt, git, js_plugin};
 
-#[path = "../../../vendor/bun/src/runtime/cli/typescript_libs.rs"]
-mod typescript_libs;
+use crate::typescript_libs;
 
 #[path = "configuration_process.rs"]
 mod configuration_process;

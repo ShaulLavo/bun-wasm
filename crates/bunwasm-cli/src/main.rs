@@ -678,7 +678,7 @@ fn usage_error(message: &str) -> Command {
 }
 
 fn parse(args: Vec<String>, executable: &str) -> Command {
-    if matches!(executable.rsplit('/').next(), Some("node" | "nodejs")) {
+    if tool_args::is_node(executable) {
         return node_command(args);
     }
     if tool_args::before_command(&args).is_some() {
@@ -753,7 +753,8 @@ fn parse_command_with_flags(
     let mut exec_argv = exec_argv;
     let mut flags = flags;
     while let Some(arg) = rest.next() {
-        if run_file && (arg == "-" || !arg.starts_with('-')) {
+        // `bun -` runs standard input, like `bun run -`; `bun - check` passes it `check`.
+        if arg == "-" || run_file && !arg.starts_with('-') {
             return run_command(
                 Entry::File(arg),
                 rest.collect(),
@@ -789,6 +790,7 @@ fn parse_command_with_flags(
                     | "init"
                     | "lint"
                     | "fmt"
+                    | "check"
                     | "add"
                     | "a"
                     | "ci"
@@ -876,7 +878,7 @@ fn parse_command_with_flags(
                     flags,
                 );
             }
-            "lint" | "fmt" => return Command::Lint,
+            "lint" | "fmt" | "check" => return Command::Lint,
             "test" => {
                 return run_command(
                     Entry::Test(rest.collect()),
@@ -915,8 +917,7 @@ fn parse_command_with_flags(
             }
             "upgrade" | "link" | "unlink" | "outdated" | "publish" | "patch" | "patch-commit"
             | "info" | "why" | "audit" | "completions" | "getcompletes" | "discord" | "dedupe"
-            | "prune" | "check" | "deploy" | "cloud" | "config" | "use" | "auth" | "login"
-            | "logout" => {
+            | "prune" | "deploy" | "cloud" | "config" | "use" | "auth" | "login" | "logout" => {
                 eprintln!("error: bun {arg} is not supported in bun-wasm");
                 return Command::Exit(1);
             }
@@ -952,6 +953,11 @@ fn parse_command_with_flags(
             // Like native Bun, other runtime flags (Node's --enable-source-maps, --no-warnings, ...)
             // are accepted and kept in process.execArgv, so forked children receive them too.
             // `bun run --silent` reaches package scripts this way and hides their `$ command` lines.
+            // A value in the next argument stays with its flag: `bun --title check x.ts` runs x.ts.
+            flag if tool_args::takes_next_argument(flag) => {
+                exec_argv.push(arg);
+                exec_argv.extend(rest.next());
+            }
             flag if flag.starts_with('-') => exec_argv.push(flag.to_owned()),
             file => {
                 return run_command(
@@ -1116,7 +1122,9 @@ fn main() {
     let (entry, args, conditions, exec_argv, flags) = match command {
         Command::Exit(code) => std::process::exit(code),
         Command::Lint => {
-            eprintln!("error: bun lint/fmt requires a host that loads dist/bun-tools.wasm");
+            eprintln!(
+                "error: bun lint, fmt and check require a host that loads dist/bun-tools.wasm"
+            );
             std::process::exit(1);
         }
         Command::Build(args) => std::process::exit(build(args)),

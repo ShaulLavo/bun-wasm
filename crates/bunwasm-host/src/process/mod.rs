@@ -263,7 +263,10 @@ impl Runtime {
         argv: &[String],
         base: &'a wasmtime::Module,
     ) -> anyhow::Result<&'a wasmtime::Module> {
-        if crate::tool_args::before_command(argv.get(1..).unwrap_or_default()).is_none() {
+        let executable = argv.first().map_or("", String::as_str);
+        if crate::tool_args::is_node(executable)
+            || crate::tool_args::before_command(argv.get(1..).unwrap_or_default()).is_none()
+        {
             return Ok(base);
         }
         let tools = self.tools.get_or_init(|| {
