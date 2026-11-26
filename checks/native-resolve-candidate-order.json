@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/resolve-candidate-order",
+  "engines": ["quickjs", "jsc", "browser"]
+}

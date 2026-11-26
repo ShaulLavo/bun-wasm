@@ -210,16 +210,36 @@ impl Roots {
     /// namespace. Every component but the last must be a directory after following links; the
     /// last is followed when `follow` is set or the path ends in `/`.
     pub fn resolve(&mut self, start: &str, path: &str, follow: bool) -> Result<Resolved, i32> {
+        self.walk(start, path, follow, false)
+    }
+
+    /// [`Self::resolve`]; with `directories`, a path or link target ending in `/` or `/.` (or
+    /// being `.`) makes the component before it a directory, as realpath(3) requires: a file
+    /// there is ENOTDIR. A [`DIRECTORY`] mark stands for that requirement while walking.
+    fn walk(
+        &mut self,
+        start: &str,
+        path: &str,
+        follow: bool,
+        directories: bool,
+    ) -> Result<Resolved, i32> {
         let follow = follow || path.ends_with('/');
         let mut pending: VecDeque<String> = VecDeque::new();
         if !path.starts_with('/') {
             pending.extend(parts(start));
         }
         pending.extend(parts(path));
+        if directories && names_directory(path) {
+            pending.push_back(DIRECTORY.to_owned());
+        }
         // The resolved path so far, as `/a/b`; empty is the guest root.
         let mut current = String::new();
         let mut links = 0;
         while let Some(part) = pending.pop_front() {
+            // The component before a mark is no longer last, so it must be a directory.
+            if part == DIRECTORY {
+                continue;
+            }
             if part == ".." {
                 current.truncate(current.rfind('/').unwrap_or(0));
                 continue;
@@ -238,6 +258,9 @@ impl Roots {
                         return Err(LOOP);
                     }
                     current.truncate(if target.starts_with('/') { 0 } else { parent });
+                    if directories && names_directory(&target) {
+                        pending.push_front(DIRECTORY.to_owned());
+                    }
                     for part in parts(&target).rev() {
                         pending.push_front(part);
                     }
@@ -278,7 +301,7 @@ impl Roots {
         if path.is_empty() || path.starts_with('/') {
             return false;
         }
-        let Ok(resolved) = self.resolve(start, path, true) else {
+        let Ok(resolved) = self.walk(start, path, true, true) else {
             return false;
         };
         if directory {
@@ -290,8 +313,32 @@ impl Roots {
         dir.metadata(&resolved.relative)
             .is_ok_and(|metadata| metadata.is_file())
     }
+
+    /// `realpath(3)` of `path` from the directory at guest path `start`: the absolute guest
+    /// path with every link followed, which must exist (`runtime_fs.path_realpath`).
+    pub fn realpath(&mut self, start: &str, path: &str) -> Result<String, i32> {
+        if path.starts_with('/') {
+            return Err(PERM);
+        }
+        if !matches!(self.kind(&normalize(start)), Kind::Directory) {
+            return Err(NOTDIR);
+        }
+        let resolved = self.walk(start, path, true, true)?;
+        match self.kind(&resolved.guest) {
+            Kind::Missing => Err(NOENT),
+            Kind::Failed(errno) => Err(errno),
+            _ => Ok(resolved.guest),
+        }
+    }
 }
 
+/// A walk mark: never a component, since [`parts`] drops every `.`.
+const DIRECTORY: &str = ".";
+
+/// Whether `path` must name a directory: it ends in `/` or `/.`, or is `.`.
+fn names_directory(path: &str) -> bool {
+    path.ends_with('/') || path == "." || path.ends_with("/.")
+}
 /// The non-empty components of a path other than `.`.
 fn parts(path: &str) -> impl DoubleEndedIterator<Item = String> + '_ {
     path.split('/')
@@ -610,6 +657,7 @@ pub(super) fn install(
     }
     install_readlink(linker, store, namespace)?;
     install_probe(linker, namespace)?;
+    install_realpath(linker, namespace)?;
     install_symlink(linker, store, namespace)
 }
 
@@ -671,12 +719,77 @@ fn install_probe(
             let Some(start) = start.filter(|_| state.files.contains_key(&fd)) else {
                 return Ok(BADF);
             };
+            if !matches!(state.roots.kind(&normalize(&start)), Kind::Directory) {
+                return Ok(NOTDIR);
+            }
             let index = names
                 .iter()
                 .position(|name| state.roots.names(&start, name, directory));
             drop(state);
             let word = index.map_or(u32::MAX, |index| index as u32);
             super::store_word(&memory, &mut caller, output.start, word)?;
+            Ok(0)
+        },
+    )?;
+    Ok(())
+}
+
+/// Waffle's `runtime_fs.path_realpath`: the canonical guest path in one call, with the
+/// result's length at `used` and ENOBUFS when it does not fit (Waffle docs/host-abi.md).
+fn install_realpath(
+    linker: &mut Linker<Host>,
+    namespace: &std::sync::Arc<std::sync::Mutex<Namespace>>,
+) -> Result<()> {
+    const INVAL: i32 = 28;
+    const NOBUFS: i32 = 42;
+    let state = namespace.clone();
+    linker.func_wrap(
+        "runtime_fs",
+        "path_realpath",
+        move |mut caller: Caller<'_, Host>,
+              fd: i32,
+              path: i32,
+              length: i32,
+              buf: i32,
+              capacity: i32,
+              used: i32|
+              -> Result<i32> {
+            let memory = memory(&mut caller)?;
+            let size = memory.len(&caller);
+            let (Some(buffer), Some(output)) = (
+                span(size, buf, capacity as u32 as usize),
+                span(size, used, 4),
+            ) else {
+                return Ok(FAULT);
+            };
+            // Either result would clobber the other.
+            if !buffer.is_empty() && buffer.start < output.end && output.start < buffer.end {
+                return Ok(INVAL);
+            }
+            let mut state = state.lock().unwrap();
+            state.initialize(&mut caller)?;
+            // The pathname is its exact bytes: malformed UTF-8 or a NUL is EINVAL, as in Waffle.
+            let path = match read_path(&mut caller, path, length)? {
+                Ok(path) if !path.contains('\0') => path,
+                Ok(_) | Err(ILSEQ) => return Ok(INVAL),
+                Err(errno) => return Ok(errno),
+            };
+            let start = state.paths.get(&fd).cloned();
+            let Some(start) = start.filter(|_| state.files.contains_key(&fd)) else {
+                return Ok(BADF);
+            };
+            let real = match state.roots.realpath(&start, &path) {
+                Ok(real) => real,
+                Err(errno) => return Ok(errno),
+            };
+            drop(state);
+            super::store_word(&memory, &mut caller, output.start, real.len() as u32)?;
+            if real.len() > buffer.len() {
+                return Ok(NOBUFS);
+            }
+            memory
+                .write(&mut caller, buffer.start, real.as_bytes())
+                .ok_or_else(|| anyhow::anyhow!("validated realpath buffer"))?;
             Ok(0)
         },
     )?;
@@ -796,31 +909,52 @@ fn install_symlink(
 mod tests {
     use super::*;
 
-    /// A host directory mounted at guest `/`, removed on drop.
-    struct Mount(PathBuf);
+    /// A host directory mounted at guest `/` and one mounted at `/mnt`, removed on drop.
+    struct Mounts(PathBuf);
 
-    impl Mount {
+    impl Mounts {
         fn new() -> Self {
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let root = std::env::temp_dir().join(format!("bunwasm-probe-{nanos}"));
-            std::fs::create_dir_all(root.join("app/node_modules/vue")).unwrap();
-            std::fs::create_dir_all(root.join("real/pkg")).unwrap();
-            std::fs::write(root.join("real/pkg/index.js"), "x").unwrap();
+            let root = std::env::temp_dir().join(format!("bunwasm-links-{nanos}"));
+            for dir in [
+                "root/real/dir",
+                "root/real/pkg",
+                "root/home/user/node_modules",
+                "root/app/node_modules/vue",
+                "mnt/data",
+            ] {
+                std::fs::create_dir_all(root.join(dir)).unwrap();
+            }
+            std::fs::write(root.join("root/real/dir/file.txt"), "x").unwrap();
+            std::fs::write(root.join("root/real/pkg/index.js"), "x").unwrap();
             let link = |target: &str, at: &str| {
                 std::os::unix::fs::symlink(target, root.join(at)).unwrap();
             };
-            link("/real/pkg", "app/node_modules/abs");
-            link("../../real/pkg", "app/node_modules/rel");
-            link("missing", "app/node_modules/dangling");
-            link("loop", "app/loop");
+            link("../../../real/dir", "root/home/user/node_modules/pkg");
+            link("/real/dir", "root/home/user/abs");
+            link("/mnt/data", "root/home/user/mounted");
+            link("self", "root/home/user/self");
+            link("missing", "root/home/user/dangling");
+            link("/real/dir/file.txt/", "root/home/user/slashed");
+            link("/real/pkg", "root/app/node_modules/abs");
+            link("../../real/pkg", "root/app/node_modules/rel");
+            link("missing", "root/app/node_modules/dangling");
+            link("loop", "root/app/loop");
             Self(root)
+        }
+
+        fn roots(&self) -> Roots {
+            Roots::new(vec![
+                (self.0.join("root"), "/".to_owned()),
+                (self.0.join("mnt"), "/mnt".to_owned()),
+            ])
         }
     }
 
-    impl Drop for Mount {
+    impl Drop for Mounts {
         fn drop(&mut self) {
             std::fs::remove_dir_all(&self.0).unwrap();
         }
@@ -828,8 +962,8 @@ mod tests {
 
     #[test]
     fn names_answers_as_a_following_stat() {
-        let mount = Mount::new();
-        let mut roots = Roots::new(vec![(mount.0.clone(), "/".to_owned())]);
+        let mounts = Mounts::new();
+        let mut roots = mounts.roots();
         let cases = [
             ("/", "app/node_modules/vue", true, true),
             ("/", "app/node_modules/vue", false, false),
@@ -841,7 +975,9 @@ mod tests {
             ("/", "app/node_modules/dangling", true, false),
             ("/", "app/loop", false, false),
             ("/", "real/pkg/index.js/", false, false),
+            ("/", "real/pkg/index.js/.", false, false),
             ("/", "real/pkg/index.js/x", false, false),
+            ("/home/user", "slashed", false, false),
             ("/", "app/missing/x", true, false),
             ("/", "/real/pkg", true, false),
             ("/", "", true, false),
@@ -868,5 +1004,43 @@ mod tests {
         assert_eq!(probe_names(b"\xff\0"), None);
         assert!(probe_names(&b"a\0".repeat(PROBE_LIMIT)).is_some());
         assert_eq!(probe_names(&b"a\0".repeat(PROBE_LIMIT + 1)), None);
+    }
+
+    #[test]
+    fn realpath_follows_every_link_in_the_guest_namespace() {
+        let mounts = Mounts::new();
+        let mut roots = mounts.roots();
+        let real = |roots: &mut Roots, start: &str, path: &str| roots.realpath(start, path);
+        let cases = [
+            (
+                "/",
+                "home/user/node_modules/pkg/file.txt",
+                Ok("/real/dir/file.txt"),
+            ),
+            ("/", "home/user/abs/", Ok("/real/dir")),
+            (
+                "/home/user",
+                "abs/../dir/file.txt",
+                Ok("/real/dir/file.txt"),
+            ),
+            ("/home/user", "mounted", Ok("/mnt/data")),
+            ("/home/user", "../..", Ok("/")),
+            ("/", ".", Ok("/")),
+            ("/", "home/user/missing", Err(NOENT)),
+            ("/", "home/user/dangling", Err(NOENT)),
+            ("/", "real/dir/file.txt/", Err(NOTDIR)),
+            ("/", "real/dir/file.txt/x", Err(NOTDIR)),
+            ("/", "real/dir/file.txt/.", Err(NOTDIR)),
+            ("/home/user", "slashed", Err(NOTDIR)),
+            ("/", "real/dir/.", Ok("/real/dir")),
+            ("/home/user", "abs/.", Ok("/real/dir")),
+            ("/", "home/user/self", Err(LOOP)),
+            ("/", "/real", Err(PERM)),
+            ("/real/dir/file.txt", "x", Err(NOTDIR)),
+        ];
+        for (start, path, expected) in cases {
+            let expected = expected.map(str::to_owned);
+            assert_eq!(real(&mut roots, start, path), expected, "{start} {path}");
+        }
     }
 }

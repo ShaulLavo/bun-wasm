@@ -96,7 +96,7 @@ function assertClean(root: string) {
   }
 }
 
-async function run(root: string, ready?: (child: Bun.Subprocess) => Promise<void>, environment = process.env) {
+async function run(root: string, ready?: (child: Bun.Subprocess) => Promise<void>, environment = process.env, expectClean = true) {
   const child = Bun.spawn([process.execPath, "scripts/ci-native-control-compilers.ts"], {
     cwd: root, detached: true, stdout: "pipe", stderr: "pipe",
     env: { ...environment, TMPDIR: join(root, "tmp"), PATH: `${join(root, "bin")}:${environment.PATH}` },
@@ -110,7 +110,7 @@ async function run(root: string, ready?: (child: Bun.Subprocess) => Promise<void
     for (const row of records(out)) {
       if (typeof row.pid === "number") expect(groupMembers(row.pid)).toEqual([]);
     }
-    assertClean(root);
+    if (expectClean) assertClean(root);
     return { out, err, exitCode };
   } finally {
     killGroup(child.pid);
@@ -250,17 +250,62 @@ ${launch}`;
 
 test("catchable interruption stops active compiler groups before deleting partial outputs", async () => {
   await withFixture(async root => {
-    execFileSync("mkfifo", [join(root, "ready.fifo")]);
-    wrapper(root, "c++", 'touch "$7"\nexec sleep 30');
-    wrapper(root, "rustup", `printf 'ready\\n' > ${quoted(join(root, "ready.fifo"))}\nexec sleep 30`);
-    const result = await run(root, async child => {
-      // A FIFO read completes only after the Rust slot has started.
-      await Bun.file(join(root, "ready.fifo")).text();
-      child.kill("SIGTERM");
-    });
+    const result = await interruptAfterRustStarts(root);
     expect(result.exitCode).toBe(1);
     expect(result.err).toContain("preparation interrupted by SIGTERM");
     assertClean(root);
+  });
+});
+
+// A SIGKILLed group member can still show in /proc after its pipes close and its leader is reaped.
+function patchGroupReadings(root: string, liveReadings: string, exitCapMs?: number) {
+  const path = join(root, "scripts/ci-native-control-compilers.ts");
+  const declaration = "function liveGroup(pid: number): boolean {";
+  const cap = /const groupExitCapMs = [\d_]+;/;
+  const source = readFileSync(path, "utf8");
+  expect(source).toContain(declaration);
+  if (exitCapMs !== undefined) expect(source).toMatch(cap);
+  const readings = `const groupReadings = new Map<number, number>();
+function liveGroup(pid: number): boolean {
+  const seen = groupReadings.get(pid) ?? 0;
+  groupReadings.set(pid, seen + 1);
+  return seen < ${liveReadings} || procLiveGroup(pid);
+}
+function procLiveGroup(pid: number): boolean {`;
+  const patched = source.replace(declaration, readings);
+  writeFileSync(path, exitCapMs === undefined ? patched : patched.replace(cap, `const groupExitCapMs = ${exitCapMs};`));
+}
+
+async function interruptAfterRustStarts(root: string, expectClean = true) {
+  execFileSync("mkfifo", [join(root, "ready.fifo")]);
+  wrapper(root, "c++", 'touch "$7"\nexec sleep 30');
+  wrapper(root, "rustup", `printf 'ready\\n' > ${quoted(join(root, "ready.fifo"))}\nexec sleep 30`);
+  return run(root, async child => {
+    // A FIFO read completes only after the Rust slot has started.
+    await Bun.file(join(root, "ready.fifo")).text();
+    child.kill("SIGTERM");
+  }, process.env, expectClean);
+}
+
+test("interruption cleanup waits for killed group members that are still exiting", async () => {
+  await withFixture(async root => {
+    patchGroupReadings(root, "3");
+    const result = await interruptAfterRustStarts(root);
+    expect(result.exitCode).toBe(1);
+    expect(result.err).toContain("preparation interrupted by SIGTERM");
+    expect(result.err).not.toContain("Owned groups remain live");
+    assertClean(root);
+  });
+});
+
+test("a group that never finishes exiting still fails cleanup and keeps the scratch", async () => {
+  await withFixture(async root => {
+    patchGroupReadings(root, "Infinity", 200);
+    const result = await interruptAfterRustStarts(root, false);
+    expect(result.exitCode).toBe(1);
+    expect(result.err).toContain("preparation interrupted by SIGTERM");
+    expect(result.err).toContain("Owned groups remain live");
+    expect(readdirSync(join(root, "tmp"))).toHaveLength(1);
   });
 });
 

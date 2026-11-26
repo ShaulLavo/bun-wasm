@@ -12,7 +12,7 @@ import type { PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import { HOST_CALL_FD, installHostSlotsViaImport, type SlotImpls } from "../src/net/trampoline.ts";
 import { writeStdio } from "./node-stdio.ts";
 import { createNodeSignalController } from "./node-signals.ts";
-import { installNodeLinks } from "./node-links.ts";
+import { installNodeLinks, type NodeRealpath } from "./node-links.ts";
 import { nodePathProbe } from "./node-probe.ts";
 import type { EngineNet } from "../src/net/host.ts";
 
@@ -173,7 +173,8 @@ export function createNodeProcess(options: NodeProcessOptions) {
       // Startup failure can dispose Bun's host before Node WASI binds guest memory.
       const wasi = imports.wasi_snapshot_preview1;
       // Below Waffle's descriptor layer, on Node WASI's own descriptors.
-      if (options.preopens) installNodeLinks(wasi, memory, options.preopens);
+      const realpath = options.preopens ? installNodeLinks(wasi, memory, options.preopens) : undefined;
+      imports.runtime_fs.path_realpath = guard(realpathImport(memory, descriptors, realpath));
       wasi.fd_close = allowUnstartedWasiClose(wasi.fd_close!);
       installNodeWasiDescriptors(imports, memory, descriptors, preopenCount, client, isSignalPending, guard);
       const original = imports.wasi_snapshot_preview1.sock_send!;
@@ -203,6 +204,32 @@ export function createNodeProcess(options: NodeProcessOptions) {
       return { natives: net?.natives ?? {}, caps: { ...net?.caps, signal: true, proc_spawn: true }, onNews: notify => net?.onNews(notify) };
     },
     dispose() { descriptors.dispose(); },
+  };
+}
+
+/** `runtime_fs.path_realpath` (Waffle docs/host-abi.md, "Canonical path query") over Node WASI
+ * descriptors: the pathname's exact UTF-8 bytes, disjoint outputs, ENOBUFS with the needed length. */
+function realpathImport(memory: () => WebAssembly.Memory, descriptors: DescriptorTable, realpath: NodeRealpath | undefined) {
+  const EBADF = 8, EFAULT = 21, EINVAL = 28, ENOBUFS = 42, ENOTSUP = 58;
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  return (fd: number, pathPtr: number, pathLen: number, bufPtr: number, bufLen: number, usedPtr: number): number => {
+    const ptr = pathPtr >>> 0, len = pathLen >>> 0, buf = bufPtr >>> 0, capacity = bufLen >>> 0, used = usedPtr >>> 0;
+    const size = memory().buffer.byteLength;
+    if (ptr + len > size || buf + capacity > size || used + 4 > size) return EFAULT;
+    if (capacity > 0 && buf < used + 4 && used < buf + capacity) return EINVAL;
+    let path: string;
+    try { path = decoder.decode(new Uint8Array(memory().buffer, ptr, len)); } catch { return EINVAL; }
+    if (path.includes("\0")) return EINVAL;
+    const nodeFd = nodeWasiDescriptor(descriptors.get(fd >>> 0));
+    if (nodeFd === undefined) return EBADF;
+    if (!realpath) return ENOTSUP;
+    const real = realpath(nodeFd, path);
+    if (typeof real === "number") return real;
+    const bytes = new TextEncoder().encode(real);
+    new DataView(memory().buffer).setUint32(used, bytes.length, true);
+    if (bytes.length > capacity) return ENOBUFS;
+    new Uint8Array(memory().buffer, buf, bytes.length).set(bytes);
+    return 0;
   };
 }
 
