@@ -63,14 +63,28 @@ export function compilerResources(usage: ReturnType<Child["child"]["resourceUsag
   };
 }
 
+// Only a hang cap: SIGKILL has already been sent, so a group still live this long is stuck.
+const groupExitCapMs = 30_000;
+
+// A killed member can still be finishing its exit after the leader is reaped and the pipes close.
+async function awaitGroupsExited(pids: number[]): Promise<number[]> {
+  const deadline = performance.now() + groupExitCapMs;
+  let live = pids.filter(pid => liveGroup(pid));
+  while (live.length && performance.now() < deadline) {
+    await Bun.sleep(10);
+    live = live.filter(pid => liveGroup(pid));
+  }
+  return live;
+}
+
 async function cleanupCompilers(owned: OwnedCompiler[], root: string, errors: unknown[]) {
   for (const entry of owned) {
     try { signalGroup(entry.process.child.pid); }
     catch (error) { errors.push(error); }
   }
   await Promise.allSettled(owned.flatMap(entry => entry.boundaries.concat([entry.done])));
-  const live = owned.filter(entry => liveGroup(entry.process.child.pid));
-  if (live.length) throw new Error(`Owned groups remain live: ${live.map(entry => entry.process.child.pid).join(", ")}`);
+  const live = await awaitGroupsExited(owned.map(entry => entry.process.child.pid));
+  if (live.length) throw new Error(`Owned groups remain live: ${live.join(", ")}`);
   if (errors.length) throw new AggregateError(errors, "Failed to stop owned groups");
   rmSync(root, { recursive: true, force: true });
 }
