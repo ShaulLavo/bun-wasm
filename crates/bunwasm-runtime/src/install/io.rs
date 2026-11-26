@@ -278,7 +278,9 @@ pub fn cache_dir() -> PathBuf {
 pub fn fetch(url: &str, tarball: bool, refresh: bool, registry: &Registry) -> Result<Vec<u8>> {
     let mut downloads = Downloads::new(0);
     // One request: a stat costs less than listing the whole cache.
-    downloads.cache = CacheIndex::Probe;
+    if downloads.cache.enabled() {
+        downloads.cache = CacheIndex::Probe;
+    }
     downloads.fetch(url, tarball, refresh, registry)
 }
 
@@ -294,6 +296,10 @@ fn cache_path(url: &str) -> PathBuf {
 /// host round trip in the browser, so a prefetching `Downloads` lists the directory once
 /// instead of probing it for every URL, and creates it at most once.
 pub(super) enum CacheIndex {
+    /// The host keeps no install cache (`BUN_WASM_INSTALL_CACHE=off`): nothing is read or
+    /// written. The browser host sets it, because its HTTP cache already keeps registry
+    /// responses and writing them into the workspace filesystem costs more than it saves.
+    Off,
     /// Not listed yet.
     Unlisted,
     /// Probe the cache file for every URL.
@@ -306,6 +312,18 @@ pub(super) enum CacheIndex {
 }
 
 impl CacheIndex {
+    /// The policy the host chose.
+    pub(super) fn new() -> Self {
+        if std::env::var_os("BUN_WASM_INSTALL_CACHE").is_some_and(|value| value == "off") {
+            return Self::Off;
+        }
+        Self::Unlisted
+    }
+
+    pub(super) fn enabled(&self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
     pub(super) fn listed() -> Self {
         let names = match fs::read_dir(cache_dir()) {
             Ok(entries) => entries,
@@ -333,12 +351,16 @@ impl CacheIndex {
         }
         match self {
             Self::Listed { names, .. } => names.contains(&cache_name(url)),
+            Self::Off => false,
             _ => true,
         }
     }
 
     /// Writes `bytes` as the cache file for `url`, creating the directory first if needed.
     pub(super) fn store(&mut self, url: &str, bytes: &[u8]) {
+        if !self.enabled() {
+            return;
+        }
         let exists = matches!(self, Self::Listed { exists: true, .. });
         if !exists && fs::create_dir_all(cache_dir()).is_err() {
             return;
@@ -415,7 +437,7 @@ impl Downloads {
             pending: Vec::new(),
             pumped: None,
             scratch: Vec::new(),
-            cache: CacheIndex::Unlisted,
+            cache: CacheIndex::new(),
         }
     }
 
@@ -626,7 +648,7 @@ impl Download {
         completed?;
         let bytes = std::mem::take(&mut self.body);
         trace::time(store, || {
-            if cacheable(&bytes, self.tarball, registry) {
+            if others.cache.enabled() && cacheable(&bytes, self.tarball, registry) {
                 others.cache.store(&self.url, &bytes);
             }
         });
