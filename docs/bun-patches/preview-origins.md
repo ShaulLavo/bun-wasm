@@ -3,7 +3,7 @@
 Classification: original Bun consumer adapter. No upstream implementation is copied or adapted.
 It consumes Waffle's exported root-preview relay and wire dispatcher (`PreviewRouter` in root
 mode, `PreviewHostDispatcher`, `PreviewHostOpen`, `PreviewHostInput`, `PreviewHostOutput`) from
-`@waffle-os/runtime` 0.0.148 unchanged. [Preview origins](../preview-origins.md) describes the
+`@waffle-os/runtime` 0.0.150 unchanged. [Preview origins](../preview-origins.md) describes the
 behavior.
 
 ## Original adapters

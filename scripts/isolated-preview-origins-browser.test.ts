@@ -643,7 +643,7 @@ for (const browserName of browsers) {
       const errors: string[] = [];
       const page = await context.newPage();
       trackErrors(page, "sandbox", errors);
-      await navigateTestPage(page, ideUrl("cross", served, "/sandbox/", "template=vanilla&mode=memory"));
+      await navigateTestPage(page, ideUrl("cross", served, "/sandbox/", "template=vanilla"));
       await waitForSandboxReady(page);
       const src = await sandboxFrameSrc(page);
       expect(PREVIEW_HOST.exec(src.hostname)?.[1]).toBe("5173");
@@ -665,7 +665,7 @@ if (browsers.includes("chromium")) {
       const errors: string[] = [];
       const page = await context.newPage();
       trackErrors(page, "sandbox", errors);
-      await navigateTestPage(page, ideUrl("public", served, "/sandbox/", "template=vanilla&mode=memory"));
+      await navigateTestPage(page, ideUrl("public", served, "/sandbox/", "template=vanilla"));
       await waitForSandboxReady(page);
       const src = await sandboxFrameSrc(page);
       expect(src.hostname.endsWith(`-5173-pv.${PUBLIC_DOMAIN}`)).toBe(true);
