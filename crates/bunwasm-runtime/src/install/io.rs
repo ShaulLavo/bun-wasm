@@ -620,6 +620,15 @@ fn read_body(
     }
 }
 
+/// A complete body without the room its growth reserved. How far a body grew past its
+/// length depends on how its chunks arrived, and consumers budget kept archives by
+/// capacity, so an archive that overgrew could miss the shared-archive budget and be
+/// fetched again; the spare memory goes back to the allocator too.
+pub(super) fn finished_body(mut body: Vec<u8>) -> Vec<u8> {
+    body.shrink_to_fit();
+    body
+}
+
 /// Makes room for `count` more bytes, doubling the capacity but never past `ceiling`.
 fn grow_within(body: &mut Vec<u8>, count: usize, ceiling: usize) {
     let needed = body.len() + count;
@@ -672,7 +681,7 @@ impl Download {
         // Failed attempts count too, with whatever arrived (a failure frees the body).
         trace::finish(download, started, self.body.len());
         completed?;
-        let bytes = std::mem::take(&mut self.body);
+        let bytes = finished_body(std::mem::take(&mut self.body));
         trace::time(store, || {
             if others.cache.enabled() && cacheable(&bytes, self.tarball, registry) {
                 others.cache.store(&self.url, &bytes);
@@ -1278,6 +1287,26 @@ mod tests {
             left -= count;
             Ok(count)
         }
+    }
+
+    #[test]
+    fn a_finished_body_keeps_no_room_from_its_growth() {
+        // A first chunk larger than twice the capacity sets an uneven size, and doubling
+        // from it leaves a 17 MiB archive in more than 32 MiB.
+        let (mut body, mut scratch) = (vec![1; 10], vec![0; 64 * 1024]);
+        let size = 17 << 20;
+        let outcome = read_body(
+            &mut body,
+            &mut scratch,
+            usize::MAX,
+            LIMIT,
+            pieces(size, 64 * 1024),
+        );
+        assert_eq!(outcome, BodyRead::Ended);
+        assert!(body.capacity() > 32 << 20, "capacity {}", body.capacity());
+        let body = finished_body(body);
+        assert_eq!(body.len(), size + 10);
+        assert_eq!(body.capacity(), body.len());
     }
 
     #[test]

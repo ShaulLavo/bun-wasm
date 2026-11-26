@@ -108,6 +108,34 @@ fn a_shared_archive_is_read_once_per_install() {
 }
 
 #[test]
+fn a_shared_archive_that_overgrew_while_downloading_is_kept_for_its_second_use() {
+    // Two aliases of one 17 MiB archive. Its download grew past 32 MiB of capacity, which
+    // depends on how its chunks arrived; counted as is, the second alias fetched it again.
+    let (first, second) = (package("big", &["a-first"]), package("big", &["a-second"]));
+    let overgrown = || {
+        let mut bytes = Vec::with_capacity((32 << 20) + 1);
+        bytes.resize(17 << 20, 7);
+        bytes
+    };
+    let mut archives = Archives::new([&first, &second]);
+    archives.release(&first.tarball, overgrown());
+    assert!(
+        !archives.holds(&first.tarball),
+        "the budget counts the whole allocation"
+    );
+    let mut archives = Archives::new([&first, &second]);
+    archives.release(&first.tarball, io::finished_body(overgrown()));
+    assert!(
+        archives.holds(&first.tarball),
+        "a finished download is budgeted by its size"
+    );
+    assert_eq!(
+        archives.take(&second.tarball).map(|bytes| bytes.len()),
+        Some(17 << 20)
+    );
+}
+
+#[test]
 fn kept_archives_follow_their_remaining_uses() {
     let (first, second, other) = (
         package("shared", &["shared"]),
