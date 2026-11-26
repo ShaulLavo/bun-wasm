@@ -11,14 +11,14 @@ fn validation_reads_the_staged_manifest_and_keeps_only_binary_fields() {
     let package = package();
     let (root, staging, _) = modules("validate", b"");
     assert_eq!(
-        validate_package(&staging, &package, None).unwrap_err(),
+        validate_package(&staging, &package).unwrap_err(),
         "Tarball has no package.json"
     );
     let manifest =
         json!({"name": "tool", "version": "1.0.0", "bin": {"tool": "cli.js"}, "readme": "x"});
     fs::write(staging.join("package.json"), manifest.to_string()).unwrap();
     assert_eq!(
-        validate_package(&staging, &package, None).unwrap(),
+        validate_package(&staging, &package).unwrap(),
         json!({"bin": {"tool": "cli.js"}})
     );
     fs::write(
@@ -27,7 +27,7 @@ fn validation_reads_the_staged_manifest_and_keeps_only_binary_fields() {
     )
     .unwrap();
     assert!(
-        validate_package(&staging, &package, None)
+        validate_package(&staging, &package)
             .unwrap_err()
             .contains("does not match")
     );
@@ -66,7 +66,7 @@ fn a_failed_record_write_leaves_no_older_record_beside_new_bytes() {
     // An empty directory, which a rename replaces, with a record of the same identity.
     fs::create_dir(&path).unwrap();
     fs::write(installed_source_path(&path), installed_source(&package)).unwrap();
-    let result = publish_package(&staging, &path, &package, false, |_, _| {
+    let result = publish_package(&staging, &path, &package, |_, _| {
         Err("synthetic record write failure".into())
     });
     assert_eq!(result.unwrap_err(), "synthetic record write failure");
@@ -85,7 +85,7 @@ fn publishing_replaces_an_existing_package_and_records_its_source() {
     fs::create_dir(&path).unwrap();
     fs::write(path.join("index.js"), b"old").unwrap();
     fs::write(installed_source_path(&path), b"[\"tool\",\"0.9.0\"]").unwrap();
-    publish_package(&staging, &path, &package, false, super::io::write).unwrap();
+    publish_package(&staging, &path, &package, super::io::write).unwrap();
     assert_eq!(fs::read(path.join("index.js")).unwrap(), b"new");
     assert!(!staging.exists());
     assert_eq!(

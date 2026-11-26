@@ -173,15 +173,14 @@ impl Early {
         let ran = job
             .extraction
             .run(&job.bytes, &job.staging, &mut tick, arrived);
-        let manifest = match ran {
+        let extracted = match ran {
             Ok(io::Extracted::Paused) => return,
-            Ok(io::Extracted::Done(manifest)) => Ok(manifest),
+            Ok(io::Extracted::Done) => Ok(()),
             Err(error) => Err(error),
         };
         let job = self.current.take().unwrap();
-        let completed = manifest.and_then(|manifest| {
-            super::complete_package(&job.staging, &job.package, manifest, true)
-        });
+        let completed =
+            extracted.and_then(|()| super::complete_package(&job.staging, &job.package));
         let Ok(bins) = completed else {
             let _ = fs::remove_dir_all(&job.staging);
             return;
@@ -210,7 +209,7 @@ impl Early {
                     self.queued.remove(&package.key());
                     continue;
                 }
-                Ancestors::Done if self.downloads.ready(&package.tarball, true) => {
+                Ancestors::Done if self.downloads.ready(&package.tarball, true, self.refresh) => {
                     return Some(index);
                 }
                 Ancestors::Done | Ancestors::Waiting => index += 1,

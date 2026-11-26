@@ -64,11 +64,10 @@ fn repeated_parents(root: &Path) {
         ("package/large.wasm", file, large.as_slice()),
     ]);
     let mut ticks = 0;
-    let written = extraction::extract(&manifests, destination(&root.join("manifest")), &mut || {
+    extraction::extract(&manifests, destination(&root.join("manifest")), &mut || {
         ticks += 1
     })
     .unwrap();
-    assert_eq!(written.as_deref(), Some(b"last".as_slice()));
     assert_eq!(
         fs::read(root.join("manifest/package.json")).unwrap(),
         b"last"
@@ -131,6 +130,20 @@ fn invalid_entries(root: &Path) {
         .to_string();
     assert_eq!(error, expected);
     assert_eq!(fs::read(root.join("file")).unwrap(), b"file");
+    // A deeper conflict reports what create_dir_all reports, not the fast path's error.
+    let deep = archive(&[
+        ("package/file", tar::EntryType::Regular, b"file"),
+        (
+            "package/file/nested/child",
+            tar::EntryType::Regular,
+            b"child",
+        ),
+    ]);
+    let error = extraction::extract(&deep, root, &mut || {}).unwrap_err();
+    let expected = fs::create_dir_all(root.join("file/nested"))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(error, expected);
     assert!(extraction::extract(b"invalid gzip", root, &mut || {}).is_err());
 }
 
