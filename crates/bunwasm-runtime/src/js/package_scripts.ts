@@ -52,19 +52,22 @@
     return packages.sort().reverse();
   }
 
-  function moduleBinary(modules: string, name: string): string | undefined {
+  function moduleBinary(modules: string, name: string, manifests: boolean): string | undefined {
     const bin = path.resolve(modules, ".bin", name);
     if (native.exists(bin)) return bin;
+    if (!manifests) return;
     for (const base of packageDirectories(modules)) {
       const file = manifestBinary(base, name);
       if (file) return file;
     }
   }
 
-  function binary(cwd: string, name: string): string | undefined {
+  // `manifests` false answers from node_modules/.bin only; true also reads the installed packages'
+  // manifests for a binary that was never linked, which opens every package.json in node_modules.
+  function binary(cwd: string, name: string, manifests = true): string | undefined {
     if (!name || name === "." || name === ".." || /[/\\]/.test(name)) return;
     for (;;) {
-      const file = moduleBinary(path.resolve(cwd, "node_modules"), name);
+      const file = moduleBinary(path.resolve(cwd, "node_modules"), name, manifests);
       if (file) return file;
       const parent = path.dirname(cwd);
       if (parent === cwd) return;
@@ -192,10 +195,13 @@
   }
 
   const shellCommands = new Set(". alias bg bind break builtin caller case cd command compgen complete compopt continue coproc declare dirs disown do done echo elif else enable esac eval exec exit export false fc fg fi for function getopts hash help history if in jobs kill let local logout mapfile popd printf pushd pwd read readarray readonly return select set shift shopt source suspend test then time times trap true type typeset ulimit umask unalias unset until wait while".split(" "));
+  const shellProvided = new Set(["bun", "node"]);
   function expandScriptBinary(script: string): string {
     const command = /^([ \t]*)([A-Za-z0-9_@.+-]+)(?=[ \t]|$)/.exec(script);
     if (!command || shellCommands.has(command[2])) return script;
-    const file = binary(process.cwd(), command[2]);
+    // The package shell supplies `bun` and `node` on every host, so an unlinked manifest bin of
+    // those names is never searched for. Other names, `bunx` included, keep the manifest fallback.
+    const file = binary(process.cwd(), command[2], !shellProvided.has(command[2]));
     if (!file || file.endsWith(`/node_modules/.bin/${command[2]}`)) return script;
     return command[1] + quote(process.execPath) + " " + quote(dereference(file)) + script.slice(command[0].length);
   }

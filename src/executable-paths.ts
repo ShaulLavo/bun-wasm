@@ -13,7 +13,11 @@ export function bunEnvironment(env: Readonly<Record<string, string>>): Record<st
 }
 
 export function engineEnvironment(engine: Engine, env: Readonly<Record<string, string>>): Record<string, string> {
-  const bin = ENGINE_BIN[engine];
+  return pathEnvironment(ENGINE_BIN[engine], env);
+}
+
+/** Puts `bin` first on the inherited `PATH`, once. */
+export function pathEnvironment(bin: string, env: Readonly<Record<string, string>>): Record<string, string> {
   const path = env.PATH ?? "/bin:/usr/bin";
   return { ...env, PATH: path.split(":")[0] === bin ? path : `${bin}:${path}` };
 }

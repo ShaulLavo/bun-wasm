@@ -14,7 +14,7 @@ Pin bun-wasm to an exact commit and match that checkout's `waffle` pin:
 {
 	"dependencies": {
 		"bun-wasm": "github:ShaulLavo/bun-wasm#<commit>",
-		"waffle": "npm:@waffle-os/runtime@0.0.151"
+		"waffle": "npm:@waffle-os/runtime@0.0.153"
 	},
 	"trustedDependencies": ["bun-wasm"]
 }
@@ -60,7 +60,24 @@ installation.dispose();
 
 The default `browser` guest downloads on the first spawn, not during installation, using `BUN_WASM_ASSET` and verifying its uncompressed byte count and SHA-256 before compiling. You do not need to pass `asset` or `module` for the default `browser` engine.
 
-How you launch a process depends on your Waffle host. A Waffle shell such as bash-web spawns `/bin/bun` like any other command. Waffle's `startCommand` from `waffle/command` does not run Bun yet. It admits only interruptible byte-backed guests, while Bun registers as a cooperative adapter program, so `startCommand` exits with `EACCES`. The playground launches runs through `startRun` in `web/src/runner.ts`, which is not part of the package exports.
+## Run a command
+
+`runBun` runs `bun <args>` in the Runtime and resolves once Bun and its children have finished:
+
+```ts
+import { runBun } from "bun-wasm";
+
+const { exitCode, stdout, stderr } = await runBun(runtime, ["-e", "console.log(Bun.version)"]);
+
+await runtime.filesystem.writeFile("/index.ts", "const n: number = 42;\nconsole.log(n);\n");
+await runBun(runtime, ["index.ts"]); // { exitCode: 0, stdout: "42\n", ... }
+```
+
+`exitCode` is the status a shell reports. `stdout` and `stderr` hold the first 1 MiB of each stream as plain text; Bun sees pipes, not a terminal, unless you pass `terminal: true`. Other options: `cwd`, `env`, `stdin` (a string, bytes or a `ReadableStream`), `onStdout` and `onStderr` for each chunk, `outputLimitBytes`, `signal`, `onLeaderExit` and `executable`.
+
+For a process that keeps running, such as a server, `startBun` takes the same arguments and returns `{ result, kill }`. `kill()` stops the process tree; `kill(2)` sends SIGINT.
+
+A Waffle shell such as bash-web spawns `/bin/bun` like any other command.
 
 ## Serve the page
 
