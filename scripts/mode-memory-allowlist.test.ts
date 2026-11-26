@@ -81,6 +81,7 @@ type ObjectModeState = "none" | "allowed" | "disallowed";
 
 interface BindingInfo {
   readonly isConst: boolean;
+  readonly isParam: boolean;
   readonly count: number;
   readonly inits: ts.Expression[];
   readonly typeKind: ReceiverKind;
@@ -146,12 +147,12 @@ function isScopeContainer(node: ts.Node): boolean {
   );
 }
 
-function addBinding(env: LexicalEnv, name: string, init: ts.Expression | undefined, isConst: boolean, typeKind: ReceiverKind): void {
+function addBinding(env: LexicalEnv, name: string, init: ts.Expression | undefined, isConst: boolean, typeKind: ReceiverKind, isParam = false): void {
   const prev = env.bindings.get(name);
   const inits = prev ? prev.inits.concat(init ? [init] : []) : init ? [init] : [];
   const nextCount = (prev?.count ?? 0) + 1;
   const resolvedType = typeKind !== "unknown" ? typeKind : (prev?.typeKind ?? "unknown");
-  env.bindings.set(name, { isConst: isConst && nextCount === 1, count: nextCount, inits, typeKind: resolvedType });
+  env.bindings.set(name, { isConst: isConst && nextCount === 1, isParam: isParam && !prev, count: nextCount, inits, typeKind: resolvedType });
 }
 
 function directExpressionKind(expr: ts.Expression): ReceiverKind {
@@ -227,11 +228,7 @@ function registerForInitializer(env: LexicalEnv, init: ts.ForInitializer | undef
 function registerParameters(env: LexicalEnv, params: readonly ts.ParameterDeclaration[]): void {
   for (const param of params) {
     if (!ts.isIdentifier(param.name)) continue;
-    const typeKind = classifyTypeNode(param.type);
-    const defaultInit = typeKind === "unknown" && param.initializer && directExpressionKind(param.initializer) === "query"
-      ? param.initializer
-      : undefined;
-    addBinding(env, param.name.text, defaultInit, false, typeKind);
+    addBinding(env, param.name.text, param.initializer, false, classifyTypeNode(param.type), true);
     const fromType = classifyFunctionTypeReturn(param.type);
     if (fromType !== "unknown") {
       env.fnReturns.set(param.name.text, fromType);
@@ -366,7 +363,7 @@ function classifyReceiver(expr: ts.Expression, env: LexicalEnv, seen = new Set<s
   for (const init of found.binding.inits) {
     const kind = classifyReceiver(init, found.scope, next);
     if (kind === "query") return "query";
-    if (kind === "non-query") resolved = "non-query";
+    if (kind === "non-query" && !found.binding.isParam) resolved = "non-query";
   }
   if (resolved !== "unknown") return resolved;
   return queryParamNameHint.test(target.text) ? "query" : "unknown";
@@ -639,6 +636,8 @@ test("mode=memory detector catches static, dynamic, split, spread, computed, and
   expect(findModeMemoryUses("probe.ts", 'function makeHeaders() { return new Headers(); }\nfunction inner(makeHeaders: () => URLSearchParams) { const q = makeHeaders(); q.set("mode", "memory"); }')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'function makeParams() { return new URLSearchParams(); }\nfunction probe(makeParams = () => new URLSearchParams()) { makeParams().set("mode", "memory"); }')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'function probe(make: () => { set(key: string, value: string): void } = () => new Headers()) { const params = make(); params.set("mode", "memory"); }')).toHaveLength(1);
+  expect(findModeMemoryUses("probe.ts", 'const defaults = new URLSearchParams();\nfunction probe(p = defaults) { p.set("mode", "memory"); }')).toHaveLength(1);
+  expect(findModeMemoryUses("probe.ts", 'function probe(params: { set(k: string, v: string): void } = new Headers()) { params.set("mode", "memory"); }')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'new URLSearchParams({ mode: "memory" });')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'new URLSearchParams({ ["mode"]: "memory" });')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'const options = { mode: "memory" }; new URLSearchParams(options);')).toHaveLength(1);
