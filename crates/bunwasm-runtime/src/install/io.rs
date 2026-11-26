@@ -268,11 +268,81 @@ pub fn cache_dir() -> PathBuf {
 }
 
 pub fn fetch(url: &str, tarball: bool, refresh: bool, registry: &Registry) -> Result<Vec<u8>> {
-    Downloads::new(0).fetch(url, tarball, refresh, registry)
+    let mut downloads = Downloads::new(0);
+    // One request: a stat costs less than listing the whole cache.
+    downloads.cache = CacheIndex::Probe;
+    downloads.fetch(url, tarball, refresh, registry)
+}
+
+fn cache_name(url: &str) -> String {
+    format!("{:x}", Sha256::digest(url.as_bytes()))
 }
 
 fn cache_path(url: &str) -> PathBuf {
-    cache_dir().join(format!("{:x}", Sha256::digest(url.as_bytes())))
+    cache_dir().join(cache_name(url))
+}
+
+/// What one `Downloads` knows about the install cache directory. Each filesystem call is a
+/// host round trip in the browser, so a prefetching `Downloads` lists the directory once
+/// instead of probing it for every URL, and creates it at most once.
+pub(super) enum CacheIndex {
+    /// Not listed yet.
+    Unlisted,
+    /// Probe the cache file for every URL.
+    Probe,
+    /// The directory's file names when first needed, plus the entries written since.
+    Listed {
+        names: BTreeSet<String>,
+        exists: bool,
+    },
+}
+
+impl CacheIndex {
+    pub(super) fn listed() -> Self {
+        let names = match fs::read_dir(cache_dir()) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Self::Listed {
+                    names: BTreeSet::new(),
+                    exists: false,
+                };
+            }
+            Err(_) => return Self::Probe,
+        };
+        let names = names
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .collect();
+        Self::Listed {
+            names,
+            exists: true,
+        }
+    }
+
+    /// False only when the listing shows that no cache file exists for `url`.
+    pub(super) fn may_hold(&mut self, url: &str) -> bool {
+        if matches!(self, Self::Unlisted) {
+            *self = Self::listed();
+        }
+        match self {
+            Self::Listed { names, .. } => names.contains(&cache_name(url)),
+            _ => true,
+        }
+    }
+
+    /// Writes `bytes` as the cache file for `url`, creating the directory first if needed.
+    pub(super) fn store(&mut self, url: &str, bytes: &[u8]) {
+        let exists = matches!(self, Self::Listed { exists: true, .. });
+        if !exists && fs::create_dir_all(cache_dir()).is_err() {
+            return;
+        }
+        let written = write(&cache_path(url), bytes).is_ok();
+        if let Self::Listed { names, exists } = self {
+            *exists = true;
+            if written {
+                names.insert(cache_name(url));
+            }
+        }
+    }
 }
 
 /// Tarballs are immutable; metadata stays fresh for five minutes.
@@ -326,6 +396,7 @@ pub struct Downloads {
     /// One read buffer for every response: a read that finds nothing allocates nothing,
     /// and bodies grow only by the bytes that arrived.
     scratch: Vec<u8>,
+    cache: CacheIndex,
 }
 
 impl Downloads {
@@ -336,6 +407,7 @@ impl Downloads {
             pending: Vec::new(),
             pumped: None,
             scratch: Vec::new(),
+            cache: CacheIndex::Unlisted,
         }
     }
 
@@ -374,7 +446,11 @@ impl Downloads {
         }
         let request = request_url(url).and_then(|url| {
             let cache = cache_path(url.as_str());
-            if !refresh && fresh_cache(&cache, tarball) && cache.is_file() {
+            if !refresh
+                && self.cache.may_hold(url.as_str())
+                && fresh_cache(&cache, tarball)
+                && cache.is_file()
+            {
                 return Ok(None);
             }
             Download::start(&url, tarball, refresh, registry).map(Some)
@@ -397,7 +473,10 @@ impl Downloads {
             Some(request) => request?,
             None => {
                 let url = request_url(url)?;
-                if !refresh && let Some(bytes) = cached(&url, tarball, registry)? {
+                if !refresh
+                    && self.cache.may_hold(url.as_str())
+                    && let Some(bytes) = cached(&url, tarball, registry)?
+                {
                     return Ok(bytes);
                 }
                 Download::start(&url, tarball, refresh, registry)?
@@ -539,7 +618,9 @@ impl Download {
         completed?;
         let bytes = std::mem::take(&mut self.body);
         trace::time(store, || {
-            store_cache(&self.url, &bytes, self.tarball, registry)
+            if cacheable(&bytes, self.tarball, registry) {
+                others.cache.store(&self.url, &bytes);
+            }
         });
         Ok(bytes)
     }
@@ -614,12 +695,6 @@ impl Download {
 fn response_status(head: &[u8]) -> Result<u64> {
     let head: Value = serde_json::from_slice(head).map_err(|e| e.to_string())?;
     Ok(head["status"].as_u64().unwrap_or(0))
-}
-
-fn store_cache(url: &str, bytes: &[u8], tarball: bool, registry: &Registry) {
-    if cacheable(bytes, tarball, registry) && fs::create_dir_all(cache_dir()).is_ok() {
-        let _ = write(&cache_path(url), bytes);
-    }
 }
 
 fn idle_timeout() -> Duration {
@@ -813,34 +888,121 @@ pub fn archive_manifest(bytes: &[u8]) -> Result<Value> {
     manifest.ok_or_else(|| "Tarball has no package.json".into())
 }
 
-/// Extracts into `destination`. `tick` runs once per entry so other downloads keep moving
-/// during long extractions.
-pub fn extract(bytes: &[u8], destination: &Path, tick: &mut dyn FnMut()) -> Result<()> {
-    let mut directories = BTreeSet::new();
+/// Extracts into `destination`, an existing empty directory. `tick` runs once per entry so
+/// other downloads keep moving during long extractions.
+///
+/// Returns the bytes written to the root `package.json` when no other entry could land on
+/// the same file under a case-insensitive or normalizing filesystem, so callers need not
+/// read it back. `None` means: read it from disk.
+pub fn extract(
+    bytes: &[u8],
+    destination: &Path,
+    tick: &mut dyn FnMut(),
+) -> Result<Option<Vec<u8>>> {
+    let mut directories = Directories::new(destination);
     let mut buffer = Vec::new();
+    let mut manifest = Manifest::default();
     visit_archive(bytes, |entry, path| {
         tick();
         let target = destination.join(path);
+        manifest.saw(path);
         if entry.header().entry_type().is_dir() {
-            return create_directory(&target);
+            return directories.create(&target);
         }
-        ensure_parent(&mut directories, &target)?;
+        directories.create_parent(&target)?;
         // Grows to the largest file seen, exactly, and never past `EXTRACT_CHUNK`.
         let wanted = (entry.size() as usize).clamp(1, EXTRACT_CHUNK);
         if buffer.len() < wanted {
             buffer.reserve_exact(wanted - buffer.len());
             buffer.resize(wanted, 0);
         }
-        write_entry(entry, &target, &mut buffer)
-    })
+        let keep = manifest.capture(path);
+        write_entry(entry, &target, &mut buffer, keep)
+    })?;
+    Ok(manifest.bytes())
+}
+
+/// The root `package.json` as extraction wrote it.
+#[derive(Default)]
+struct Manifest {
+    bytes: Option<Vec<u8>>,
+    /// Another root entry could alias `package.json` on some filesystem.
+    ambiguous: bool,
+}
+
+impl Manifest {
+    fn saw(&mut self, path: &Path) {
+        let mut parts = path.components();
+        let (Some(Component::Normal(name)), None) = (parts.next(), parts.next()) else {
+            return;
+        };
+        let exact = name == "package.json";
+        // Non-ASCII names can normalize to ASCII (U+212A KELVIN SIGN is K), and case folds.
+        let alias = !name.is_ascii() || name.eq_ignore_ascii_case("package.json");
+        self.ambiguous |= alias && !exact;
+    }
+
+    /// The buffer that collects this entry's bytes, when it is the root `package.json`. A
+    /// later duplicate replaces an earlier one, as it does on disk.
+    fn capture(&mut self, path: &Path) -> Option<&mut Vec<u8>> {
+        if path != Path::new("package.json") {
+            return None;
+        }
+        let bytes = self.bytes.insert(Vec::new());
+        Some(bytes)
+    }
+
+    fn bytes(self) -> Option<Vec<u8>> {
+        self.bytes.filter(|_| !self.ambiguous)
+    }
+}
+
+/// The directories extraction created, so each costs one `mkdir` and files in them none.
+struct Directories {
+    known: BTreeSet<PathBuf>,
+}
+
+impl Directories {
+    fn new(root: &Path) -> Self {
+        Self {
+            known: BTreeSet::from([root.to_path_buf()]),
+        }
+    }
+
+    fn create_parent(&mut self, target: &Path) -> Result<()> {
+        self.create(target.parent().unwrap())
+    }
+
+    /// `fs::create_dir_all` that skips the directories it already made or saw.
+    fn create(&mut self, path: &Path) -> Result<()> {
+        if self.known.contains(path) {
+            return Ok(());
+        }
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty());
+        if let Some(parent) = parent {
+            self.create(parent)?;
+        }
+        create_directory(path)?;
+        if self.known.len() < 1024 {
+            self.known.insert(path.to_path_buf());
+        }
+        Ok(())
+    }
 }
 
 /// Each write is a host filesystem call in the browser, so files up to this size are
 /// written with one call. Larger files stream through in chunks of this size.
 const EXTRACT_CHUNK: usize = 256 * 1024;
 
-/// Streams one archive file to `target` through `buffer`.
-fn write_entry(entry: &mut impl Read, target: &Path, buffer: &mut [u8]) -> Result<()> {
+/// Streams one archive file to `target` through `buffer`, appending its bytes to `keep`.
+fn write_entry(
+    entry: &mut impl Read,
+    target: &Path,
+    buffer: &mut [u8],
+    mut keep: Option<&mut Vec<u8>>,
+) -> Result<()> {
     let mut file =
         trace::time("extract-write", || fs::File::create(target)).map_err(|e| e.to_string())?;
     loop {
@@ -851,6 +1013,9 @@ fn write_entry(entry: &mut impl Read, target: &Path, buffer: &mut [u8]) -> Resul
         }
         trace::time("extract-write", || file.write_all(&buffer[..count]))
             .map_err(|e| e.to_string())?;
+        if let Some(keep) = keep.as_deref_mut() {
+            keep.extend_from_slice(&buffer[..count]);
+        }
         if count < buffer.len() {
             return Ok(());
         }
@@ -871,20 +1036,13 @@ fn fill(entry: &mut impl Read, buffer: &mut [u8]) -> std::io::Result<usize> {
     Ok(filled)
 }
 
+/// One `mkdir` whose parent exists. An existing directory is fine, as with `create_dir_all`.
 fn create_directory(path: &Path) -> Result<()> {
-    trace::time("extract-mkdir", || fs::create_dir_all(path)).map_err(|e| e.to_string())
-}
-
-fn ensure_parent(directories: &mut BTreeSet<PathBuf>, target: &Path) -> Result<()> {
-    let parent = target.parent().unwrap();
-    if directories.contains(parent) {
-        return Ok(());
-    }
-    create_directory(parent)?;
-    if directories.len() < 1024 {
-        directories.insert(parent.to_path_buf());
-    }
-    Ok(())
+    trace::time("extract-mkdir", || match fs::create_dir(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        result => result,
+    })
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1074,6 +1232,63 @@ mod archive_tests {
             archive.append(&header, *bytes).unwrap();
         }
         archive.into_inner().unwrap().finish().unwrap()
+    }
+
+    fn extracted(entries: &[(&str, tar::EntryType, &[u8])]) -> (PathBuf, Result<Option<Vec<u8>>>) {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let index = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("bun-wasm-extract-{}-{index}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        let result = extract(&archive(entries), &root, &mut || {});
+        (root, result)
+    }
+
+    #[test]
+    fn extraction_returns_the_manifest_it_wrote_only_when_nothing_aliases_it() {
+        use tar::EntryType::{Directory, Regular};
+        let manifest = b"{\"name\":\"tool\",\"version\":\"1.0.0\"}".as_slice();
+        let (root, result) = extracted(&[
+            ("package/lib/", Directory, b""),
+            ("package/lib/a.js", Regular, b"a"),
+            ("package/deep/er/b.js", Regular, b"b"),
+            ("package/package.json", Regular, b"{}"),
+            ("package/package.json", Regular, manifest),
+        ]);
+        assert_eq!(
+            result.unwrap().as_deref(),
+            Some(manifest),
+            "the last duplicate wins, as on disk"
+        );
+        assert_eq!(fs::read(root.join("package.json")).unwrap(), manifest);
+        assert_eq!(fs::read(root.join("lib/a.js")).unwrap(), b"a");
+        assert_eq!(fs::read(root.join("deep/er/b.js")).unwrap(), b"b");
+        fs::remove_dir_all(root).unwrap();
+        for alias in ["package/PACKAGE.json", "package/pac\u{212a}age.json"] {
+            let (root, result) = extracted(&[
+                ("package/package.json", Regular, manifest),
+                (alias, Regular, b"{}"),
+            ]);
+            assert_eq!(
+                result.unwrap(),
+                None,
+                "{alias} could replace package.json on some filesystems"
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+        let (root, result) = extracted(&[("package/lib/package.json", Regular, manifest)]);
+        assert_eq!(result.unwrap(), None, "only the root manifest counts");
+        fs::remove_dir_all(root).unwrap();
+        let (root, result) = extracted(&[
+            ("package/clash", Regular, b"file"),
+            ("package/clash/inner.js", Regular, b"x"),
+        ]);
+        assert!(
+            result.is_err(),
+            "a file where a directory belongs still fails"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
