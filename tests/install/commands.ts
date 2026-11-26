@@ -33,7 +33,10 @@ function project(name: string, files: Record<string, string>) {
 let guestEnv: string[] = [];
 async function run(cwd: string, ...args: string[]) {
   const engine = process.env.INSTALL_ENGINE;
-  const env = { ...process.env, HOME: cwd, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(cwd, "cache") };
+  // Native Bun gets the project as its home. The guest engines get `HOME=/` below and keep the
+  // host's, where the launcher's compiled-module cache lives; a fresh one recompiles the guest.
+  const env = { ...process.env, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(cwd, "cache") };
+  if (engine === "native") env.HOME = cwd;
   const options = ["--wasm", resolve(root, process.env.BUN_WASM || "dist/bun.wasm"), "--dir", `${cwd}::/`,
     "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache"].concat(guestEnv.flatMap(value => ["--env", value]), ["--"]);
   const executable = engine === "native" ? process.env.NATIVE_BUN || "bun" : engine === "browser" ? process.execPath : process.env.BUN_WASM_LAUNCHER!;
@@ -45,7 +48,8 @@ async function run(cwd: string, ...args: string[]) {
   let stdout = "", stderr = "";
   child.stdout?.on("data", bytes => { stdout += bytes; });
   child.stderr?.on("data", bytes => { stderr += bytes; });
-  const timer = setTimeout(() => child.kill("SIGKILL"), 60000);
+  // Hang cap only. A cold JSC guest compile can take about 30 s on loaded CI runners.
+  const timer = setTimeout(() => child.kill("SIGKILL"), 100000);
   try {
     const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
     return { code, stdout, stderr };

@@ -17,10 +17,10 @@ for (const target of installFixtureTargets()) {
       env: { ...process.env, INSTALL_ENGINE: target.engine, BUN_WASM: target.wasm, BUN_WASM_LAUNCHER: launcher, INSTALL_CASES: cases.join(",") },
       encoding: "utf8",
       // Hang cap only.
-      timeout: 180_000,
+      timeout: 240_000,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     assert.equal(result.status, 0, output);
     for (const name of cases) assert.match(result.stdout, new RegExp(`PASS ${name}\\b`), output);
-  }, 200_000);
+  }, 260_000);
 }
