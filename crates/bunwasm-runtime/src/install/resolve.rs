@@ -227,6 +227,11 @@ impl Resolver {
     pub fn resolve(&mut self, manifest: &Value, production: bool) -> Result<()> {
         let result = self.resolve_graph(manifest, production);
         self.downloads.clear();
+        if result.is_ok()
+            && let Some(early) = &mut self.early
+        {
+            early.settle(&self.registry);
+        }
         result
     }
 
@@ -815,10 +820,10 @@ impl Resolver {
         if !self.responses.contains_key(name) {
             let url = self.metadata_url(name);
             let (early, registry) = (&mut self.early, &self.registry);
-            let mut idle = |metadata: &mut io::Downloads| {
+            let mut idle = |metadata: &mut io::Downloads, arrived: &mut dyn FnMut() -> bool| {
                 early
                     .as_mut()
-                    .is_some_and(|early| early.work(metadata, registry))
+                    .is_some_and(|early| early.work(metadata, registry, arrived))
             };
             let bytes =
                 self.downloads

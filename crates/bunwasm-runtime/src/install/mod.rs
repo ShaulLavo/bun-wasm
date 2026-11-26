@@ -691,25 +691,38 @@ fn extract_package(
     tick: &mut dyn FnMut(),
     fresh: bool,
 ) -> Result<Option<Value>> {
+    let staging = stage_package(package, bytes)?;
+    let result = trace::time("extract", || io::extract(bytes, &staging, tick))
+        .and_then(|manifest| complete_package(&staging, package, manifest, fresh));
+    if result.is_err() {
+        let _ = fs::remove_dir_all(staging);
+    }
+    result.map(Some)
+}
+
+/// Checks the archive's integrity and makes its empty staging directory.
+fn stage_package(package: &Package, bytes: &[u8]) -> Result<std::path::PathBuf> {
     trace::time("integrity", || io::integrity(bytes, &package.integrity))?;
-    let path = package.path();
-    let staging = path.with_file_name(format!(
+    let staging = package.path().with_file_name(format!(
         ".{}.bun-wasm-tmp",
         package.name.rsplit('/').next().unwrap()
     ));
     empty_directory(&staging)?;
-    let result = trace::time("extract", || io::extract(bytes, &staging, tick))
-        .and_then(|manifest| validate_package(&staging, package, manifest))
-        .and_then(|bins| {
-            trace::time("publish", || {
-                publish_package(&staging, &path, package, fresh, io::write)
-            })?;
-            Ok(Some(bins))
-        });
-    if result.is_err() {
-        let _ = fs::remove_dir_all(staging);
-    }
-    result
+    Ok(staging)
+}
+
+/// Validates an extracted package and publishes it. Returns its binary fields.
+fn complete_package(
+    staging: &Path,
+    package: &Package,
+    manifest: Option<Vec<u8>>,
+    fresh: bool,
+) -> Result<Value> {
+    let bins = validate_package(staging, package, manifest)?;
+    trace::time("publish", || {
+        publish_package(staging, &package.path(), package, fresh, io::write)
+    })?;
+    Ok(bins)
 }
 
 /// Creates `path` as a new empty directory, replacing a leftover one. The common case (it

@@ -13,6 +13,22 @@ pub(super) fn lock_snapshot(manifest: &Value, resolver: &Resolver) -> Value {
     locked
 }
 
+/// An archive holding `entries`, each a path and its bytes.
+pub(in super::super) fn archive_entries(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let compressor = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut archive = tar::Builder::new(compressor);
+    for (path, bytes) in entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, path, bytes.as_slice())
+            .unwrap();
+    }
+    archive.into_inner().unwrap().finish().unwrap()
+}
+
 pub(in super::super) fn archive(meta: &Value) -> Vec<u8> {
     let compressor = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     let mut archive = tar::Builder::new(compressor);

@@ -26,9 +26,9 @@ use super::{
 /// Archives requested ahead while metadata is still loading. Metadata decides when
 /// resolution ends, so archives take a small share of the connection.
 const EARLY_TARBALLS: usize = 8;
-/// Larger packages wait for the install phase, so one long extraction never holds up the
-/// metadata requests that resolution issues next.
-const EARLY_FILES: u64 = 256;
+/// Larger packages wait for the install phase: a paused extraction resumes by inflating
+/// its archive again from the start, so huge archives would repeat too much of that.
+const EARLY_FILES: u64 = 2048;
 
 /// A package installed during resolution.
 pub struct Done {
@@ -46,7 +46,16 @@ pub struct Early {
     active: BTreeSet<String>,
     queue: VecDeque<Package>,
     queued: BTreeSet<String>,
+    /// The package being extracted, between the pauses that let resolution go on.
+    current: Option<Job>,
     pub done: BTreeMap<String, Done>,
+}
+
+struct Job {
+    package: Package,
+    bytes: Vec<u8>,
+    staging: PathBuf,
+    extraction: io::Extraction,
 }
 
 impl Early {
@@ -57,6 +66,7 @@ impl Early {
             active: BTreeSet::new(),
             queue: VecDeque::new(),
             queued: BTreeSet::new(),
+            current: None,
             done: BTreeMap::new(),
         }
     }
@@ -92,16 +102,98 @@ impl Early {
 
     /// Installs one queued package whose archive has arrived. Returns whether it did any
     /// work. `metadata` keeps moving during the extraction.
-    pub fn work(&mut self, metadata: &mut Downloads, registry: &Registry) -> bool {
+    pub fn work(
+        &mut self,
+        metadata: &mut Downloads,
+        registry: &Registry,
+        arrived: &mut dyn FnMut() -> bool,
+    ) -> bool {
         self.prefetch(registry);
+        if self.current.is_none() && !self.start(registry) {
+            return false;
+        }
+        trace::time("early-install", || self.resume(metadata, registry, arrived));
+        self.prefetch(registry);
+        true
+    }
+
+    /// Finishes the package in progress, so resolution leaves no partial extraction.
+    pub fn settle(&mut self, registry: &Registry) {
+        if self.current.is_none() {
+            return;
+        }
+        let mut metadata = Downloads::new(0);
+        trace::time("early-install", || {
+            self.resume(&mut metadata, registry, &mut || false)
+        });
+    }
+
+    /// Takes the next ready package and stages it. Returns whether a job started.
+    fn start(&mut self, registry: &Registry) -> bool {
         let Some(index) = self.next(registry) else {
             return false;
         };
         let package = self.queue.remove(index).unwrap();
         self.queued.remove(&package.key());
-        self.install(&package, metadata, registry);
-        self.prefetch(registry);
+        let Ok(bytes) = self
+            .downloads
+            .fetch(&package.tarball, true, self.refresh, registry)
+        else {
+            return true;
+        };
+        let Ok(staging) = super::stage_package(&package, &bytes) else {
+            return true;
+        };
+        self.current = Some(Job {
+            extraction: io::Extraction::new(&staging),
+            package,
+            bytes,
+            staging,
+        });
         true
+    }
+
+    /// Extracts the current package until resolution's awaited response arrives, then
+    /// publishes it once complete. A failure removes its staging directory and leaves the
+    /// package to the install phase.
+    fn resume(
+        &mut self,
+        metadata: &mut Downloads,
+        registry: &Registry,
+        arrived: &mut dyn FnMut() -> bool,
+    ) {
+        let Some(job) = self.current.as_mut() else {
+            return;
+        };
+        let downloads = &mut self.downloads;
+        let mut tick = || {
+            downloads.tick(registry);
+            metadata.tick(registry);
+        };
+        let ran = job
+            .extraction
+            .run(&job.bytes, &job.staging, &mut tick, arrived);
+        let manifest = match ran {
+            Ok(io::Extracted::Paused) => return,
+            Ok(io::Extracted::Done(manifest)) => Ok(manifest),
+            Err(error) => Err(error),
+        };
+        let job = self.current.take().unwrap();
+        let completed = manifest.and_then(|manifest| {
+            super::complete_package(&job.staging, &job.package, manifest, true)
+        });
+        let Ok(bins) = completed else {
+            let _ = fs::remove_dir_all(&job.staging);
+            return;
+        };
+        self.done.insert(
+            job.package.key(),
+            Done {
+                source: installed_source(&job.package),
+                path: job.package.path(),
+                bins,
+            },
+        );
     }
 
     /// The first queued package that can be installed now: its ancestors in the tree are
@@ -133,40 +225,16 @@ impl Early {
             if self.done.contains_key(&key) {
                 continue;
             }
-            if self.queued.contains(&key) {
+            let extracting = self
+                .current
+                .as_ref()
+                .is_some_and(|job| job.package.key() == key);
+            if extracting || self.queued.contains(&key) {
                 return Ancestors::Waiting;
             }
             return Ancestors::Lost;
         }
         Ancestors::Done
-    }
-
-    fn install(&mut self, package: &Package, metadata: &mut Downloads, registry: &Registry) {
-        let Ok(bytes) = self
-            .downloads
-            .fetch(&package.tarball, true, self.refresh, registry)
-        else {
-            return;
-        };
-        let downloads = &mut self.downloads;
-        let mut tick = || {
-            downloads.tick(registry);
-            metadata.tick(registry);
-        };
-        let result = trace::time("early-install", || {
-            super::extract_package(package, &bytes, &mut tick, true)
-        });
-        let Ok(Some(bins)) = result else {
-            return;
-        };
-        self.done.insert(
-            package.key(),
-            Done {
-                source: installed_source(package),
-                path: package.path(),
-                bins,
-            },
-        );
     }
 
     /// Keeps the early installs that the final graph contains unchanged and removes the
@@ -224,7 +292,7 @@ fn small(meta: &Value) -> bool {
             .is_none_or(|size| size <= EARLY_BYTES)
 }
 
-const EARLY_BYTES: u64 = 4 * 1024 * 1024;
+const EARLY_BYTES: u64 = 32 * 1024 * 1024;
 
 fn remove(path: &std::path::Path) -> io::Result<()> {
     forget_installed_source(path)?;

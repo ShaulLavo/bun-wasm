@@ -79,7 +79,7 @@ fn registry() -> io::Registry {
 fn drain(early: &mut Early) -> usize {
     let mut metadata = io::Downloads::new(0);
     let mut count = 0;
-    while early.work(&mut metadata, &registry()) {
+    while early.work(&mut metadata, &registry(), &mut || false) {
         count += 1;
     }
     count
@@ -269,4 +269,78 @@ fn an_interrupted_early_install_leaves_only_complete_packages() {
     assert!(cut.path().join("package.json").is_file());
     assert!(!cut.path().join("partial.js").exists());
     assert!(!staging.exists());
+}
+
+#[test]
+fn extraction_pauses_whenever_resolution_has_its_response() {
+    if !child() {
+        return in_child("extraction_pauses_whenever_resolution_has_its_response");
+    }
+    let parent = plain("parent", &["parent"]);
+    let child = plain("child", &["parent", "child"]);
+    // Four entries: the manifest and three files.
+    let entries: Vec<(String, Vec<u8>)> = vec![
+        (
+            "package/package.json".into(),
+            serde_json::to_vec(&json!({"name": "parent", "version": "1.0.0"})).unwrap(),
+        ),
+        ("package/a.js".into(), b"a".to_vec()),
+        ("package/lib/b.js".into(), b"b".to_vec()),
+        ("package/lib/c.js".into(), b"c".to_vec()),
+    ];
+    fs::create_dir_all(io::cache_dir()).unwrap();
+    let cache = io::cache_dir().join(format!("{:x}", Sha256::digest(parent.tarball.as_bytes())));
+    fs::write(
+        cache,
+        super::resolve::test_support::archive_entries(&entries),
+    )
+    .unwrap();
+    seed(&[&child]);
+    let mut early = Early::new(false);
+    early.added(&parent, None, &registry());
+    early.added(&child, Some("parent"), &registry());
+    let mut metadata = io::Downloads::new(0);
+    // The awaited response is always there: every call writes one entry and yields.
+    let mut slices = 0;
+    while early.work(&mut metadata, &registry(), &mut || true) {
+        slices += 1;
+        assert!(slices < 20, "extraction never finished");
+    }
+    assert_eq!(
+        slices, 5,
+        "four entries of the parent, then the child in one entry"
+    );
+    assert!(early.done.contains_key("parent") && early.done.contains_key("parent/child"));
+    assert_eq!(fs::read(parent.path().join("lib/c.js")).unwrap(), b"c");
+    assert!(child.path().join("package.json").is_file());
+}
+
+#[test]
+fn settling_finishes_a_paused_extraction() {
+    if !child() {
+        return in_child("settling_finishes_a_paused_extraction");
+    }
+    let parent = plain("parent", &["parent"]);
+    let entries: Vec<(String, Vec<u8>)> = vec![
+        (
+            "package/package.json".into(),
+            serde_json::to_vec(&json!({"name": "parent", "version": "1.0.0"})).unwrap(),
+        ),
+        ("package/a.js".into(), b"a".to_vec()),
+    ];
+    fs::create_dir_all(io::cache_dir()).unwrap();
+    let cache = io::cache_dir().join(format!("{:x}", Sha256::digest(parent.tarball.as_bytes())));
+    fs::write(
+        cache,
+        super::resolve::test_support::archive_entries(&entries),
+    )
+    .unwrap();
+    let mut early = Early::new(false);
+    early.added(&parent, None, &registry());
+    assert!(early.work(&mut io::Downloads::new(0), &registry(), &mut || true));
+    assert!(early.done.is_empty(), "paused after the first entry");
+    early.settle(&registry());
+    assert!(early.done.contains_key("parent"));
+    assert_eq!(fs::read(parent.path().join("a.js")).unwrap(), b"a");
+    assert!(!Path::new("node_modules/.parent.bun-wasm-tmp").exists());
 }

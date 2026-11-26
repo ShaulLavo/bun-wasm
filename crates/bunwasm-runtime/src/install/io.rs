@@ -477,7 +477,7 @@ impl Downloads {
         refresh: bool,
         registry: &Registry,
     ) -> Result<Vec<u8>> {
-        self.fetch_with(url, tarball, refresh, registry, &mut |_| false)
+        self.fetch_with(url, tarball, refresh, registry, &mut |_, _| false)
     }
 
     /// Sets how many requests prefetching may keep in flight.
@@ -510,15 +510,16 @@ impl Downloads {
     }
 
     /// `fetch`, running `idle` while the response has not arrived yet. `idle` gets the
-    /// other pending downloads so its own long work can let them move, and returns whether
-    /// it did anything; when it did not, the wait blocks in the host as usual.
+    /// other pending downloads, so its own long work can let them move, and a check that
+    /// says whether this response has arrived, so that work can stop for it. It returns
+    /// whether it did anything; when it did not, the wait blocks in the host as usual.
     pub fn fetch_with(
         &mut self,
         url: &str,
         tarball: bool,
         refresh: bool,
         registry: &Registry,
-        idle: &mut dyn FnMut(&mut Downloads) -> bool,
+        idle: &mut Idle<'_>,
     ) -> Result<Vec<u8>> {
         let download = match self.take(url) {
             Some(request) => request?,
@@ -574,6 +575,10 @@ impl Downloads {
         }
     }
 }
+
+/// Work to do while one response is awaited: gets the other downloads and a check that says
+/// whether the awaited response has arrived. Returns whether it did anything.
+pub type Idle<'a> = dyn FnMut(&mut Downloads, &mut dyn FnMut() -> bool) -> bool + 'a;
 
 /// How a body read stopped.
 #[derive(Debug, PartialEq)]
@@ -660,7 +665,7 @@ impl Download {
         mut self,
         others: &mut Downloads,
         registry: &Registry,
-        idle: &mut dyn FnMut(&mut Downloads) -> bool,
+        idle: &mut Idle<'_>,
     ) -> Result<Vec<u8>> {
         let (download, store) = if self.tarball {
             ("tarball-download", "tarball-cache-write")
@@ -686,7 +691,7 @@ impl Download {
         &mut self,
         others: &mut Downloads,
         registry: &Registry,
-        idle: &mut dyn FnMut(&mut Downloads) -> bool,
+        idle: &mut Idle<'_>,
     ) -> Result<()> {
         let mut pending = Pending::new(idle_timeout(), Instant::now());
         loop {
@@ -699,10 +704,42 @@ impl Download {
             match &self.state {
                 Body::Done => return Ok(()),
                 Body::Failed(error) => return Err(error.clone()),
-                Body::Head | Body::Reading if idle(others) => {}
-                Body::Head | Body::Reading => wait(&mut pending, &self.url)?,
+                Body::Head | Body::Reading => {}
+            }
+            let (worked, moved) = self.idle(others, registry, idle);
+            if moved {
+                pending.progressed(Instant::now());
+            }
+            if !worked {
+                wait(&mut pending, &self.url)?;
             }
         }
+    }
+
+    /// Runs `idle` with a check, read at most every `PUMP_INTERVAL`, that moves this
+    /// response and says whether it has arrived. Returns whether `idle` did work and whether
+    /// the response moved meanwhile.
+    fn idle(
+        &mut self,
+        others: &mut Downloads,
+        registry: &Registry,
+        idle: &mut Idle<'_>,
+    ) -> (bool, bool) {
+        let mut moved = false;
+        let mut scratch = Vec::new();
+        let mut checked: Option<Instant> = None;
+        let mut arrived = || {
+            let now = Instant::now();
+            if checked.is_some_and(|at| now.duration_since(at) < PUMP_INTERVAL) {
+                return false;
+            }
+            checked = Some(now);
+            scratch.resize(READ_CAP, 0);
+            moved |= self.advance(usize::MAX, &mut scratch, registry);
+            matches!(self.state, Body::Done | Body::Failed(_))
+        };
+        let worked = idle(others, &mut arrived);
+        (worked, moved)
     }
 
     /// Moves the response forward without blocking, reading at most `budget` body bytes.
@@ -891,16 +928,25 @@ pub fn integrity(bytes: &[u8], sri: &str) -> Result<()> {
 
 type ArchiveEntry<'a> = tar::Entry<'a, std::io::Take<flate2::read::GzDecoder<&'a [u8]>>>;
 
+/// Whether an archive visit goes on after an entry.
+#[derive(PartialEq)]
+enum Flow {
+    Continue,
+    Pause,
+}
+
+/// Calls `visit` with each entry and its index, until it pauses.
 fn visit_archive(
     bytes: &[u8],
-    mut visit: impl FnMut(&mut ArchiveEntry<'_>, &Path) -> Result<()>,
-) -> Result<()> {
+    mut visit: impl FnMut(&mut ArchiveEntry<'_>, &Path, usize) -> Result<Flow>,
+) -> Result<Flow> {
     let decoder = flate2::read::GzDecoder::new(bytes);
     let mut archive = tar::Archive::new(decoder.take(LIMIT as u64 + 1));
     let entries = archive
         .entries()
         .map_err(|e| format!("Invalid tarball: {e}"))?;
     let mut total = 0u64;
+    let mut index = 0;
     for entry in entries {
         let mut entry = entry.map_err(|e| e.to_string())?;
         total = total.checked_add(entry.size()).ok_or("Tarball too large")?;
@@ -908,11 +954,15 @@ fn visit_archive(
             return Err("Extracted package exceeds 256 MiB".into());
         }
         let tail = archive_path(&entry)?;
-        if !tail.as_os_str().is_empty() {
-            visit(&mut entry, &tail)?;
+        if tail.as_os_str().is_empty() {
+            continue;
         }
+        if visit(&mut entry, &tail, index)? == Flow::Pause {
+            return Ok(Flow::Pause);
+        }
+        index += 1;
     }
-    Ok(())
+    Ok(Flow::Continue)
 }
 
 fn archive_path<R: Read>(entry: &tar::Entry<'_, R>) -> Result<PathBuf> {
@@ -934,9 +984,9 @@ fn archive_path<R: Read>(entry: &tar::Entry<'_, R>) -> Result<PathBuf> {
 
 pub fn archive_manifest(bytes: &[u8]) -> Result<Value> {
     let mut manifest = None;
-    visit_archive(bytes, |entry, path| {
+    visit_archive(bytes, |entry, path, _| {
         if path != Path::new("package.json") {
-            return Ok(());
+            return Ok(Flow::Continue);
         }
         if manifest.is_some() || !entry.header().entry_type().is_file() {
             return Err("Tarball needs one regular package.json".into());
@@ -945,7 +995,7 @@ pub fn archive_manifest(bytes: &[u8]) -> Result<Value> {
             serde_json::from_reader(entry)
                 .map_err(|e| format!("Invalid tarball package.json: {e}"))?,
         );
-        Ok(())
+        Ok(Flow::Continue)
     })?;
     manifest.ok_or_else(|| "Tarball has no package.json".into())
 }
@@ -961,27 +1011,89 @@ pub fn extract(
     destination: &Path,
     tick: &mut dyn FnMut(),
 ) -> Result<Option<Vec<u8>>> {
-    let mut directories = Directories::new(destination);
-    let mut buffer = Vec::new();
-    let mut manifest = Manifest::default();
-    visit_archive(bytes, |entry, path| {
-        tick();
-        let target = destination.join(path);
-        manifest.saw(path);
-        if entry.header().entry_type().is_dir() {
-            return directories.create(&target);
+    match Extraction::new(destination).run(bytes, destination, tick, &mut || false)? {
+        Extracted::Done(manifest) => Ok(manifest),
+        Extracted::Paused => unreachable!("an extraction that never pauses finished"),
+    }
+}
+
+/// How far a call to `Extraction::run` got.
+pub enum Extracted {
+    /// Every entry is written. Holds what `extract` returns.
+    Done(Option<Vec<u8>>),
+    /// Stopped between entries; a later `run` goes on from there.
+    Paused,
+}
+
+/// One archive's extraction into its staging directory, resumable between entries. A
+/// resumed run inflates the archive again from the start and skips the entries already
+/// written, which costs CPU but no filesystem calls.
+pub struct Extraction {
+    written: usize,
+    directories: Directories,
+    manifest: Manifest,
+    buffer: Vec<u8>,
+}
+
+impl Extraction {
+    pub fn new(destination: &Path) -> Self {
+        Self {
+            written: 0,
+            directories: Directories::new(destination),
+            manifest: Manifest::default(),
+            buffer: Vec::new(),
         }
-        directories.create_parent(&target)?;
+    }
+
+    /// Writes the entries not written yet. After each entry it writes, `pause` may stop
+    /// it, so every call makes progress.
+    pub fn run(
+        &mut self,
+        bytes: &[u8],
+        destination: &Path,
+        tick: &mut dyn FnMut(),
+        pause: &mut dyn FnMut() -> bool,
+    ) -> Result<Extracted> {
+        let start = self.written;
+        let flow = visit_archive(bytes, |entry, path, index| {
+            if index < start {
+                return Ok(Flow::Continue);
+            }
+            if index > start && pause() {
+                return Ok(Flow::Pause);
+            }
+            tick();
+            self.entry(entry, path, destination)?;
+            self.written = index + 1;
+            Ok(Flow::Continue)
+        })?;
+        if flow == Flow::Pause {
+            return Ok(Extracted::Paused);
+        }
+        Ok(Extracted::Done(std::mem::take(&mut self.manifest).bytes()))
+    }
+
+    fn entry(
+        &mut self,
+        entry: &mut ArchiveEntry<'_>,
+        path: &Path,
+        destination: &Path,
+    ) -> Result<()> {
+        let target = destination.join(path);
+        self.manifest.saw(path);
+        if entry.header().entry_type().is_dir() {
+            return self.directories.create(&target);
+        }
+        self.directories.create_parent(&target)?;
         // Grows to the largest file seen, exactly, and never past `EXTRACT_CHUNK`.
         let wanted = (entry.size() as usize).clamp(1, EXTRACT_CHUNK);
-        if buffer.len() < wanted {
-            buffer.reserve_exact(wanted - buffer.len());
-            buffer.resize(wanted, 0);
+        if self.buffer.len() < wanted {
+            self.buffer.reserve_exact(wanted - self.buffer.len());
+            self.buffer.resize(wanted, 0);
         }
-        let keep = manifest.capture(path);
-        write_entry(entry, &target, &mut buffer, keep)
-    })?;
-    Ok(manifest.bytes())
+        let keep = self.manifest.capture(path);
+        write_entry(entry, &target, &mut self.buffer, keep)
+    }
 }
 
 /// The root `package.json` as extraction wrote it.
