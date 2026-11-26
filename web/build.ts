@@ -104,7 +104,7 @@ if (!copyWasm(browserSource, "bun-browser.wasm")) {
 
 const toolsSource = resolve(here, process.env.BUN_TOOLS_WASM ?? "../dist/bun-tools.wasm");
 if (!copyWasm(toolsSource, "bun-tools.wasm")) {
-  console.warn(`bun-tools.wasm: ${toolsSource} not found; lint and fmt will not be available.`);
+  console.warn(`bun-tools.wasm: ${toolsSource} not found; lint, fmt and check will not be available.`);
 }
 const staging = guests.map(async ({ source, name }) => {
   await stageGuestWasm(source, name, out, engineBuilds);

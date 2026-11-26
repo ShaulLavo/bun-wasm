@@ -32,6 +32,7 @@ type Scenario = (browser: Browser, url: string) => Promise<void>;
 
 for (const browserName of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",")) {
   test(`${browserName}: demos run in one click, keep edits, restore deleted files and survive reload`, () => withBrowser(browserName, oneTab));
+  test(`${browserName}: bun check demo reports TS2322 with a non-zero exit, then exits 0 after fixing the file`, () => withBrowser(browserName, bunCheckDemo));
   test(`${browserName}: two tabs never share demo databases or overwrite a peer's restored file`, () => withBrowser(browserName, twoTabs));
   test(`${browserName}: a returning visitor's unedited old examples are upgraded and edited ones kept`, () => withBrowser(browserName, returningVisitor));
   test(`${browserName}: Run cannot slip into a preparing demo, and Stop cancels it`, () => withBrowser(browserName, runStopRace));
@@ -363,6 +364,132 @@ async function oneTab(browser: Browser, url: string): Promise<void> {
     expect(listed.code, listed.output).toBe(0);
     expect(listed.output).toContain("math.js");
     expect(listed.output).not.toMatch(/\.sqlite\b/);
+  } finally {
+    await context.close();
+  }
+}
+
+async function bunCheckDemo(browser: Browser, url: string): Promise<void> {
+  const context = await browser.newContext();
+  try {
+    const page = await open(context, url);
+    let toolsDownloads = 0;
+    page.on("request", request => {
+      if (request.url().includes("bun-tools.wasm")) toolsDownloads++;
+    });
+
+    // A visitor's ~/jsconfig.json (legacy decorators for bun run / bun test, and path aliases for
+    // bun build) must behave the same before and after clicking the check demo: nothing at ~ may shadow it.
+    await writeHome(page, {
+      "jsconfig.json": JSON.stringify({
+        compilerOptions: {
+          baseUrl: ".",
+          experimentalDecorators: true,
+          paths: { "@alias/*": ["./aliased/*"] },
+        },
+      }),
+      "aliased/value.ts": "export const value = 42;\n",
+      "visitor-decorator.ts": [
+        "export {};",
+        "let mode = 'none';",
+        "function tag(_target: unknown, ctx?: { kind?: string }) { mode = ctx === undefined ? 'legacy' : String(ctx.kind); }",
+        "@tag class Box {}",
+        "void Box;",
+        'console.log("DECORATOR:" + mode);',
+      ].join("\n") + "\n",
+      "visitor-decorator.test.ts": [
+        'import { expect, test } from "bun:test";',
+        "let mode = 'none';",
+        "function tag(_target: unknown, ctx?: { kind?: string }) { mode = ctx === undefined ? 'legacy' : String(ctx.kind); }",
+        "@tag class Box {}",
+        "void Box;",
+        'test("jsconfig legacy decorator", () => expect(mode).toBe("legacy"));',
+      ].join("\n") + "\n",
+      "visitor-alias.ts": 'import { value } from "@alias/value";\nconsole.log("ALIAS:" + value);\n',
+    });
+    const assertVisitorJsconfigWorks = async (outDir: string) => {
+      const ran = await run(page, "bun run visitor-decorator.ts", 30_000);
+      expect(ran.code, ran.output).toBe(0);
+      expect(ran.output).toContain("DECORATOR:legacy");
+      const tested = await run(page, "bun test visitor-decorator.test.ts", 30_000);
+      expect(tested.code, tested.output).toBe(0);
+      expect(tested.output).toContain("1 pass");
+      const built = await run(page, `bun build visitor-alias.ts --outdir ${outDir}`, 30_000);
+      expect(built.code, built.output).toBe(0);
+    };
+    await assertVisitorJsconfigWorks("alias-before");
+
+    // Clicking the bun check demo opens check-demo/src/check.ts, downloads bun-tools.wasm once,
+    // reports TS2322, and exits 1 without creating ~/tsconfig.json.
+    const diagnostic = "src/check.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.";
+    const failed = await runDemo(page, "check", [diagnostic]);
+    expect(failed).toContain(diagnostic);
+    expect(await page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as { editor: { path: string } }).editor.path)).toBe("/home/user/check-demo/src/check.ts");
+    expect((await run(page, "echo $?", 30_000)).output.trim()).toBe("1");
+    expect(toolsDownloads).toBe(1);
+    expect(await page.evaluate(async () => (await (Reflect.get(globalThis, "playground") as unknown as { fs: { lookup(path: string): Promise<unknown> } }).fs.lookup("/home/user/tsconfig.json")) ?? null)).toBeNull();
+    await assertVisitorJsconfigWorks("alias-after");
+
+    // A visitor's own clean ~/tsconfig.json must stay untouched and must not override the demo's project.
+    const visitorTsconfig = JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, include: ["visitor-clean.ts"] });
+    await writeHome(page, {
+      "tsconfig.json": visitorTsconfig,
+      "visitor-clean.ts": "export const ok: number = 1;\n",
+    });
+    const visitorCheck = await run(page, "bun check", 30_000);
+    expect(visitorCheck.code, visitorCheck.output).toBe(0);
+    expect(visitorCheck.output).toContain("No type errors");
+    await page.locator('.demo[data-demo="check"]').click();
+    await page.waitForFunction(expected => {
+      const api = Reflect.get(globalThis, "playground") as unknown as PageApi;
+      if (api.shell.running || document.querySelector("#run")?.getAttribute("data-state") !== "run") return false;
+      const buffer = api.term.buffer.active;
+      let text = "";
+      for (let row = 0; row < buffer.length; row++) text += buffer.getLine(row)?.translateToString(true) ?? "";
+      return text.includes(expected) && !text.includes("No type errors");
+    }, diagnostic, { timeout: HANG_MS });
+    expect((await run(page, "echo $?", 30_000)).output.trim()).toBe("1");
+    expect(await readText(page, "/home/user/tsconfig.json")).toBe(visitorTsconfig);
+    expect(toolsDownloads).toBe(1);
+
+    // Direct `bun check --cwd check-demo` reports the same diagnostic and exits 1 without redownloading tools.
+    const plain = await run(page, "bun check --cwd check-demo", 30_000);
+    expect(plain.code, plain.output).toBe(1);
+    expect(plain.output).toContain(diagnostic);
+    expect(toolsDownloads).toBe(1);
+
+    // Fixing check-demo/src/check.ts in the editor and rerunning the demo clears the error and exits 0.
+    const fixed = "export const total: number = 3;\n";
+    await setEditorText(page, fixed);
+    const passed = await runDemo(page, "check", ["No type errors"]);
+    expect(passed).not.toContain("TS2322");
+    expect(await readText(page, "/home/user/check-demo/src/check.ts")).toBe(fixed);
+    expect((await run(page, "echo $?", 30_000)).output.trim()).toBe("0");
+    expect(toolsDownloads).toBe(1);
+
+    // Pressing Run while check-demo/src/check.ts is open also runs bun check rather than bun run.
+    await setEditorText(page, 'export const total: number = "four";\n');
+    await page.locator("#run").click();
+    const rerun = await waitForOutput(page, "check", [diagnostic]);
+    expect(rerun).toContain(diagnostic);
+    expect((await run(page, "echo $?", 30_000)).output.trim()).toBe("1");
+
+    // Restoring a deleted check-demo/tsconfig.json keeps the visitor's fixed check-demo/src/check.ts and works from another cwd.
+    await setEditorText(page, fixed);
+    expect((await run(page, "rm check-demo/tsconfig.json && cd /tmp", 30_000)).code).toBe(0);
+    await page.locator('.demo[data-demo="check"]').click();
+    await page.waitForFunction(() => {
+      const api = Reflect.get(globalThis, "playground") as unknown as PageApi;
+      if (api.shell.running || document.querySelector("#run")?.getAttribute("data-state") !== "run") return false;
+      const buffer = api.term.buffer.active;
+      let text = "";
+      for (let row = 0; row < buffer.length; row++) text += buffer.getLine(row)?.translateToString(true) ?? "";
+      return text.includes("No type errors") && !text.includes("TS2322");
+    }, undefined, { timeout: HANG_MS });
+    expect((await run(page, "echo $?", 30_000)).output.trim()).toBe("0");
+    expect(await readText(page, "/home/user/check-demo/src/check.ts")).toBe(fixed);
+    expect(await readText(page, "/home/user/check-demo/tsconfig.json")).toBe(examples["check-demo/tsconfig.json"]!);
+    expect(toolsDownloads).toBe(1);
   } finally {
     await context.close();
   }

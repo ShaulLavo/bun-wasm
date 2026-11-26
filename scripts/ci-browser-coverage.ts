@@ -26,6 +26,7 @@ function groupForBatch(name: string): string {
     case "11-multitab": return "storage";
     case "21-subprocess-aliases":
     case "23-engine-interruption": return "runtime";
+    case "12-playground-demos":
     case "20-installer-links":
     case "22-preview-websocket-headers":
     case "24-worker-modules":
