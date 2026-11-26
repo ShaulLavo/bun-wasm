@@ -1638,7 +1638,10 @@ fn next_records(f: &mut Fixture) -> Result<(i32, Vec<(u8, Option<String>)>), (i3
     if errno != 0 {
         return Err((errno, id));
     }
-    Ok((id, decode_records(f.bytes(4096, f.word(64) as usize).to_vec())))
+    Ok((
+        id,
+        decode_records(f.bytes(4096, f.word(64) as usize).to_vec()),
+    ))
 }
 
 fn decode_records(mut bytes: Vec<u8>) -> Vec<(u8, Option<String>)> {
@@ -1770,11 +1773,24 @@ fn runtime_fs_watch_next_reports_each_ready_watch_with_its_id() {
         ids.push(f.word(132));
     }
     assert_eq!(next_records(&mut f), Err((6, 0)), "nothing pending yet");
-    let next = |f: &mut Fixture, args: (i32, i32, i32, i32)| f.call("runtime_fs", "watch_next", args);
-    assert_eq!(next(&mut f, (64, 4096, 2048, 64)), 28, "id and length overlap");
-    assert_eq!(next(&mut f, (4100, 4096, 2048, 64)), 28, "id inside the buffer");
+    let next =
+        |f: &mut Fixture, args: (i32, i32, i32, i32)| f.call("runtime_fs", "watch_next", args);
+    assert_eq!(
+        next(&mut f, (64, 4096, 2048, 64)),
+        28,
+        "id and length overlap"
+    );
+    assert_eq!(
+        next(&mut f, (4100, 4096, 2048, 64)),
+        28,
+        "id inside the buffer"
+    );
     assert_eq!(next(&mut f, (60, 65_530, 2048, 64)), 21, "buffer span");
-    assert_eq!(f.call("runtime_fs", "watch_read", (ids[0], 4096, 2048, 4100)), 28, "watch_read buffer and length overlap");
+    assert_eq!(
+        f.call("runtime_fs", "watch_read", (ids[0], 4096, 2048, 4100)),
+        28,
+        "watch_read buffer and length overlap"
+    );
     std::fs::write(root.join("app/b/page.tsx"), "1").unwrap();
     std::fs::write(root.join("app/a/page.tsx"), "1").unwrap();
     let wanted = (2, Some("page.tsx".to_string()));
@@ -1794,7 +1810,11 @@ fn runtime_fs_watch_next_reports_each_ready_watch_with_its_id() {
     for id in ids {
         assert_eq!(f.call("runtime_fs", "watch_close", id), 0);
     }
-    assert_eq!(next_records(&mut f), Err((6, 0)), "closed watches report nothing");
+    assert_eq!(
+        next_records(&mut f),
+        Err((6, 0)),
+        "closed watches report nothing"
+    );
 }
 
 #[test]

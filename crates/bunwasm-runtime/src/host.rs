@@ -811,19 +811,21 @@ pub enum WatchNext {
 /// One `watch_next`: the next ready watch's records, read in the provider's batched drain
 /// instead of one read per watch. A first record larger than the buffer grows it and retries.
 pub fn fs_watch_next() -> WatchNext {
-    WATCH_BUFFER.with_borrow_mut(|buf| loop {
-        let (mut id, mut len) = (0u32, 0u32);
-        let errno = proc_call!(runtime_fs::watch_next(
-            ptr_mut(std::slice::from_mut(&mut id)),
-            ptr_mut(buf.as_mut_slice()),
-            buf.len() as i32,
-            ptr_mut(std::slice::from_mut(&mut len))
-        ));
-        match errno {
-            0 => return WatchNext::Records(id, buf[..len as usize].to_vec()),
-            WATCH_NOBUFS if id != 0 && len as usize > buf.len() => buf.resize(len as usize, 0),
-            _ if id != 0 => return WatchNext::WatchError(id, errno),
-            _ => return WatchNext::Error(errno),
+    WATCH_BUFFER.with_borrow_mut(|buf| {
+        loop {
+            let (mut id, mut len) = (0u32, 0u32);
+            let errno = proc_call!(runtime_fs::watch_next(
+                ptr_mut(std::slice::from_mut(&mut id)),
+                ptr_mut(buf.as_mut_slice()),
+                buf.len() as i32,
+                ptr_mut(std::slice::from_mut(&mut len))
+            ));
+            match errno {
+                0 => return WatchNext::Records(id, buf[..len as usize].to_vec()),
+                WATCH_NOBUFS if id != 0 && len as usize > buf.len() => buf.resize(len as usize, 0),
+                _ if id != 0 => return WatchNext::WatchError(id, errno),
+                _ => return WatchNext::Error(errno),
+            }
         }
     })
 }

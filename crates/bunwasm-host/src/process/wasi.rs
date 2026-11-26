@@ -1096,7 +1096,10 @@ fn install_watches(
             ) else {
                 return Ok(FAULT);
             };
-            if overlaps(&id_word, &output) || overlaps(&buffer, &id_word) || overlaps(&buffer, &output) {
+            if overlaps(&id_word, &output)
+                || overlaps(&buffer, &id_word)
+                || overlaps(&buffer, &output)
+            {
                 return Ok(INVAL);
             }
             store_word(&memory, &mut caller, id_word.start, 0)?;
