@@ -134,6 +134,30 @@ const cases: Record<string, Case> = {
     },
     expected: "true 2 true 2\n",
   },
+  // Resolutions are shared by importers in one directory only: a nested package stays apart.
+  "per-directory resolutions": {
+    files: {
+      "main.mjs": "import a from './a/x.mjs'; import b from './b/y.mjs'; import c from './b/z.mjs'; console.log(a, b, c);",
+      "a/x.mjs": "import v from 'pkg'; export default v;",
+      "a/node_modules/pkg/package.json": "{\"name\":\"pkg\",\"main\":\"index.mjs\"}",
+      "a/node_modules/pkg/index.mjs": "export default 'nested';",
+      "b/y.mjs": "import v from 'pkg'; import w from './w.mjs'; export default v + w;",
+      "b/z.mjs": "import v from 'pkg'; import w from './w.mjs'; export default w + v;",
+      "b/w.mjs": "export default '!';",
+      "node_modules/pkg/package.json": "{\"name\":\"pkg\",\"main\":\"index.mjs\"}",
+      "node_modules/pkg/index.mjs": "export default 'top';",
+    },
+    expected: "nested top! !top\n",
+  },
+  // A graph's reused resolutions never answer a later import(): after a mock or an unlink,
+  // the same specifier resolves live.
+  "mock then import()": {
+    files: {
+      "main.mjs": "import { mock } from 'bun:test'; import dep from './dep.mjs'; mock.module('/dep.mjs', () => ({ default: 'replacement' })); const again = await import('./dep.mjs'); console.log(dep, again.default);",
+      "dep.mjs": "export default 'original';",
+    },
+    expected: "original replacement\n",
+  },
   // CommonJS failure: the import rejects with the thrown error, and a retry runs it again.
   "commonjs failure and retry": {
     files: {
@@ -201,6 +225,35 @@ export function testModuleRecordControls(wasm: string): void {
       rmSync(scratch, { recursive: true, force: true });
     }
   }, 300000);
+
+  // Records only, each run on fresh files (the cases unlink them). After an unlink, import()
+  // of a specifier the static graph found resolves live and fails. A CommonJS module runs
+  // while its importer links (the store instead loads the whole graph first): a path it
+  // removes is gone for the requests linked after it, even though the graph's preparation
+  // found that path.
+  test("module records resolve live after a path change", () => {
+    const scratch = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-record-path-change-"));
+    const run = (name: string, files: Record<string, string>) => {
+      const directory = join(scratch, name);
+      mkdirSync(directory);
+      for (const [file, text] of Object.entries(files)) writeFileSync(join(directory, file), `${text}\n`);
+      const child = runCase(directory, wasm, "records", ["run", "/main.mjs"]);
+      return { stdout: child.stdout, status: child.status, missing: child.stderr.includes("Cannot find module './dep.mjs' from '/main.mjs'") };
+    };
+    try {
+      expect(run("unlink", {
+        "main.mjs": "import dep from './dep.mjs'; import { unlinkSync } from 'node:fs'; unlinkSync('/dep.mjs'); try { await import('./dep.mjs'); console.log(dep, 'loaded'); } catch { console.log(dep, 'missing'); }",
+        "dep.mjs": "export default 'original';",
+      })).toEqual({ stdout: "original missing\n", status: 0, missing: false });
+      expect(run("commonjs", {
+        "main.mjs": "import './mutate.cjs'; import value from './dep.mjs'; console.log(value);",
+        "mutate.cjs": "require('node:fs').unlinkSync('/dep.mjs');",
+        "dep.mjs": "export default 'deleted';",
+      })).toEqual({ stdout: "", status: 1, missing: true });
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 60000);
 
   // D2: function source may differ in formatting and literal spelling, never in structure.
   test("module records keep equality operands where they were written", () => {

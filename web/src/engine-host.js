@@ -754,6 +754,7 @@ class EngineHost {
       keys: wrapperKeys,
       initMeta: (key, meta) => host.internal.initImportMeta(meta, key, key === host.internal.mainPath),
       resolve: (specifier, referrer) => host.native.resolveImport(specifier, referrer, "inferred"),
+      generation: () => host.native.resolverGeneration(),
       active: () => !host.exited,
       track: operation => then(host.track(operation, then), value => value),
     }, this.evalPolyfill("esm_loader"), then);

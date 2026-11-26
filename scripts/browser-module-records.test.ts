@@ -67,6 +67,7 @@ test("actual createRecords uses import-only resolution for graph preparation and
         if (specifier !== token || referrer !== "/entry.mjs" || mode !== "inferred") throw new Error("Unexpected logical request");
         return logical;
       },
+      resolverGeneration: () => 0,
       hostModuleRecord(key: keyof typeof records) { return { format: "esm", record: records[key] }; },
     },
     internal: { mainPath: "/entry.mjs", initImportMeta() {} },
@@ -83,6 +84,10 @@ test("actual createRecords uses import-only resolution for graph preparation and
   try {
     const namespace = await loaded.importKey("/entry.mjs");
     expect(namespace.default).toBe("exact text");
-    expect(calls.filter(call => call.startsWith(token)).length).toBeGreaterThanOrEqual(2);
+    // Preparation resolves the edge once, and linking that graph reuses it.
+    expect(calls).toEqual([`${token}|/entry.mjs|inferred`]);
+    // The next preparation resolves afresh: nothing outlives the graph that made it.
+    expect(await loaded.importKey("/entry.mjs")).toBe(namespace);
+    expect(calls).toEqual([`${token}|/entry.mjs|inferred`, `${token}|/entry.mjs|inferred`]);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 });

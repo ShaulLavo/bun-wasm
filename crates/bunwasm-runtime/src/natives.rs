@@ -1782,6 +1782,11 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         }
     });
     let st = state.clone();
+    // The browser host reuses import resolutions within one graph preparation while this holds.
+    t.add("resolverGeneration", move |_| {
+        Ok(Val::Num(st.resolver.generation() as f64))
+    });
+    let st = state.clone();
     t.add("resolveImport", move |a| {
         use crate::import_requests::{ImportMode, ImportRequest};
         let mode = match a.str(2)? {

@@ -21,7 +21,8 @@ declare namespace BunWasm {
     gt(): string;
   };
   type RecordSessionBindings = {
-    resolve(specifier: string, referrer: string): string;
+    /** `scope` is what `prepare` fulfilled with, passed only while that graph links its static requests. */
+    resolve(specifier: string, referrer: string, scope?: unknown): string;
     resolveImport?(specifier: string, referrer: string, mode: BunWasm.ImportMode): string;
     load(name: string): { record: ModuleRecord } | { namespace: unknown; default: unknown };
     initMeta(name: string, meta: object): void;
@@ -37,7 +38,7 @@ declare namespace BunWasm {
     /** Keeps the host's event loop alive while a loader-started dynamic import is pending. */
     track?(operation: Promise<object>): Promise<object>;
     /** Readies `name` and its static imports for `load`, for a host that evaluates records asynchronously. */
-    prepare?(name: string): Promise<void>;
+    prepare?(name: string): Promise<unknown>;
   };
 
   interface HotDiagnostic {

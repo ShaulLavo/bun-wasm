@@ -254,9 +254,14 @@ type RecordSessionBindings = BunWasm.RecordSessionBindings;
     return mod;
   }
 
+  // What `native.prepare` fulfilled with for the graph `loadGraph` is linking now, handed to
+  // `native.resolve` for that graph's static requests only. A nested graph (a CommonJS module
+  // requiring an ES module mid-link) links with its own, and evaluation sees none.
+  let linkScope: unknown;
+
   function load(specifier: string, referrer: string, added: Mod[]): Mod {
     stillActive();
-    const name = native.resolve(specifier, referrer);
+    const name = linkScope === undefined ? native.resolve(specifier, referrer) : native.resolve(specifier, referrer, linkScope);
     return loadName(name, added);
   }
 
@@ -264,8 +269,10 @@ type RecordSessionBindings = BunWasm.RecordSessionBindings;
     return mapGet(registry, name) ?? register(name, added);
   }
 
-  function loadGraph(start: (added: Mod[]) => Mod): Mod {
+  function loadGraph(start: (added: Mod[]) => Mod, scope?: unknown): Mod {
     const added: Mod[] = [];
+    const outer = linkScope;
+    linkScope = scope;
     try {
       const mod = start(added);
       link(mod);
@@ -273,6 +280,8 @@ type RecordSessionBindings = BunWasm.RecordSessionBindings;
     } catch (error) {
       for (let i = 0; i < added.length; i++) forget(added[i]!);
       throw error;
+    } finally {
+      linkScope = outer;
     }
   }
 
@@ -694,7 +703,7 @@ type RecordSessionBindings = BunWasm.RecordSessionBindings;
     return track(requests.request<object>(specifier, options, (text, mode, resolve, reject) => {
       if (!active()) return;
       let name: string;
-      let ready: Promise<void>;
+      let ready: Promise<unknown>;
       try {
         name = native.resolveImport ? native.resolveImport(text, referrer, mode) : mode === "text" ? requests.resolve(text, referrer, mode) : native.resolve(text, referrer);
         ready = native.prepare === undefined ? resolvePromise() : native.prepare(name);
@@ -702,13 +711,13 @@ type RecordSessionBindings = BunWasm.RecordSessionBindings;
         const mocked = (globalThis as { __bunwasm_mockImportReady?: (name: string) => Promise<void> | undefined }).__bunwasm_mockImportReady?.(name);
         if (mocked) {
           const prepared = ready;
-          ready = new NativePromise<void>((settle, fail) => then(mocked, () => then(prepared, () => settle(), fail), fail));
+          ready = new NativePromise<unknown>((settle, fail) => then(mocked, () => then(prepared, settle, fail), fail));
         }
       } catch (error) {
         reject(error);
         return;
       }
-      then(ready, () => then(settleGraph(added => loadName(name, added)), value => resolve(value as object), reject), reject);
+      then(ready, scope => then(settleGraph(added => loadName(name, added), scope), value => resolve(value as object), reject), reject);
     }));
   }
 
@@ -717,10 +726,10 @@ type RecordSessionBindings = BunWasm.RecordSessionBindings;
     configurable: true,
   }));
 
-  function settleGraph(start: (added: Mod[]) => Mod): Promise<object> {
+  function settleGraph(start: (added: Mod[]) => Mod, scope?: unknown): Promise<object> {
     if (!active()) return abandoned();
     try {
-      return settleNamespace(loadGraph(start));
+      return settleNamespace(loadGraph(start, scope));
     } catch (error) {
       return error === EXITED || !active() ? abandoned() : rejectPromise(error);
     }
@@ -748,8 +757,8 @@ type RecordSessionBindings = BunWasm.RecordSessionBindings;
     importModule(specifier: string, referrer: string): Promise<object> {
       return settleGraph(added => load(specifier, referrer, added));
     },
-    importName(name: string): Promise<object> {
-      return settleGraph(added => loadName(name, added));
+    importName(name: string, scope?: unknown): Promise<object> {
+      return settleGraph(added => loadName(name, added), scope);
     },
     dynamicImport,
     newSession,
