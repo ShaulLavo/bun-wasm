@@ -1181,8 +1181,9 @@
   // [exports, default] for importing a builtin. Builtins marked __esModule
   // name their own default export.
   internal.builtinImport = function builtinImport(id) {
-    const exports = esmShapedBuiltins.has(id) ? internal.mockImport(id) : internal.builtin(id);
-    const named = esmShapedBuiltins.has(id) || (exports !== null && typeof exports === "object" && exports.__esModule === true);
+    const shaped = esmShapedBuiltins.has(id);
+    const exports = shaped ? internal.mockImport(id) : internal.builtin(id);
+    const named = shaped || (exports !== null && typeof exports === "object" && exports.__esModule === true);
     return [exports, named ? exports.default : exports];
   };
 

@@ -793,13 +793,17 @@
   let factoryChain;
   const chainStorage = () => (factoryChain ??= new (internal.builtin("node:async_hooks").AsyncLocalStorage)());
 
-  // Whether waiting on mock `key` from code in `chain` would wait on that chain itself: `key` is
-  // in it, or its factory's chain is waiting, directly or through other mocks, on one that is.
+  // Waits made inside factory chains: `from` is the chain's mocks, `to` the mock an import of
+  // it waits on.
+  const chainWaits = new Set();
+
+  // Whether waiting on mock `key` from `chain` would wait on the chain itself: `key` is in it, or
+  // its factory's chain waits, directly or through other mocks, on one that is. A cycle.
   function closesCycle(key, chain, seen = new Set()) {
     if (chain.has(key)) return true;
     seen.add(key);
-    for (const other of moduleMocks.get(key)?.waitingOn ?? []) {
-      if (!seen.has(other) && closesCycle(other, chain, seen)) return true;
+    for (const wait of chainWaits) {
+      if (wait.from.has(key) && !seen.has(wait.to) && closesCycle(wait.to, chain, seen)) return true;
     }
     return false;
   }
@@ -808,41 +812,41 @@
     return chain !== undefined && closesCycle(key, chain);
   };
 
-  // Records, while a factory's chain waits, which mocks it waits on.
-  function markWaiting(chain, keys, waiting) {
-    for (const key of chain) {
-      const entry = moduleMocks.get(key);
-      for (const other of keys) if (entry) entry.waitingOn[waiting ? "add" : "delete"](other);
-    }
+  // A live mock's entry: Bun.plugin.clearAll() removes them all.
+  function liveMock(key) {
+    if (native.mockTarget(key) != null) return moduleMocks.get(key);
+    moduleMocks.delete(key);
+    return undefined;
+  }
+
+  // An import made inside a factory's chain waits only on a mock it imports directly, unless that
+  // closes a cycle, whose import then sees an empty module, as in Bun. A plain module's static
+  // imports of pending async mocks are not waited for (docs/bun-patches/bun-test-mock-module.md).
+  function chainImportReady(name, chain) {
+    const target = liveMock(name);
+    if (!target || closesCycle(name, chain)) return undefined;
+    const pending = target.settle();
+    if (!pending) return undefined;
+    const wait = { from: chain, to: name };
+    chainWaits.add(wait);
+    return Promise.allSettled([pending]).then(() => { chainWaits.delete(wait); });
   }
 
   // Before a module graph links (each test file, preload and dynamic import), settle async
   // factories so static imports of them link with their values, as in Bun: every mock whose
   // factory is an async function, plus `name` itself when it is a mock with a thenable result.
-  // The imports a factory makes never wait on a mock that is waiting on that factory, so two
-  // factories that import each other's targets see an empty module, as in Bun, not a deadlock.
+  // Imports made inside a factory's chain go through chainImportReady.
   // A rejected factory is reported where its module loads, not here.
   function mockImportReady(name) {
-    const waits = [];
-    const keys = [];
-    for (const [key, entry] of moduleMocks) {
-      // Bun.plugin.clearAll() removed it.
-      if (native.mockTarget(key) == null) {
-        moduleMocks.delete(key);
-        continue;
-      }
-      if (inCycle(key)) continue;
-      const pending = key === name || entry.async ? entry.settle() : undefined;
-      if (!pending) continue;
-      waits.push(pending);
-      keys.push(key);
-    }
-    if (!waits.length) return undefined;
     const chain = factoryChain?.getStore();
-    if (chain) markWaiting(chain, keys, true);
-    return Promise.allSettled(waits).then(() => {
-      if (chain) markWaiting(chain, keys, false);
-    });
+    if (chain) return chainImportReady(name, chain);
+    const waits = [];
+    for (const key of Array.from(moduleMocks.keys())) {
+      const entry = liveMock(key);
+      const pending = entry && (key === name || entry.async) ? entry.settle() : undefined;
+      if (pending) waits.push(pending);
+    }
+    return waits.length ? Promise.allSettled(waits).then(() => undefined) : undefined;
   }
 
   function installMockImports() {
@@ -912,7 +916,6 @@
     let settling; // the wait for a thenable result
     const entry = {
       target,
-      waitingOn: new Set(),
       async: Object.getPrototypeOf(factory) === AsyncFunctionPrototype,
       // import() of a thenable result uses what it settles to.
       settle() {

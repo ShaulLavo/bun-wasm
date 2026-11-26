@@ -8,7 +8,7 @@ mkdirSync(join(here, "mods/a"), { recursive: true });
 mkdirSync(join(here, "mods/b"), { recursive: true });
 mkdirSync(join(here, "node_modules/dual"), { recursive: true });
 writeFileSync(join(here, "mods/target.ts"), `export const name = "real";\n`);
-for (const name of ["async", "slow", "thenable", "defaults", "pending", "linked", "rejects", "importer", "cycle-a", "cycle-b", "late", "shared"]) writeFileSync(join(here, `mods/${name}.ts`), `export const name = "real-${name}";\n`);
+for (const name of ["async", "slow", "thenable", "defaults", "pending", "linked", "rejects", "importer", "cycle-a", "cycle-b", "late", "shared", "leaf", "dep-a", "dep-b"]) writeFileSync(join(here, `mods/${name}.ts`), `export const name = "real-${name}";\n`);
 writeFileSync(join(here, "mods/b/probe.ts"), `export const load = () => import("./missing.ts").then(m => m.name, () => "unresolved");\n`);
 const importer = (target: string) => `import value, { name } from "./${target}.ts";\nimport * as ns from "./${target}.ts";\nexport const seen = [value, name, ns.default].join(" ");\n`;
 for (const target of ["defaults", "linked", "rejects"]) writeFileSync(join(here, `mods/uses-${target}.ts`), importer(target));
@@ -140,6 +140,13 @@ test("concurrent imports of a slow async factory both wait", async () => {
   });
   const both = await Promise.all([import("./mods/shared.ts"), import("./mods/shared.ts")]);
   expect(both.map(mod => mod.name)).toEqual(["shared-value", "shared-value"]);
+});
+
+test("a factory waiting on another mock's factory is not a cycle", async () => {
+  mock.module("./mods/dep-a.ts", async () => ({ name: "a+" + (await import("./mods/leaf.ts")).name }));
+  mock.module("./mods/dep-b.ts", async () => ({ name: "b+" + (await import("./mods/dep-a.ts")).name }));
+  const both = await Promise.all([import("./mods/dep-a.ts"), import("./mods/dep-b.ts")]);
+  expect(both.map(mod => mod.name)).toEqual(["a+real-leaf", "b+a+real-leaf"]);
 });
 
 test("mock.module argument errors", () => {

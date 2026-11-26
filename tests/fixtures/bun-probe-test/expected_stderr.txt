@@ -15,6 +15,7 @@ module-mocks.test.ts:
 (pass) async factories that import each other's targets do not deadlock
 (pass) a factory started by require() can import after awaiting
 (pass) concurrent imports of a slow async factory both wait
+(pass) a factory waiting on another mock's factory is not a cycle
 (pass) mock.module argument errors
 
 probe.test.ts:
@@ -42,9 +43,9 @@ probe.test.ts:
 1 tests todo:
 (todo) async and modifiers > todo later
 
- 30 pass
+ 31 pass
  1 skip
  1 todo
  0 fail
- 2 snapshots, 66 expect() calls
-Ran 32 tests across 2 files. [TIME]
+ 2 snapshots, 67 expect() calls
+Ran 33 tests across 2 files. [TIME]
