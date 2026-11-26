@@ -63,6 +63,10 @@ function hostContext(native: boolean): Context {
       fsWatchDropFd: () => {},
       fsWatchReady: () => state.watches.some(records => records.length > 0),
       fsWatchRead: id => state.watches[id - 40].shift() ?? -6,
+      fsWatchNext: () => {
+        const index = state.watches.findIndex(records => records.length > 0);
+        return index < 0 ? -6 : [40 + index, state.watches[index].shift()];
+      },
       fsWatchClose: id => { state.closed.push(id); return 0; },
       procRead: () => { const next = state.reads.shift() ?? -6; if (next instanceof Error) throw next; return next; },
       procWrite: (_fd, bytes) => state.writable ? bytes.length : -6,

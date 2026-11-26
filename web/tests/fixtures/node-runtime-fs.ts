@@ -32,7 +32,7 @@ interface WatchExports {
   read(id: number, buf: number, len: number, out: number): number;
   close(id: number): number;
 }
-const EBADF = 8, EFAULT = 21, EINVAL = 28, ENOTSUP = 58, PAGE = 65536, UNTOUCHED = 0xdeadbeef;
+const EAGAIN = 6, EBADF = 8, EFAULT = 21, EINVAL = 28, ENOTSUP = 58, PAGE = 65536, UNTOUCHED = 0xdeadbeef;
 const scratch = mkdtempSync(join(process.argv[2] ?? tmpdir(), "bun-wasm-node-runtime-fs-"));
 const owned: ReturnType<typeof createNodeProcess>[] = [];
 function host() {
@@ -49,7 +49,7 @@ try {
   let instance: WebAssembly.Instance | undefined;
   const { proc } = created.install(imports, () => instance!);
   instance = new WebAssembly.Instance(guest, imports);
-  assert.deepEqual(Object.keys(imports.runtime_fs!).toSorted(), ["path_permissions_get", "watch_close", "watch_open", "watch_read", "watch_ready"]);
+  assert.deepEqual(Object.keys(imports.runtime_fs!).toSorted(), ["path_permissions_get", "watch_close", "watch_next", "watch_open", "watch_read", "watch_ready"]);
   const permissions = imports.runtime_fs!.path_permissions_get;
   if (typeof permissions !== "function") throw new Error("missing path_permissions_get import");
   assert.equal(permissions(-1, -1, -1, -1, -1), ENOTSUP);
@@ -85,6 +85,13 @@ try {
   assert.deepEqual([open(3, 2), open(pipe, 0), open(99, 0), open(3, 0, PAGE - 2)], [EINVAL, EINVAL, EBADF, EFAULT]);
   assert.deepEqual([guestFs.read(1, 512, 64, 128), guestFs.read(1, PAGE - 8, 64, 128), guestFs.read(1, 512, 64, PAGE - 2)], [EBADF, EFAULT, EFAULT]);
   assert.equal(guestFs.close(1), EBADF);
+  // watch_next validates its spans, then reports nothing ready with out_id 0.
+  const next = imports.runtime_fs!.watch_next as (outId: number, buf: number, len: number, out: number) => number;
+  view().setUint32(64, UNTOUCHED, true);
+  assert.equal(next(64, 512, 64, 128), EAGAIN);
+  assert.equal(view().getUint32(64, true), 0, "watch_next clears out_id when nothing is ready");
+  assert.deepEqual([next(PAGE - 2, 512, 64, 128), next(64, PAGE - 8, 64, 128), next(64, 512, 64, 64), next(520, 512, 64, 128)],
+    [EFAULT, EFAULT, EINVAL, EINVAL]);
 
   // A guest that fails before wasi.start() still releases its process host; the unstarted Node
   // WASI keeps its preopen, so release must not surface ERR_WASI_NOT_STARTED.

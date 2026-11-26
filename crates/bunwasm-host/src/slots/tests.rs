@@ -1628,7 +1628,20 @@ fn watch_records(f: &mut Fixture, id: i32) -> Result<Vec<(u8, Option<String>)>, 
     if errno != 0 {
         return Err(errno);
     }
-    let mut bytes = f.bytes(4096, f.word(64) as usize).to_vec();
+    Ok(decode_records(f.bytes(4096, f.word(64) as usize).to_vec()))
+}
+
+/// Reads one `runtime_fs.watch_next` result: the ready id and its records, or (errno, id).
+fn next_records(f: &mut Fixture) -> Result<(i32, Vec<(u8, Option<String>)>), (i32, i32)> {
+    let errno = f.call("runtime_fs", "watch_next", (60, 4096, 2048, 64));
+    let id = f.word(60);
+    if errno != 0 {
+        return Err((errno, id));
+    }
+    Ok((id, decode_records(f.bytes(4096, f.word(64) as usize).to_vec())))
+}
+
+fn decode_records(mut bytes: Vec<u8>) -> Vec<(u8, Option<String>)> {
     let mut records = Vec::new();
     while !bytes.is_empty() {
         let length = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
@@ -1644,7 +1657,7 @@ fn watch_records(f: &mut Fixture, id: i32) -> Result<Vec<(u8, Option<String>)>, 
         records.push((bytes[0], name));
         bytes.drain(..stride);
     }
-    Ok(records)
+    records
 }
 
 /// Sleep in the network poll until a drain of the watch reports `name` as a rename.
@@ -1739,6 +1752,48 @@ fn runtime_fs_watches_follow_an_opened_directory_and_wake_the_network_poll() {
     assert_eq!(f.call("runtime_fs", "watch_close", id), 0);
     assert_eq!(f.call("runtime_fs", "watch_close", id), 8);
     assert_eq!(watch_records(&mut f, id), Err(8));
+}
+
+#[test]
+fn runtime_fs_watch_next_reports_each_ready_watch_with_its_id() {
+    let root =
+        std::env::temp_dir().join(format!("bun-wasm-runtime-fs-next-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("app/a")).unwrap();
+    std::fs::create_dir_all(root.join("app/b")).unwrap();
+    let _scratch = Scratch(root.clone());
+    let mut f = Fixture::at(&root);
+    let mut ids = Vec::new();
+    for path in [b"app/a", b"app/b"] {
+        let directory = open_read_only(&mut f, path);
+        assert_eq!(f.call("runtime_fs", "watch_open", (directory, 0, 132)), 0);
+        ids.push(f.word(132));
+    }
+    assert_eq!(next_records(&mut f), Err((6, 0)), "nothing pending yet");
+    let next = |f: &mut Fixture, args: (i32, i32, i32, i32)| f.call("runtime_fs", "watch_next", args);
+    assert_eq!(next(&mut f, (64, 4096, 2048, 64)), 28, "id and length overlap");
+    assert_eq!(next(&mut f, (4100, 4096, 2048, 64)), 28, "id inside the buffer");
+    assert_eq!(next(&mut f, (60, 65_530, 2048, 64)), 21, "buffer span");
+    std::fs::write(root.join("app/b/page.tsx"), "1").unwrap();
+    std::fs::write(root.join("app/a/page.tsx"), "1").unwrap();
+    let wanted = (2, Some("page.tsx".to_string()));
+    let mut seen = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while seen.len() < 2 {
+        assert!(std::time::Instant::now() < deadline, "saw only {seen:?}");
+        f.store.data_mut().net.poll(1000);
+        while let Ok((id, records)) = next_records(&mut f) {
+            if records.contains(&wanted) && !seen.contains(&id) {
+                seen.push(id);
+            }
+        }
+    }
+    seen.sort_unstable();
+    assert_eq!(seen, ids);
+    for id in ids {
+        assert_eq!(f.call("runtime_fs", "watch_close", id), 0);
+    }
+    assert_eq!(next_records(&mut f), Err((6, 0)), "closed watches report nothing");
 }
 
 #[test]

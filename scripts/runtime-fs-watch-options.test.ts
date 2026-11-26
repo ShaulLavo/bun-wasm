@@ -22,6 +22,7 @@ function watchOptions() {
       fsWatchOpenFd() { return 30 + effects.opens++; },
       fsWatchDropFd() {},
       fsWatchRead: () => -6,
+      fsWatchNext: () => -6,
       fsWatchClose() { effects.closes++; return 0; },
     },
     require(name: string) {
