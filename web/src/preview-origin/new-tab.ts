@@ -28,6 +28,14 @@ export function newTabLink(wrapper: string, destination: string | URL | undefine
   return wrapperLink(wrapper, url.href);
 }
 
+/**
+ * The wrapper page's URL for a `window.open(url, target)` call, or null when the call is left as
+ * the app wrote it. A missing or empty target means a new tab, as `window.open` itself reads it.
+ */
+export function openLink(wrapper: string, url: string | URL | undefined, target: string | undefined, frameNamed: (name: string) => boolean, base: string, origin: string): string | null {
+  return namesNewTab(target || "_blank", frameNamed) ? newTabLink(wrapper, url, base, origin) : null;
+}
+
 function frameNamed(name: string): boolean {
   if (window.name === name) return true;
   return Array.from(document.querySelectorAll("iframe[name], frame[name], object[name]")).some(frame => frame.getAttribute("name") === name);
@@ -52,7 +60,7 @@ function redirectOnce(anchor: HTMLAnchorElement | HTMLAreaElement, link: string)
 export function installNewTabs(wrapper: string): void {
   const nativeOpen = window.open;
   window.open = function (this: Window, url?: string | URL, target?: string, features?: string): WindowProxy | null {
-    const link = namesNewTab(target ?? "_blank", frameNamed) ? newTabLink(wrapper, url, document.baseURI, location.origin) : null;
+    const link = openLink(wrapper, url, target, frameNamed, document.baseURI, location.origin);
     return nativeOpen.call(this, link ?? url, target, features);
   };
   const onClick = (event: MouseEvent) => {

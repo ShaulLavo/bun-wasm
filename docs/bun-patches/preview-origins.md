@@ -17,8 +17,8 @@ user-facing behavior.
 | `web/src/preview-origin/sw-core.ts`, `sw-exchange.ts`, `sw.ts` | Preview-origin service worker |
 | `web/src/preview-origin/relay.ts`, `bootstrap.ts`, `frame-page.ts`, `frame-entry.ts` | Relay page, cold-load page, and new-tab wrapper |
 | `web/src/preview-origin/page-shim.ts`, `new-tab.ts` | Injected page script for cookies, service-worker guard, frame reports, and IDE-wrapped new tabs |
-| `web/src/preview-origin/frame-watch.ts` | IDE watcher that tracks when a preview frame settles |
-| `web/src/preview-origin/script-policy.ts` | Checks whether Content-Security-Policy headers admit the page script, using CSP Level 3 source matching |
+| `web/src/preview-origin/frame-watch.ts` | What a preview frame holds, as the relay page reads it for the IDE watcher |
+| `web/src/preview-origin/script-policy.ts` | Checks whether Content-Security-Policy headers admit the page script, using CSP Level 3 source matching and the http-to-https upgrade browsers apply to scheme and port together |
 | `web/src/preview-origin/host.ts`, `site/preview-worker.ts` | Static preview host |
 | `web/src/preview-origin/workspace-identity.ts` | Stored workspace preview identity |
 | `web/src/preview-html.ts` | Script insertion after the doctype, moved out of `web/src/sw-routing.ts` so both workers share it |
@@ -59,10 +59,12 @@ user-facing behavior.
 - Outside Chromium, a `MessagePort` has no close signal. The page pings the IDE tab, counting missed
   pings rather than elapsed time because browsers throttle hidden timers, and the IDE drops silent
   pages.
-- A frame settles on its `load` event only after the server sends the final response for that
-  navigation, following redirects. `load` also fires for blank, cold-load, and error pages, yet
-  plain-text responses and script-blocked pages have no other signal. Because the IDE matches
-  cross-origin frames only by URL, the owner tab broadcasts navigation answers for other tabs.
+- A frame settles on its `load` event only after the relay page of its origin finds a loaded
+  document of the server in that frame. `load` also fires for blank, cold-load, and error pages, yet
+  plain-text responses and script-blocked pages have no other signal. The relay page reads the frame
+  itself, so the answer is about one frame and the document it holds, not about a response for the
+  same URL. The origin's own pages carry `data-bunwasm-preview-page` so they are not mistaken for
+  the server's.
 - The worker inserts the page script tag only when it passes every `Content-Security-Policy` header
   on the response. A blocked tag triggers a violation report, and the preview must not weaken an
   app's policy.

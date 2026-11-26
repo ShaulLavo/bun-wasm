@@ -40,19 +40,48 @@ function pathMatches(pattern: string, pathname: string): boolean {
   return wanted.endsWith("/") ? pathname.startsWith(wanted) : pathname === wanted;
 }
 
-/** Whether a scheme source (`https:`) or host source (`https://*.example.com:443/dir/`) covers `url`. */
+/** How one part of a host source covers the URL: as written, by the http-to-https upgrade, for any value, or not. */
+type PartMatch = "exact" | "upgrade" | "any" | "none";
+
+/** A host source without a scheme takes the page's own, which is the URL's: the script is same-origin. */
+function hostSourceScheme(sourceScheme: string | undefined, url: URL): PartMatch {
+  if (sourceScheme === undefined) return "exact";
+  const scheme = `${sourceScheme.toLowerCase()}:`;
+  if (scheme === url.protocol) return "exact";
+  return scheme === "http:" && url.protocol === "https:" ? "upgrade" : "none";
+}
+
+/**
+ * `url.port` is empty for the scheme's default port. A source for port 80, or an http source that
+ * names no port, also covers the same host on 443: the port half of the http-to-https upgrade.
+ */
+function hostSourcePort(sourcePort: string | undefined, httpSource: boolean, url: URL): PartMatch {
+  if (sourcePort === "*") return "any";
+  const port = sourcePort ?? "";
+  if (port === url.port) return port === "" ? "any" : "exact";
+  const secureDefault = url.protocol === "https:" && (url.port === "" || url.port === "443");
+  if (secureDefault && (port === "80" || (httpSource && (port === "" || port === "443")))) return "upgrade";
+  return url.port === "" && port === DEFAULT_PORT[url.protocol] ? "exact" : "none";
+}
+
+/**
+ * Whether a scheme source (`https:`) or host source (`https://*.example.com:443/dir/`) covers `url`.
+ * Scheme and port upgrade together or not at all, as browsers apply it: `http://host:80` covers
+ * `https://host` (both upgrade), `https://host:80` does not (only the port would).
+ */
 function urlSourceMatches(source: string, url: URL): boolean {
   const scheme = /^([a-z][a-z0-9+.-]*):$/i.exec(source);
   if (scheme) return schemeMatches(scheme[1]!, url);
   const host = /^(?:([a-z][a-z0-9+.-]*):\/\/)?(\*|(?:\*\.)?[a-z0-9.-]+)(?::(\d+|\*))?(\/[^?#]*)?$/i.exec(source);
   if (!host) return false;
   const [, sourceScheme, sourceHost = "", sourcePort, sourcePath = ""] = host;
-  if (sourceScheme !== undefined && !schemeMatches(sourceScheme, url)) return false;
-  if (!hostMatches(sourceHost, url.hostname)) return false;
-  const port = url.port || DEFAULT_PORT[url.protocol] || "";
-  // Without a port a source means the default port of the scheme in use.
-  const portMatches = sourcePort === "*" || (sourcePort ?? DEFAULT_PORT[url.protocol]) === port;
-  return portMatches && pathMatches(sourcePath, url.pathname);
+  const schemeMatch = hostSourceScheme(sourceScheme, url);
+  const httpSource = sourceScheme === undefined ? url.protocol === "http:" : sourceScheme.toLowerCase() === "http";
+  const portMatch = hostSourcePort(sourcePort, httpSource, url);
+  if (schemeMatch === "none" || portMatch === "none") return false;
+  const upgrades = schemeMatch === "upgrade" || portMatch === "upgrade";
+  if (upgrades && (schemeMatch !== "upgrade" || portMatch === "exact")) return false;
+  return hostMatches(sourceHost, url.hostname) && pathMatches(sourcePath, url.pathname);
 }
 
 /** What one policy asks of a script element that loads `url` from the page's own origin. */

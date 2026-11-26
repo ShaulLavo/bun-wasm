@@ -4,7 +4,7 @@
 //
 // Globals stay out of this module so the routing can be unit-tested (sw.ts binds them).
 import {
-  COOKIE_PATH, FRAME_MESSAGE, IDE_ONLY_MESSAGE, RELAY_PATH, SHIM_PATH, SW_ATTACH, SW_COOKIES, SW_COOKIES_ACK, SW_NEED_PORT, SW_PATH, SW_SHIM, SW_SOCKET,
+  COOKIE_PATH, FRAME_MESSAGE, IDE_ONLY_MESSAGE, OWN_PAGE_ATTRIBUTE, RELAY_PATH, SHIM_PATH, SW_ATTACH, SW_COOKIES, SW_COOKIES_ACK, SW_NEED_PORT, SW_PATH, SW_SHIM, SW_SOCKET,
   type ScriptCookie, type SessionReply, type SessionRequest,
 } from "./protocol";
 import { insertAfterDoctype } from "../preview-html";
@@ -105,10 +105,13 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
   // Requests and cookie writes leave in the order their events arrived.
   let order: Promise<unknown> = Promise.resolve();
 
-  const isRelayUrl = (href: string) => {
+  /** The relay page in either of its modes: never a page of the app. */
+  const isRelayPage = (href: string) => {
     const url = new URL(href);
     return url.origin === options.origin && url.pathname === RELAY_PATH;
   };
+  /** The relay page that carries ports. Loaded with a query it only looks at frames, and is never asked for a port. */
+  const isRelayUrl = (href: string) => isRelayPage(href) && new URL(href).search === "";
   const isRelay = (client: OriginClient) => isRelayUrl(client.url);
 
   function post(attachment: Attachment, message: SessionRequest, transfer: Transferable[] = []): void {
@@ -263,7 +266,7 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
     const headers = documentHeaders(false);
     headers.set("content-type", "text/html; charset=utf-8");
     headers.set("content-security-policy", "default-src 'none'; frame-ancestors 'none'");
-    const page = `<!doctype html><meta charset="utf-8"><title>Preview</title><body><p role="status">${escapeHtml(IDE_ONLY_MESSAGE)}</p></body>`;
+    const page = `<!doctype html><html ${OWN_PAGE_ATTRIBUTE}><meta charset="utf-8"><title>Preview</title><body><p role="status">${escapeHtml(IDE_ONLY_MESSAGE)}</p></body>`;
     return new Response(method === "HEAD" ? null : page, { status: 403, headers });
   }
 
@@ -278,7 +281,8 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
     const script = `if(parent!==window)parent.postMessage(Object.assign(${report},{href:location.href}),"*")`;
     headers.set("content-type", "text/html; charset=utf-8");
     headers.set("content-security-policy", ["default-src 'none'", "script-src 'unsafe-inline'", "base-uri 'none'"].concat(frameAncestors || []).join("; "));
-    return new Response(`<!doctype html><meta charset="utf-8"><title>Preview unavailable</title><body><p role="status">${escapeHtml(message)}</p><script>${script}</script></body>`, { status, headers });
+    // The attribute tells this origin's relay page that the document is the worker's own, not the server's.
+    return new Response(`<!doctype html><html ${OWN_PAGE_ATTRIBUTE}><meta charset="utf-8"><title>Preview unavailable</title><body><p role="status">${escapeHtml(message)}</p><script>${script}</script></body>`, { status, headers });
   }
 
   /**
@@ -348,7 +352,7 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
 
   /** Hands changed cookies to the requesting page before its response resolves. */
   async function deliverCookies(requester: string): Promise<void> {
-    const windows = (await options.clients.matchAll()).filter(client => !isRelay(client));
+    const windows = (await options.clients.matchAll()).filter(client => !isRelayPage(client.url));
     const waits: Promise<void>[] = [];
     for (const client of windows) {
       // Only a page that runs the shim answers, so only the requester's answer is awaited.
@@ -464,9 +468,8 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
     const source = event.source;
     if (!data || typeof data !== "object" || !source?.id || !source.url) return;
     const port = event.ports[0];
-    const fromRelay = isRelayUrl(source.url);
-    if (data.type === SW_ATTACH && fromRelay && port) { attach(source.id, port); return; }
-    if (fromRelay || new URL(source.url).origin !== options.origin) return;
+    if (data.type === SW_ATTACH && isRelayUrl(source.url) && port) { attach(source.id, port); return; }
+    if (isRelayPage(source.url) || new URL(source.url).origin !== options.origin) return;
     if (data.type === SW_SOCKET && port) { socket(port); return; }
     if (data.type === SW_COOKIES_ACK && typeof data.ack === "number") { cookieAcks.get(data.ack)?.(); return; }
     if (data.type !== SW_SHIM) return;

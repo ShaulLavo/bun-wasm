@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import {
-  frameMessage, isPreviewOrigin, navigationAnswer, parsePreviewHost, previewFrameLink, previewHostEnv, previewOrigin, previewOriginId, relayMessage,
+  frameMessage, isPreviewOrigin, parsePreviewHost, previewFrameLink, previewHostEnv, previewOrigin, previewOriginId, relayMessage,
   resolvePreviewOriginConfig, sessionRequest, socketRequest,
 } from "../src/preview-origin/protocol";
 
@@ -154,12 +154,15 @@ test("requests from the preview origin are rebuilt from known fields or dropped"
   expect(socketRequest({ type: "grant" })).toBeNull();
 });
 
-test("a navigation answer from another tab is taken by shape only", () => {
-  expect(navigationAnswer({ url: "https://p.test/a", status: 302, location: "/b", extra: 1 })).toEqual({ url: "https://p.test/a", status: 302, location: "/b" });
-  expect(navigationAnswer({ url: "https://p.test/a", status: 200, location: null })).toEqual({ url: "https://p.test/a", status: 200, location: null });
-  for (const bad of [null, "x", {}, { url: 5, status: 200, location: null }, { url: "https://p.test/", status: "200", location: null }, { url: "https://p.test/", status: 200 }, { url: "https://p.test/", status: 200, location: 5 }]) {
-    expect(navigationAnswer(bad)).toBeNull();
-  }
+test("the relay's frame questions and answers are taken by shape only", () => {
+  const type = "bunwasm-preview-relay";
+  expect(relayMessage({ type, event: "inspect", id: 3, index: 2, frame: "x" })).toEqual({ type, event: "inspect", id: 3, index: 2 });
+  expect(relayMessage({ type, event: "inspected", id: 3, document: "server", href: "x" })).toEqual({ type, event: "inspected", id: 3, document: "server" });
+  for (const document of ["own", "loading", "unreadable"]) expect(relayMessage({ type, event: "inspected", id: 1, document })).toMatchObject({ document });
+  for (const bad of [
+    { type, event: "inspect", id: 1 }, { type, event: "inspect", id: 1, index: -1 }, { type, event: "inspect", id: "1", index: 0 }, { type, event: "inspect", id: 1, index: 0.5 },
+    { type, event: "inspected", id: 1 }, { type, event: "inspected", id: 1, document: "ready" }, { type, event: "inspected", document: "server" },
+  ]) expect(relayMessage(bad)).toBeNull();
 });
 
 test("window messages are recognized by shape only", () => {

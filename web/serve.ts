@@ -8,6 +8,7 @@
 // the preview host's files from <root>/__preview-origin instead of the app. The domain is
 // `localhost:<port>` unless PREVIEW_ORIGIN_HOST names another host (a `.test` name in tests), and
 // PREVIEW_IDE_HOSTS adds IDE hosts to the two loopback ones allowed to frame a preview.
+// PREVIEW_PUBLIC_PORT names the port browsers reach this server on when it is not the bound one.
 import { existsSync, readFileSync } from "node:fs";
 import { join, normalize, resolve } from "node:path";
 import { brotliDecompressSync } from "node:zlib";
@@ -131,12 +132,14 @@ const server = Bun.serve({
 /** The preview host's part of this server: same port, told apart by the Host name alone. */
 function previewOrigin(req: Request, server: { url: URL }): Promise<Response> | null {
   const { protocol, port: bound } = server.url;
-  const authority = bound ? `:${bound}` : "";
+  // PREVIEW_PUBLIC_PORT is the port browsers use when something in front maps it to this server's own.
+  const reached = process.env.PREVIEW_PUBLIC_PORT || bound;
+  const authority = reached ? `:${reached}` : "";
   const ideHosts = ["localhost", "127.0.0.1"].concat(process.env.PREVIEW_IDE_HOSTS?.split(",").filter(Boolean) ?? []);
   return handlePreviewOriginRequest(req, {
     domain: `${process.env.PREVIEW_ORIGIN_HOST || "localhost"}${authority}`,
     scheme: protocol === "https:" ? "https" : "http",
-    ideOrigins: ideHosts.map(host => `${protocol}//${host}${authority}`),
+    ideOrigins: ideHosts.map(host => new URL(`${protocol}//${host}${authority}`).origin),
     asset: name => Bun.file(join(root, "__preview-origin", name)).text(),
   });
 }

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { previewOriginAssets } from "../preview-origin-build";
 import { handlePreviewOriginRequest, IDE_ORIGINS_PLACEHOLDER, type PreviewOriginHostConfig } from "../src/preview-origin/host";
-import { RELAY_PATH, SW_PATH } from "../src/preview-origin/protocol";
+import { OWN_PAGE_ATTRIBUTE, RELAY_INSPECT_QUERY, RELAY_PATH, SW_PATH } from "../src/preview-origin/protocol";
 
 const HOST = `${"a".repeat(52)}-5173-pv.sprockt.dev`;
 const config: PreviewOriginHostConfig = {
@@ -81,4 +81,8 @@ test("the built files carry the worker, the shim inside it, and one placeholder 
   expect(assets["bootstrap.html"]).toContain("serviceWorker");
   expect(assets["top.html"]).toContain("only works inside its IDE tab");
   expect(assets["top.html"]).not.toContain("<script");
+  // The origin's own pages say so, and the relay page can tell the IDE page what a frame holds (frame-watch.ts).
+  for (const name of ["bootstrap.html", "top.html", "relay.html"] as const) expect(assets[name]).toStartWith(`<!doctype html><html lang="en" ${OWN_PAGE_ATTRIBUTE}>`);
+  expect(assets["relay.html"]).toContain("inspected");
+  expect(assets["relay.html"]).toContain(RELAY_INSPECT_QUERY);
 }, 60_000);

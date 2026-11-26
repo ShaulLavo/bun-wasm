@@ -25,6 +25,8 @@ function targetUrl(config: PreviewOriginConfig | null): URL | null {
  * is ever framed, so the page cannot be made to frame anything else.
  */
 export function showPreviewFrame(config: PreviewOriginConfig | null): void {
+  // A preview may have opened this tab (its own `window.open` or link). This page is the IDE's: it keeps no way back to its opener.
+  try { window.opener = null; } catch { /* Nothing to cut. */ }
   const target = targetUrl(config);
   if (!target) { fail("This link does not name a preview of this IDE."); return; }
   const frame = document.createElement("iframe");

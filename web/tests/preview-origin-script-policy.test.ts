@@ -42,6 +42,31 @@ test("a source list admits the shim's own URL by 'self', a wildcard, a scheme or
   expect(admission("script-src *.localhost:4173", local)).toEqual(OPEN);
 });
 
+test("an http host source covers the same host over https when scheme and port upgrade together", () => {
+  const host = new URL(ORIGIN).hostname;
+  // The shim is https on the default port. Browsers let http:80 stand for https:443.
+  for (const source of [`http://${host}:80`, `http://${host}`, `http://${host}:443`, `http://*.sprockt.dev:80`, `HTTP://${host}:80/__bunwasm-preview/`]) {
+    expect(admission(`script-src ${source}`)).toEqual(OPEN);
+  }
+  // Only one of the two would upgrade, or the port is another one altogether.
+  for (const source of [`https://${host}:80`, `${host}:80`, `http://${host}:8080`, `http://${host}:81`, `ws://${host}:80`]) {
+    expect(admission(`script-src ${source}`)).toEqual(BLOCKED);
+  }
+  // Over https on another port, and over plain http, nothing upgrades.
+  const secureElsewhere = `https://${host}:8443/__bunwasm-preview/ws.js`;
+  expect(admission(`script-src http://${host}:80`, secureElsewhere)).toEqual(BLOCKED);
+  expect(admission(`script-src http://${host}`, secureElsewhere)).toEqual(BLOCKED);
+  expect(admission(`script-src http://${host}:8443`, secureElsewhere)).toEqual(BLOCKED);
+  expect(admission(`script-src https://${host}:8443`, secureElsewhere)).toEqual(OPEN);
+  const plain = `http://${host}/__bunwasm-preview/ws.js`;
+  expect(admission(`script-src http://${host}:80`, plain)).toEqual(OPEN);
+  expect(admission(`script-src ${host}`, plain)).toEqual(OPEN);
+  expect(admission(`script-src http://${host}:443`, plain)).toEqual(BLOCKED);
+  expect(admission(`script-src https://${host}`, plain)).toEqual(BLOCKED);
+  // With another policy beside it, the upgraded source still counts as open.
+  expect(admission(`script-src http://${host}:80, script-src 'nonce-app'`)).toEqual({ allowed: true, nonce: "app" });
+});
+
 test("with 'strict-dynamic' only a nonce admits the tag, whatever hosts the list also names", () => {
   expect(admission("script-src 'self' https: 'strict-dynamic'")).toEqual(BLOCKED);
   expect(admission("script-src 'self' 'nonce-n' 'strict-dynamic'")).toEqual({ allowed: true, nonce: "n" });

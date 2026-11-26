@@ -3,9 +3,7 @@
 // select another server, port or owner. Malformed messages are dropped before they reach Waffle.
 import type { PreviewHostExchange, PreviewHostOutput, PreviewHostRelay } from "waffle/browser/preview-host";
 import type { CookieJar } from "./cookie-jar.js";
-import {
-  MAX_EXCHANGES, sessionRequest, SOCKET_IDE_SILENCE_MS, socketRequest, type NavigationAnswer, type SessionReply, type SessionRequest,
-} from "./protocol.js";
+import { MAX_EXCHANGES, sessionRequest, SOCKET_IDE_SILENCE_MS, socketRequest, type SessionReply, type SessionRequest } from "./protocol.js";
 
 export interface SessionBinding {
   /** The one grant this port reaches. */
@@ -21,8 +19,6 @@ export interface SessionBinding {
    * Without it a session owns its sockets and closes them with itself.
    */
   sockets?: Set<{ close(): void }>;
-  /** The server's response head went out for the navigation of a frame. */
-  navigationAnswered?(answer: NavigationAnswer): void;
   /** The IDE-origin page that shows a preview URL of this origin in a new tab (its `url` parameter). */
   wrapper?: string;
   /** How long a socket may hear nothing from its page before it is let go. A hang cap, not a speed limit. */
@@ -33,7 +29,6 @@ const MAX_SOCKETS = 64;
 const MAX_SOCKET_HEAD = 64 * 1024;
 const HEAD_END = [13, 10, 13, 10];
 const supplied = (name: string) => /^(?:cookie|host)$/i.test(name);
-const headerValue = (headers: readonly [string, string][], wanted: string) => headers.find(([name]) => name.toLowerCase() === wanted)?.[1];
 type SocketOutput = PreviewHostOutput | { type: "pong" };
 
 /** Where the blank line that ends a head begins, searching from `from`, or -1. */
@@ -269,17 +264,9 @@ export class PortSession {
     const cookie = credentialed ? jar.header(url.pathname) : null;
     if (cookie) headers.push(["cookie", cookie]);
     const { id } = request;
-    // The service worker says what kind of request this is. It decides nothing but when a frame counts as loaded.
-    const framedNavigation = headerValue(request.headers, "sec-fetch-mode") === "navigate"
-      && /^i?frame$/.test(headerValue(request.headers, "sec-fetch-dest") ?? "");
     const exchange: PreviewHostExchange = {
       onmessage: null,
-      postMessage: (output, transfer = []) => {
-        if (output.type === "head" && framedNavigation) {
-          this.binding.navigationAnswered?.({ url: url.href, status: output.status, location: headerValue(output.headers, "location") ?? null });
-        }
-        this.output(id, url.pathname, credentialed, output, transfer);
-      },
+      postMessage: (output, transfer = []) => this.output(id, url.pathname, credentialed, output, transfer),
       close: () => { if (this.exchanges.delete(id)) this.send({ t: "finish", id }); },
     };
     this.exchanges.set(id, exchange);

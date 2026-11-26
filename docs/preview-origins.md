@@ -156,11 +156,12 @@ error pages, so `watchFrame` uses three signals:
 - The page's load report, sent by the injected script in HTML documents.
 - The service worker's error page, which reports a failure and whether a retry can help.
 - The frame's `load` event, for documents that cannot report, such as plain text, images, or pages
-  whose policy blocks the script. `watchFrame` accepts it only after the server sends the final
-  response for that navigation, following redirects.
+  whose policy blocks the script. `watchFrame` accepts it only after the hidden relay page of the
+  frame's origin looks at that frame and finds a loaded document of the server in it.
 
-The server's tab broadcasts those navigation answers over a `BroadcastChannel`, a same-origin
-browser messaging channel, so other workspace tabs settle frames by the same rule.
+The relay page shares the preview's origin, so it can read the frame through `parent.frames`, which
+the IDE page cannot. A tab that only shows another tab's server mounts the relay page with
+`?inspect` for this check alone. The frame must be a frame of the IDE page itself.
 
 The injected script must pass every `Content-Security-Policy` header on the response, from both the
 app and any proxy. Its `<script>` tag carries a nonce, a one-time token, accepted by every policy
@@ -175,8 +176,10 @@ worker skips injection and leaves the policies unchanged. The page still loads, 
   than WebKit's service-worker fetch limit, about 70 seconds before headers.
 - The preview blocks the app from registering its own service worker because the preview worker
   handles every request.
-- Tabs the app opens load the IDE wrapper page on another origin, so the app cannot script them and
-  `window.opener` is not set. Forms with `target="_blank"`, the context menu's "open link in new
+- Tabs the app opens load the IDE wrapper page on another origin, so the app cannot script them. The
+  wrapper page clears its `window.opener`. The app keeps its handle to the tab unless the wrapper is
+  served with `Cross-Origin-Opener-Policy: same-origin`, as a cross-origin isolated IDE's pages are.
+  Forms with `target="_blank"`, the context menu's "open link in new
   tab", and later navigations of an `about:blank` popup hit the preview origin directly and get the
   `403` page. A `target="_top"` link navigates the IDE tab itself.
 - The older loopback host enabled by `?root-previews` and `PREVIEW_ORIGINS=1` stays unchanged for

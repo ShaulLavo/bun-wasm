@@ -29,9 +29,10 @@ afterEach(async () => {
  * Where the IDE and its previews live.
  * - `same`: `ide.bunwasm.localhost` and `<id>-<port>-pv.bunwasm.localhost`, one site, as in production.
  * - `cross`: `localhost` and `<id>-<port>-pv.localhost`, two sites, with the browser's real storage partitioning.
- * - `public`: `bun.bunwasm-preview.test` and `<id>-<port>-pv.bunwasm-preview.test` over HTTPS: names no dev
- *   server treats as loopback. Chromium only: it alone resolves a made-up name without a proxy, and it lets a
- *   service worker load behind a throwaway certificate.
+ * - `public`: `bun.bunwasm-preview.test` and `<id>-<port>-pv.bunwasm-preview.test` over HTTPS on the default
+ *   port, as in production: names no dev server treats as loopback. Chromium only: it alone resolves a
+ *   made-up name (and maps port 443 to the server's own) without a proxy, and it lets a service worker load
+ *   behind a throwaway certificate.
  */
 type Layout = "same" | "cross" | "public";
 
@@ -48,12 +49,13 @@ const PUBLIC_DOMAIN = "bunwasm-preview.test";
 
 function serveEnv(layout: Layout): Record<string, string> {
   if (layout === "same") return { PREVIEW_ORIGIN_HOST: "bunwasm.localhost", PREVIEW_IDE_HOSTS: "ide.bunwasm.localhost" };
-  if (layout === "public") return { PREVIEW_ORIGIN_HOST: PUBLIC_DOMAIN, PREVIEW_IDE_HOSTS: `bun.${PUBLIC_DOMAIN}` };
+  if (layout === "public") return { PREVIEW_ORIGIN_HOST: PUBLIC_DOMAIN, PREVIEW_IDE_HOSTS: `bun.${PUBLIC_DOMAIN}`, PREVIEW_PUBLIC_PORT: "443" };
   return {};
 }
 
-function launchOptions(layout: Layout, browserName: string): LaunchOptions {
-  if (layout === "public") return { args: [`--host-resolver-rules=MAP *.${PUBLIC_DOMAIN} 127.0.0.1`, "--ignore-certificate-errors"] };
+function launchOptions(layout: Layout, browserName: string, served: URL): LaunchOptions {
+  // Every port of the made-up names, 443 included, is the test server.
+  if (layout === "public") return { args: [`--host-resolver-rules=MAP *.${PUBLIC_DOMAIN} 127.0.0.1:${served.port}`, "--ignore-certificate-errors"] };
   if (layout !== "cross") return {};
   if (browserName === "firefox") return { firefoxUserPrefs: { "network.cookie.cookieBehavior": 5 } };
   if (browserName !== "chromium") return {};
@@ -77,7 +79,7 @@ function throwawayCertificate(scratch: string): { TLS_CERT: string; TLS_KEY: str
 function ideUrl(layout: Layout, served: URL, path: string, query = ""): string {
   const prefix = query ? `${query}&` : "";
   if (layout === "same") return `http://ide.bunwasm.localhost:${served.port}${path}?${prefix}preview-origin=bunwasm.localhost:${served.port}`;
-  if (layout === "public") return `https://bun.${PUBLIC_DOMAIN}:${served.port}${path}?${prefix}preview-origin=${PUBLIC_DOMAIN}:${served.port}`;
+  if (layout === "public") return `https://bun.${PUBLIC_DOMAIN}${path}?${prefix}preview-origin=${PUBLIC_DOMAIN}`;
   return `http://localhost:${served.port}${path}?${prefix}preview-origin`;
 }
 
@@ -98,11 +100,11 @@ async function withSite(browserName: string, layout: Layout, run: (context: Brow
   const before = verify ? await verifySite(verify) : null;
   const task = session("bun-wasm-preview-origins-");
   cleanups.push(() => task.cleanup());
-  const env: Record<string, string> = { PORT: process.env.BUN_WASM_TEST_PORT ?? "0", ROOT: root, PREVIEW_ORIGIN_HOST: "", PREVIEW_IDE_HOSTS: "", ...serveEnv(layout) };
+  const env: Record<string, string> = { PORT: process.env.BUN_WASM_TEST_PORT ?? "0", ROOT: root, PREVIEW_ORIGIN_HOST: "", PREVIEW_IDE_HOSTS: "", PREVIEW_PUBLIC_PORT: "", ...serveEnv(layout) };
   if (layout === "public") Object.assign(env, throwawayCertificate(task.scratch));
   const started: RegExpExecArray = await task.start(["serve.ts"], /at (https?:\/\/\S+) \(cross-origin isolated\)/, env);
   const served = new URL(started[1]!);
-  const browser = await engine.launch({ headless: true, ...launchOptions(layout, browserName) });
+  const browser = await engine.launch({ headless: true, ...launchOptions(layout, browserName, served) });
   cleanups.push(() => browser.close());
   const context = await browser.newContext({ ignoreHTTPSErrors: layout === "public" });
   cleanups.push(() => context.close());
@@ -259,7 +261,7 @@ function app(name: string) {
       headers.append("set-cookie", "sid=secret-" + name + "; Path=/; HttpOnly");
       headers.append("set-cookie", "theme=dark-" + name + "; Path=/");
     }
-    return new Response('<!doctype html><title>' + name + '</title><script>' + probe + '</script><h1 id="path">path:' + url.pathname + '</h1><p><a id="blank" href="/report?from=link" target="_blank">report</a> <button id="open" onclick="window.open(\\'/report?from=open\\')">print</button></p><p id="asset"></p><p id="api"></p><img id="logo" src="/logo.svg"><script src="/assets/app.js"></script>', { headers });
+    return new Response('<!doctype html><title>' + name + '</title><script>' + probe + '</script><h1 id="path">path:' + url.pathname + '</h1><p><a id="blank" href="/report?from=link" target="_blank">report</a> <button id="open" onclick="window.open(\\'/report?from=open\\')">print</button> <button id="window" onclick="window.open(\\'/report?from=window\\', \\'\\', \\'width=600,height=400\\')">window</button></p><p id="asset"></p><p id="api"></p><img id="logo" src="/logo.svg"><script src="/assets/app.js"></script>', { headers });
   };
 }
 const websocket = { message(socket: { send(text: string): void }, message: string | Uint8Array) { socket.send("echo:" + String(message)); } };
@@ -285,6 +287,7 @@ Bun.serve({ port: 3000, fetch(req: Request) {
   if (path === "/probe.js") return new Response(probe, { headers: { "content-type": "text/javascript" } });
   if (path === "/hang") return new Promise<Response>(() => {});
   if (path === "/moved") return new Response(null, { status: 302, headers: { location: "/plain?moved" } });
+  if (path === "/detour") return new Response(null, { status: 302, headers: { location: "/hang?detour" } });
   if (path === "/plain") return new Response("plain text, no markup", { headers: { "content-type": "text/plain; charset=utf-8" } });
   if (path === "/locked") return new Response("<!doctype html><title>locked</title><h1>locked</h1>", { headers: { "content-type": "text/html", "content-security-policy": "script-src 'none'" } });
   const headers = new Headers({ "content-type": "text/html", "set-cookie": "theme=dock; Path=/" });
@@ -293,6 +296,23 @@ Bun.serve({ port: 3000, fetch(req: Request) {
   return new Response('<!doctype html><title>dock</title><script nonce="n0nce" src="/probe.js"></script><h1 id="path">dock:' + path + '</h1>', { headers });
 } });
 console.log("dock-app-listening");
+`;
+
+/**
+ * A page whose policy names its own host as an http source on port 80. Over https on the default
+ * port, browsers upgrade both the scheme and the port of such a source.
+ */
+const UPGRADE_APP = `
+const probe = ${JSON.stringify(PROBE)};
+Bun.serve({ port: 3000, fetch(req: Request) {
+  const url = new URL(req.url);
+  if (url.pathname === "/probe.js") return new Response(probe, { headers: { "content-type": "text/javascript" } });
+  const policy = "script-src http://" + (req.headers.get("host") ?? "").replace(/:\\d+$/, "") + ":80 'unsafe-eval'";
+  return new Response('<!doctype html><title>upgrade</title><script src="/probe.js"></script><p id="policy">' + policy + '</p>', {
+    headers: { "content-type": "text/html", "content-security-policy": policy, "set-cookie": "theme=upgrade; Path=/" },
+  });
+} });
+console.log("upgrade-app-listening");
 `;
 
 /** A server that takes every connection and hangs up without a word: the preview frame gets the service worker's error page. */
@@ -377,6 +397,42 @@ function frameSettles(page: Page, url: string, hang: string | null = "/hang"): P
     if (never !== null) hanging.frame.src = new URL(never, target).href;
     shown.frame.src = target;
   }), [url, hang] as const);
+}
+
+/**
+ * Sends one watched frame of the page to `url`. The first call makes the frame and returns at once;
+ * a later call sends the same frame on, resolves with what its watch reports first, and removes it.
+ */
+function watchedFrame(page: Page, url: string): Promise<string[]> {
+  return page.evaluate(target => new Promise<string[]>((resolve) => {
+    interface Kept { frame: HTMLIFrameElement; events: string[]; settled?: () => void; stop(): void }
+    const kept = Reflect.get(globalThis, "__watchedFrame") as Kept | undefined;
+    if (kept) {
+      kept.settled = () => {
+        kept.stop();
+        kept.frame.remove();
+        Reflect.deleteProperty(globalThis, "__watchedFrame");
+        resolve(kept.events);
+      };
+      kept.frame.src = target;
+      return;
+    }
+    const previews = (Reflect.get(globalThis, "playground") as unknown as PlaygroundApi).previews;
+    if (!previews) throw new Error("No previews");
+    const frame = document.createElement("iframe");
+    frame.setAttribute("aria-hidden", "true");
+    frame.style.display = "none";
+    const made: Kept = { frame, events: [], stop: () => {} };
+    const report = (outcome: string) => {
+      made.events.push(outcome);
+      made.settled?.();
+    };
+    made.stop = previews.watchFrame(frame, { loaded: href => report(`loaded ${href}`), failed: transient => report(`failed ${transient}`) });
+    Reflect.set(globalThis, "__watchedFrame", made);
+    document.body.appendChild(frame);
+    frame.src = target;
+    resolve([]);
+  }), url);
 }
 
 /** The paths the dock fixture's server was asked for, read through its page in the dock. */
@@ -551,18 +607,21 @@ for (const browserName of browsers) {
 
       // The app's own new tabs: a real click on its `target="_blank"` link, and on a button that calls
       // window.open, each opens the IDE's wrapper page for that URL, and the server gets the request.
-      for (const [selector, from] of [["#blank", "link"], ["#open", "open"]] as const) {
+      // The third opens a window with an empty target and a size, which is a new tab like the others.
+      for (const [selector, from] of [["#blank", "link"], ["#open", "open"], ["#window", "window"]] as const) {
         const opened = await clickForNewTab(context, tab, selector);
         trackErrors(opened, `opened by ${selector}`, errors);
         await opened.waitForURL(url => url.origin === one.origin && url.pathname === one.pathname && url.searchParams.get("url") === `${origin}/report?from=${from}`, { timeout: 60_000 });
         await text(opened, "#path", "path:/report");
         expect(sorted((await requestEcho(opened)).cookie)).toEqual(["client=1", "sid=secret-one", "theme=dark-one"]);
+        // The wrapper page is the IDE's: it keeps no way back to the preview that opened it.
+        expect(await opened.evaluate(() => window.opener === null)).toBe(true);
         await opened.close();
       }
       // The link itself is as the app wrote it again.
       expect(await inPreview(tab, () => document.querySelector("#blank")?.getAttribute("href"), "no link")).toBe("/report?from=link");
       const reports = await inPreview(tab, async () => (await (await fetch("/api/log")).json()) as string[], "no log");
-      expect(reports.filter(line => line === "one GET /report").length).toBe(2);
+      expect(reports.filter(line => line === "one GET /report").length).toBe(3);
 
       // A tab on the preview origin itself is outside the IDE. The IDE tab is attached and, in this
       // same-site layout, the origin's service worker also controls that tab in Chromium and Firefox;
@@ -625,6 +684,16 @@ for (const browserName of browsers) {
         expect(asked).toContain(path);
         expect(asked).toContain(served);
       }
+      // A frame sent elsewhere while a redirect of its first address is still unanswered settles on the new document.
+      const detoured = (await dockRequests(ide)).length;
+      await watchedFrame(ide, `${src.origin}/detour`);
+      const followed = Date.now() + 60_000;
+      while (!(await dockRequests(ide)).slice(detoured).includes("/hang")) {
+        if (Date.now() > followed) throw new Error("The redirect to /hang was never followed");
+        await ide.waitForTimeout(100);
+      }
+      expect(await watchedFrame(ide, `${src.origin}/plain`)).toEqual(["loaded null"]);
+      expect((await dockRequests(ide)).slice(detoured)).toEqual(["/detour", "/hang", "/plain"]);
 
       // A frame's load event is no proof: it fires for the service worker's error page as well. A
       // server that answers nothing leaves the dock saying so, after its retries.
@@ -669,9 +738,35 @@ if (browsers.includes("chromium")) {
       await waitForSandboxReady(page);
       const src = await sandboxFrameSrc(page);
       expect(src.hostname.endsWith(`-5173-pv.${PUBLIC_DOMAIN}`)).toBe(true);
+      expect(`${src.protocol}//${src.port}`).toBe("https://");
       // Vite answers 403 "Blocked request" to a Host name it does not know. It knows this one.
       await installProbe(page);
       await expectHotReload(page, `preview-origin-public-${Date.now()}`);
+      expect(errors).toEqual([]);
+    });
+  });
+
+  test("chromium: the page script runs under an http source that the browser upgrades to the page's https origin", async () => {
+    await withSite("chromium", "public", async (context, served) => {
+      const errors: string[] = [];
+      const ide = await context.newPage();
+      trackErrors(ide, "playground", errors);
+      await navigateTestPage(ide, ideUrl("public", served, "/"));
+      await playgroundReady(ide);
+      await ide.evaluate(async (source) => {
+        const playground = Reflect.get(globalThis, "playground") as unknown as PlaygroundApi;
+        await playground.fs.writeFile("/home/user/upgrade-app.ts", source);
+        await playground.fs.flush();
+      }, UPGRADE_APP);
+      await runInPlayground(ide, "/home/user/upgrade-app.ts");
+      await ide.locator('.preview-dock[data-frame="loaded"]').waitFor({ timeout: 120_000 });
+      const src = new URL((await ide.locator(".preview-dock iframe").getAttribute("src")) ?? "about:blank");
+      expect(src.origin).toBe(`https://${src.hostname}`);
+      // The page's only script source is `http://<its host>:80`. The browser runs the app's own https
+      // script under it (the probe answers), so the page script must be there too: the cookie the
+      // server set is readable only through it.
+      expect(await inPreview(ide, () => document.querySelector("#policy")?.textContent, "no policy")).toBe(`script-src http://${src.hostname}:80 'unsafe-eval'`);
+      expect(await inPreview(ide, () => document.cookie, "no cookie string")).toBe("theme=upgrade");
       expect(errors).toEqual([]);
     });
   });

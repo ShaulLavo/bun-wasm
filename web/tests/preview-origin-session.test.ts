@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { PreviewHostExchange, PreviewHostOpen, PreviewHostOutput } from "waffle/browser/preview-host";
 import { CookieJar } from "../src/preview-origin/cookie-jar";
 import { PortSession } from "../src/preview-origin/port-session";
-import type { NavigationAnswer, SessionReply } from "../src/preview-origin/protocol";
+import type { SessionReply } from "../src/preview-origin/protocol";
 
 const ORIGIN = `https://${"a".repeat(52)}-5173-pv.sprockt.dev`;
 const GRANT = Object.freeze({ owner: "owner-1", port: 5173, origin: ORIGIN, capability: "capability-that-never-leaves-the-ide" });
@@ -16,7 +16,6 @@ function setup(sockets?: Set<{ close(): void }>, socketSilenceMs?: number) {
   const jar = new CookieJar(new URL(ORIGIN).hostname, true);
   let cookieChanges = 0;
   let attached = 0;
-  const navigations: NavigationAnswer[] = [];
   const channel = new MessageChannel();
   const session = new PortSession(channel.port1, {
     relay: {
@@ -29,7 +28,6 @@ function setup(sockets?: Set<{ close(): void }>, socketSilenceMs?: number) {
     socketSilenceMs,
     cookiesChanged: () => { cookieChanges++; },
     attached: () => { attached++; },
-    navigationAnswered: (answer) => { navigations.push(answer); },
     wrapper: WRAPPER,
   });
   const replies: SessionReply[] = [];
@@ -43,7 +41,7 @@ function setup(sockets?: Set<{ close(): void }>, socketSilenceMs?: number) {
     while (!ready()) await new Promise<void>(resolve => { const wake = () => { waiters.delete(wake); resolve(); }; waiters.add(wake); });
   };
   const settle = () => Bun.sleep(10);
-  return { session, jar, dispatched, replies, remote, until, settle, navigations, counts: () => ({ cookieChanges, attached }) };
+  return { session, jar, dispatched, replies, remote, until, settle, counts: () => ({ cookieChanges, attached }) };
 }
 
 /** A page's end of one socket, opened through the session, with what the guest and the page each saw. */
@@ -391,31 +389,6 @@ test("a header list with a hole is refused on both paths, and what is dispatched
   expect(f.dispatched.length).toBe(1);
   expect(Object.keys(f.dispatched[0]!.open.headers)).toEqual(["0"]);
   expect(Object.keys(f.dispatched[0]!.open.headers[0]!)).toEqual(["0", "1"]);
-  f.session.close();
-});
-
-test("the session reports the server's answer to each frame navigation, and to nothing else", async () => {
-  const f = setup();
-  const framed = (dest: string): [string, string][] => [["sec-fetch-mode", "navigate"], ["Sec-Fetch-Dest", dest]];
-  f.remote.postMessage(open(1, "/page?x=1", { headers: framed("iframe") }));
-  f.remote.postMessage(open(2, "/api", { headers: [["sec-fetch-mode", "cors"], ["sec-fetch-dest", "empty"]] }));
-  f.remote.postMessage(open(3, "/slow", { headers: framed("frame") }));
-  f.remote.postMessage(open(4, "/old", { headers: framed("iframe") }));
-  f.remote.postMessage(open(5, "/top", { headers: framed("document") }));
-  await f.settle();
-  expect(f.navigations).toEqual([]);
-  f.dispatched[1]!.exchange.postMessage({ type: "head", status: 200, statusText: "OK", headers: [] });
-  f.dispatched[4]!.exchange.postMessage({ type: "head", status: 200, statusText: "OK", headers: [] });
-  f.dispatched[0]!.exchange.postMessage({ type: "accepted" });
-  expect(f.navigations).toEqual([]);
-  f.dispatched[0]!.exchange.postMessage({ type: "head", status: 200, statusText: "OK", headers: [["content-type", "text/plain"]] });
-  f.dispatched[3]!.exchange.postMessage({ type: "head", status: 302, statusText: "Found", headers: [["Location", "/new"]] });
-  // A navigation the server never answers is no answer.
-  f.dispatched[2]!.exchange.postMessage({ type: "error", message: "refused" });
-  expect(f.navigations).toEqual([
-    { url: `${ORIGIN}/page?x=1`, status: 200, location: null },
-    { url: `${ORIGIN}/old`, status: 302, location: "/new" },
-  ]);
   f.session.close();
 });
 

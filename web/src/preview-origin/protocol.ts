@@ -185,13 +185,32 @@ export interface ScriptCookie {
 // ---- relay frame <-> IDE page (window.postMessage) ----
 
 export const RELAY_MESSAGE = "bunwasm-preview-relay";
+/** The relay page loaded with this query only looks at frames for the IDE page: it registers nothing and takes no port. */
+export const RELAY_INSPECT_QUERY = "?inspect";
+/** Marks the pages the preview origin serves for itself (cold-load page, error pages), apart from the server's documents. */
+export const OWN_PAGE_ATTRIBUTE = "data-bunwasm-preview-page";
 export type RelayEvent = "ready" | "need-port" | "attach";
-export interface RelayMessage { type: typeof RELAY_MESSAGE; event: RelayEvent }
+/**
+ * What a frame of the IDE page holds, as the relay page of the frame's preview origin sees it:
+ * a loaded document of the server, one of the origin's own pages, a document still loading, or
+ * something the relay page cannot read (another origin's document, a blank frame, no such frame).
+ */
+export type FrameDocument = "server" | "own" | "loading" | "unreadable";
+/** `inspect` asks about the IDE page's frame at `index` (`window.frames`); `inspected` answers it. */
+export type RelayMessage =
+  | { type: typeof RELAY_MESSAGE; event: RelayEvent }
+  | { type: typeof RELAY_MESSAGE; event: "inspect"; id: number; index: number }
+  | { type: typeof RELAY_MESSAGE; event: "inspected"; id: number; document: FrameDocument };
+
+const FRAME_DOCUMENTS: readonly unknown[] = ["server", "own", "loading", "unreadable"] satisfies FrameDocument[];
 
 export function relayMessage(value: unknown): RelayMessage | null {
   if (!record(value) || value.type !== RELAY_MESSAGE) return null;
-  if (value.event !== "ready" && value.event !== "need-port" && value.event !== "attach") return null;
-  return { type: RELAY_MESSAGE, event: value.event };
+  const { event, id, index, document } = value;
+  if (event === "ready" || event === "need-port" || event === "attach") return { type: RELAY_MESSAGE, event };
+  if (event === "inspect" && count(id) && count(index)) return { type: RELAY_MESSAGE, event, id, index };
+  if (event === "inspected" && count(id) && FRAME_DOCUMENTS.includes(document)) return { type: RELAY_MESSAGE, event, id, document: document as FrameDocument };
+  return null;
 }
 
 // ---- preview page -> its embedder (window.postMessage) ----
@@ -210,19 +229,6 @@ export function frameMessage(value: unknown): FrameMessage | null {
     title: text(value.title) ? value.title : undefined,
     transient: value.transient === true,
   };
-}
-
-// ---- IDE tab -> the other IDE tabs of its origin (BroadcastChannel) ----
-
-/** Where the tab that runs a dev server tells the others what the server answered to frame navigations. */
-export const NAVIGATION_CHANNEL = "bunwasm-preview-navigations";
-/** The response head a server sent for the navigation of a frame to `url`. `location` is its redirect target, if it is one. */
-export interface NavigationAnswer { url: string; status: number; location: string | null }
-
-export function navigationAnswer(value: unknown): NavigationAnswer | null {
-  if (!record(value) || !text(value.url) || !count(value.status)) return null;
-  if (value.location !== null && !text(value.location)) return null;
-  return { url: value.url, status: value.status, location: value.location };
 }
 
 // ---- service worker <-> relay frame and preview pages (ServiceWorker.postMessage) ----

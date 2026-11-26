@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import {
-  COOKIE_PATH, IDE_ONLY_MESSAGE, RELAY_PATH, SHIM_PATH, SW_ATTACH, SW_COOKIES, SW_COOKIES_ACK, SW_NEED_PORT, SW_PATH, SW_SHIM, SW_SOCKET,
+  COOKIE_PATH, IDE_ONLY_MESSAGE, OWN_PAGE_ATTRIBUTE, RELAY_INSPECT_QUERY, RELAY_PATH, SHIM_PATH, SW_ATTACH, SW_COOKIES, SW_COOKIES_ACK, SW_NEED_PORT, SW_PATH, SW_SHIM, SW_SOCKET,
   type SessionReply, type SessionRequest,
 } from "../src/preview-origin/protocol";
 import { insertAfterDoctype } from "../src/preview-html";
@@ -106,12 +106,34 @@ test("only the relay page may attach a port, and the worker confirms it on the p
   const stray = new MessageChannel();
   worker.message({ data: { type: SW_ATTACH }, ports: [stray.port2], source: page });
   worker.message({ data: { type: SW_ATTACH }, ports: [stray.port2], source: null });
+  // The relay page mounted only to look at frames carries no port either.
+  worker.message({ data: { type: SW_ATTACH }, ports: [stray.port2], source: { id: "inspector", url: `${ORIGIN}${RELAY_PATH}${RELAY_INSPECT_QUERY}` } });
   expect(worker.attachments.length).toBe(0);
   const ide = attach();
   expect(await ide.next("attached")).toEqual({ t: "attached" });
   expect(worker.attachments.length).toBe(1);
   stray.port1.close();
   ide.port.close();
+});
+
+test("a relay page that only looks at frames is never asked for a port, and the worker's own answer is marked as its own", async () => {
+  const { worker, clients } = setup({ relays: 0 });
+  const inspector = { id: "inspector", url: `${ORIGIN}${RELAY_PATH}${RELAY_INSPECT_QUERY}`, messages: [] as unknown[], postMessage(message: unknown) { inspector.messages.push(message); } };
+  clients.set(inspector.id, inspector);
+  // No relay that carries ports is there, so the answer comes at once, not after the wait for one.
+  const framed = await worker.fetch(request("/", { mode: "navigate", destination: "iframe" }), "")!;
+  expect(framed.status).toBe(503);
+  expect(inspector.messages).toEqual([]);
+  // The relay page tells the worker's error page from the server's document by this attribute (frame-watch.ts).
+  expect(await framed.text()).toStartWith(`<!doctype html><html ${OWN_PAGE_ATTRIBUTE}><meta charset="utf-8"><title>Preview unavailable</title>`);
+  // Like the relay proper, it is no page of the app: nothing it posts opens a socket.
+  const channel = new MessageChannel();
+  const received: unknown[] = [];
+  channel.port1.onmessage = (event: MessageEvent<unknown>) => { received.push(event.data); };
+  worker.message({ data: { type: SW_SOCKET }, ports: [channel.port2], source: inspector });
+  await Bun.sleep(20);
+  expect(received).toEqual([]);
+  channel.port1.close();
 });
 
 test("a request crosses unchanged, with the headers a service worker cannot see restored and none it must not send", async () => {
@@ -176,7 +198,7 @@ test("a top-level visit is told to use the IDE and reaches nothing, even with a 
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; frame-ancestors 'none'");
       const text = await response.text();
-      expect(text).toBe(method === "HEAD" ? "" : `<!doctype html><meta charset="utf-8"><title>Preview</title><body><p role="status">${IDE_ONLY_MESSAGE}</p></body>`);
+      expect(text).toBe(method === "HEAD" ? "" : `<!doctype html><html ${OWN_PAGE_ATTRIBUTE}><meta charset="utf-8"><title>Preview</title><body><p role="status">${IDE_ONLY_MESSAGE}</p></body>`);
     }
   }
   // A frame of the same pages is the app's, and is served.

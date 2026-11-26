@@ -9,7 +9,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { previewOriginShimScript } from "./preview-build";
 import { IDE_ORIGINS_PLACEHOLDER, type PreviewOriginAsset } from "./src/preview-origin/host";
-import { FRAME_PAGE, IDE_ONLY_MESSAGE } from "./src/preview-origin/protocol";
+import { FRAME_PAGE, IDE_ONLY_MESSAGE, OWN_PAGE_ATTRIBUTE } from "./src/preview-origin/protocol";
 
 const source = join(import.meta.dir, "src/preview-origin");
 
@@ -25,7 +25,7 @@ function inline(script: string): string {
 }
 
 function document(title: string, body: string): string {
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>`
+  return `<!doctype html><html lang="en" ${OWN_PAGE_ATTRIBUTE}><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>`
     + `<style>html,body{height:100%;margin:0}body{font:15px/1.5 system-ui,sans-serif;color:#e6e6e6;background:#14151a}p{margin:0;padding:24px}iframe{display:block;width:100%;height:100%;border:0;background:#fff}</style>`
     + `<body>${body}</body></html>`;
 }
