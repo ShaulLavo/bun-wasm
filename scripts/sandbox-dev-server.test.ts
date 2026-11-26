@@ -158,6 +158,74 @@ test("installation failures keep their exit diagnostic without a dev startup err
   } finally { await f.cleanup(); }
 });
 
+// The page's workspace watch overflows while `bun install` extracts thousands of files. A
+// reconcile then must not kill and rerun the install (it used to, silently, 2 of 8 cold Nuxt runs).
+const restartReasons = ["fs-overflow", "recovered", "rebound"] as const;
+type Reconcile = (reason: (typeof restartReasons)[number]) => Promise<void>;
+
+test("a watch reconcile during installation leaves the install running", async () => {
+  const f = await fixture();
+  try {
+    const reconcile = method<Reconcile>(f.sandbox, "handleWatchReconcile");
+    for (const reason of restartReasons) await reconcile(reason);
+    await turn();
+    expect(f.install.kills).toEqual([]);
+    expect(f.page.runs).toHaveLength(1);
+    await f.dev();
+  } finally { await f.cleanup(); }
+});
+
+test("a watch reconcile during the dev server restarts it and says why the old one ended", async () => {
+  const f = await fixture();
+  try {
+    const run = await f.dev();
+    await method<Reconcile>(f.sandbox, "handleWatchReconcile")("rebound");
+    expect(run.kills).toEqual([9]);
+    run.done.resolve({ code: 137 });
+    await turn();
+    expect(f.output()).toContain("[dev stopped: restarting]");
+    const install = f.page.runs.at(-1)!;
+    expect(install).not.toBe(f.install);
+    expect(install.args).toEqual(["install"]);
+  } finally { await f.cleanup(); }
+});
+
+test("an owner tab's watch reconcile restarts only its dev server, never its install", async () => {
+  const f = await fixture();
+  try {
+    let restarts = 0;
+    Reflect.set(f.sandbox, "coordinator", {
+      role: "owner",
+      hasActiveResetIntent: () => false,
+      broadcastOwnerState() {},
+      restartOwnedDevServer: async () => { restarts++; return { ok: true }; },
+    });
+    const reconcile = method<Reconcile>(f.sandbox, "handleWatchReconcile");
+    for (const reason of restartReasons) await reconcile(reason);
+    expect(restarts).toBe(0);
+    await f.dev();
+    await reconcile("fs-overflow");
+    expect(restarts).toBe(1);
+  } finally {
+    Reflect.set(f.sandbox, "coordinator", null);
+    await f.cleanup();
+  }
+});
+
+test("an install stopped by Restart says why it ended", async () => {
+  const f = await fixture();
+  try {
+    f.sandbox.restart();
+    await turn();
+    expect(f.install.kills).toEqual([9]);
+    f.install.done.resolve({ code: 137 });
+    await turn();
+    expect(f.output()).toContain("[install stopped: restarting]");
+    expect(f.page.runs.at(-1)!.args).toEqual(["install"]);
+    expect(f.page.runs).toHaveLength(2);
+  } finally { await f.cleanup(); }
+});
+
 test("follower tab navigates to the owner's broadcast cross-origin hosted preview URL and handles cross-origin frame load", async () => {
   const page = await models(undefined, sources);
   const sandbox = new page.Sandbox("");

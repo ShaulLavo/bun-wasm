@@ -84,6 +84,12 @@ const APP = `${HOME}/app`;
 const PORT = 5173;
 const DEFAULT_ENGINE: Engine = "browser";
 const STOP_WAIT_MS = 30_000;
+/** What the terminal says ended a command when the runtime retires under it. */
+const RETIRE_STOP_REASONS: Record<RetireOptions["mode"], string> = {
+  reopen: "restarting",
+  "retire-only": "a reset in another tab",
+  teardown: "the tab is closing",
+};
 
 interface WorkspaceRuntime extends CoordinatorWorkspace {
   readonly runtime: Runtime;
@@ -170,6 +176,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private firstStart = true;
 
   private run: Run | null = null;
+  /** Which script `run` is: a watch reconcile may restart the dev server, never the install. */
+  private runScript: "install" | "dev" | null = null;
+  /** Why `stopDevServer` ended a run, printed when that run's `command()` returns. */
+  private readonly stopReasons = new WeakMap<Run, string>();
   private readonly stopping = new Set<StoppingRun>();
   private server: Server | null = null;
   private preview: PreviewNavigation | null = null;
@@ -715,8 +725,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       }
       return;
     }
+    // Only a running dev server is restarted. `bun install` writes thousands of files, which can
+    // overflow this watch; restarting then killed the install and ran it again, with no message.
     if (
-      this.run !== null &&
+      this.runScript === "dev" &&
       (reason === "fs-overflow" || reason === "recovered" || reason === "rebound")
     ) {
       if (this.coordinator && this.coordinator.role === "owner") {
@@ -1093,7 +1105,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.localResetting = true;
     this.resetting = true;
     this.serverRevision++;
-    this.stopDevServer();
+    this.stopDevServer("resetting the template");
     this.editorInstance?.suspendAutosaveForReset();
     this.changed();
 
@@ -1208,7 +1220,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private fail(failure: Failure, error: unknown): void {
     this.failure = failure;
     const lost = this.ownershipLostFlag || this.workspace?.fs.ownershipLost;
-    if (lost) this.stopDevServer();
+    if (lost) this.stopDevServer("this tab lost the workspace");
     if (!this.started || lost || !this.server) {
       this.serverState = {
         state: "down",
@@ -1689,7 +1701,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         this.serverRevision++;
         this.activeDevLaunch = null;
         if (this.workspace) this.workspace.launchInvalidated = true;
-        this.stopDevServer();
+        this.stopDevServer(RETIRE_STOP_REASONS[options.mode]);
         this.server = null;
         if (this.coordinator?.restartLaunchController && this.coordinator.restartLaunchController.signal !== options.signal) {
           this.coordinator.restartLaunchController.abort();
@@ -1881,7 +1893,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private async startLocalDevServer(): Promise<void> {
     if (this.localResetting || this.disposed) return;
-    this.stopDevServer();
+    this.stopDevServer("restarting");
     const revision = this.serverRevision;
     const ws = this.workspace;
     if (!this.wasm || !ws) return;
@@ -1976,12 +1988,19 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const listenerRevision = this.listenerRevision;
     const current = startRun({ ...options, args }, hooks);
     this.run = current;
+    this.runScript = script;
     const result = await current.done;
     stage(`${script}-done`);
     output.flush();
     if (result.error) term.write(`\x1b[31m${result.error}\x1b[0m\r\n`);
-    if (this.run !== current) return;
+    if (this.run !== current) {
+      // Say why the run ended, so a restart is never silent.
+      const reason = this.stopReasons.get(current) ?? "replaced by a newer run";
+      if (!this.disposed && !this.teardownRequested) term.write(`\x1b[2m[${script} stopped: ${reason}]\x1b[0m\r\n`);
+      return;
+    }
     this.run = null;
+    this.runScript = null;
     if (script === "install" && (storageFailed || isStorageFull(result.error))) {
       throw new Error("Dependency installation ran out of storage", { cause: `ENOSPC\n${result.error ?? ""}\n${diagnostic}` });
     }
@@ -2019,12 +2038,14 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     }
   }
 
-  private stopDevServer(): void {
+  private stopDevServer(reason: string): void {
     this.serverRevision++;
     const current = this.run;
     this.run = null;
+    this.runScript = null;
     this.server = null;
     if (!current) return;
+    this.stopReasons.set(current, reason);
     current.kill(9);
     const stopping = stoppingRun(current.done, STOP_WAIT_MS);
     this.stopping.add(stopping);
