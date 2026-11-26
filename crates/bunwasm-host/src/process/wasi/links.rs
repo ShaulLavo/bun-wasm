@@ -313,6 +313,13 @@ impl Roots {
             }
             if part == ".." {
                 current.truncate(current.rfind('/').unwrap_or(0));
+                if !from_start && let Some(scope) = scope {
+                    let step = if current.is_empty() { "/" } else { &current };
+                    let (root, _) = self.mount(step).ok_or(NOENT)?;
+                    if !scope.allows(root, step) {
+                        return Err(PERM);
+                    }
+                }
                 continue;
             }
             let parent = current.len();
@@ -820,13 +827,13 @@ impl ProbeParser {
     }
 
     fn push(&mut self, byte: u8) -> bool {
-        if byte != 0 {
-            self.current.push(byte);
-            return true;
-        }
         if self.names.len() >= PROBE_LIMIT {
             self.valid = false;
             return false;
+        }
+        if byte != 0 {
+            self.current.push(byte);
+            return true;
         }
         match String::from_utf8(std::mem::take(&mut self.current)) {
             Ok(name) => {
@@ -1215,6 +1222,14 @@ mod tests {
         assert!(probe_names(&b"a\0".repeat(PROBE_LIMIT)).is_some());
         assert_eq!(probe_names(&b"a\0".repeat(PROBE_LIMIT + 1)), None);
         assert_eq!(probe_names(&b"a\0".repeat(100_000)), None);
+        // Reject the very first byte after the 64th NUL without buffering a 65th pathname.
+        let mut parser = ProbeParser::new();
+        for &byte in &b"a\0".repeat(PROBE_LIMIT) {
+            assert!(parser.push(byte));
+        }
+        assert!(!parser.push(b'x'));
+        assert!(parser.current.is_empty());
+        assert_eq!(parser.finish(), None);
     }
 
     #[test]
@@ -1237,6 +1252,13 @@ mod tests {
             Kind::Directory
         ));
         assert!(roots.names_in("/app", "node_modules/vue", true, &[false, true]));
+        assert!(roots.names_in(
+            "/app",
+            "node_modules/../node_modules/vue",
+            true,
+            &[false, true]
+        ));
+        assert!(!roots.names_in("/app", "../app/node_modules/vue", true, &[false, true]));
         assert!(!roots.names_in("/app", "../real/pkg/index.js", false, &[false, true]));
         assert!(!roots.names_in("/app", "node_modules/rel", true, &[false, true]));
         assert!(roots.names_in("/home/user", "node_modules", true, &[false, true]));
