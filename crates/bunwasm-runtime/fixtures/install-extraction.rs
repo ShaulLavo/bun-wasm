@@ -64,7 +64,10 @@ fn repeated_parents(root: &Path) {
         ("package/large.wasm", file, large.as_slice()),
     ]);
     let mut ticks = 0;
-    let written = extraction::extract(&manifests, destination(&root.join("manifest")), &mut || ticks += 1).unwrap();
+    let written = extraction::extract(&manifests, destination(&root.join("manifest")), &mut || {
+        ticks += 1
+    })
+    .unwrap();
     assert_eq!(written.as_deref(), Some(b"last".as_slice()));
     assert_eq!(
         fs::read(root.join("manifest/package.json")).unwrap(),
