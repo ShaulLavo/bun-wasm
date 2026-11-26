@@ -852,3 +852,110 @@ test("clearInstallCache drops queued puts, resets the key index, and deletes the
     expect(networkCalls).toBe(3);
   });
 });
+
+test("slow streaming body finishing after an idle session refresh still updates the active key index", async () => {
+  const realNow = Date.now;
+  let clock = realNow();
+  Date.now = () => clock;
+  const firstBodyChunk = deferred<void>();
+  const firstPutDone = deferred<void>();
+  const env = indexedCacheStorage({}, {
+    async put(url, response) {
+      env.putCalls.push(url);
+      env.stored.set(new URL(url).href, Response.prototype.clone.call(response));
+      await response.arrayBuffer();
+      if (url.endsWith("/slow.tgz")) firstPutDone.resolve();
+    },
+  });
+  let networkCalls = 0;
+  try {
+    await withStorage(env.storage, async (input) => {
+      networkCalls++;
+      const url = String(input);
+      if (url.endsWith("/slow.tgz") && networkCalls === 1) {
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            await firstBodyChunk.promise;
+            controller.enqueue(new TextEncoder().encode("slow-tarball-bytes"));
+            controller.close();
+          },
+        });
+        return new Response(stream, { status: 200 });
+      }
+      if (url.endsWith("/other.tgz")) return new Response("other-bytes", { status: 200 });
+      return new Response("upstream down", { status: 503 });
+    }, async () => {
+      const slowUrl = "https://registry.invalid/slow.tgz";
+      const otherUrl = "https://registry.invalid/other.tgz";
+      // Headers for slow.tgz arrive first; its body is still streaming.
+      const slowResponse = await installFetch(slowUrl, requestOptions());
+      const slowTextPromise = slowResponse.text();
+
+      // Advance past the 2 s idle refresh window and trigger another request that rebuilds knownKeys.
+      clock += 2_500;
+      expect(await (await installFetch(otherUrl, requestOptions())).text()).toBe("other-bytes");
+
+      // Now finish streaming slow.tgz and wait for its background cache.put() to complete.
+      firstBodyChunk.resolve();
+      expect(await slowTextPromise).toBe("slow-tarball-bytes");
+      await observeBeforeDeadline(firstPutDone.promise, "slow.tgz put did not complete");
+      await Bun.sleep(10);
+
+      // A subsequent request for slow.tgz must hit the cache instead of skipping cache.match() and getting 503.
+      const hit = await installFetch(slowUrl, requestOptions());
+      expect(hit.status).toBe(200);
+      expect(await hit.text()).toBe("slow-tarball-bytes");
+      expect(networkCalls).toBe(2);
+    });
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("clearInstallCache broadcasts invalidation so another tab drops its cached handle immediately", async () => {
+  const listeners = new Set<(event: MessageEvent) => void>();
+  class FakeBroadcastChannel {
+    onmessage: ((event: MessageEvent) => void) | null = null;
+    private closed = false;
+    constructor(public readonly name: string) {
+      listeners.add(this.dispatch);
+    }
+    private dispatch = (event: MessageEvent) => {
+      if (!this.closed) this.onmessage?.(event);
+    };
+    postMessage(data: unknown) {
+      for (const listener of Array.from(listeners)) {
+        if (listener !== this.dispatch) listener(new MessageEvent("message", { data }));
+      }
+    }
+    close() {
+      this.closed = true;
+      listeners.delete(this.dispatch);
+    }
+  }
+  const originalBC = Object.getOwnPropertyDescriptor(globalThis, "BroadcastChannel");
+  Object.defineProperty(globalThis, "BroadcastChannel", { configurable: true, value: FakeBroadcastChannel });
+  try {
+    // Tab B holds an open CacheStorage session with one warm entry.
+    const tabB = indexedCacheStorage({ "https://registry.invalid/cross.tgz": new Response("stale-tab-b") });
+    const tabA = indexedCacheStorage();
+    await withStorage(tabB.storage, async () => new Response("unexpected"), async () => {
+      expect(await (await installFetch("https://registry.invalid/cross.tgz", requestOptions())).text()).toBe("stale-tab-b");
+      expect(tabB.opens).toHaveLength(1);
+    });
+    // Tab A clears the cache, broadcasting invalidation to Tab B before 2 s have elapsed.
+    await withStorage(tabA.storage, async () => new Response("unused"), async () => {
+      expect(await clearInstallCache()).toBe(true);
+    });
+    tabB.stored.clear();
+    // Tab B must reopen the cache and skip cache.match on the now-empty cache instead of reusing the deleted handle.
+    await withStorage(tabB.storage, async () => new Response("fresh-after-clear"), async () => {
+      expect(await (await installFetch("https://registry.invalid/cross.tgz", requestOptions())).text()).toBe("fresh-after-clear");
+      expect(tabB.opens).toHaveLength(2);
+      expect(tabB.matchCalls).toHaveLength(1);
+    });
+  } finally {
+    if (originalBC) Object.defineProperty(globalThis, "BroadcastChannel", originalBC);
+    else Reflect.deleteProperty(globalThis, "BroadcastChannel");
+  }
+});

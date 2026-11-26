@@ -206,6 +206,45 @@ for (const engine of [chromium, webkit]) {
       }, { baseUrl: base, accept: TARBALL });
       expect(postClear).toEqual({ text: "tarball-payload:/tarballs/pkg-0.tgz", matches: 0 });
       expect(tarballRequests).toBe(21);
+
+      // Cross-tab recovery: wait for pkg-0.tgz to persist, open a second tab that holds a live
+      // Cache handle, clear from tab 1, and verify tab 2 immediately drops its handle without
+      // reading stale bytes or waiting for the idle timer.
+      await page.evaluate(async () => {
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          const cache = await caches.open("bun-wasm-install-v1");
+          if ((await cache.keys()).length > 0) return;
+          await new Promise(resolveDelay => setTimeout(resolveDelay, 20));
+        }
+      });
+      const page2 = await context.newPage();
+      page2.on("pageerror", error => errors.push(error.message));
+      await page2.goto(`${base}/`);
+      const tab2Warm = await page2.evaluate(async ({ baseUrl, accept }) => {
+        const mod = await import(`${baseUrl}/install-cache.js`) as InstallCacheModule;
+        const response = await mod.installFetch(`${baseUrl}/tarballs/pkg-0.tgz`, { method: "GET", headers: { accept } });
+        return response.text();
+      }, { baseUrl: base, accept: TARBALL });
+      expect(tab2Warm).toBe("tarball-payload:/tarballs/pkg-0.tgz");
+      expect(tarballRequests).toBe(21);
+
+      // Tab 1 clears the install cache; tab 2 must not serve stale cached data when offline.
+      expect(await page.evaluate(async ({ baseUrl }) => {
+        const mod = await import(`${baseUrl}/install-cache.js`) as InstallCacheModule;
+        return mod.clearInstallCache();
+      }, { baseUrl: base })).toBe(true);
+      offline = true;
+      const tab2AfterClear = await page2.evaluate(async ({ baseUrl, accept }) => {
+        // Yield a turn so BroadcastChannel invalidation delivers before the next fetch.
+        await new Promise(resolveDelay => setTimeout(resolveDelay, 50));
+        const mod = await import(`${baseUrl}/install-cache.js`) as InstallCacheModule;
+        const response = await mod.installFetch(`${baseUrl}/tarballs/pkg-0.tgz`, { method: "GET", headers: { accept } });
+        return response.status;
+      }, { baseUrl: base, accept: TARBALL });
+      expect(tab2AfterClear).toBe(503);
+      expect(tarballRequests).toBe(22);
+      await page2.close();
       expect(errors).toEqual([]);
     } finally {
       await context.close().catch(() => {});

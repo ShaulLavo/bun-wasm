@@ -8,6 +8,7 @@ const CACHE_CAPTURE_LIMIT = 4 * 1024 * 1024;
 const PUT_QUEUE_BYTE_LIMIT = 8 * 1024 * 1024;
 const PUT_QUEUE_ENTRY_LIMIT = 512;
 const SESSION_IDLE_REFRESH_MS = 2_000;
+const INVALIDATION_CHANNEL = "bun-wasm-install-cache-v1";
 const BODY_FORBIDDEN_STATUS = new Set([204, 205, 304]);
 
 type CaptureState =
@@ -34,6 +35,9 @@ interface QueuedPut {
 interface CacheSession {
   generation: number;
   opened?: Promise<OpenedCache | undefined>;
+  currentOpened?: OpenedCache;
+  idleTimer?: ReturnType<typeof setTimeout>;
+  invalidationChannel?: BroadcastChannel;
   lastActivity: number;
   activeFetches: number;
   activePut: boolean;
@@ -74,10 +78,78 @@ function cacheKey(url: string): string {
   }
 }
 
-function invalidateSession(session: CacheSession | undefined): void {
-  if (!session) return;
+function isSessionIdle(session: CacheSession): boolean {
+  return session.activeFetches === 0 && !session.activePut && session.queue.length === 0;
+}
+
+function clearIdleTimer(session: CacheSession): void {
+  if (session.idleTimer === undefined) return;
+  clearTimeout(session.idleTimer);
+  session.idleTimer = undefined;
+}
+
+function closeInvalidationChannel(session: CacheSession): void {
+  if (!session.invalidationChannel) return;
+  try {
+    session.invalidationChannel.close();
+  } catch {
+    // Closing an already-closed channel is a no-op.
+  }
+  session.invalidationChannel = undefined;
+}
+
+function ensureInvalidationChannel(session: CacheSession): void {
+  if (session.invalidationChannel || typeof BroadcastChannel !== "function") return;
+  try {
+    const channel = new BroadcastChannel(INVALIDATION_CHANNEL);
+    channel.onmessage = () => invalidateSession(session);
+    session.invalidationChannel = channel;
+  } catch {
+    // Contexts without BroadcastChannel still release idle handles on the timer.
+  }
+}
+
+function broadcastClear(): void {
+  if (typeof BroadcastChannel !== "function") return;
+  try {
+    const channel = new BroadcastChannel(INVALIDATION_CHANNEL);
+    channel.postMessage("clear");
+    channel.close();
+  } catch {
+    // Best-effort cross-tab cache release.
+  }
+}
+
+function releaseIdleSession(session: CacheSession): void {
+  session.idleTimer = undefined;
+  if (!isSessionIdle(session)) return;
+  if (Date.now() - session.lastActivity < SESSION_IDLE_REFRESH_MS) {
+    scheduleIdleRelease(session);
+    return;
+  }
   session.generation++;
   session.opened = undefined;
+  session.currentOpened = undefined;
+  closeInvalidationChannel(session);
+}
+
+function scheduleIdleRelease(session: CacheSession): void {
+  clearIdleTimer(session);
+  if (!session.opened || !isSessionIdle(session) || typeof setTimeout !== "function") return;
+  const timer = setTimeout(() => releaseIdleSession(session), SESSION_IDLE_REFRESH_MS);
+  if (typeof timer === "object" && timer !== null && "unref" in timer && typeof timer.unref === "function") {
+    timer.unref();
+  }
+  session.idleTimer = timer;
+}
+
+function invalidateSession(session: CacheSession | undefined): void {
+  if (!session) return;
+  clearIdleTimer(session);
+  closeInvalidationChannel(session);
+  session.generation++;
+  session.opened = undefined;
+  session.currentOpened = undefined;
   for (const entry of session.queue) {
     if (entry.chunks) entry.chunks.length = 0;
   }
@@ -90,12 +162,13 @@ function invalidateSession(session: CacheSession | undefined): void {
 export async function clearInstallCache(): Promise<boolean> {
   if (typeof caches === "undefined") return false;
   invalidateSession(sessions.get(caches));
+  broadcastClear();
   return typeof caches.delete === "function" ? caches.delete(CACHE) : false;
 }
 
 function shouldRefreshSession(session: CacheSession, now: number): boolean {
   if (!session.opened) return true;
-  if (session.activeFetches > 0 || session.activePut || session.queue.length > 0) return false;
+  if (!isSessionIdle(session)) return false;
   return now - session.lastActivity >= SESSION_IDLE_REFRESH_MS;
 }
 
@@ -111,17 +184,26 @@ async function loadKnownKeys(cache: Cache): Promise<Set<string> | undefined> {
 }
 
 function getOpenedCache(storage: CacheStorage, session: CacheSession, now: number): Promise<OpenedCache | undefined> {
+  clearIdleTimer(session);
   if (!shouldRefreshSession(session, now)) return session.opened!;
   const generation = session.generation;
+  session.currentOpened = undefined;
+  ensureInvalidationChannel(session);
   let opening: Promise<OpenedCache | undefined> | undefined;
   opening = (async (): Promise<OpenedCache | undefined> => {
     try {
       const cache = await storage.open(CACHE);
       const knownKeys = await loadKnownKeys(cache);
       if (session.generation !== generation) return undefined;
-      return { cache, knownKeys, generation };
+      const result: OpenedCache = { cache, knownKeys, generation };
+      if (session.opened === opening) session.currentOpened = result;
+      return result;
     } catch {
-      if (session.opened === opening) session.opened = undefined;
+      if (session.opened === opening) {
+        session.opened = undefined;
+        session.currentOpened = undefined;
+        closeInvalidationChannel(session);
+      }
       return undefined;
     }
   })();
@@ -162,6 +244,7 @@ export async function installFetch(url: string, options: RequestInit): Promise<R
   } finally {
     session.activeFetches--;
     session.lastActivity = Date.now();
+    scheduleIdleRelease(session);
   }
 }
 
@@ -263,6 +346,7 @@ function createForwardingBody(
       const result = await reader.read();
       if (!isForwardingState(state)) return;
       if (result.done) return finish();
+      session.lastActivity = Date.now();
       state = captureChunk(state, result.value);
       controller?.enqueue(result.value);
     } catch (error) {
@@ -390,7 +474,9 @@ function enqueuePut(
     if (chunks) chunks.length = 0;
     return;
   }
+  clearIdleTimer(session);
   session.lastActivity = Date.now();
+  const target = session.currentOpened?.generation === session.generation ? session.currentOpened : opened;
   const existing = session.queuedByKey.get(key);
   if (existing) removeQueued(session, existing);
   if (
@@ -398,13 +484,30 @@ function enqueuePut(
     || session.activePutBytes + session.queuedBytes + bytes > PUT_QUEUE_BYTE_LIMIT
   ) {
     if (chunks) chunks.length = 0;
+    scheduleIdleRelease(session);
     return;
   }
-  const entry: QueuedPut = { key, url, bytes, response, chunks, opened };
+  const entry: QueuedPut = { key, url, bytes, response, chunks, opened: target };
   session.queue.push(entry);
   session.queuedByKey.set(key, entry);
   session.queuedBytes += bytes;
   scheduleDrain(session, false);
+}
+
+function recordKnownKey(session: CacheSession, entry: QueuedPut, putGeneration: number): void {
+  if (putGeneration !== session.generation) return;
+  entry.opened.knownKeys?.add(entry.key);
+  if (session.currentOpened?.generation === putGeneration) {
+    session.currentOpened.knownKeys?.add(entry.key);
+    return;
+  }
+  const pending = session.opened;
+  if (!pending) return;
+  void pending.then(active => {
+    if (active && active.generation === putGeneration && session.generation === putGeneration) {
+      active.knownKeys?.add(entry.key);
+    }
+  });
 }
 
 function scheduleDrain(session: CacheSession, yieldMacrotask: boolean): void {
@@ -421,14 +524,19 @@ function drainPutQueue(session: CacheSession): void {
   session.drainScheduled = false;
   if (session.activePut) return;
   const entry = session.queue.shift();
-  if (!entry) return;
+  if (!entry) {
+    scheduleIdleRelease(session);
+    return;
+  }
   session.queuedByKey.delete(entry.key);
   session.queuedBytes -= entry.bytes;
   if (entry.opened.generation !== session.generation) {
     if (entry.chunks) entry.chunks.length = 0;
     scheduleDrain(session, false);
+    scheduleIdleRelease(session);
     return;
   }
+  clearIdleTimer(session);
   session.activePut = true;
   session.activePutBytes = entry.bytes;
   session.lastActivity = Date.now();
@@ -436,11 +544,7 @@ function drainPutQueue(session: CacheSession): void {
   const putGeneration = entry.opened.generation;
   void Promise.resolve()
     .then(() => entry.opened.cache.put(entry.url, createCachedResponse(entry.response, body)))
-    .then(() => {
-      if (putGeneration === session.generation) {
-        entry.opened.knownKeys?.add(entry.key);
-      }
-    })
+    .then(() => recordKnownKey(session, entry, putGeneration))
     .catch(() => {})
     .finally(() => {
       if (entry.chunks) entry.chunks.length = 0;
@@ -448,5 +552,6 @@ function drainPutQueue(session: CacheSession): void {
       session.activePutBytes = 0;
       session.lastActivity = Date.now();
       scheduleDrain(session, true);
+      scheduleIdleRelease(session);
     });
 }
