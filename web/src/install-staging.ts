@@ -1,6 +1,6 @@
 /** Names of the staging directories `bun install` creates in the guest's temporary directory
  * while it prepares packages early (`crates/bunwasm-runtime/src/install/early.rs`). */
-export const EARLY_STAGING_PREFIX = "bun-wasm-early-";
+const EARLY_STAGING_PREFIX = "bun-wasm-early-";
 
 /** The part of a workspace filesystem this needs: Waffle's shared or memory filesystem. */
 interface StagingFilesystem {
