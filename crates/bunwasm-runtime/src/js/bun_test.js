@@ -842,14 +842,16 @@
     return chain ? chainImportReady(name, chain) : settleAll(name, new Set());
   }
 
-  // Settles the mocks not in `seen`, then again for any a factory registered meanwhile.
+  // Settles the mocks whose targets are not in `seen`, then again for any a factory registered
+  // meanwhile. Each target settles once per link, so a factory that keeps replacing a mock does
+  // not start another round.
   function settleAll(name, seen) {
     const waits = [];
     for (const key of Array.from(moduleMocks.keys())) {
-      if (seen.has(key)) continue;
-      seen.add(key);
       const entry = liveMock(key);
-      const pending = entry && (key === name || entry.async) ? entry.settle() : undefined;
+      if (!entry || seen.has(entry.target)) continue;
+      seen.add(entry.target);
+      const pending = key === name || entry.async ? entry.settle() : undefined;
       if (pending) waits.push(pending);
     }
     return waits.length ? Promise.allSettled(waits).then(() => settleAll(name, seen)) : undefined;

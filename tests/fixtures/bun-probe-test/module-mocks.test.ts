@@ -8,7 +8,7 @@ mkdirSync(join(here, "mods/a"), { recursive: true });
 mkdirSync(join(here, "mods/b"), { recursive: true });
 mkdirSync(join(here, "node_modules/dual"), { recursive: true });
 writeFileSync(join(here, "mods/target.ts"), `export const name = "real";\n`);
-for (const name of ["async", "slow", "thenable", "defaults", "pending", "linked", "rejects", "importer", "cycle-a", "cycle-b", "late", "shared", "leaf", "dep-a", "dep-b", "late-a", "late-b"]) writeFileSync(join(here, `mods/${name}.ts`), `export const name = "real-${name}";\n`);
+for (const name of ["async", "slow", "thenable", "defaults", "pending", "linked", "rejects", "importer", "cycle-a", "cycle-b", "late", "shared", "leaf", "dep-a", "dep-b", "late-a", "late-b", "self"]) writeFileSync(join(here, `mods/${name}.ts`), `export const name = "real-${name}";\n`);
 writeFileSync(join(here, "mods/b/probe.ts"), `export const load = () => import("./missing.ts").then(m => m.name, () => "unresolved");\n`);
 const importer = (target: string) => `import value, { name } from "./${target}.ts";\nimport * as ns from "./${target}.ts";\nexport const seen = [value, name, ns.default].join(" ");\n`;
 for (const target of ["defaults", "linked", "rejects"]) writeFileSync(join(here, `mods/uses-${target}.ts`), importer(target));
@@ -160,6 +160,15 @@ test("async mocks registered while settling are settled before linking", async (
     return { name: "mock A" };
   });
   expect((await import("./mods/consumer.ts")).seen).toEqual(["mock A", "mock B"]);
+});
+
+test("a factory that re-registers its own target does not hold up other imports", async () => {
+  const factory = async () => {
+    mock.module("./mods/self.ts", factory);
+    return { name: "self" };
+  };
+  mock.module("./mods/self.ts", factory);
+  expect((await import("./mods/fake.ts")).value).toBe(42);
 });
 
 test("mock.module argument errors", () => {
