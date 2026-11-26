@@ -89,5 +89,20 @@ test("actual createRecords uses import-only resolution for graph preparation and
     // The next preparation resolves afresh: nothing outlives the graph that made it.
     expect(await loaded.importKey("/entry.mjs")).toBe(namespace);
     expect(calls).toEqual([`${token}|/entry.mjs|inferred`, `${token}|/entry.mjs|inferred`]);
+    // Older published guests without `resolverGeneration` stay live without throwing.
+    const legacyCalls: string[] = [];
+    const legacy = Reflect.apply(method, {
+      ...host,
+      native: {
+        resolve: host.native.resolve,
+        resolveImport(specifier: string, referrer: string, mode: string) {
+          legacyCalls.push(`${specifier}|${referrer}|${mode}`);
+          return host.native.resolveImport(specifier, referrer, mode);
+        },
+        hostModuleRecord: host.native.hostModuleRecord,
+      },
+    }, []);
+    expect((await legacy.importKey("/entry.mjs")).default).toBe("exact text");
+    expect(legacyCalls).toEqual([`${token}|/entry.mjs|inferred`, `${token}|/entry.mjs|inferred`]);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 });

@@ -739,6 +739,12 @@ class EngineHost {
   createRecords() {
     const host = this;
     const then = uncurryThis(Promise.prototype.then);
+    // Older published guests predate `resolverGeneration`; bumping on every check keeps
+    // their resolutions live instead of throwing or reusing across unmonitored changes.
+    let fallbackGeneration = 0;
+    const generation = typeof host.native.resolverGeneration === "function"
+      ? () => host.native.resolverGeneration()
+      : () => (fallbackGeneration += 1);
     return createModuleRecords({
       record: key => host.native.hostModuleRecord(key),
       // A module URL the URL -> path table maps back to the file in stack traces.
@@ -754,7 +760,7 @@ class EngineHost {
       keys: wrapperKeys,
       initMeta: (key, meta) => host.internal.initImportMeta(meta, key, key === host.internal.mainPath),
       resolve: (specifier, referrer) => host.native.resolveImport(specifier, referrer, "inferred"),
-      generation: () => host.native.resolverGeneration(),
+      generation,
       active: () => !host.exited,
       track: operation => then(host.track(operation, then), value => value),
     }, this.evalPolyfill("esm_loader"), then);
