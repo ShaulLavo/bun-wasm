@@ -249,7 +249,7 @@ test("fixture admission removes all seeded and stale project files, not runtime 
     await fs.writeFile("/home/user/.matrix-command.ts", "stale launcher");
     await fs.mkdirp("/usr/local/lib");
     await fs.writeFile("/usr/local/lib/runtime.ts", "preserved runtime");
-    expect(await fs.readFile("/home/user/db.ts")).toBeDefined();
+    expect(await fs.readFile("/home/user/sqlite.ts")).toBeDefined();
     await runInNewContext(`(${resetBrowserProject.toString()})()`, { globalThis: { playground: { fs } } });
     expect(await fs.listFiles("/home/user")).toEqual([]);
     const app = nextApps.find(app => app.id === "next-15-pages");

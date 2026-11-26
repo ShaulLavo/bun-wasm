@@ -20,6 +20,7 @@ import { errorText, measureStartup } from "../../web/src/startup";
 import { entryAssetName, entryAssetUrl } from "../../web/src/entry-assets";
 import { openTerminal } from "../../web/src/terminal-mount";
 import { linkLocalUrls } from "../../web/src/terminal-links";
+import { copy } from "../../web/src/playground/showcase-copy";
 import {
   acquireLockHandle,
   acquireWriterClaim,
@@ -137,6 +138,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private message: Status = { text: "", kind: "" };
   private started = false;
   private disposed = false;
+  /** A follower tab says once where its dev server's output is. */
+  private followerNoticeShown = false;
   private teardownRequested = false;
   private ownershipLostFlag = false;
   private editorMounted = false;
@@ -2052,6 +2055,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         }
       }
       this.setServerState("up", state.text, url);
+      if (!this.followerNoticeShown) {
+        // This tab shows another tab's dev server; its output is printed in that tab.
+        this.followerNoticeShown = true;
+        this.term?.write(`\x1b[2m${copy.sandboxFollower}\x1b[0m\r\n`);
+      }
       const crossOrigin = new URL(url, location.href).origin !== location.origin;
       if (crossOrigin) {
         this.navigatePreviewFrame(remoteServer, url, 0, false);
