@@ -1,6 +1,6 @@
 import { Scope, type Admission } from "./scope";
 import { withScoped } from "./scope-fixture";
-import { test, expect, spyOn, setDefaultTimeout } from "bun:test";
+import { afterEach, describe, test, expect, spyOn, setDefaultTimeout, jest } from "bun:test";
 import { IphoneBus } from "./iphone-bus";
 import { createIphoneTransport, nativeButtonRef, validateIphoneControl } from "./iphone-transport";
 import { checkClick } from "./playground";
@@ -54,27 +54,76 @@ test("bus rejects wrong documents, stale replies and expired commands", async ()
   bus.close();
 });
 
-test("native cleanup shares one deadline, cancels its child and never dispatches a later input", async () => {
-  const started: { args: string[]; at: number; timeoutMs: number }[] = [];
+let pendingDeadlineTeardown: (() => Promise<void>) | undefined;
+
+// Only this test uses fake timers, so its timer reset and child teardown run only after it.
+describe("shared cleanup deadline", () => {
+  afterEach(async () => {
+    jest.useRealTimers();
+    const cleanup = pendingDeadlineTeardown;
+    pendingDeadlineTeardown = undefined;
+    await cleanup?.();
+  });
+
+  test("native cleanup shares one deadline, cancels its child and never dispatches a later input", async () => {
+    const { started, active, deadline } = await sharedCleanupDeadline();
+    expect(started.map(item => item.args[0])).toEqual(["open", "batch"]);
+    expect(started.map(item => item.timeoutMs)).toEqual([200, 125]);
+    expect(started.every(item => item.at < deadline && item.timeoutMs > 0 && item.timeoutMs <= deadline - item.at)).toBe(true);
+    expect(started[1]!.signal.aborted).toBe(true);
+    expect(active()).toBe(0);
+  });
+});
+
+async function sharedCleanupDeadline() {
+  jest.useFakeTimers();
+  jest.setSystemTime(1_000_000);
+  const started: { args: string[]; at: number; timeoutMs: number; signal: AbortSignal }[] = [];
   let active = 0;
   const deadline = Date.now() + 200;
-  await expect(closeIphoneTab(async (args, timeoutMs, signal) => {
+  const secondStarted = Promise.withResolvers<void>();
+  const teardown = new AbortController();
+  let settled = false;
+  const runStep = (timeoutMs: number, signal: AbortSignal) => {
+    if (started.length === 1) {
+      jest.advanceTimersByTime(75);
+      return Promise.resolve("");
+    }
+    secondStarted.resolve();
+    return ownedCommand([process.execPath, "-e", "await Bun.sleep(60_000)"], AbortSignal.any([signal, teardown.signal]), timeoutMs);
+  };
+  const command = (args: string[], timeoutMs: number, signal: AbortSignal) => {
     expect(active).toBe(0);
     active++;
-    started.push({ args, at: Date.now(), timeoutMs });
-    try {
-      const delay = started.length === 1 ? 10 : 500;
-      return await ownedCommand([process.execPath, "-e", `await Bun.sleep(${delay}); console.log('done')`], signal, timeoutMs);
-    } finally { active--; }
-  }, "owned tab", deadline)).rejects.toThrow();
-  const count = started.length;
-  expect(count).toBeGreaterThan(0);
-  expect(count).toBeLessThanOrEqual(2);
-  expect(active).toBe(0);
-  expect(started.every(item => item.at < deadline && item.timeoutMs <= deadline - item.at + 1)).toBe(true);
-  await Bun.sleep(250);
-  expect(started.length).toBe(count);
-});
+    started.push({ args, at: Date.now(), timeoutMs, signal });
+    return runStep(timeoutMs, signal).finally(() => { active--; });
+  };
+  const cleanup = closeIphoneTab(command, "owned tab", deadline);
+  const outcome = cleanup.then(() => { settled = true; }, () => { settled = true; });
+  pendingDeadlineTeardown = async () => {
+    teardown.abort();
+    await outcome;
+  };
+  const earlySettlement = cleanup.then(
+    () => { throw new Error("Cleanup resolved before dispatching the second command"); },
+    error => { throw new Error(`Cleanup rejected before dispatching the second command: ${String(error)}`, { cause: error }); },
+  );
+  void earlySettlement.catch(() => {});
+  await Promise.race([secondStarted.promise, earlySettlement]);
+  jest.advanceTimersByTime(124);
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  expect(active).toBe(1);
+  expect(started[1]!.signal.aborted).toBe(false);
+  jest.advanceTimersByTime(1);
+  expect(started[1]!.signal.aborted).toBe(true);
+  await expect(cleanup).rejects.toThrow("iPhone cleanup deadline expired");
+  await outcome;
+  jest.advanceTimersByTime(5000);
+  await Promise.resolve();
+  expect(started).toHaveLength(2);
+  return { started, active: () => active, deadline };
+}
 
 test("transport close is cached and reaps its timed-out native command before any further input", async () => {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-goals-close-"));

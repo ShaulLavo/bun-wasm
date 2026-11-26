@@ -7,6 +7,7 @@ import { existsSync, rmSync, statSync } from "node:fs";
 import { templateFiles } from "../sandbox/template-files";
 import { projectTemplates } from "./src/playground/project-templates";
 import { previewWebsocketScript } from "./preview-build";
+import { previewOriginStartup, writePreviewOriginAssets } from "./preview-origin-build";
 import { buildBrowserEntries, buildClassicWorker, buildShellAssets, publishVersionedEntries, rewriteEntryHtml, VERSIONED_WORKER_FILES } from "../scripts/browser-build";
 import { dirname, join, resolve } from "node:path";
 import { stageSharedPrograms } from "../scripts/stage-program-profiles";
@@ -32,6 +33,7 @@ const sw = await buildClassicWorker(join(here, "src/sw.ts"), out, {
 }, join(here, "src/main.ts"));
 
 await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
+await writePreviewOriginAssets(out);
 // Cloudflare Static Assets headers: cross-origin isolation (SharedArrayBuffer for
 // Atomics.wait sleeps and the networking bridge). serve.ts sends the same locally.
 await Bun.write(join(out, "_headers"), Bun.file(join(here, "_headers")));
@@ -125,7 +127,7 @@ const workerAssets = Object.fromEntries(VERSIONED_WORKER_FILES.map(name => [name
 // Keep engine-builds.json restricted to WASM fingerprints (validated by producer-closure.ts).
 await Bun.write(join(out, "engine-builds.json"), JSON.stringify(builds));
 const index = rewriteEntryHtml(await Bun.file(join(here, "index.html")).text(), entries);
-const startup = `globalThis.__bunwasmBuilds=${JSON.stringify(pageBuilds)};globalThis.__bunwasmAssets=${JSON.stringify(workerAssets)};globalThis.__bunwasmCommandChunks=${JSON.stringify(commandChunks(result.metafile!))}`;
+const startup = `${previewOriginStartup()}globalThis.__bunwasmBuilds=${JSON.stringify(pageBuilds)};globalThis.__bunwasmAssets=${JSON.stringify(workerAssets)};globalThis.__bunwasmCommandChunks=${JSON.stringify(commandChunks(result.metafile!))}`;
 await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>${startup}</script>`));
 
 for (const output of result.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);

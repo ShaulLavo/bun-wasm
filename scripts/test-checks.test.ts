@@ -506,7 +506,7 @@ test("Browser guest matrix discovers each profile batch and runs every check exa
   expect(paths.toSorted()).toEqual(selectChecks("browser-guest").toSorted());
   expect(new Set(paths).size).toBe(paths.length);
   expect(selectCheckBatch("browser-guest", "10-storage")).toEqual(["scripts/sandbox-fs-observation-browser.test.ts", "scripts/sandbox-storage-browser.test.ts"]);
-  expect(selectCheckBatch("browser-guest", "11-multitab")).toEqual(["scripts/multitab-browser.test.ts"]);
+  expect(selectCheckBatch("browser-guest", "11-multitab")).toEqual(["scripts/isolated-preview-origins-browser.test.ts", "scripts/multitab-browser.test.ts"]);
   expect(selectChecks("web")).toContain("scripts/sandbox-editor-sync.test.ts");
   expect(selectChecks("web")).toContain("scripts/sandbox-dev-server-coordinator.test.ts");
   expect(() => selectCheckBatch("browser-guest", "missing")).toThrow("Unknown check batch");

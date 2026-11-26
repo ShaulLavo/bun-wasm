@@ -32,7 +32,15 @@
       "browser": "./src/assets.ts",
       "node": "./dist/package/assets.js",
       "default": "./src/assets.ts"
-    }
+    },
+    "./preview-origins": {
+      "types": "./src/preview-origins.ts",
+      "bun": "./src/preview-origins.ts",
+      "browser": "./src/preview-origins.ts",
+      "node": "./dist/package/preview-origins.js",
+      "default": "./src/preview-origins.ts"
+    },
+    "./preview-origins/assets/*": "./dist/package/preview-origin/*"
   },
   "files": [
     "dist/package",
@@ -86,6 +94,16 @@
     "src/executable-paths.ts",
     "web/src/bun-launcher.ts",
     "web/src/entry-assets.ts",
+    "src/preview-origins.ts",
+    "web/src/preview.ts",
+    "web/src/preview-protocol.ts",
+    "web/src/preview-origin/protocol.ts",
+    "web/src/preview-origin/cookie-jar.ts",
+    "web/src/preview-origin/frame-watch.ts",
+    "web/src/preview-origin/port-session.ts",
+    "web/src/preview-origin/root-previews.ts",
+    "web/src/preview-origin/frame-page.ts",
+    "web/src/preview-origin/host.ts",
     "web/src/tool-command.ts",
     "web/src/bun-executor.ts",
     "web/src/engine-stack-budget.ts",
