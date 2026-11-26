@@ -280,6 +280,17 @@ impl Roots {
         self.walk_in(start, path, follow, directories, None, false)
     }
 
+    fn check_scope(&self, guest: &str, scope: Option<&ProbeScope<'_>>) -> Result<(), i32> {
+        let Some(scope) = scope else {
+            return Ok(());
+        };
+        let (root, _) = self.mount(guest).ok_or(NOENT)?;
+        if !scope.allows(root, guest) {
+            return Err(PERM);
+        }
+        Ok(())
+    }
+
     fn walk_in(
         &mut self,
         start: &str,
@@ -313,12 +324,9 @@ impl Roots {
             }
             if part == ".." {
                 current.truncate(current.rfind('/').unwrap_or(0));
-                if !from_start && let Some(scope) = scope {
+                if !from_start {
                     let step = if current.is_empty() { "/" } else { &current };
-                    let (root, _) = self.mount(step).ok_or(NOENT)?;
-                    if !scope.allows(root, step) {
-                        return Err(PERM);
-                    }
+                    self.check_scope(step, scope)?;
                 }
                 continue;
             }
