@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "../src/buffer-transfer.ts";
 import { ContentModules } from "../src/content-modules.ts";
+import { createIoPumpGate } from "../src/io-pump-gate.ts";
 import { SLOT_NAMES } from "../src/net/trampoline.ts";
 import { createScriptEvaluation } from "../src/script-evaluation.ts";
 
@@ -38,7 +39,7 @@ function host(moduleUrls: "blob" | "data") {
     url: (key: string) => `memory:/m/${key}`,
     put: (url: string) => holdWrite(url, writes),
   };
-  const context = createContext({ TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, isWasmMemoryBuffer, transferArrayBuffers, createScriptEvaluation, SLOT_NAMES, ContentModules, memoryViews: () => ({}) });
+  const context = createContext({ TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, isWasmMemoryBuffer, transferArrayBuffers, createIoPumpGate, createScriptEvaluation, SLOT_NAMES, ContentModules, memoryViews: () => ({}) });
   const EngineHost = runInContext(source + "\nEngineHost;", context, {
     // The native module loader: records which writes were still pending when import() started.
     importModuleDynamically: ((url: string) => {

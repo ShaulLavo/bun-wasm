@@ -746,7 +746,8 @@ const PATH_CHANGES: &[(&str, Option<i32>)] = &[
 ];
 
 /// After a native that may have changed which path a require() finds, forget the remembered
-/// targets (`Resolver::forget_required`), whether or not the call succeeded.
+/// targets and the read a pending compile would reuse (`State::paths_changed`), whether or
+/// not the call succeeded.
 fn forget_required_after_path_changes(t: &mut Table, state: &Rc<State>) {
     for (name, function) in t.functions.iter_mut() {
         let change = PATH_CHANGES.iter().find(|(key, _)| key == name);
@@ -756,14 +757,14 @@ fn forget_required_after_path_changes(t: &mut Table, state: &Rc<State>) {
     }
 }
 
-/// `inner`, followed by `Resolver::forget_required` unless its flags rule out creating a path.
+/// `inner`, followed by `State::paths_changed` unless its flags rule out creating a path.
 fn forgetting_required(inner: DataFn, st: Rc<State>, create_flag: Option<i32>) -> DataFn {
     Rc::new(move |a| {
         let changes =
             create_flag.is_none_or(|bit| a.opt_num(1).is_some_and(|flags| flags as i32 & bit != 0));
         let result = inner(a);
         if changes {
-            st.resolver.forget_required();
+            st.paths_changed();
         }
         result
     })
@@ -1831,7 +1832,7 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
     });
     let st = state.clone();
     t.add("moduleFormat", move |a| {
-        Ok(st.load_source(a.str(0)?)?.1.name().into())
+        Ok(st.probe_source(a.str(0)?)?.1.name().into())
     });
     let st = state.clone();
     t.add("mapPosition", move |a| {
@@ -2414,6 +2415,25 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     });
     t.add("procClose", |a| Ok(host::proc_close(a.i32(0)?).into()));
     // runtime_fs watches: ids and records for fs_watch.ts, failures as negative WASI errnos.
+    t.add("fsWatchResolve", |a| {
+        Ok(match host::fs_watch_resolve(a.str(0)?) {
+            Ok((fd, identity)) => Val::Array(vec![
+                Val::Num(fd as f64),
+                Val::Str(identity.unwrap_or_default()),
+            ]),
+            Err(errno) => (-errno).into(),
+        })
+    });
+    t.add("fsWatchOpenFd", |a| {
+        Ok(match host::fs_watch_open_fd(a.i32(0)?, a.bool(1)) {
+            Ok(id) => (id as f64).into(),
+            Err(errno) => (-errno).into(),
+        })
+    });
+    t.add("fsWatchDropFd", |a| {
+        host::fs_watch_drop_fd(a.i32(0)?);
+        Ok(Val::Undefined)
+    });
     t.add("fsWatchOpen", |a| {
         Ok(match host::fs_watch_open(a.str(0)?, a.bool(1)) {
             Ok(id) => (id as f64).into(),
@@ -2422,7 +2442,10 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     });
     t.add("fsWatchReady", |_| Ok(host::fs_watch_ready().into()));
     t.add("fsWatchRead", |a| {
-        Ok(match host::fs_watch_read(a.u32(0)?) {
+        let max_bytes = a
+            .opt_num(1)
+            .map(|n| n.clamp(0.0, 16.0 * 1024.0 * 1024.0) as usize);
+        Ok(match host::fs_watch_read(a.u32(0)?, max_bytes) {
             Ok(bytes) if bytes.is_empty() => 0.into(),
             Ok(bytes) => Val::Bytes(bytes),
             Err(errno) => (-errno).into(),

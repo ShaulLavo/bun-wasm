@@ -26,6 +26,21 @@ changes (SHA-256
 `activated()` treats a non-redundant worker in `registration.active` as
 ready (Waffle PR 636). The worker adapter's anchors and insertions in
 `createPreviewServiceWorker()` are unchanged.
+In selected release `0.0.154`, revision
+`d5c6dc5f37fb4cbbf8b40f3d82741cb9e00cdfff`, three of the four files change.
+`browser/preview.ts` (SHA-256
+`482a5f1678f4ed22f9bf1c932097d4c98388216ad2547b530c1c15e0f5c2bb42`) and
+`browser/net/helper.ts` (SHA-256
+`e64e1a736c40fa916b986cedbb0c87d6b2099312df4402d2a2a90d4cf583cf27`) add the
+optional abort `signal` to `PreviewServer.request()` (Waffle PR 652), and
+`browser/net/runtime.ts` (SHA-256
+`269d7b68e9e693bc9d0645740ebabb33fd6412844600cb239424426efc015bfe`) changes by
+four lines. `browser/service-worker.ts` is byte-identical to `0.0.152`. The
+router and projection adapters' anchors are unchanged. The helper adapter's
+`request()` anchor now names the unsigned path
+(`if (!signal) return this.requestConnection(port, req, sink) !== null;`),
+because the signed path also calls `requestConnection`; its observation wraps
+only the unsigned path, which is the only path this repository's preview uses.
 The exact installed source hashes and unique insertion anchors reject drift or
 incomplete installations. No provider source is edited.
 

@@ -27,6 +27,10 @@ fn package(name: &str, chain: &[&str]) -> Package {
 
 /// Runs `test` in a child process inside a fresh directory with its own install cache.
 fn in_child(name: &str, variable: &str) {
+    in_child_with(name, &[(variable, "1")]);
+}
+
+fn in_child_with(name: &str, variables: &[(&str, &str)]) {
     let directory =
         std::env::temp_dir().join(format!("bun-wasm-reuse-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&directory);
@@ -40,7 +44,7 @@ fn in_child(name: &str, variable: &str) {
         .current_dir(&directory)
         .env("BUN_INSTALL_CACHE_DIR", directory.join("cache"))
         .env("BUN_WASM_INSTALL_TRACE", "1")
-        .env(variable, "1")
+        .envs(variables.iter().copied())
         .output();
     fs::remove_dir_all(&directory).unwrap();
     let output = output.unwrap();
@@ -277,4 +281,32 @@ fn a_manifest_that_cannot_be_read_back_still_fails_validation() {
     seed_cache(&[&tool]);
     let error = install_packages(&mut resolver(&[&tool])).unwrap_err();
     assert!(error.contains("Tarball has no package.json"), "{error}");
+}
+
+#[test]
+fn a_host_without_an_install_cache_reads_and_writes_none() {
+    if std::env::var_os("BUN_WASM_CACHE_OFF_CHILD").is_none() {
+        return in_child_with(
+            "a_host_without_an_install_cache_reads_and_writes_none",
+            &[
+                ("BUN_WASM_CACHE_OFF_CHILD", "1"),
+                ("BUN_WASM_INSTALL_CACHE", "off"),
+            ],
+        );
+    }
+    // The archive is in the cache, but the host turned the cache off: the install must ask
+    // the network (which a native test does not have) and write nothing.
+    let tool = package("tool", &["tool"]);
+    seed_cache(&[&tool]);
+    let error = install_packages(&mut resolver(&[&tool])).unwrap_err();
+    assert!(error.contains("networking support"), "{error}");
+    assert_eq!(trace::calls("cache-read"), 0);
+    let mut writer = io::CacheWriter::default();
+    assert!(!writer.enabled());
+    writer.store("https://registry.invalid/other.tgz", b"x");
+    assert_eq!(
+        fs::read_dir(io::cache_dir()).unwrap().count(),
+        1,
+        "nothing new is written"
+    );
 }

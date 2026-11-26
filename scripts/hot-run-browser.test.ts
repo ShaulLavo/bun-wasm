@@ -4,9 +4,10 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
-import { chromium, webkit, type Browser } from "playwright";
-import { buildSite, verifySite } from "./browser-guest-site";
-import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
+import type { Browser } from "playwright";
+import { verifySite } from "./browser-guest-site";
+import { withGuestSite } from "./browser-guest-page";
+import { ready, run, writeFile } from "../web/tests/playground.mjs";
 import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
@@ -41,26 +42,7 @@ test("Node host rejects hot watching explicitly, in store/native and records/hoo
 
 for (const browserName of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",")) {
   test(`${browserName}: actual Waffle hot server keeps its process, server and in-flight response`, async () => {
-    const provided = process.env.BUN_WASM_BROWSER_SITE;
-    if (process.env.CI && !provided) throw new Error("CI must provide the existing browser-guest site");
-    const scratch = provided ? undefined : mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-hot-site-"));
-    const directory = provided ? resolve(provided) : scratch!;
-    const previousRoot = process.env.ROOT;
-    const task = session("bun-wasm-hot-browser-");
-    try {
-      const before = provided ? verifySite(directory) : buildSite(directory);
-      process.env.ROOT = join(directory, "site");
-      const url = await task.serve();
-      if (browserName !== "chromium" && browserName !== "webkit") throw new Error(`Unsupported browser ${browserName}`);
-      const browser = await task.launch(browserName === "chromium" ? chromium : webkit);
-      await scenario(browser, url);
-      expect(verifySite(directory)).toEqual(before);
-    } finally {
-      if (previousRoot === undefined) delete process.env.ROOT;
-      else process.env.ROOT = previousRoot;
-      await task.cleanup();
-      if (scratch) rmSync(scratch, { recursive: true, force: true });
-    }
+    await withGuestSite(browserName, "bun-wasm-hot", scenario);
   }, 300000);
 }
 

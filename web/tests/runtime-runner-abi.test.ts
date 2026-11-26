@@ -15,7 +15,7 @@ import { readOutcome } from "waffle/proc/outcome";
 import { startRun, type RunOptions } from "../src/runner";
 import type { RunRequest } from "../src/worker";
 import type { SharedFilesystem } from "../src/shared-fs";
-import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
+import { answerNotificationRelayDrop, isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 const notifyObserver = createNotifyObserver();
 
@@ -43,7 +43,7 @@ function fixture(module: WebAssembly.Module, options: Partial<RunOptions> | ((ru
     constructor(readonly url: string) { if (!isNotificationWorkerUrl(url)) rootWorker ??= this; }
     onmessage?: (event: { data: WorkerProcessMessage }) => void;
     postMessage(request: RunRequest) {
-      if (isNotificationBridgeRequest(request)) return;
+      if (answerNotificationRelayDrop(this, request) || isNotificationBridgeRequest(request)) return;
       sent ??= request; requests.push(request); workerUrls.set(request, this.url); posted();
     }
     terminate() {}
@@ -372,7 +372,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
     globalThis.Worker = class {
       onmessage: ((event: MessageEvent) => void) | null = null;
       onerror: ((event: ErrorEvent) => void) | null = null;
-      postMessage(request: RunRequest) { if (!isNotificationBridgeRequest(request)) requests.push(request); }
+      postMessage(request: RunRequest) { if (!answerNotificationRelayDrop(this, request) && !isNotificationBridgeRequest(request)) requests.push(request); }
       terminate() {}
     } as unknown as typeof Worker;
     const state = registryFixture();

@@ -603,6 +603,7 @@
   function beginPost(state: PortState, io: BunWasm.GroupSharedLane, peer: string, packet: unknown, list: unknown[]): CommitCall {
     const post: GroupPost = { phase: "gathering", state, io, peer, sequence: -1, nonce: 0, plan: null, ports: [] };
     posts.add(post);
+    internal.markIoDirty?.();
     try { return stagePost(post, packet, list); }
     catch (error) {
       // What an interrupted rollback leaves is still registered, and the next settle finishes it.

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { isNotificationBridgeRequest } from "./notification-worker-fixture";
+import { answerNotificationRelayDrop, isNotificationBridgeRequest } from "./notification-worker-fixture";
 
 test("notification bridge accepts the public packet with an actual MessagePort", () => {
   const channel = new MessageChannel();
@@ -23,4 +23,14 @@ test("notification bridge rejects a process request with its nested filesystem p
     };
     expect(isNotificationBridgeRequest(request)).toBe(false);
   } finally { channel.port1.close(); channel.port2.close(); }
+});
+
+test("a relay drop is answered as dropped and a run request is not", async () => {
+  const answers: unknown[] = [];
+  const worker = { onmessage: (event: { data: unknown }) => { answers.push(event.data); } };
+  expect(answerNotificationRelayDrop(worker, { drop: 7 })).toBe(true);
+  expect(answerNotificationRelayDrop(worker, { engine: "quickjs", args: [] })).toBe(false);
+  expect(answerNotificationRelayDrop(worker, null)).toBe(false);
+  await Promise.resolve();
+  expect(answers).toEqual([{ id: 7, type: "dropped" }]);
 });

@@ -10,7 +10,7 @@ import { createRuntimeEngineScope } from "./engine-interruption-scope";
 import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { attachPipePublicationRegistry, type PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
-import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
+import { answerNotificationRelayDrop, isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 /** Keep production page ownership, allocator, filesystem admission and launchRuntime intact.
  * Only guest execution is fake; real filesystem admission uses the in-memory service.
@@ -43,6 +43,7 @@ function runtimeRealm() {
       this.ownedPorts.add(port);
     }
     postMessage(message: RunRequest | { connect: FilesystemConnection }) {
+      if (answerNotificationRelayDrop(this, message)) return;
       if (isNotificationBridgeRequest(message)) { this.own(message.port); return; }
       if ("connect" in message) {
         const service = message.connect.port;

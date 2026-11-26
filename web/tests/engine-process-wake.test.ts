@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { createIoPumpGate } from "../src/io-pump-gate.ts";
+import { GuestWatchTable } from "../node_modules/waffle/fs/guest-watch.ts";
 
 const source = readFileSync(new URL("../src/engine-host.js", import.meta.url), "utf8")
   .replace(/^import .*;\n/gm, "")
@@ -230,4 +232,113 @@ test("terminal callback errors do not mask cleanup errors or skip completion", a
   if (!(caught instanceof AggregateError)) throw new Error("Expected aggregate cleanup error");
   expect(caught.errors).toEqual([cancellation, disposal, onExit]);
   expect(resolved).toEqual([1]);
+});
+
+test("createIoPumpGate skips idle hot turns and wakes immediately on process, watch, dirty, or forced events", () => {
+  const processWake = new Int32Array(new SharedArrayBuffer(4));
+  const watchWord = new Int32Array(new SharedArrayBuffer(16));
+  let watchReady = false;
+  let now = 1000;
+  const gate = createIoPumpGate({
+    processWake,
+    fsWatchWord: () => watchWord,
+    fsWatchReady: () => watchReady,
+    now: () => now,
+  });
+
+  // Initial turn runs.
+  expect(gate.beginPump(false)).toBe(true);
+  gate.endPump(false);
+
+  // 500 hot turns with no wake, no watch change, and < 16ms elapsed all skip.
+  let ran = 0;
+  for (let i = 0; i < 500; i++) {
+    if (gate.beginPump(false)) { ran++; gate.endPump(false); }
+  }
+  expect(ran).toBe(0);
+
+  // processWake bump wakes immediately.
+  Atomics.add(processWake, 0, 1);
+  expect(gate.beginPump(false)).toBe(true);
+  gate.endPump(false);
+  expect(gate.beginPump(false)).toBe(false);
+
+  // watchWord[3] bump wakes immediately and retains watchStillReady until drained.
+  watchReady = true;
+  Atomics.add(watchWord, 3, 1);
+  expect(gate.beginPump(false)).toBe(true);
+  expect(gate.watchReady()).toBe(true);
+  gate.endPump(false);
+  expect(gate.beginPump(false)).toBe(true);
+  watchReady = false;
+  gate.endPump(false);
+  expect(gate.beginPump(false)).toBe(false);
+
+  // markIoDirty wakes immediately.
+  gate.markIoDirty();
+  expect(gate.beginPump(false)).toBe(true);
+  gate.endPump(false);
+  expect(gate.beginPump(false)).toBe(false);
+
+  // Progress keeps pumping until quiescent.
+  gate.markIoDirty();
+  expect(gate.beginPump(false)).toBe(true);
+  gate.endPump(true);
+  expect(gate.beginPump(false)).toBe(true);
+  gate.endPump(false);
+  expect(gate.beginPump(false)).toBe(false);
+
+  // force=true (idle turn) always runs, and 16ms safety ceiling wakes during hot bursts.
+  expect(gate.beginPump(true)).toBe(true);
+  gate.endPump(false);
+  now += 16;
+  expect(gate.beginPump(false)).toBe(true);
+  gate.endPump(false);
+  expect(gate.beginPump(false)).toBe(false);
+});
+
+test("createIoPumpGate exposes real Waffle per-process revocation readiness even when watch generation is unchanged", () => {
+  const processWake = new Int32Array(new SharedArrayBuffer(4));
+  const watchCells = new Int32Array(new SharedArrayBuffer(16));
+  let revoked = false;
+  let now = 2000;
+  const table = new GuestWatchTable({
+    cells: watchCells,
+    get revoked() { return revoked; },
+    open: () => 1,
+    read: () => ({ kind: "events", events: [] }),
+    close: () => {},
+  });
+  const watchId = table.open(1, false);
+  const gate = createIoPumpGate({
+    processWake,
+    fsWatchWord: () => table.word,
+    fsWatchReady: () => table.ready(),
+    now: () => now,
+  });
+
+  // Prime cache at generation 0 while healthy.
+  expect(gate.beginPump(false)).toBe(true);
+  expect(gate.watchReady()).toBe(false);
+  gate.endPump(false);
+  expect(gate.beginPump(false)).toBe(false);
+
+  // Per-process revocation notifies the watch word WITHOUT incrementing watchCells[3].
+  revoked = true;
+  expect(Atomics.load(watchCells, 3)).toBe(0);
+  expect(table.ready()).toBe(true);
+
+  // 1. net.onNews wakes the pump and queries GuestWatchTable.ready() authoritatively.
+  gate.onNetNews();
+  expect(gate.beginPump(false)).toBe(true);
+  expect(gate.watchReady()).toBe(true);
+  gate.endPump(false);
+
+  // 2. Even if watchStillReady is cleared on a forced scan, force=true still sees authoritative readiness.
+  expect(gate.beginPump(true)).toBe(true);
+  expect(gate.watchReady()).toBe(true);
+  expect(table.read(watchId, 256)).toEqual({ kind: "error", errno: 11 });
+  expect(table.close(watchId)).toBe(0);
+  gate.endPump(true);
+  expect(gate.watchReady()).toBe(false);
 });

@@ -491,6 +491,7 @@
         const data = bytes(chunk);
         if (data.length) queue.push({ data: data.slice(), callback });
         else complete(callback);
+        internal.markIoDirty?.();
         flush();
         return data.length;
       },
@@ -622,6 +623,7 @@
       const wakeIo = () => {
         if (!registered) return;
         refreshRef();
+        internal.markIoDirty?.();
         const host = native as unknown as { wake?: (timeout: number) => void };
         host.wake?.(0);
       };

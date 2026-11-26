@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { resourceFrames } from "./resource-frame-source";
 import { GuestWatchTable } from "../web/node_modules/waffle/fs/guest-watch.ts";
+import { MemoryBackend } from "../web/node_modules/waffle/fs/backend.ts";
+import { WatchService } from "../web/node_modules/waffle/fs/watch-service.ts";
 import { FilesystemError } from "../web/node_modules/waffle/core/filesystem.ts";
 import type { WatchBatch } from "../web/node_modules/waffle/fs/watch.ts";
 
@@ -36,25 +38,44 @@ function record(type: "change" | "rename" | "overflow", name?: string | null) {
 }
 const chunk = (...records: Uint8Array[]) => Buffer.concat(records);
 
-function fixture() {
+function fixture(options: { resolve?: (path: string) => { dev?: bigint; ino: bigint } | number } = {}) {
   const queued = new Map<number, (Uint8Array | number)[]>();
-  const opened: { path: string; recursive: boolean; id: number }[] = [];
+  const opened: { path: string; recursive: boolean; id: number; fd?: number }[] = [];
   const closed: number[] = [];
+  const droppedFds: number[] = [];
+  const fdToPath = new Map<number, string>();
   const ticks: (() => void)[] = [];
   const effects = { stats: 0, timers: 0, scans: 0 };
   const traffic = { readiness: 0, reads: 0 };
   let nextId = 40;
+  let nextFd = 100;
   let openResult: number | undefined;
   let net: unknown;
   const internal: any = {
     native: {
       hostCaps: {},
-      fsWatchOpen(path: string, recursive: boolean) {
+      fsWatchResolve(path: string): [number, string] | number {
+        const fd = nextFd++;
+        fdToPath.set(fd, path);
+        if (!options.resolve) return [fd, ""];
+        const resolved = options.resolve(path);
+        if (typeof resolved === "number") {
+          fdToPath.delete(fd);
+          return resolved;
+        }
+        const identity = resolved.ino === 0n ? "" : `${resolved.dev ?? 0n}:${resolved.ino}`;
+        return [fd, identity];
+      },
+      fsWatchOpenFd(fd: number, recursive: boolean) {
         if (openResult !== undefined) return openResult;
         const id = nextId++;
-        opened.push({ path, recursive, id });
+        opened.push({ path: fdToPath.get(fd) ?? "", recursive, id, fd });
         queued.set(id, []);
         return id;
+      },
+      fsWatchDropFd(fd: number) {
+        droppedFds.push(fd);
+        fdToPath.delete(fd);
       },
       fsWatchReady() {
         traffic.readiness++;
@@ -98,7 +119,7 @@ function fixture() {
   const factory = runInNewContext(transpile("fs_watch.ts"), { AbortSignal });
   const module: WatchModule = factory(internal)(filesystem);
   return {
-    module, opened, closed, effects, traffic, internal,
+    module, opened, closed, droppedFds, effects, traffic, internal,
     commit(id: number, ...results: (Uint8Array | number)[]) { queued.get(id)!.push(...results); },
     failOpen(errno: number) { openResult = -errno; },
     pump: (): boolean => internal.pumpIo(),
@@ -125,7 +146,9 @@ function providerFixture() {
   let batch: WatchBatch = { kind: "events", events: [] };
   const table = new GuestWatchTable({ cells, get revoked() { return revoked; }, open: () => 1,
     read() { if (failed) throw new FilesystemError(29); return batch; }, close() { closed++; } });
-  world.internal.native.fsWatchOpen = (_path: string, recursive: boolean) => id = table.open(1, recursive);
+  world.internal.native.fsWatchResolve = () => [1, ""];
+  world.internal.native.fsWatchOpenFd = (fd: number, recursive: boolean) => id = table.open(fd, recursive);
+  world.internal.native.fsWatchDropFd = () => {};
   world.internal.native.fsWatchReady = () => table.ready();
   world.internal.native.fsWatchRead = (watch: number) => {
     try {
@@ -211,8 +234,9 @@ test("a write committed before the pump reaches change listeners before a socket
   world.commit(world.opened[0]!.id, chunk(record("change", "page.tsx")));
   world.pump();
   expect(log).toEqual(["change page.tsx", "request"]);
-  expect(world.effects).toEqual({ stats: 1, timers: 0, scans: 0 });
-  expect(world.opened).toEqual([{ path: "/app", recursive: true, id: 40 }]);
+  expect(world.effects).toEqual({ stats: 0, timers: 0, scans: 0 });
+  expect(world.opened).toEqual([{ path: "/app", recursive: true, id: 40, fd: 100 }]);
+  expect(world.droppedFds).toEqual([100]);
   watcher.close();
 });
 
@@ -368,4 +392,324 @@ test("a construction failure after registration releases the watch and its waite
   expect(() => world.module.watch("/app", { signal })).toThrow(failure);
   expect(world.opened.map(({ id }) => id)).toEqual(world.closed);
   expect([world.closed.length, world.pending()]).toEqual([1, 0]);
+});
+
+test("watchers on the same descriptor identity, path and recursive flag share one native watch", () => {
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 42n }) });
+  const seenA: unknown[][] = [];
+  const seenB: unknown[][] = [];
+  const a = world.module.watch("/shared/file.txt", "utf8", (...args) => seenA.push(args));
+  const b = world.module.watch("/shared/file.txt", "buffer", (...args) => seenB.push(args));
+  const c = world.module.watch("/shared/file.txt", { recursive: true });
+  expect(world.opened).toHaveLength(2);
+  expect(world.droppedFds).toHaveLength(3);
+  expect(world.pending()).toBe(1);
+  world.commit(world.opened[0]!.id, chunk(record("change", null)));
+  expect(world.pump()).toBe(true);
+  expect(seenA).toEqual([["change", "file.txt"]]);
+  const bName = seenB[0]?.[1];
+  expect(Buffer.isBuffer(bName) && bName.toString()).toBe("file.txt");
+  a.close();
+  expect(world.closed).toEqual([]);
+  expect(world.pending()).toBe(1);
+  world.commit(world.opened[0]!.id, chunk(record("rename", null)));
+  expect(world.pump()).toBe(true);
+  expect(seenA).toHaveLength(1);
+  expect(seenB).toHaveLength(2);
+  b.unref();
+  c.unref();
+  expect(world.pending()).toBe(0);
+  b.ref();
+  expect(world.pending()).toBe(1);
+  b.close();
+  expect(world.closed).toEqual([world.opened[0]!.id]);
+  c.close();
+  expect(world.closed).toEqual([world.opened[0]!.id, world.opened[1]!.id]);
+  expect(world.pending()).toBe(0);
+});
+
+test("late subscriber on a shared watch does not receive events queued before it registered", () => {
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 77n }) });
+  const events: string[] = [];
+  const a = world.module.watch("/dir", (_event, name) => events.push(`A:${name}`));
+  const watchId = world.opened[0]!.id;
+  // Write occurs while only A is registered, before pump runs.
+  world.commit(watchId, chunk(record("change", "old")));
+  const b = world.module.watch("/dir", (_event, name) => events.push(`B:${name}`));
+  expect(world.opened).toHaveLength(1);
+  expect(world.pump()).toBe(true);
+  expect(events).toEqual(["A:old"]);
+
+  // Subsequent writes reach both A and B.
+  world.commit(watchId, chunk(record("change", "new")));
+  expect(world.pump()).toBe(true);
+  expect(events).toEqual(["A:old", "A:new", "B:new"]);
+
+  a.close();
+  b.close();
+  expect(world.closed).toEqual([watchId]);
+});
+
+test("late subscriber opens a fresh watch when existing shared watch has queued overflow", () => {
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 88n }) });
+  const errorsA: string[] = [];
+  const eventsB: string[] = [];
+  const a = world.module.watch("/dir");
+  a.on("error", (err: { code: string }) => errorsA.push(err.code));
+  const idA = world.opened[0]!.id;
+  world.commit(idA, chunk(record("overflow")));
+  const b = world.module.watch("/dir", (_event, name) => eventsB.push(String(name)));
+  expect(world.opened).toHaveLength(2);
+  const idB = world.opened[1]!.id;
+  expect(world.pump()).toBe(true);
+  expect(errorsA).toEqual(["EOVERFLOW"]);
+  expect(world.closed).toEqual([idA]);
+
+  world.commit(idB, chunk(record("change", "fresh")));
+  expect(world.pump()).toBe(true);
+  expect(eventsB).toEqual(["fresh"]);
+  b.close();
+  expect(world.closed).toEqual([idA, idB]);
+});
+
+test("sharing key derives from the opened descriptor and keeps full 64-bit inode width", () => {
+  // Symlink target switches between inode 2 and inode 1: each open resolves its own fd identity.
+  const resolvedInos = [2n, 1n, 2n];
+  const openedInos: bigint[] = [];
+  let cursor = 0;
+  const world = fixture({
+    resolve: () => {
+      const ino = resolvedInos[cursor++]!;
+      return { dev: 1n, ino };
+    },
+  });
+  const origOpenFd = world.internal.native.fsWatchOpenFd;
+  world.internal.native.fsWatchOpenFd = (fd: number, recursive: boolean) => {
+    openedInos.push(resolvedInos[cursor - 1]!);
+    return origOpenFd(fd, recursive);
+  };
+  const w1 = world.module.watch("/link");
+  const w2 = world.module.watch("/link");
+  const w3 = world.module.watch("/link");
+  expect(openedInos).toEqual([2n, 1n]);
+  expect(world.opened).toHaveLength(2);
+  w1.close();
+  w2.close();
+  w3.close();
+
+  // 64-bit inodes above 2^53 that collide in IEEE-754 Number must not share a watch.
+  const wide = [9007199254740992n, 9007199254740993n];
+  let wideAt = 0;
+  const wideWorld = fixture({ resolve: () => ({ dev: 1n, ino: wide[wideAt++]! }) });
+  const wa = wideWorld.module.watch("/same-path");
+  const wb = wideWorld.module.watch("/same-path");
+  expect(wideWorld.opened).toHaveLength(2);
+  wa.close();
+  wb.close();
+});
+
+test("unhandled overflow on one shared subscriber still delivers to remaining subscribers and propagates uncaught", () => {
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 99n }) });
+  const errorsB: string[] = [];
+  const a = world.module.watch("/dir");
+  const b = world.module.watch("/dir");
+  b.on("error", (err: { code: string }) => errorsB.push(err.code));
+  expect(world.opened).toHaveLength(1);
+  const watchId = world.opened[0]!.id;
+  expect(world.pending()).toBe(1);
+
+  world.commit(watchId, chunk(record("overflow")));
+  let caught: unknown;
+  try {
+    world.pump();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toMatchObject({ code: "EOVERFLOW", syscall: "watch" });
+  expect(errorsB).toEqual(["EOVERFLOW"]);
+  expect(world.closed).toEqual([watchId]);
+  expect(world.pending()).toBe(0);
+  expect(a).toBeDefined();
+  expect(b).toBeDefined();
+});
+
+test("repeated joins bound the shared backlog and preserve provider overflow", () => {
+  let nextId = 1;
+  const queues = new Map<number, (Uint8Array | number)[]>();
+  const overflowed = new Set<number>();
+  const CAPACITY = 128;
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 777n }) });
+  world.internal.native.fsWatchOpenFd = () => {
+    const id = nextId++;
+    queues.set(id, []);
+    return id;
+  };
+  world.internal.native.fsWatchReady = () =>
+    Array.from(queues.entries()).some(([id, q]) => overflowed.has(id) || q.length > 0);
+  world.internal.native.fsWatchRead = (id: number) => {
+    if (overflowed.has(id)) return chunk(record("overflow"));
+    const q = queues.get(id);
+    if (!q || q.length === 0) return -6;
+    const batch = Buffer.concat(q.splice(0, q.length) as Uint8Array[]);
+    return batch;
+  };
+  world.internal.native.fsWatchClose = (id: number) => {
+    queues.delete(id);
+    overflowed.delete(id);
+    return 0;
+  };
+
+  const emitCreate = (name: string) => {
+    for (const [id, q] of queues) {
+      if (overflowed.has(id)) continue;
+      if (q.length + 3 > CAPACITY) {
+        q.length = 0;
+        overflowed.add(id);
+      } else {
+        q.push(record("rename", name), record("change", name), record("change", name));
+      }
+    }
+  };
+
+  const eventsA: string[] = [];
+  const errorsA: string[] = [];
+  const a = world.module.watch("/dir", (_ev, name) => eventsA.push(String(name)));
+  a.on("error", (err: { code: string }) => errorsA.push(err.code));
+
+  for (let i = 0; i < 512; i++) {
+    emitCreate(`f${i}`);
+    const dup = world.module.watch("/dir");
+    dup.close();
+  }
+  expect(world.pump()).toBe(true);
+  expect(errorsA).toEqual(["EOVERFLOW"]);
+  expect(eventsA.length).toBeLessThan(300);
+});
+
+test("a throwing iterator on the fsWatchResolve tuple still drops the resolved descriptor", () => {
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 55n }) });
+  const poisoned = [100, "1:55"] as [number, string];
+  Object.defineProperty(poisoned, Symbol.iterator, {
+    value() { throw new Error("iterator boom"); },
+  });
+  world.internal.native.fsWatchResolve = () => poisoned;
+  const watcher = world.module.watch("/dir");
+  expect(world.droppedFds).toEqual([100]);
+  watcher.close();
+
+  // Throwing when reading index 1 inside the protected scope also drops the descriptor.
+  const badIdentity = [101] as unknown as [number, string];
+  Object.defineProperty(badIdentity, 1, {
+    get() { throw new Error("identity boom"); },
+  });
+  world.internal.native.fsWatchResolve = () => badIdentity;
+  expect(() => world.module.watch("/dir")).toThrow("identity boom");
+  expect(world.droppedFds).toEqual([100, 101]);
+});
+
+test("watch requires fsWatchResolve, fsWatchOpenFd, and fsWatchDropFd instead of falling back to fsWatchOpen", () => {
+  const world = fixture({ resolve: () => ({ dev: 1n, ino: 66n }) });
+  delete world.internal.native.fsWatchResolve;
+  expect(() => world.module.watch("/dir")).toThrow();
+  expect(world.opened).toHaveLength(0);
+});
+
+test("captureBoundary bounds both records (<=128) and bytes (<=16384) against a real Waffle WatchService", () => {
+  function realWaffleHub() {
+    const backend = new MemoryBackend();
+    const service = new WatchService(backend);
+    backend.execute("mkdirp", ["/short"], new Uint8Array());
+    backend.execute("mkdirp", ["/long"], new Uint8Array());
+    const root = backend.execute("preopen", ["/"], new Uint8Array()) as number;
+    const handles = new Map<string, number>([
+      ["/short", (backend.execute("resolve", [root, "short"], new Uint8Array()) as { node: number }).node],
+      ["/long", (backend.execute("resolve", [root, "long"], new Uint8Array()) as { node: number }).node],
+    ]);
+    const table = new GuestWatchTable({
+      cells: backend.shared.watch.cells,
+      revoked: false,
+      open: (handle, recursive) => service.open(1, handle, recursive, () => false),
+      read: (id) => service.read(1, id),
+      close: (id) => service.close(1, id),
+    });
+    const world = fixture();
+    let opens = 0;
+    let capturedBytes = 0;
+    let capturedRecords = 0;
+    let capturePhase = true;
+    world.internal.native.fsWatchResolve = (path: string): [number, string] => {
+      const handle = handles.get(path)!;
+      return [handle, `1:${handle}`];
+    };
+    world.internal.native.fsWatchOpenFd = (fd: number, recursive: boolean) => {
+      opens++;
+      return table.open(fd, recursive);
+    };
+    world.internal.native.fsWatchDropFd = () => {};
+    world.internal.native.fsWatchReady = () => table.ready();
+    world.internal.native.fsWatchRead = (id: number, maxBytes?: number) => {
+      try {
+        const result = table.read(id, maxBytes ?? 65536);
+        if (result.kind === "error") return -result.errno;
+        if (result.kind === "short") return -42;
+        if (capturePhase) {
+          capturedRecords += result.records.length;
+          capturedBytes += result.length;
+        }
+        return result.length ? Buffer.concat(result.records) : 0;
+      } catch (error) {
+        if (error instanceof FilesystemError) return -error.errno;
+        throw error;
+      }
+    };
+    world.internal.native.fsWatchClose = (id: number) => table.close(id);
+    return {
+      backend, world, table,
+      opens: () => opens,
+      captured: () => ({ records: capturedRecords, bytes: capturedBytes }),
+      endCapture: () => { capturePhase = false; },
+    };
+  }
+
+  // Record cap repro: 42 short creates + join, then 42 more short creates + join.
+  const shortRun = realWaffleHub();
+  const shortSeen = new Set<string>();
+  const aShort = shortRun.world.module.watch("/short", (_type: string, name: string) => {
+    shortSeen.add(name);
+  });
+  for (let i = 0; i < 42; i++) shortRun.backend.execute("writeFile", [`/short/f${i}`, false], new Uint8Array([1]));
+  const dup1 = shortRun.world.module.watch("/short");
+  dup1.close();
+  for (let i = 42; i < 84; i++) shortRun.backend.execute("writeFile", [`/short/f${i}`, false], new Uint8Array([1]));
+  const dup2 = shortRun.world.module.watch("/short");
+  dup2.close();
+  expect(shortRun.captured().records).toBeLessThanOrEqual(128);
+  expect(shortRun.captured().bytes).toBeLessThanOrEqual(16 * 1024);
+  expect(shortRun.opens()).toBeGreaterThan(1);
+  shortRun.endCapture();
+  // Pumping delivers both the buffered backlog and every excess record that stayed queued in Waffle.
+  shortRun.world.pump();
+  for (let i = 0; i < 84; i++) expect(shortSeen.has(`f${i}`)).toBe(true);
+  aShort.close();
+
+  // Byte cap repro: 28 creates + join, then 42 creates + join with 200-char name prefixes.
+  const longRun = realWaffleHub();
+  const prefix = "a".repeat(200);
+  const longSeen = new Set<string>();
+  const aLong = longRun.world.module.watch("/long", (_type: string, name: string) => {
+    longSeen.add(name);
+  });
+  for (let i = 0; i < 28; i++) longRun.backend.execute("writeFile", [`/long/${prefix}${i}`, false], new Uint8Array([1]));
+  const ldup1 = longRun.world.module.watch("/long");
+  ldup1.close();
+  for (let i = 28; i < 70; i++) longRun.backend.execute("writeFile", [`/long/${prefix}${i}`, false], new Uint8Array([1]));
+  const ldup2 = longRun.world.module.watch("/long");
+  ldup2.close();
+  expect(longRun.captured().bytes).toBeLessThanOrEqual(16 * 1024);
+  expect(longRun.captured().records).toBeLessThanOrEqual(128);
+  expect(longRun.opens()).toBeGreaterThan(1);
+  longRun.endCapture();
+  longRun.world.pump();
+  for (let i = 0; i < 70; i++) expect(longSeen.has(`${prefix}${i}`)).toBe(true);
+  aLong.close();
 });

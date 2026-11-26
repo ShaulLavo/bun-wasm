@@ -1,4 +1,4 @@
-(function (internal: { runTimers(): number; pumpIo(): boolean; pumpSignals(): boolean }) {
+(function (internal: { runTimers(): number; pumpIo(): boolean; pumpSignals(): boolean; ioPumped?: boolean }) {
   "use strict";
   const callbacks = internal.runTimers;
   let phase: "callbacks" | "io" = "callbacks";
@@ -13,6 +13,7 @@
     }
     if (phase === "io") {
       phase = "callbacks";
+      internal.ioPumped = true;
       if (internal.pumpIo()) return 0;
     }
     const next = callbacks();

@@ -105,6 +105,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
   let nested: import("./nested/host.js").NestedHost | undefined;
   let groupMemory: WebAssembly.Memory | undefined;
   let netHost: NetHost | null = null;
+  let wasiWatches: (() => unknown) | undefined;
   let sharedObjects: SharedObjectService | undefined;
   let terminal: BunTerminal | undefined;
   const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
@@ -163,6 +164,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     async instantiated(context) {
       packages.instantiated(context, groupMemory);
       const { instance, wasi, fs, checkActive, notifications } = context;
+      wasiWatches = () => { checkActive(); return wasi.filesystemWatches; };
       // No guest code runs until this member holds every pre-attached buffer; a failed grant fails the start.
       if (sharedObjects) { await sharedObjects.ready; checkActive(); }
       netHost = req.net ? new NetHost(req.net, (net, transfer = []) => host.postMessage({ type: "net", req: net }, transfer), (path, bytes) => fs.writeFile(path, bytes), { shared: true }) : null;
@@ -213,7 +215,16 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
           error instanceof RuntimeWorkerSignal || isProcessExecutionTerminated(error) || observedProcessExit(error) !== null,
         onWasmCallTrap: telemetry ? (_error, index) => publishBrowserCallTrap(instance, index, telemetry, message => host.postMessage(message)) : undefined,
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
-        sharedObjects, net, terminal, processWake: runtimeState?.wake, onExit: code => finish({ code }),
+        sharedObjects, net, terminal, processWake: runtimeState?.wake,
+        fsWatchWord: () => {
+          const table = wasiWatches?.() as { readonly word?: Int32Array } | undefined;
+          return table?.word;
+        },
+        fsWatchReady: () => {
+          const table = wasiWatches?.() as { ready?(): boolean } | undefined;
+          return table?.ready ? table.ready() : false;
+        },
+        onExit: code => finish({ code }),
       });
     },
   };

@@ -300,7 +300,11 @@ declare namespace BunWasm {
     require(name: "worker_lane"): GroupLanes;
     require(name: "worker_threads"): { isMainThread: boolean; initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
     require(name: "net"): NetWaiterModule;
-    require(name: "io_pump"): (waiters: Set<IoWaiter>) => boolean;
+    require(name: "io_pump"): (waiters: Set<IoWaiter>, watchWaiters?: Set<IoWaiter>) => boolean;
+    markIoDirty?(): void;
+    markWatchDirty?(): void;
+    ioBeginPump?(force?: boolean): boolean;
+    ioEndPump?(progressed: boolean): void;
     removeIoWaiter(waiter: IoWaiter): void;
     cancelIoWaiters(): void;
     require(name: "node_url"): { fileURLToPath(url: URL): string };

@@ -86,6 +86,7 @@
       paused = false;
       if (waiter && readAhead) restartRead(waiter);
       updateReference();
+      internal.markIoDirty?.();
     });
     function restartRead(pending: BunWasm.IoWaiter) {
       internal.removeIoWaiter(pending);

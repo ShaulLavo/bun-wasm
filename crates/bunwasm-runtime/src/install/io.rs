@@ -292,12 +292,36 @@ fn cache_path(url: &str) -> PathBuf {
 /// is a host round trip in the browser. A write that fails with `NotFound` because the
 /// directory has since disappeared creates it again and retries once; any other failure
 /// leaves the entry absent, as before.
-#[derive(Default)]
 pub(super) struct CacheWriter {
     created: bool,
+    /// The host keeps no install cache (`BUN_WASM_INSTALL_CACHE=off`): nothing is read or
+    /// written. The browser page hosts set it, because the browser's HTTP cache already
+    /// keeps registry responses, and writing them into the workspace filesystem costs more
+    /// than reading them back saves.
+    off: bool,
+}
+
+impl Default for CacheWriter {
+    fn default() -> Self {
+        Self {
+            created: false,
+            off: !install_cache_enabled(),
+        }
+    }
+}
+
+/// Whether the host keeps an install cache: every host does unless it sets
+/// `BUN_WASM_INSTALL_CACHE=off`.
+fn install_cache_enabled() -> bool {
+    std::env::var_os("BUN_WASM_INSTALL_CACHE").is_none_or(|value| value != "off")
 }
 
 impl CacheWriter {
+    /// Whether the install cache is in use.
+    pub(super) fn enabled(&self) -> bool {
+        !self.off
+    }
+
     /// Writes `bytes` as the cache file for `url`.
     pub(super) fn store(&mut self, url: &str, bytes: &[u8]) {
         self.store_with(url, bytes, write_atomically);
@@ -310,6 +334,9 @@ impl CacheWriter {
         bytes: &[u8],
         mut write: impl FnMut(&Path, &[u8]) -> std::io::Result<()>,
     ) {
+        if self.off {
+            return;
+        }
         if !self.created && fs::create_dir_all(cache_dir()).is_err() {
             return;
         }
@@ -324,6 +351,11 @@ impl CacheWriter {
             let _ = write(&path, bytes);
         }
     }
+}
+
+/// Whether `cache` is a cache file still fresh enough to use.
+fn fresh_file(cache: &Path, tarball: bool) -> bool {
+    fresh_cache(cache, tarball) && cache.is_file()
 }
 
 /// Tarballs are immutable; metadata stays fresh for five minutes.
@@ -425,9 +457,9 @@ impl Downloads {
         if self.is_full() || self.contains(url) {
             return;
         }
+        let use_cache = !refresh && self.cache.enabled();
         let request = request_url(url).and_then(|url| {
-            let cache = cache_path(url.as_str());
-            if !refresh && fresh_cache(&cache, tarball) && cache.is_file() {
+            if use_cache && fresh_file(&cache_path(url.as_str()), tarball) {
                 return Ok(None);
             }
             Download::start(&url, tarball, refresh, registry).map(Some)
@@ -488,7 +520,10 @@ impl Downloads {
             Some(request) => request?,
             None => {
                 let url = request_url(url)?;
-                if !refresh && let Some(bytes) = cached(&url, tarball, registry)? {
+                if !refresh
+                    && self.cache.enabled()
+                    && let Some(bytes) = cached(&url, tarball, registry)?
+                {
                     return Ok(bytes);
                 }
                 Download::start(&url, tarball, refresh, registry)?
@@ -639,7 +674,7 @@ impl Download {
         completed?;
         let bytes = std::mem::take(&mut self.body);
         trace::time(store, || {
-            if cacheable(&bytes, self.tarball, registry) {
+            if others.cache.enabled() && cacheable(&bytes, self.tarball, registry) {
                 others.cache.store(&self.url, &bytes);
             }
         });

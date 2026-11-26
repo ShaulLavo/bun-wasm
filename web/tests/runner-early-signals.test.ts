@@ -9,7 +9,7 @@ import { startRun, type Run } from "../src/runner";
 import type { RunRequest } from "../src/bun-executor";
 import { fixtureFilesystemConnection } from "./process-runtime-fixture";
 import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
-import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
+import { answerNotificationRelayDrop, isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 async function until(check: () => boolean) {
   for (let turn = 0; turn < 100; turn++) {
@@ -46,6 +46,7 @@ function fixture(explicit = true, deferNetwork = false) {
     readonly relay: boolean;
     constructor(url: string | URL) { this.relay = isNotificationWorkerUrl(url); }
     postMessage(request: unknown) {
+      if (answerNotificationRelayDrop(this, request)) return;
       if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
       posts.push(request as RunRequest);
     }
