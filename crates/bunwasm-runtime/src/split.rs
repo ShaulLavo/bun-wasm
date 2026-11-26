@@ -94,7 +94,7 @@ fn source(state: &State, args: Args<'_>) -> NativeResult {
     }
     let (code, format) = match mode {
         "cjs" => state.load_source_once(name)?,
-        _ => state.load_source(name)?,
+        _ => state.probe_source(name)?,
     };
     if mode == "cjs" {
         let (code, line) = modules::cjs_wrapper(&code);
