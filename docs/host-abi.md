@@ -565,6 +565,26 @@ the group's life. Exhaustion returns `-EAGAIN` (`-6`) without mutation, even if
 earlier IDs have been freed. Region exhaustion is checked before reserving a
 chunk or charging backing growth.
 
+## Canonical paths (`runtime_fs.path_realpath`)
+
+`fs.realpathSync`, `fs.realpath` and `fs.promises.realpath` call
+`runtime_fs.path_realpath(dirfd, path_ptr, path_len, buf_ptr, buf_len, used_ptr) -> errno`
+once per path (Waffle's `docs/host-abi.md`, "Canonical path query"). Preview 1 has no realpath,
+and libc's costs one `path_readlink` round trip per path component. The guest finds the preopen
+for its absolute path with `__wasilibc_find_abspath` and passes the rest relative to it. The
+import follows every link and answers with the absolute guest path, or, for a preopen outside the
+guest's root namespace, a path the guest joins below that preopen. A result longer than
+`buf_len` returns `ENOBUFS` (42) with the needed length at `used_ptr`, and the guest retries with
+a buffer that size, up to four times. Errors are positive WASI errnos, which the runtime reports
+as Node's `realpath` errors: `ENOENT` (44), `ENOTDIR` (54, including a file followed by `/` or
+`/.`, directly or through a link target), `ELOOP` (32), `EACCES` (2), `EPERM` (63) for an absolute
+pathname, and `EINVAL` (28) for malformed UTF-8, a NUL, or overlapping result and length spans.
+
+Browser hosts get the import from Waffle. The native launcher implements it in
+`crates/bunwasm-host/src/process/wasi/links.rs` with the same guest-namespace walk that it
+uses to retry path calls Wasmtime refuses: an absolute link target restarts at guest `/`, and
+`..` stops there.
+
 ## Filesystem watch descriptor natives
 
 Every JS engine's native table (`crates/bunwasm-runtime/src/natives.rs`) installs the
