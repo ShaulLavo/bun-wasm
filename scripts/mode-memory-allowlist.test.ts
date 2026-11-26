@@ -277,15 +277,14 @@ function lookupFnReturn(env: LexicalEnv | undefined, name: string): ReceiverKind
   return "unknown";
 }
 
-function staticText(node: ts.Expression, env: LexicalEnv, seen = new Set<string>()): string | undefined {
+function staticText(node: ts.Expression, env: LexicalEnv, seen = new Set<BindingInfo>()): string | undefined {
   const target = unwrap(node);
   if (isStringLiteral(target)) return target.text;
   if (ts.isIdentifier(target)) {
-    if (seen.has(target.text)) return undefined;
     const found = lookupBinding(env, target.text);
-    if (!found || !found.binding.isConst || found.binding.inits.length !== 1) return undefined;
+    if (!found || seen.has(found.binding) || !found.binding.isConst || found.binding.inits.length !== 1) return undefined;
     const next = new Set(seen);
-    next.add(target.text);
+    next.add(found.binding);
     return staticText(found.binding.inits[0]!, found.scope, next);
   }
   if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.PlusToken) {
@@ -344,7 +343,7 @@ function recordFinding(source: ts.SourceFile, node: ts.Node, file: string, messa
   findings.push({ file, location: location(source, node), scope: enclosingScope(node), message });
 }
 
-function classifyReceiver(expr: ts.Expression, env: LexicalEnv, seen = new Set<string>()): ReceiverKind {
+function classifyReceiver(expr: ts.Expression, env: LexicalEnv, seen = new Set<BindingInfo>()): ReceiverKind {
   const target = unwrap(expr);
   const direct = directExpressionKind(target);
   if (direct !== "unknown") return direct;
@@ -352,13 +351,14 @@ function classifyReceiver(expr: ts.Expression, env: LexicalEnv, seen = new Set<s
     const calleeName = methodName(target.expression);
     return calleeName ? lookupFnReturn(env, calleeName) : "unknown";
   }
-  if (!ts.isIdentifier(target) || seen.has(target.text)) return "unknown";
+  if (!ts.isIdentifier(target)) return "unknown";
   const found = lookupBinding(env, target.text);
   if (!found) return queryParamNameHint.test(target.text) ? "query" : "unknown";
+  if (seen.has(found.binding)) return "unknown";
   if (found.binding.typeKind !== "unknown") return found.binding.typeKind;
   if (found.binding.inits.length === 0) return queryParamNameHint.test(target.text) ? "query" : "unknown";
   const next = new Set(seen);
-  next.add(target.text);
+  next.add(found.binding);
   let resolved: ReceiverKind = "unknown";
   for (const init of found.binding.inits) {
     const kind = classifyReceiver(init, found.scope, next);
@@ -432,14 +432,14 @@ function propertyKeyText(name: ts.PropertyName, env: LexicalEnv): string | undef
   return undefined;
 }
 
-function resolveObjectModeState(expr: ts.Expression, env: LexicalEnv, seen: Set<string>): ObjectModeState {
+function resolveObjectModeState(expr: ts.Expression, env: LexicalEnv, seen: Set<BindingInfo>): ObjectModeState {
   const target = unwrap(expr);
   if (ts.isObjectLiteralExpression(target)) return evaluateObjectLiteralMode(target, env, seen);
-  if (!ts.isIdentifier(target) || seen.has(target.text)) return "none";
+  if (!ts.isIdentifier(target)) return "none";
   const found = lookupBinding(env, target.text);
-  if (!found) return "none";
+  if (!found || seen.has(found.binding)) return "none";
   const next = new Set(seen);
-  next.add(target.text);
+  next.add(found.binding);
   let state: ObjectModeState = "none";
   for (const init of found.binding.inits) {
     const candidate = resolveObjectModeState(init, found.scope, next);
@@ -449,7 +449,7 @@ function resolveObjectModeState(expr: ts.Expression, env: LexicalEnv, seen: Set<
   return state;
 }
 
-function evaluateObjectLiteralMode(expr: ts.ObjectLiteralExpression, env: LexicalEnv, seen: Set<string>): ObjectModeState {
+function evaluateObjectLiteralMode(expr: ts.ObjectLiteralExpression, env: LexicalEnv, seen: Set<BindingInfo>): ObjectModeState {
   let state: ObjectModeState = "none";
   for (const prop of expr.properties) {
     if (ts.isSpreadAssignment(prop)) {
@@ -468,7 +468,7 @@ function evaluateObjectLiteralMode(expr: ts.ObjectLiteralExpression, env: Lexica
   return state;
 }
 
-function hasDisallowedModeTuple(expr: ts.ArrayLiteralExpression, env: LexicalEnv, seen: Set<string>): boolean {
+function hasDisallowedModeTuple(expr: ts.ArrayLiteralExpression, env: LexicalEnv, seen: Set<BindingInfo>): boolean {
   for (const elem of expr.elements) {
     if (ts.isSpreadElement(elem) && hasDisallowedModeInit(elem.expression, env, seen)) return true;
     if (!ts.isArrayLiteralExpression(elem) || elem.elements.length < 2) continue;
@@ -477,15 +477,15 @@ function hasDisallowedModeTuple(expr: ts.ArrayLiteralExpression, env: LexicalEnv
   return false;
 }
 
-function hasDisallowedModeInit(expr: ts.Expression, env: LexicalEnv, seen = new Set<string>()): boolean {
+function hasDisallowedModeInit(expr: ts.Expression, env: LexicalEnv, seen = new Set<BindingInfo>()): boolean {
   const target = unwrap(expr);
   if (ts.isObjectLiteralExpression(target)) return evaluateObjectLiteralMode(target, env, seen) === "disallowed";
   if (ts.isArrayLiteralExpression(target)) return hasDisallowedModeTuple(target, env, seen);
-  if (!ts.isIdentifier(target) || seen.has(target.text)) return false;
+  if (!ts.isIdentifier(target)) return false;
   const found = lookupBinding(env, target.text);
-  if (!found) return false;
+  if (!found || seen.has(found.binding)) return false;
   const next = new Set(seen);
-  next.add(target.text);
+  next.add(found.binding);
   return found.binding.inits.some(init => hasDisallowedModeInit(init, found.scope, next));
 }
 
@@ -637,6 +637,7 @@ test("mode=memory detector catches static, dynamic, split, spread, computed, and
   expect(findModeMemoryUses("probe.ts", 'function makeParams() { return new URLSearchParams(); }\nfunction probe(makeParams = () => new URLSearchParams()) { makeParams().set("mode", "memory"); }')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'function probe(make: () => { set(key: string, value: string): void } = () => new Headers()) { const params = make(); params.set("mode", "memory"); }')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'const defaults = new URLSearchParams();\nfunction probe(p = defaults) { p.set("mode", "memory"); }')).toHaveLength(1);
+  expect(findModeMemoryUses("probe.ts", 'const p = new URLSearchParams();\nconst defaults = p;\nfunction probe(p = defaults) { p.set("mode", "memory"); }')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'function probe(params: { set(k: string, v: string): void } = new Headers()) { params.set("mode", "memory"); }')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'new URLSearchParams({ mode: "memory" });')).toHaveLength(1);
   expect(findModeMemoryUses("probe.ts", 'new URLSearchParams({ ["mode"]: "memory" });')).toHaveLength(1);
