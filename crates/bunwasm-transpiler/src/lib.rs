@@ -964,7 +964,7 @@ fn scan_json(ast: &mut bun_ast::Ast<'_>, trim_unused: bool) -> String {
     use bun_ast::import_record::Flags;
     let imports: Vec<_> = ast.import_records.as_slice().iter()
         .filter(|record| !record.flags.contains(Flags::IS_INTERNAL) && !(trim_unused && record.flags.contains(Flags::IS_UNUSED)))
-        .map(|record| serde_json::json!({ "path": String::from_utf8_lossy(record.path.text), "kind": String::from_utf8_lossy(record.kind.label()) }))
+        .map(|record| serde_json::json!({ "kind": String::from_utf8_lossy(record.kind.label()), "path": String::from_utf8_lossy(record.path.text) }))
         .collect();
     let mut exports = Vec::new();
     let entries = ast.named_exports.iterator();

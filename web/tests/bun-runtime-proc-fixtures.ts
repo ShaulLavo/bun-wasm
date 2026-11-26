@@ -21,6 +21,8 @@ export interface BunRuntimeScenario {
   stdout: string;
   stderr?: string;
   action?: "kill" | "dispose" | "kill-detached";
+  /** The page passes `loadTools` to installBunAdapters, and the server serves bun-tools.wasm. */
+  tools?: boolean;
 }
 const encoder = new TextEncoder();
 function uint(value: number): number[] {
@@ -200,7 +202,7 @@ const mainScenarios: BunRuntimeScenario[] = [
   { name: "dispose-live-descendants", commands: [{ source: tree }], action: "dispose", stdout: "" },
   { name: "worker-control-fd-isolation", commands: [{ source: workerControls }], stdout: "grandchild-no-controls\nworker-high-fds-ok\nexternal-root-ok\n" },
   { name: "inherited-descriptor-semantics", pipe: "input", input: "x", commands: [{
-    source: `const f=require('node:fs');const pipe=f.fstatSync(0),terminal=f.fstatSync(3);if(!pipe.isFIFO()||pipe.isFile()||pipe.isCharacterDevice()||pipe.isBlockDevice())throw Error('inherited pipe type');if(!terminal.isCharacterDevice()||terminal.isFile()||terminal.isFIFO()||terminal.isBlockDevice())throw Error('inherited terminal type');for(const run of [()=>f.closeSync(-1),()=>f.closeSync(-7),()=>f.writeSync(1000000,Buffer.alloc(0)),()=>f.writevSync(1000000,[Buffer.alloc(0)]),()=>f.writevSync(1000000,[Buffer.alloc(0),Buffer.alloc(0)])]){let code;try{run()}catch(e){code=e.code}if(code!=='EBADF')throw Error('empty closed descriptor '+code)}if(f.readSync(1000000,Buffer.alloc(0))!==0||f.readSync(1000000,Buffer.alloc(4),0,0,null)!==0)throw Error('empty closed descriptor read');await new Promise((resolve,reject)=>f.read(1000000,Buffer.alloc(0),0,0,null,(error,count)=>error?reject(error):count===0?resolve():reject(Error('empty callback read'))));const handle=await f.promises.open('preopen-data','r');await handle.close();let handleCode;try{await handle.read(Buffer.alloc(0),0,0,null)}catch(error){handleCode=error.code}if(handleCode!=='EBADF')throw Error('closed empty FileHandle read '+handleCode);if(f.readSync(0,Buffer.alloc(0))!==0)throw Error('empty pipe read');const b=Buffer.alloc(1);if(f.readSync(0,b,0,1,null)!==1||b.toString()!=='x')throw Error('empty read consumed pipe');f.writeSync(1,'buffered;');f.writeSync(3,'alias;');f.writeSync(1,'buffered-v;');f.writevSync(3,[Buffer.from('alias-v;')]);f.writeSync(1,'done\\n');`,
+    source: `const f=require('node:fs');const pipe=f.fstatSync(0),terminal=f.fstatSync(3);if(!pipe.isFIFO()||pipe.isFile()||pipe.isCharacterDevice()||pipe.isBlockDevice())throw Error('inherited pipe type');if(!terminal.isCharacterDevice()||terminal.isFile()||terminal.isFIFO()||terminal.isBlockDevice())throw Error('inherited terminal type');for(const fd of [-1,-7]){let code;try{f.closeSync(fd)}catch(e){code=e.code}if(code!=='ERR_OUT_OF_RANGE')throw Error('negative descriptor '+code)}for(const run of [()=>f.writeSync(1000000,Buffer.alloc(0)),()=>f.writevSync(1000000,[Buffer.alloc(0)]),()=>f.writevSync(1000000,[Buffer.alloc(0),Buffer.alloc(0)])]){let code;try{run()}catch(e){code=e.code}if(code!=='EBADF')throw Error('empty closed descriptor '+code)}if(f.readSync(1000000,Buffer.alloc(0))!==0||f.readSync(1000000,Buffer.alloc(4),0,0,null)!==0)throw Error('empty closed descriptor read');await new Promise((resolve,reject)=>f.read(1000000,Buffer.alloc(0),0,0,null,(error,count)=>error?reject(error):count===0?resolve():reject(Error('empty callback read'))));const handle=await f.promises.open('preopen-data','r');await handle.close();let handleCode;try{await handle.read(Buffer.alloc(0),0,0,null)}catch(error){handleCode=error.code}if(handleCode!=='EBADF')throw Error('closed empty FileHandle read '+handleCode);if(f.readSync(0,Buffer.alloc(0))!==0)throw Error('empty pipe read');const b=Buffer.alloc(1);if(f.readSync(0,b,0,1,null)!==1||b.toString()!=='x')throw Error('empty read consumed pipe');f.writeSync(1,'buffered;');f.writeSync(3,'alias;');f.writeSync(1,'buffered-v;');f.writevSync(3,[Buffer.from('alias-v;')]);f.writeSync(1,'done\\n');`,
     fds: [{ child: 0, parent: "reader" }, { child: 1, parent: 1 }, { child: 2, parent: 2 }, { child: 3, parent: 1 }],
   }], stdout: "buffered;alias;buffered-v;alias-v;done\nexternal-root-ok\n" },
   { name: "start-failed", commands: [{ executable: "/bin/broken-bun", source: "", kind: 2, status: 29 }], stdout: "external-root-ok\n" },
@@ -228,3 +230,25 @@ export const bunRuntimeProcScenarios: readonly BunRuntimeScenario[] = mainScenar
 })), [{ name: "preopen-blocks-fd4-read-fd3-write", fileCursor: "sequential",
   commands: [{ source: `const f=require('node:fs'),b=Buffer.alloc(6);if(f.readSync(4,b,0,6,null)!==6||b.toString()!=='cursor')throw Error('inherited file cursor');if(await Bun.file('preopen-data').text()!=='ROOT_PREOPEN_OK')throw Error('relocated root');f.writeSync(3,'FD3:'+b.toString()+'\\n');`,
   fds: ordinary.concat([{ child: 3, parent: 1 }, { child: 4, parent: "reader" }]) }], stdout: "FD3:cursor\nexternal-root-ok\n" }]);
+
+const toolsCheck = `
+  const run = async () => {
+    const child = Bun.spawn(["bun", "check", "--cwd", "/home/user/check-app", "--no-pretty"], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    return { stdout, stderr, code };
+  };
+  require("node:fs").mkdirSync("/home/user/check-app/src", { recursive: true });
+  await Bun.write("/home/user/check-app/tsconfig.json", JSON.stringify({ compilerOptions: { strict: true, lib: ["es2022"], noEmit: true }, include: ["src"] }));
+  await Bun.write("/home/user/check-app/src/index.ts", "export const total: number = 1 + 2;\\n");
+  const clean = await run();
+  if (clean.code !== 0 || clean.stdout) throw new Error("clean check: " + JSON.stringify(clean));
+  await Bun.write("/home/user/check-app/src/index.ts", "export const total: number = \\"three\\";\\n");
+  const failed = await run();
+  if (failed.code !== 1) throw new Error("failed check: " + JSON.stringify(failed));
+  process.stdout.write("clean=" + clean.code + " failed=" + failed.code + "\\n" + failed.stdout);
+`;
+/** `bun check` through installBunAdapters with `loadTools`, the public package path. Not in the default list: it needs bun-tools.wasm. */
+export const bunRuntimeProcToolsScenario: BunRuntimeScenario = {
+  name: "tools-check", tools: true, commands: [{ source: toolsCheck }],
+  stdout: "clean=0 failed=1\nsrc/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.\nexternal-root-ok\n",
+};

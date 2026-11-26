@@ -1,0 +1,1 @@
+Waffle and bunwasm-host enforce descendant-only signal permission (EPERM for existing parent/sibling), whereas native Linux allows same-UID parent probes.

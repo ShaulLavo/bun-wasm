@@ -1,6 +1,8 @@
 import { browserType } from "./browser-type.ts";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import { join, resolve } from "node:path";
 import { session, ready, writeFile, run, web } from "./playground.mjs";
 import { ToolsLifecycle } from "./tools-lifecycle.ts";
@@ -31,6 +33,7 @@ await progress.run(async () => {
   for (const name of browsers.length ? browsers : ["chromium", "webkit"]) {
     for (const engine of engines) {
       await checkTools(name, engine, url);
+      if (engine === "browser") await checkPackageTools(name);
     }
   }
 }, async () => { clearTimeout(deadline); await s.cleanup(); });
@@ -77,6 +80,16 @@ async function checkTools(name: string, engine: string, url: string): Promise<vo
   assert.equal(await progress.step("verified-compilations", () => page.evaluate(() => Number(Reflect.get(globalThis, "__bunwasmCompileCount")))), 1, "verified tools compile once");
   assert.equal((await progress.step("fmt-reuse", () => run(page, "bun fmt --check tool-source.ts"))).code, 0);
   assert.equal(downloads.length, 2, "fmt reuses compiled tools");
+  assert.equal((await progress.step("check-mkdir", () => run(page, "mkdir -p check-app/src"))).code, 0);
+  await progress.step("check-source-write", () => writeFile(page, "/home/user/check-app/tsconfig.json", '{"compilerOptions":{"strict":true,"lib":["es2022"],"noEmit":true},"include":["src"]}'));
+  await progress.step("check-clean-write", () => writeFile(page, "/home/user/check-app/src/index.ts", "export const total: number = 1 + 2;\n"));
+  const clean = await progress.step("check-clean", () => run(page, "bun check --cwd check-app --no-pretty"));
+  assert.equal(clean.code, 0, clean.output);
+  await progress.step("check-error-write", () => writeFile(page, "/home/user/check-app/src/index.ts", 'export const total: number = "three";\n'));
+  const failed = await progress.step("check-error", () => run(page, "bun check --cwd check-app --no-pretty"));
+  assert.equal(failed.code, 1, failed.output);
+  assert.ok(failed.output.includes("src/index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'."), failed.output);
+  assert.equal(downloads.length, 2, "check reuses compiled tools");
   await progress.step("cache-persistence", () => page.waitForFunction(() => {
     const key = new URL("bun-tools.wasm", location.href).href;
     const build = Reflect.get(globalThis, "__bunwasmBuilds")["bun-tools.wasm"];
@@ -94,6 +107,27 @@ async function checkTools(name: string, engine: string, url: string): Promise<vo
   assert.equal(downloads.length, 2, "reload compiles tools from persistent cache");
   await progress.step("context-close", () => context.close());
   console.log(JSON.stringify({ coverage: "tools-integrity", phase: "complete", browser: name, engine }));
+}
+
+/** `bun check` through the package's installBunAdapters({ loadTools }), with this site's guests:
+ * the `tools-check` scenario of bun-runtime-proc-browser.ts. */
+async function checkPackageTools(name: string): Promise<void> {
+  progress.select(name, "browser");
+  const artifact = join(s.scratch, "package-bun-browser.wasm");
+  await progress.step("package-guest", async () => writeFileSync(artifact, gunzipSync(readFileSync(join(root, "bun-browser.wasm.gz")))));
+  const env = { ...process.env, BUN_WASM_RUNTIME_PROC_ARTIFACT: artifact, BUN_WASM_RUNTIME_PROC_ENGINE: "browser",
+    BUN_WASM_RUNTIME_PROC_SCENARIO: "tools-check", BUN_WASM_RUNTIME_PROC_TOOLS: join(root, "bun-tools.wasm.gz"), BUN_WASM_RUNTIME_PROC_PORT: "0" };
+  const result = await progress.step("package-check", () => new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+    const child = spawn("bun", [join(web, "tests/bun-runtime-proc-browser.ts"), name], { cwd: web, env, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", chunk => { output += chunk; });
+    child.stderr.on("data", chunk => { output += chunk; });
+    child.on("error", reject);
+    child.on("close", code => resolve({ code, output }));
+  }));
+  assert.equal(result.code, 0, result.output);
+  assert.ok(result.output.includes('"executedScenarios":1'), result.output);
+  console.log(JSON.stringify({ packageTools: "complete", browser: name }));
 }
 
 async function toolsCached(): Promise<boolean> {

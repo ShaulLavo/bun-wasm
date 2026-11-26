@@ -1,0 +1,19 @@
+ok server.url: [ "http:", true, "string" ]
+ok static route: 200 home
+ok param route: 200 {"id":"42"}
+ok method route GET: 200 [{"id":1}]
+ok method route POST: 201 {"created":{"title":"hi"}}
+ok file route: 200 static file body
+ok redirect route: [ 302, "/" ]
+ok wildcard route: 200 wild /wild/a/b
+ok fallback 404: 404 not found
+ok error handler: 500 handled: boom
+ok ReadableStream response: 200 one two three
+ok async generator response: 200 gen-a gen-b
+ok async generator body kinds: [ "200 tagged", "200 function() { return \"called\"; }", "200 method" ]
+ok commented async generator bodies: [ "200 commented-method", "ok", "ok" ]
+ok direct stream response: 200 direct-a direct-b
+ok streamed body reader: one two three
+ok websocket upgrade + echo: [ "welcome ada", "echo ping" ]
+ok websocket pub/sub: [ "broadcast from a", "broadcast from a" ]
+ok server.stop: [ "a:1005", "ada:1000", "b:1005" ]

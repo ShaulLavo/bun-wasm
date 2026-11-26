@@ -106,7 +106,7 @@ test("plain transcript helper rejects prompt-on and implicit modes before readin
 });
 
 const transcriptCallers = [
-  "scripts/browser-import-rejections.test.ts",
+  "scripts/browser-import-rejections.test.ts", "scripts/bun-api-probe.ts",
   "scripts/dev-html-browser.test.ts",
   "scripts/hot-run-browser.test.ts",
   "scripts/spidermonkey-memory-browser.test.ts", "scripts/webcrypto-browser.test.ts",

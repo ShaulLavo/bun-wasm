@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import { discoverChecks } from "./test-checks";
 import { checkInputPaths, matchesCheckInput, nativeCheckInputsAt } from "./ci-check-inputs";
 import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
@@ -101,13 +102,24 @@ const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".c
   ".github/actions/setup-tools/", ".github/actions/release-downloads/", ".github/actions/spidermonkey-", "scripts/ci-spidermonkey-"];
 export function needsSharedNative(paths: readonly string[], inputs: readonly string[] = sharedNativeCheckInputs): boolean {
   if (inputs.length === 0) return false;
-  return paths.some(path => !excludedNativeInput(path) && (nativePreparationFiles.has(path) || sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
+  return paths.some(path => !excludedNativeInput(path) && (nativePreparationFiles.has(path) || sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs)));
 }
 
 const nativeChecks = discoverChecks();
 const nativeCheckInputs = nativeChecks.flatMap(checkInputPaths);
 const jscNativeCheckInputs = nativeChecks.filter(check => check.owner === "native" && check.engines?.includes("jsc")).flatMap(checkInputPaths);
-const sharedNativeCheckInputs = nativeChecks.filter(check => (check.owner === "native" || check.owner === "browser-guest") && check.profile === "shared-group").flatMap(checkInputPaths);
+const sharedNativeCheckInputs = nativeChecks.filter(check => (check.owner === "native" || check.owner === "browser-guest") && check.profile === "shared-group").flatMap(checkInputPaths)
+  .concat(sharedGroupManifests());
+
+/** The shared-group manifests themselves: editing one selects the shared producer, as selectChanges'
+ * profileInputs do for every ref. Split manifests don't. */
+function sharedGroupManifests(): string[] {
+  const directory = new URL("../checks/", import.meta.url);
+  return readdirSync(directory).filter(file => file.endsWith(".json")).filter(file => {
+    const value: unknown = JSON.parse(readFileSync(new URL(file, directory), "utf8"));
+    return typeof value === "object" && value !== null && "profile" in value && value.profile === "shared-group";
+  }).map(file => `checks/${file}`);
+}
 const nativeCheckManifests = /^checks\/(?:native|native-probe|runtime)-[a-z0-9-]+\.json$/;
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;

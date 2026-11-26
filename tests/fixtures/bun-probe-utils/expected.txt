@@ -1,0 +1,116 @@
+ok Bun.version: true
+ok import.meta: [ true, "index.ts", true, true, "string" ]
+ok Bun.main: true
+ok Bun.env: string
+ok Bun.argv: true
+ok Bun.sleep: true
+ok Bun.nanoseconds: true
+ok Bun.inspect: {
+  a: 1,
+  nested: {
+    list: [ 1, "two" ],
+    map: Map(1) {
+      "k": 1,
+    },
+  },
+}
+ok Bun.inspect.custom: custom!
+ok Bun.inspect.table: ┌───┬───┬───┐
+│   │ a │ b │
+├───┼───┼───┤
+│ 0 │ 1 │ 2 │
+│ 1 │ 3 │ 4 │
+└───┴───┴───┘
+
+ok Bun.deepEquals: [ true, false ]
+ok Bun.escapeHTML: &lt;a href=&quot;x&quot;&gt;&amp;&#x27;&lt;/a&gt;
+ok Bun.stringWidth: [ 5, 4, 2 ]
+ok Bun.hash: [ 4144324190076436210n, 2244896048542195824n, 1280313264, 42008902, 6906495099114325215n,
+  1235554422, 15609765314684665588n, 17829677933038192631n, 2628747375, 18075925927743871885n
+]
+ok Bun.CryptoHasher sha256: 4b37ea80bce39087789a905658986b202717098f6a2fa9f16d3498de03a5a650
+ok Bun.CryptoHasher algorithms: [ "93aced76e8e70b11", "b14615a7fdef9595", "5c4f1b4a21be27f7", "49204a8eb03418d0", "0dbb1da0441c8123" ]
+ok Bun.CryptoHasher hmac: Kggmem7tCwSzqoD35ONxaTtR5xaynXcJe6/zJInxgVE=
+ok Bun.SHA256.hash: 08d1082cc8d85a0833da8815ff1574675c415760e0aff7fb4e32de6de27faf86
+ok Bun.hash inputs: [ 1235554422, 4144324190076436210n, 1280313264, 394295678, 3062191159, "ERR_INVALID_ARG_TYPE",
+  "ERR_INVALID_ARG_TYPE", "ERR_INVALID_ARG_TYPE"
+]
+ok Bun.hash seeds: [
+  14670945076142220194n, 14670945076142220194n, 14670945076142220194n, 14670945076142220194n,
+  2698177514542653905n, 17514842372215533229n, 14828893381335048847n, 15609765314684665588n,
+  15609765314684665588n, 15609765314684665588n, 15609765314684665588n, 15609765314684665588n,
+  1015659547241263397n, 14670945076142220194n, 15609765314684665588n, 14670945076142220194n,
+  15609765314684665588n, 1974205004322664044n, 15124295519328352088n, 1251722587, 3174531959
+]
+ok Bun.sha: [ "a6e3d070c0dd9f6da143d6f2258819b2749340f394cccec10447543e27437f50", "a6e3d070c0dd9f6da143d6f2258819b2749340f394cccec10447543e27437f50",
+  true, "a6e3d070c0dd9f6da143d6f2258819b2749340f394cccec10447543e27437f50", "CNEILMjYWggz2ogV/xV0Z1xBV2Dgr/f7TjLebeJ/r4Y="
+]
+ok Bun hash buffer output and digest retry: [ true, "a6e3d070c0dd9f6da143d6f2258819b2749340f394cccec10447543e27437f50", true,
+  "ERR_INVALID_ARG_VALUE", "08d1082cc8d85a0833da8815ff1574675c415760e0aff7fb4e32de6de27faf86",
+  "ERR_INVALID_ARG_TYPE", "08d1082cc8d85a0833da8815ff1574675c415760e0aff7fb4e32de6de27faf86",
+  true, true
+]
+ok Bun.password argon2id: [ true, false ]
+ok Bun.password empty verify settles at once: [
+  [ "fulfilled", "fulfilled" ], [ false, false ], false
+]
+ok Bun.password returns a pending promise: pending
+ok Bun.password bcrypt: [ true, false ]
+ok Bun.password sync: true
+ok Bun.Glob: [ true, false, true ]
+ok Bun.Glob scan: [ "a.ts", "sub/b.ts" ]
+ok Bun.semver: [ true, false, -1, [ "1.2.0", "1.9.9", "1.10.0" ] ]
+ok Bun.TOML.parse: {
+  title: "bun",
+  owner: {
+    name: "x",
+    list: [ 1, 2 ],
+  },
+  items: [
+    {
+      id: 1,
+    }
+  ],
+}
+ok Bun.YAML.parse: {
+  name: "bun",
+  list: [ 1, "two" ],
+  nested: {
+    ok: true,
+  },
+}
+ok Bun.YAML.stringify: {name: bun,list: [1,2]}
+ok import toml/yaml/json5: [ 3000, "yaml" ]
+ok Bun.randomUUIDv7: 36
+ok Bun.which: string
+ok Bun.fileURLToPath: [ "/a/b.ts", "file:///a/b.ts" ]
+ok Bun.gzipSync: zip me
+ok Bun.deflateSync: deflate me
+ok Bun.zstd: zstd me
+ok Bun.peek: [ 5, "pending" ]
+ok Bun.ArrayBufferSink: abc
+ok Bun.readableStreamToText: stream text
+ok Bun.Transpiler: const x = 1;
+
+export { x };
+ok Bun.Transpiler scan: {
+  exports: [ "b" ],
+  imports: [
+    {
+      kind: "import-statement",
+      path: "a",
+    }
+  ],
+}
+ok HTMLRewriter: <p>new text</p><a href="/X">x</a>
+ok HTMLRewriter string: <strong>bold</strong>
+ok Bun.cookie: [ "1", 3, "name=value; Path=/; HttpOnly; SameSite=Lax" ]
+ok structuredClone + Bun types: {
+  d: 1970-01-01T00:00:00.000Z,
+  m: Map(1) {
+    1: 2,
+  },
+}
+ok fetch data url: hi bun
+ok WebCrypto subtle digest: 08d1082cc8d85a08
+ok crypto.randomUUID: 36

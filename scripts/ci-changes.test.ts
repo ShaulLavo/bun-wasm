@@ -267,6 +267,10 @@ test.each(["pull_request", "push"])("the exact JSC README skips native jobs thro
   expect(needsSharedNative(["jsc/common.sh"])).toBe(true);
 });
 
+test("a split native manifest and its fixture do not select the shared native producer", () => {
+  expect(needsSharedNative(["checks/native-check-command.json", "tests/fixtures/check-command/index.ts"])).toBe(false);
+});
+
 for (const path of [
   "scripts/jsc-json-fast-controls.test.ts", "checks/runtime-json-fast-controls.json",
   "scripts/bench-jsc-json.ts", "scripts/fixtures/jsc-json-bench.ts",

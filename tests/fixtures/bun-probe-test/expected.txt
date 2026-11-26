@@ -1,0 +1,2 @@
+bun test vVERSION
+hooks: beforeAll,beforeEach,afterEach,beforeEach,afterEach,beforeEach,afterEach,beforeEach,afterEach,beforeEach,afterEach

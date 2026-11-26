@@ -14,7 +14,7 @@ Pin bun-wasm to an exact commit and match that checkout's `waffle` pin:
 {
 	"dependencies": {
 		"bun-wasm": "github:ShaulLavo/bun-wasm#<commit>",
-		"waffle": "npm:@waffle-os/runtime@0.0.150"
+		"waffle": "npm:@waffle-os/runtime@0.0.151"
 	},
 	"trustedDependencies": ["bun-wasm"]
 }
@@ -55,6 +55,8 @@ installation.dispose();
 ```
 
 `installBunAdapters` never creates or disposes the `Runtime`. It registers the Bun adapters and programs, then writes a small marker file at each executable path. For the default `browser` engine, those paths are `/bin/bun`, `/bin/node` and `/bin/nodejs`. Pass `executables: ["/opt/bun/browser"]` to pick other absolute paths, or `executables: []` to register none.
+
+`bun lint`, `bun fmt` and `bun check` run in a separate module, `bun-tools.wasm`. Pass `loadTools: () => WebAssembly.compileStreaming(fetch(toolsUrl))` to enable them; it is called once, on the first such command. Without it those commands exit 1.
 
 The default `browser` guest downloads on the first spawn, not during installation, using `BUN_WASM_ASSET` and verifying its uncompressed byte count and SHA-256 before compiling. You do not need to pass `asset` or `module` for the default `browser` engine.
 
