@@ -445,12 +445,6 @@ fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, 
     let keys: Vec<_> = resolver.packages.keys().cloned().collect();
     let mut downloads = io::Downloads::new(io::TARBALL_PREFETCHES);
     let mut archives = Archives::new(resolver.packages.values());
-    // Without node_modules nothing is installed yet, and only this run's own installs write
-    // the source records that a present package needs.
-    let fresh = matches!(
-        fs::symlink_metadata("node_modules"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    );
     let mut lookahead = keys.iter();
     // Lookahead already found these missing. Only their own installs add them; reinstalling a
     // parent can remove a nested package, so positive answers are checked again.
@@ -461,14 +455,10 @@ fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, 
             downloads: &mut downloads,
             archives: &archives,
             absent: &mut absent,
-            fresh,
         };
         prefetch.fill(&mut lookahead);
         let package = &resolver.packages[key];
-        if !fresh
-            && !absent.remove(key)
-            && trace::time("present-check", || package_present(package))
-        {
+        if !absent.remove(key) && trace::time("present-check", || package_present(package)) {
             archives.skip(package);
             continue;
         }
@@ -507,7 +497,6 @@ struct Prefetch<'a> {
     downloads: &'a mut io::Downloads,
     archives: &'a Archives,
     absent: &'a mut BTreeSet<String>,
-    fresh: bool,
 }
 
 impl Prefetch<'_> {
@@ -519,14 +508,11 @@ impl Prefetch<'_> {
             let Some(package) = self.resolver.packages.get(key) else {
                 continue;
             };
-            if package.local.is_some()
-                || !self.fresh && trace::time("present-check", || package_present(package))
+            if package.local.is_some() || trace::time("present-check", || package_present(package))
             {
                 continue;
             }
-            if !self.fresh {
-                self.absent.insert(key.clone());
-            }
+            self.absent.insert(key.clone());
             if self.archives.holds(&package.tarball) {
                 continue;
             }

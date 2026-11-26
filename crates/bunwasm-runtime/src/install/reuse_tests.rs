@@ -1,4 +1,4 @@
-//! Cold installs read each archive once and skip checks that cannot find anything.
+//! Cold installs read each shared archive once.
 use std::{fs, path::Path, process::Command};
 
 use serde_json::json;
@@ -93,11 +93,6 @@ fn a_shared_archive_is_read_once_per_install() {
     let (installed, _) = install_packages(&mut resolver(&all)).unwrap();
     assert_eq!(installed, 3);
     assert_eq!(trace::calls("cache-read"), 2, "each archive is read once");
-    assert_eq!(
-        trace::calls("present-check"),
-        0,
-        "nothing is installed without node_modules"
-    );
     for package in all {
         let manifest = fs::read(package.path().join("package.json")).unwrap();
         assert_eq!(
