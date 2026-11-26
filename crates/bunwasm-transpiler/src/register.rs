@@ -103,20 +103,24 @@ impl Module {
 /// substring of the source, also after decoding its `\u`/`\x` escapes. Since a fresh
 /// name appears nowhere in the module's own tokens, strings or comments, every printed
 /// occurrence of it is one the record put there.
+///
+/// Most fresh names start with [`RESERVED`], so the offsets where that prefix occurs are
+/// found once: such a name occurs in the text only at one of them. Other names scan the text.
 struct Names<'source> {
     taken: HashSet<String>,
     source: &'source str,
     decoded: Cow<'source, str>,
+    /// Byte offsets of [`RESERVED`] in `source`, then in `decoded` when it differs.
+    reserved: Vec<usize>,
+    reserved_decoded: Vec<usize>,
 }
+
+/// The prefix of the record's own generated names.
+const RESERVED: &str = "__bunwasm";
 
 /// A wrapper parameter that cannot capture the module's own names, including escaped names.
 pub fn commonjs_metadata_name(source: &str) -> String {
-    Names {
-        taken: HashSet::new(),
-        source,
-        decoded: decode_escapes(source),
-    }
-    .fresh("$Bun_import_meta")
+    Names::with_taken(HashSet::new(), source).fresh("$Bun_import_meta")
 }
 
 impl<'source> Names<'source> {
@@ -126,15 +130,37 @@ impl<'source> Names<'source> {
             .iter()
             .map(|symbol| text(symbol.original_name.slice()))
             .collect();
+        Names::with_taken(taken, source)
+    }
+
+    fn with_taken(taken: HashSet<String>, source: &'source str) -> Self {
+        let decoded = decode_escapes(source);
+        let offsets = |text: &str| text.match_indices(RESERVED).map(|(at, _)| at).collect();
+        let reserved = offsets(source);
+        let reserved_decoded = match &decoded {
+            Cow::Borrowed(_) => Vec::new(),
+            Cow::Owned(text) => offsets(text),
+        };
         Names {
             taken,
             source,
-            decoded: decode_escapes(source),
+            decoded,
+            reserved,
+            reserved_decoded,
         }
     }
 
     fn free(&self, name: &str) -> bool {
-        !self.taken.contains(name) && !self.source.contains(name) && !self.decoded.contains(name)
+        !self.taken.contains(name) && !self.occurs(name)
+    }
+
+    /// Whether `name` is a substring of the source or its decoded spelling.
+    fn occurs(&self, name: &str) -> bool {
+        if !name.starts_with(RESERVED) {
+            return self.source.contains(name) || self.decoded.contains(name);
+        }
+        let at = |text: &str, offsets: &[usize]| offsets.iter().any(|&at| text[at..].starts_with(name));
+        at(self.source, &self.reserved) || at(&self.decoded, &self.reserved_decoded)
     }
 
     fn fresh(&mut self, base: &str) -> String {
@@ -1350,6 +1376,22 @@ mod source_memory_tests {
         let decoded = decode_escapes(source);
         assert_eq!(&*decoded, source);
         assert_eq!(decoded.as_ptr(), source.as_ptr());
+    }
+
+    #[test]
+    fn reserved_names_collide_with_any_occurrence() {
+        let arena = Arena::new();
+        let ast = js_ast::Ast::empty_in(&arena);
+        let mut names = Names::new(&ast, "x__bunwasm_ns0_0y; '__bunwasm_m$1'; __bunwasm_i2 __bunwasm");
+        assert_eq!(names.fresh("__bunwasm_ns0_0"), "__bunwasm_ns0_0$1");
+        assert_eq!(names.fresh("__bunwasm_m"), "__bunwasm_m$2");
+        assert_eq!(names.fresh("__bunwasm_m"), "__bunwasm_m$3");
+        assert_eq!(names.fresh("__bunwasm_i"), "__bunwasm_i$1");
+        assert_eq!(names.fresh("__bunwasm_r"), "__bunwasm_r");
+        let mut escaped = Names::new(&ast, r"'\x5f_bunwasm_r' + __bunw\u0061sm_m");
+        assert_eq!(escaped.fresh("__bunwasm_r"), "__bunwasm_r$1");
+        assert_eq!(escaped.fresh("__bunwasm_m"), "__bunwasm_m$1");
+        assert_eq!(escaped.fresh("__bunwasm_i"), "__bunwasm_i");
     }
 
     #[test]

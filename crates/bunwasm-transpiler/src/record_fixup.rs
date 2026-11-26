@@ -48,8 +48,7 @@ pub(crate) struct Fixed {
 }
 
 pub(crate) fn fix(code: &str, mappings: &str, names: &Names<'_>) -> Option<Fixed> {
-    let calls_possible = names.views.iter().any(|view| code.contains(view));
-    if mappings.is_empty() || !(code.contains(names.arguments) || calls_possible) {
+    if mappings.is_empty() || !(code.contains(names.arguments) || has_namespace_call(code, &names.views)) {
         return None;
     }
     let mut lines = decode(mappings);
@@ -114,36 +113,60 @@ fn argument_edit(line: usize, text: &str, start: usize, names: &Names<'_>) -> Ed
     }
 }
 
+/// How the printer opens a call through a binding view: `(0, <view>.f)(`.
+const CALL: &str = "(0, ";
+
+/// Whether `code` calls through any binding view. One scan for the call opening serves
+/// every view.
+fn has_namespace_call(code: &str, views: &[&str]) -> bool {
+    !views.is_empty()
+        && code
+            .match_indices(CALL)
+            .any(|(start, _)| namespace_call(&code[start..], views).is_some())
+}
+
 /// Adds a segment at the argument list of each `(0, <view>.f)(` that copies the segment
 /// where the call starts. Returns how many were added.
 fn map_namespace_calls(code: &str, lines: &mut [Vec<Segment>], views: &[&str]) -> usize {
+    let line_end = |from: usize| code[from..].find('\n').map_or(code.len(), |at| from + at);
     let mut added = 0;
-    for (text, segments) in code.split('\n').zip(lines.iter_mut()) {
-        for view in views {
-            let prefix = format!("(0, {view}");
-            let calls = text
-                .match_indices(prefix.as_str())
-                .filter_map(|(start, _)| {
-                    Some((start, namespace_callee_end(&text[start..], &prefix)?))
-                });
-            for (start, arguments) in calls.collect::<Vec<_>>() {
-                let call = text[..start].encode_utf16().count() as i64;
-                let list = call + text[start..start + arguments].encode_utf16().count() as i64;
-                added += usize::from(copy_segment(segments, call, list));
-            }
+    // The current match's line (its index and where it ends in `code`), and the last
+    // counted position on it as a byte offset and a UTF-16 column.
+    let (mut line, mut end) = (0, line_end(0));
+    let (mut counted, mut column) = (0, 0i64);
+    for (start, _) in code.match_indices(CALL) {
+        while start > end {
+            line += 1;
+            counted = end + 1;
+            column = 0;
+            end = line_end(counted);
         }
+        let Some(arguments) = namespace_call(&code[start..end], views) else {
+            continue;
+        };
+        let Some(segments) = lines.get_mut(line) else {
+            break;
+        };
+        let call = column + code[counted..start].encode_utf16().count() as i64;
+        (counted, column) = (start, call);
+        let list = call + code[start..start + arguments].encode_utf16().count() as i64;
+        added += usize::from(copy_segment(segments, call, list));
     }
     added
 }
 
-/// For text starting `(0, <view>.name)(` (or `[“string”]` for the name), `prefix` being
-/// `(0, <view>`, the byte offset of the argument list's `(`.
-fn namespace_callee_end(text: &str, prefix: &str) -> Option<usize> {
-    let rest = text.strip_prefix(prefix)?;
-    let member = member_length(rest)?;
-    rest[member..]
-        .starts_with(")(")
-        .then(|| text.len() - rest.len() + member + 1)
+/// For text starting `(0, <view>.name)(` (or `[“string”]` for the name) with one of `views`,
+/// the byte offset of the argument list's `(`. At most one view fits: the next character
+/// after a view must be `.` or `[`, never part of a longer identifier.
+fn namespace_call(text: &str, views: &[&str]) -> Option<usize> {
+    let opened = text.strip_prefix(CALL)?;
+    views.iter().find_map(|view| {
+        let rest = opened.strip_prefix(view)?;
+        let member = member_length(rest)?;
+        rest[member..]
+            .starts_with(")(")
+            .then(|| text.len() - rest.len() + member + 1)
+    })
 }
 
 /// The length of `.name` or `["string"]` at the start of `text`.
@@ -367,23 +390,20 @@ pub(crate) mod tests {
 
     #[test]
     fn namespace_callees() {
-        let view = "(0, __bunwasm_ns0_1";
+        let view = ["__bunwasm_ns0_1"];
+        assert_eq!(namespace_call("(0, __bunwasm_ns0_1.test)(1)", &view), Some(25));
         assert_eq!(
-            namespace_callee_end("(0, __bunwasm_ns0_1.test)(1)", view),
-            Some(25)
-        );
-        assert_eq!(
-            namespace_callee_end(
-                r#"(0, __bunwasm_ns12_3["a-\"b"])()"#,
-                "(0, __bunwasm_ns12_3"
-            ),
+            namespace_call(r#"(0, __bunwasm_ns12_3["a-\"b"])()"#, &["__bunwasm_ns12_3"]),
             Some(30)
         );
-        assert_eq!(
-            namespace_callee_end("(0, __bunwasm_ns0_1.test)", view),
-            None
-        );
-        assert_eq!(namespace_callee_end("(0, __bunwasm_ns0_1)()", view), None);
+        assert_eq!(namespace_call("(0, __bunwasm_ns0_1.test)", &view), None);
+        assert_eq!(namespace_call("(0, __bunwasm_ns0_1)()", &view), None);
+        // Of views where one prefixes another, only the one the member follows fits.
+        let nested = ["__bunwasm_ns0_1", "__bunwasm_ns0_1$1", "__bunwasm_ns0_10"];
+        assert_eq!(namespace_call("(0, __bunwasm_ns0_1$1.f)()", &nested), Some(24));
+        assert_eq!(namespace_call("(0, __bunwasm_ns0_10.f)()", &nested), Some(23));
+        assert!(has_namespace_call("x; (0, other.f)(); (0, __bunwasm_ns0_10.f)();", &nested));
+        assert!(!has_namespace_call("__bunwasm_ns0_1.f(); (0, __bunwasm_ns0_2.f)();", &nested));
         // As printed: the call's segment marks the imported name (column 4), then a later
         // token (30); the argument list (25) gets the call's original position.
         let fixed = fix(
@@ -402,6 +422,66 @@ pub(crate) mod tests {
             )
             .is_none()
         );
+    }
+
+    /// The former per-line, per-view scan, as an oracle for the single scan.
+    fn oracle_namespace_calls(code: &str, lines: &mut [Vec<Segment>], views: &[&str]) -> usize {
+        let mut added = 0;
+        for (text, segments) in code.split('\n').zip(lines.iter_mut()) {
+            for view in views {
+                let prefix = format!("(0, {view}");
+                let calls: Vec<_> = text
+                    .match_indices(prefix.as_str())
+                    .filter_map(|(start, _)| {
+                        let rest = text[start..].strip_prefix(prefix.as_str())?;
+                        let member = member_length(rest)?;
+                        rest[member..].starts_with(")(").then(|| (start, prefix.len() + member + 1))
+                    })
+                    .collect();
+                for (start, arguments) in calls {
+                    let call = text[..start].encode_utf16().count() as i64;
+                    let list = call + text[start..start + arguments].encode_utf16().count() as i64;
+                    added += usize::from(copy_segment(segments, call, list));
+                }
+            }
+        }
+        added
+    }
+
+    #[test]
+    fn single_scan_matches_per_view_scan() {
+        let views = ["__bunwasm_ns0_0", "__bunwasm_ns1_1", "__bunwasm_ns1_1$1"];
+        let code = concat!(
+            "é😀(0, __bunwasm_ns0_0.a)(1); (0, __bunwasm_ns1_1$1[\"x\"])(2);\n",
+            "\n",
+            "(0, other.b)(); (0, __bunwasm_ns1_1.c)(3); (0, __bunwasm_ns0_0.d)\n",
+            "(4); (0, __bunwasm_ns0_0.e)(5)",
+        );
+        // A segment at every column of each line, so each callee has one to copy.
+        let mappings: Vec<String> = code
+            .split('\n')
+            .map(|text| {
+                let columns: Vec<i64> = (0..text.encode_utf16().count() as i64).step_by(3).collect();
+                line(&columns)
+            })
+            .collect();
+        let mappings = mappings.join(";");
+        let mut expected = decode(&mappings);
+        let mut actual = decode(&mappings);
+        let oracle = oracle_namespace_calls(code, &mut expected, &views);
+        assert_eq!(map_namespace_calls(code, &mut actual, &views), oracle);
+        assert!(oracle >= 2, "the input has calls to map: {oracle}");
+        assert_eq!(encode(&actual), encode(&expected));
+        // Fewer mapping lines than code lines: both stop at the last mapped line.
+        let mut short = decode(&mappings);
+        short.truncate(1);
+        let mut short_expected = decode(&mappings);
+        short_expected.truncate(1);
+        assert_eq!(
+            map_namespace_calls(code, &mut short, &views),
+            oracle_namespace_calls(code, &mut short_expected, &views)
+        );
+        assert_eq!(encode(&short), encode(&short_expected));
     }
 
     fn line(columns: &[i64]) -> String {
