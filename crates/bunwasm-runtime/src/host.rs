@@ -349,6 +349,7 @@ mod runtime_proc {
         pub fn wait_job(job: i32, flags: i32, status_ptr: i32) -> i32;
         pub fn kill(pid: i32, sig: i32) -> i32;
         pub fn kill_job(job: i32, sig: i32) -> i32;
+        pub fn probe_process(pid: i32) -> i32;
         pub fn poll(subs_ptr: i32, n: i32, timeout_ms: i32, out_ptr: i32) -> i32;
         pub fn signal(sig: i32, mode: i32) -> i32;
     }
@@ -412,6 +413,9 @@ mod runtime_proc {
         UNSUPPORTED
     }
     pub unsafe fn kill_job(_: i32, _: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn probe_process(_: i32) -> i32 {
         UNSUPPORTED
     }
     pub unsafe fn poll(_: i32, _: i32, _: i32, _: i32) -> i32 {
@@ -630,6 +634,10 @@ pub fn proc_kill(pid: i32, signal: i32) -> i32 {
 
 pub fn proc_kill_job(job: i32, signal: i32) -> i32 {
     proc_call!(runtime_proc::kill_job(job, signal))
+}
+
+pub fn proc_probe_process(pid: i32) -> i32 {
+    proc_call!(runtime_proc::probe_process(pid))
 }
 
 /// Waits on 16-byte subscriptions and returns the 16-byte events that fired (possibly none).

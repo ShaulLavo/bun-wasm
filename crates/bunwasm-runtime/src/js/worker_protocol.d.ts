@@ -237,6 +237,7 @@ declare namespace BunWasm {
     procWaitJob(job: number, flags: number): [kind: number, value: number] | number;
     procKill(pid: number, signal: number): number;
     procKillJob(job: number, signal: number): number;
+    procProbeProcess(pid: number): number;
     /** 16-byte subscriptions in, 16-byte events out. */
     procPoll(subscriptions: Uint8Array, timeoutMs: number): Uint8Array | number;
     utf8Decode(bytes: Uint8Array): string;

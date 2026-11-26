@@ -2350,6 +2350,9 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     t.add("procKillJob", |a| {
         Ok(host::proc_kill_job(a.i32(0)?, a.i32(1)?).into())
     });
+    t.add("procProbeProcess", |a| {
+        Ok(host::proc_probe_process(a.i32(0)?).into())
+    });
     t.add("procPoll", |a| {
         Ok(match host::proc_poll(a.bytes(0)?, a.i32(1)?) {
             Ok(events) => Val::Bytes(events),
