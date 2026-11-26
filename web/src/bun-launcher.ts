@@ -115,7 +115,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   let attempt: number | undefined;
   try {
     if (!active()) throw new Error("Bun process launch was revoked");
-    const module = options.loadTools && isToolCommand(context.request.argv.slice(1))
+    const module = options.loadTools && isToolCommand(context.request.argv.slice(1), context.request.argv[0])
       ? await options.loadTools() : context.module;
     if (!active()) throw new Error("Bun process launch was revoked");
     const [{ createRing }, { createBunNetworkHelper, dispatchBunNetwork }, network] = await Promise.all([
@@ -129,6 +129,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     relay = await runtimeRelay(options.runtime, options.network?.relay);
     if (!active()) throw new Error("Bun process launch was revoked");
     helper = createBunNetworkHelper(network, ring, { ...options.network, connect: options.network?.connect ?? relay?.connect, pathScope });
+    options.network?.started?.(helper, { argv: context.request.argv, env: context.request.env, pid: context.pid, job: context.job });
     if (engine === "browser" && typeof BroadcastChannel === "function") {
       lookupChannel = new BroadcastChannel(`bun-wasm-dns-${crypto.randomUUID()}`);
       disposeLookup = installLookupServer(lookupChannel, network);

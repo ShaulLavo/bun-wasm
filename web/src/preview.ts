@@ -4,7 +4,7 @@ import type { PreviewConnection } from "waffle/browser/net/helper";
 import { PreviewRouter, type PreviewOptions, type PreviewServer } from "waffle/browser/preview";
 import type { PreviewMessage, PreviewReply } from "waffle/browser/preview-protocol";
 import { swScriptUrl } from "./entry-assets.js";
-import { PREVIEW_DIR } from "./preview-protocol";
+import { PREVIEW_DIR } from "./preview-protocol.js";
 
 export { activated } from "waffle/browser/service-worker";
 export type PreviewState = "ready" | "unsupported" | "failed";
@@ -107,8 +107,16 @@ function postAndAck(
   return { promise, cancel: () => finish(false) };
 }
 
+/**
+ * Returns the registration's ready worker, or null when none is active yet.
+ *
+ * A worker in the registration's active slot is already activating or activated (unless marked
+ * redundant, which the spec queues before clearing the slot). WebKit can resolve `register()` in a
+ * second tab with `registration.active.state` stuck at "installing" and never fire `statechange`,
+ * so any non-redundant worker in the active slot counts as ready.
+ */
 function activatedWorker(registration: ServiceWorkerRegistration): ServiceWorker | null {
-  if (registration.active?.state === "activated") return registration.active;
+  if (registration.active && registration.active.state !== "redundant") return registration.active;
   if (registration.waiting?.state === "activated") return registration.waiting;
   if (registration.installing?.state === "activated") return registration.installing;
   return null;
@@ -119,9 +127,7 @@ function isObservablePending(registration: ServiceWorkerRegistration, worker: Se
     worker !== null &&
     worker.state !== "activated" &&
     worker.state !== "redundant" &&
-    (worker === registration.installing ||
-      worker === registration.waiting ||
-      (worker === registration.active && worker.state === "activating"))
+    (worker === registration.installing || worker === registration.waiting)
   );
 }
 
@@ -198,6 +204,15 @@ export class Previews extends PreviewRouter {
       return super.url(port, path);
     }
     return new URL(`${this.routePrefix}${port}${path}`, this.mountBaseURL).href;
+  }
+
+  /** The link that opens a preview URL in a new tab. Mounted previews are their own link; preview origins use a wrapper page. */
+  linkFor(url: string): string {
+    return url;
+  }
+
+  linkUrl(port: number, path = "/"): string {
+    return this.linkFor(this.url(port, path));
   }
 
   get ready(): Promise<PreviewState> {
@@ -330,27 +345,30 @@ export class Previews extends PreviewRouter {
     }
   }
 
+  private observePendingWorker(registration: ServiceWorkerRegistration, worker: ServiceWorker): void {
+    const onStateChange = () => {
+      const state = worker.state;
+      if (isObservablePending(registration, worker)) return;
+      cleanup();
+      this.updateObservers.delete(worker);
+      if (state !== "redundant") this.reconcileActiveWorker();
+    };
+    const cleanup = () => {
+      worker.removeEventListener("statechange", onStateChange);
+    };
+    worker.addEventListener("statechange", onStateChange);
+    this.updateObservers.set(worker, cleanup);
+  }
+
   private observePendingUpdates(registration: ServiceWorkerRegistration): void {
     for (const [worker, cleanup] of Array.from(this.updateObservers)) {
-      if (!isObservablePending(registration, worker)) {
-        cleanup();
-        this.updateObservers.delete(worker);
-      }
+      if (isObservablePending(registration, worker)) continue;
+      cleanup();
+      this.updateObservers.delete(worker);
     }
-    for (const worker of [registration.installing, registration.waiting, registration.active]) {
+    for (const worker of [registration.installing, registration.waiting]) {
       if (!isObservablePending(registration, worker) || this.updateObservers.has(worker)) continue;
-      const onStateChange = () => {
-        if (worker.state === "activated" || worker.state === "redundant") {
-          cleanup();
-          this.updateObservers.delete(worker);
-          if (worker.state === "activated") this.reconcileActiveWorker();
-        }
-      };
-      const cleanup = () => {
-        worker.removeEventListener("statechange", onStateChange);
-      };
-      worker.addEventListener("statechange", onStateChange);
-      this.updateObservers.set(worker, cleanup);
+      this.observePendingWorker(registration, worker);
     }
   }
 
@@ -466,7 +484,7 @@ export class Previews extends PreviewRouter {
     }
     const candidate =
       upgrading ??
-      [registration.active, registration.waiting, registration.installing].find(
+      [registration.waiting, registration.installing].find(
         (w): w is ServiceWorker => isObservablePending(registration, w),
       ) ??
       null;
@@ -640,7 +658,7 @@ export class Previews extends PreviewRouter {
       this.currentReadyState === "ready" &&
       this.workerReadySettled &&
       liveActive !== null &&
-      liveActive.state === "activated" &&
+      liveActive.state !== "redundant" &&
       entry.worker === liveActive
     );
   }

@@ -106,7 +106,7 @@ test("plain transcript helper rejects prompt-on and implicit modes before readin
 });
 
 const transcriptCallers = [
-  "scripts/browser-import-rejections.test.ts",
+  "scripts/browser-import-rejections.test.ts", "scripts/bun-api-probe.ts",
   "scripts/dev-html-browser.test.ts",
   "scripts/hot-run-browser.test.ts",
   "scripts/spidermonkey-memory-browser.test.ts", "scripts/webcrypto-browser.test.ts",
@@ -118,7 +118,8 @@ const transcriptCallers = [
   "web/tests/browser-prepare-context.ts", "web/tests/browser-solid-stack.ts", "web/tests/browser-stack.mjs", "web/tests/browser-subprocess.ts",
   "web/tests/browser-tools.ts", "web/tests/browser-worker-modules.ts", "web/tests/next-framework-browser.ts",
   "web/tests/browser-playground-stdin.ts", "web/tests/browser-vite-react.ts", "web/tests/browser-next-dev.ts", "web/tests/browser-next-production.ts",
-  "web/tests/shell-stop-check.ts", "scripts/deploy-upgrade-browser.test.ts",
+  "web/tests/shell-stop-check.ts", "scripts/deploy-upgrade-browser.test.ts", "scripts/playground-demos-browser.test.ts",
+  "web/tests/browser-typescript-language-server.ts",
 ];
 const nonTranscriptCallers = [
   // The coverage selector declares input paths; it never reads a playground transcript.
@@ -133,6 +134,10 @@ const nonTranscriptCallers = [
   "web/tests/playground-navigation.ts", "scripts/navigation-server-browser.test.ts",
   // Storage and multi-tab checks use lifecycle, public state, and server helpers, never playground.mjs transcripts.
   "scripts/sandbox-storage-browser.test.ts", "scripts/sandbox-fs-observation-browser.test.ts", "scripts/multitab-browser.test.ts",
+  // Starts the server session only; its scenario module reads the transcript.
+  "scripts/typescript-language-server-browser.test.ts",
+  // The preview-origin check starts servers and reads preview frames; it uses playground.mjs only to serve the site.
+  "scripts/isolated-preview-origins-browser.test.ts",
 ];
 const inheritedTranscriptCallers = ["web/tests/browser-quickjs-stack.ts", "web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts", "scripts/bench-engines.test.ts", "scripts/engine-chromium-bench.ts"];
 

@@ -3,14 +3,14 @@ import { createRuntime, type Runtime, type ProcessService } from "waffle";
 import { createWorkerProcessTransport, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { installBunAdapters, type BunAdapterOptions } from "../../src/bun-adapter.js";
 import { runtimeProcFixture } from "./runtime-proc-fixtures";
-import { bunRuntimeProcFixture, bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
+import { bunRuntimeProcFixture, bunRuntimeProcScenarios, bunRuntimeProcToolsScenario } from "./bun-runtime-proc-fixtures";
 
 const parameters = new URLSearchParams(location.search);
 const engine = parameters.get("engine") ?? "browser";
 if (engine !== "browser" && engine !== "quickjs" && engine !== "jsc") throw new Error(`unknown engine ${engine}`);
 const publishedDefault = parameters.has("published-default");
 const name = parameters.get("scenario") ?? "nested";
-const scenario = bunRuntimeProcScenarios.find(item => item.name === name);
+const scenario = bunRuntimeProcScenarios.concat([bunRuntimeProcToolsScenario]).find(item => item.name === name);
 const nativeWorker = globalThis.Worker;
 const workers = new Set<Worker>();
 // Waffle prestarts idle process workers that receive no request until a spawn takes one.
@@ -110,7 +110,8 @@ try {
     // with no engine/module/asset/URL override and no local artifact fallback.
     const options: BunAdapterOptions = publishedDefault ? { workerUrl, notificationWorkerUrl } : { workerUrl, notificationWorkerUrl, engine,
       module: await WebAssembly.compileStreaming(fetch("./bun-guest.wasm")),
-      executables: ["/bin/bun", "/bin/node"] };
+      executables: ["/bin/bun", "/bin/node"],
+      ...scenario?.tools ? { loadTools: () => WebAssembly.compileStreaming(fetch("./bun-tools.wasm")) } : {} };
     // Disposal must unregister aliases and adapters, not merely clear a private installed flag.
     const first = await installBunAdapters(runtime, options);
     first.dispose(); first.dispose();

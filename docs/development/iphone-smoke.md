@@ -77,7 +77,7 @@ For a deploy check, run the same three cases against the public site instead of 
 local build. Replace `--root` and `--source-file` with `--base-url`, the site root:
 
 ```sh
-bun scripts/iphone-smoke.ts --base-url=https://bun.sprockt.dev/ \
+bun scripts/iphone-smoke.ts --base-url=https://bun.shaulavo.dev/ \
 	--output=/absolute/results/new-iphone-smoke \
 	--iphone-control-url=http://127.0.0.1:FORWARDED_PORT/__goals_iphone/TOKEN \
 	--iphone-agent-command=/exact/device_open/path/agent-device \
@@ -92,7 +92,7 @@ engine files and runs the same fingerprint preflight before the first case and a
 the last. A deployment that changes during the run makes the result red.
 
 The page still needs the observer script, which the deployed site cannot carry.
-Start the same Mac wrapper with `LIVE_URL=https://bun.sprockt.dev/` in place of
+Start the same Mac wrapper with `LIVE_URL=https://bun.shaulavo.dev/` in place of
 `ROOT` and `PREVIEW_ORIGINS`, and stage only the two controller bundles. The
 observer server then forwards every request to the live site with Safari's own
 headers, including `Accept-Encoding`, and serves the response on Mac loopback.
@@ -113,7 +113,7 @@ missing, the result is red at the `isolation` step.
 
 After the cases, the runner checks the edge. The proxy records each whole,
 unconditional request it made and what came back. The PC repeats each request
-against `https://bun.sprockt.dev/` with the same headers. It compares status,
+against `https://bun.shaulavo.dev/` with the same headers. It compares status,
 `Content-Type`, `Content-Encoding`, COOP, COEP, CORP, `Cache-Control`,
 `Service-Worker-Allowed` and the decoded bytes. Any difference makes the result
 red at the `live-origin` step, and `liveOrigin` in the result lists them. The PC
@@ -124,7 +124,7 @@ This mode can't prove:
 
 - Safari's own connection to the Cloudflare edge: TLS, HTTP/2 or HTTP/3, and edge
   caching keyed on Safari's request. Bun's fetch on the Mac makes those requests.
-- Behavior tied to the real origin `https://bun.sprockt.dev`: per-origin storage
+- Behavior tied to the real origin `https://bun.shaulavo.dev`: per-origin storage
   and service-worker state, and absolute URLs to that host. Under the proxy, those
   URLs become cross-origin loads.
 - The deployed caching of the injected HTML and `sw.js`, including how the service

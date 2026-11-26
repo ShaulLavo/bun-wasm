@@ -56,7 +56,7 @@ test("Firefox: installed observation covers original root and successful Bun, sh
   page.on("console", async message => { if (message.type() === "error") console.error("control page error", await Promise.all(message.args().map(arg => arg.evaluate(value => value instanceof Error ? { message: value.message, stack: value.stack } : String(value))))); });
   const failures: string[] = [];
   page.on("console", message => { if (message.text().startsWith("[storage-fs-first-event] ")) failures.push(message.text()); });
-  await page.goto(url + "?mode=memory&engine=browser&prompt=off", { timeout: 120_000 });
+  await page.goto(url + "?engine=browser&prompt=off", { timeout: 120_000 });
   await page.waitForFunction(() => Boolean(Reflect.get(globalThis, "playground")), undefined, { timeout: 120_000 });
   const root = await snapshot(page);
   expect(root.some(row => "workerId" in row && row.workerId === null && "process" in row && row.process === null)).toBe(true);

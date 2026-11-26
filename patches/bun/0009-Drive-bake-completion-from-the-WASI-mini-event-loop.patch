@@ -1,7 +1,7 @@
-From 9026cb073d3d7a7f324f828bc299537554c35627 Mon Sep 17 00:00:00 2001
+From 7f723908a49eef5b16a2c0028079b89dc2e8d589 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 16:50:01 +0300
-Subject: [PATCH 09/14] Drive bake completion from the WASI mini event loop
+Subject: [PATCH 09/28] Drive bake completion from the WASI mini event loop
 
 Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>
 ---
@@ -9,10 +9,10 @@ Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>
  1 file changed, 9 insertions(+)
 
 diff --git a/src/bundler/bundle_v2.rs b/src/bundler/bundle_v2.rs
-index 6ed38562..84c3a76f 100644
+index 201b3258..851a73e8 100644
 --- a/src/bundler/bundle_v2.rs
 +++ b/src/bundler/bundle_v2.rs
-@@ -5833,6 +5833,15 @@ pub mod bv2_impl {
+@@ -5925,6 +5925,15 @@ pub mod bv2_impl {
              Ok(ctx)
          }
  

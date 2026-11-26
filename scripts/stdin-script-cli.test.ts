@@ -7,7 +7,7 @@ import { runInNewContext } from "node:vm";
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
 
-test("run accepts only the lone dash as stdin and preserves script arguments and flags", () => {
+test("run and bun accept only the lone dash as stdin and preserve script arguments and flags", () => {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-stdin-cli-"));
   try {
     const source = readFileSync(new URL("../crates/bunwasm-cli/src/main.rs", import.meta.url), "utf8");
@@ -15,11 +15,13 @@ test("run accepts only the lone dash as stdin and preserves script arguments and
     const end = source.indexOf("// Referenced so the linker", start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
+    // The real selector: parse() asks it whether a command belongs to bun-tools.wasm.
+    const toolArgs = readFileSync(new URL("../crates/bunwasm-cli/src/tool_args.rs", import.meta.url), "utf8");
     const definitions = `
       mod bunwasm_runtime { pub const BUN_VERSION: &str = "test"; pub const BUN_REVISION: &str = "test"; }
       #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] enum RunMode { #[default] Once, Hot }
       enum Entry { File(String), Eval(String), Test(Vec<String>) }
-      mod tool_args { pub fn before_command(_: &[String]) -> Option<()> { None } }
+      mod tool_args { ${toolArgs} }
       const HELP: &str = "help";
     `;
     const controls = `
@@ -38,6 +40,11 @@ test("run accepts only the lone dash as stdin and preserves script arguments and
         assert!(matches!(parse(args(&["run", "--eval"]), "bun"), Command::Exit(1)));
         assert!(matches!(parse(args(&["run", "file.ts", "-"]), "bun"), Command::Run(Entry::File(file), tail, _, _, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if file == "file.ts" && tail == args(&["-"])));
         assert!(matches!(parse(args(&["run", "./-", "tail"]), "bun"), Command::Run(Entry::File(file), tail, _, _, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if file == "./-" && tail == args(&["tail"])));
+        // A bare dash runs standard input too, and what follows it is the script's: bun - check.
+        for argv in [args(&["-"]), args(&["-", "check"]), args(&["--smol", "-", "lint", "tail"])] {
+          let tail = argv[argv.iter().position(|arg| arg == "-").unwrap() + 1..].to_vec();
+          assert!(matches!(parse(argv, "bun"), Command::Run(Entry::File(file), rest, _, _, RunFlags { mode: RunMode::Once, experimental_stream_iter: false }) if file == "-" && rest == tail));
+        }
       }
     `;
     const input = join(scratch, "parser.rs");
@@ -57,7 +64,12 @@ test("stdin main bypasses package aliases and files while ordinary runtime comma
   const start = source.indexOf("  internal.runMain =");
   const end = source.indexOf("  internal.getMainModule", start);
   const scripts = { resolve: () => ({ kind: "runtime" }), run: () => "package-command" };
-  const internal = { require: () => scripts, runMain: (_path: string): unknown => undefined };
+  const internal = {
+    require: () => scripts,
+    runMain: (_path: string): unknown => undefined,
+    // bootstrap's importModule with no mocks registered: the native import.
+    importModule: (path: string): unknown => native.importModule(path),
+  };
   const loaded: string[] = [];
   const native = { runMode: () => "once",
     mainArg: () => "-",

@@ -2,7 +2,7 @@
 
 `0023-wasm-use-an-unshadowable-dynamic-import-hook.patch` is a **Host feature**.
 It changes `src/js_printer/lib.rs` at pinned Bun revision
-`9510e74152073d850a18758ca41114d8f214ffa6`, after the existing patch series.
+`a7733435cf40429e3b35c36072769df2052b80f1`, after the existing patch series.
 
 Runtime file preparation and CommonJS bundling emit a call through a function
 literal's `__bunwasmFunctionImport` property instead of a lexical `globalThis`

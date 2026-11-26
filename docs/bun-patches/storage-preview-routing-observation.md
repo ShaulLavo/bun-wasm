@@ -19,6 +19,13 @@ under `redirect: "error"` (Waffle PR 565). The helper adapter's anchor and
 insertion are unchanged. Selected release `0.0.145`, revision
 `21f5ad1f38dd3c3d3b346a7cfaf955e8139831ea`, keeps all four files
 byte-identical to `0.0.144`.
+In selected release `0.0.152`, revision
+`72849910ef1260a1e27ec37e6b3a8e0371f71de3`, only `browser/service-worker.ts`
+changes (SHA-256
+`11141b1fc8b8ffd0d7810d46bfa599e8923c84d6e719a597c70afa72f47ddce2`):
+`activated()` treats a non-redundant worker in `registration.active` as
+ready (Waffle PR 636). The worker adapter's anchors and insertions in
+`createPreviewServiceWorker()` are unchanged.
 The exact installed source hashes and unique insertion anchors reject drift or
 incomplete installations. No provider source is edited.
 

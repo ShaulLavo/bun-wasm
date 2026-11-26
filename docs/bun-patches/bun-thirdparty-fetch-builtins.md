@@ -1,6 +1,6 @@
 ## Bun thirdparty fetch builtins
 
-Bun replaces four npm packages with its own modules, even when a project installs them: `node-fetch`, `undici`, `isomorphic-fetch` and `@vercel/fetch` (`src/resolve_builtins/HardcodedModule.rs`, `BUN_EXTRA_ALIAS_KVS`, at Bun `9510e74152073d850a18758ca41114d8f214ffa6`). bun-wasm now does the same. The Rust resolver lists the four names as builtins, ahead of `node_modules`, and the builtin registry loads Bun's generated `src/js/thirdparty/node-fetch.ts`, `undici.js`, `isomorphic-fetch.ts` and `vercel_fetch.js` through the existing [builtin loader](builtin-loader-adapter.md). The generated factories are unchanged [generated builtins](bun-generated-builtins.md).
+Bun replaces four npm packages with its own modules, even when a project installs them: `node-fetch`, `undici`, `isomorphic-fetch` and `@vercel/fetch` (`src/resolve_builtins/HardcodedModule.rs`, `BUN_EXTRA_ALIAS_KVS`, at Bun `a7733435cf40429e3b35c36072769df2052b80f1`). bun-wasm now does the same. The Rust resolver lists the four names as builtins, ahead of `node_modules`, and the builtin registry loads Bun's generated `src/js/thirdparty/node-fetch.ts`, `undici.js`, `isomorphic-fetch.ts` and `vercel_fetch.js` through the existing [builtin loader](builtin-loader-adapter.md). The generated factories are unchanged [generated builtins](bun-generated-builtins.md).
 
 Two `$cpp` binding objects, `createNodeFetchInternalBinding` (`src/jsc/bindings/NodeFetch.cpp`) and `createUndiciInternalBinding` (`src/jsc/bindings/Undici.cpp`), only return the runtime's web classes in a fixed order. `src/js/bun_builtins.ts` builds the same arrays from the global constructors when the module first loads.
 
@@ -15,7 +15,7 @@ Limits: `blobFrom` and `fileFrom` in node-fetch call `Promise.$resolve`, a JSC p
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`crates/bunwasm-runtime/generated/builtins/192.js` to `195.js`](#bun-thirdparty-fetch-builtins) | Port | Bun's generated thirdparty fetch modules, unchanged. |
+| [`crates/bunwasm-runtime/generated/builtins/196.js` to `199.js`](#bun-thirdparty-fetch-builtins) | Port | Bun's generated thirdparty fetch modules, unchanged. |
 | [`src/js/bun_provided_internals.ts`](#bun-thirdparty-fetch-builtins) | Port | `_ReadableFromWeb` and `nodeClientTlsToNative`, adapted from Bun over bun-wasm's `node:stream`. |
 | [Resolver names, registry entries, binding hooks and `runtimeProvided` entries](#bun-thirdparty-fetch-builtins) | Host feature | Original glue that resolves the four package names to Bun's modules on every engine. |
 

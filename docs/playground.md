@@ -17,6 +17,36 @@ The build compresses each engine's wasm from `../dist` into `dist/<name>.wasm.br
 without that negotiation the page decompresses the `.gz` twin itself. If one is missing the build still succeeds and that engine says it is missing. `?wasm=<url>`
 loads a different module at runtime; `?trace` logs every WASI call to the worker's console.
 
+## One-click Bun demos
+
+The examples workspace shows a demo bar: Bun.serve, bun:sqlite, bun test, Bun.build, bun check,
+Bun.$ and Bun.file. A click stops any running command, restores the demo's files if they were
+deleted (edits are kept), opens the file and runs it from `~` (it runs `cd ~`, clears the screen and
+echoes `bun run serve.ts`, or `bun check --cwd check-demo` for the type-check demo, which downloads
+`bun-tools.wasm` once on demand). Restoring is one exclusive-create call, so it never replaces a
+file another tab wrote meanwhile, and an existing file is always the visitor's. When a demo's code
+changes in a way an old copy would get wrong, the demo gets a new file name (main's `db.ts` became
+`sqlite.ts` and `files.ts` became `bun-file.ts`), so old workspaces simply gain the new file.
+While a demo prepares, Run stays out and Stop cancels it. Script demos resolve their files from
+`import.meta.dir`, and the `bun check` demo runs with its own `check-demo` project directory
+(`--cwd`), so every demo works from any shell directory without adding a root `tsconfig.json` at
+`~`. The SQLite demos use in-memory databases: every tab runs its own processes, and SQLite here
+allows one writer per file.
+
+While a command runs, Run becomes Stop (Ctrl-C; a second Stop forces it). A server started there
+opens in a preview above the terminal. Each Run or demo launch carries a unique
+`BUNWASM_LAUNCH_ID` into its processes; Restart belongs only to a server whose process inherited a
+live launch's id, so a server from any other process gets no Restart. A second Stop on a launch
+kills its jobs with SIGKILL, so a program that handles Ctrl-C still stops. If the preview request
+fails, the dock says so instead of waiting (the loading page marks its status element with
+`data-preview-loading`). At 800 px and narrower the examples workspace shows
+one pane at a time (Code, Preview, Terminal). `?demo=<id>` (for example `/playground/?demo=serve`)
+starts a demo once the page is ready, and the address follows the last demo clicked. The page
+switch in both headers links the sandbox at `/` and `?demo=serve`. Visible strings live in
+`web/src/playground/showcase-copy.ts`; the demo programs are in `web/src/examples.ts`.
+`scripts/playground-demos-browser.test.ts` checks every demo, Restart, Close, Stop, edits, file
+restore, reload, and two tabs (separate databases and the restore race).
+
 ## Run Vite with React
 
 Open `/playground/?template=vite-react` on the deployed site, or choose **Vite + React**
@@ -154,7 +184,7 @@ Build the playground, copy `web/dist` to a macOS machine, and serve it with COOP
 Run `bun web/tests/browser-startup-safari.ts <playground-url>` on macOS to check fresh startup, three durable reloads, newest-tab ownership, and recovery of the displaced tab.
 Set `SAFARI_IOS=1` for the iPhone 17 Pro simulator, `SAFARI_OUTPUT=<path>` for the JSON report, and `SAFARI_SCREENSHOT=<path>` for the error screenshot.
 If the simulator is shut down, run `xcrun simctl boot "iPhone 17 Pro"` and `xcrun simctl bootstatus "iPhone 17 Pro" -b` before starting the driver.
-Set `SAFARI_SEED_URL=https://bun.sprockt.dev/playground/` to import a workspace created by the live build before testing the candidate.
+Set `SAFARI_SEED_URL=https://bun.shaulavo.dev/playground/` to import a workspace created by the live build before testing the candidate.
 The test uses its own Safari automation session and driver. It preserves normal browser profiles.
 
 The filesystem lifecycle regression uses the actual page adapter and persistence worker without

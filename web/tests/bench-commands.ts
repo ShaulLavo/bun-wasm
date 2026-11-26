@@ -3,7 +3,7 @@
 //
 //   bun tests/bench-commands.ts                        # serve web/dist locally, Chromium
 //   LATENCY_MS=70 bun tests/bench-commands.ts          # every response 70 ms late, like a remote host
-//   bun tests/bench-commands.ts --url https://bun.sprockt.dev/playground/
+//   bun tests/bench-commands.ts --url https://bun.shaulavo.dev/playground/
 //   bun tests/bench-commands.ts --browser firefox --runs 7 --output /work/tmp/bun-wasm-bench.json
 //   bun tests/bench-commands.ts --network              # also install, add, update, remove and bunx
 //   bun tests/bench-commands.ts --think 1000           # wait 1 s (typing time) before each first command

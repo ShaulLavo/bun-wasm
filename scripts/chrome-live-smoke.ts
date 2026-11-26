@@ -1,7 +1,7 @@
 // Chrome check of a deployed sandbox: tests the actual `/` root sandbox landing page on default
 // persistent FS (including full reload on the same profile), plus the iPhone smoke's three
 // `/playground/` cells, in Chrome for Testing against the live origin.
-// Usage: bun scripts/chrome-live-smoke.ts --output=DIR [--base-url=https://bun.sprockt.dev/] [--timeout-ms=N]
+// Usage: bun scripts/chrome-live-smoke.ts --output=DIR [--base-url=https://bun.shaulavo.dev/] [--timeout-ms=N]
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -49,7 +49,7 @@ export function liveSmokeOptions(argv: readonly string[]): LiveSmokeOptions {
   const { values } = parseArgs({
     args: argv.slice(), strict: true, allowPositionals: false,
     options: {
-      "base-url": { type: "string", default: "https://bun.sprockt.dev/" },
+      "base-url": { type: "string", default: "https://bun.shaulavo.dev/" },
       output: { type: "string" },
       "timeout-ms": { type: "string", default: "300000" },
       "install-timeout-ms": { type: "string", default: "600000" },

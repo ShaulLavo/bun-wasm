@@ -24,12 +24,30 @@
     return err;
   }
 
-  // runtime_proc.signal reports a negated WASI errno: -28 EINVAL (signal number or mode the
-  // process service rejects) and -58 ENOTSUP (unsupported job-control stops). Node reports the
-  // same codes from uv_signal_start and kill, with libuv's errno values.
+  // runtime_proc.signal and runtime_proc.kill report negated WASI errnos: -28 EINVAL,
+  // -52 ENOSYS, -58 ENOTSUP, -63 EPERM, and -71 ESRCH. Node reports the same codes from
+  // uv_signal_start and kill, with libuv's errno values.
+  const signalErrors: Record<number, readonly [string, number]> = {
+    [-28]: ["EINVAL", -22],
+    [-52]: ["ENOSYS", -38],
+    [-58]: ["ENOTSUP", -95],
+    [-63]: ["EPERM", -1],
+    [-71]: ["ESRCH", -3],
+  };
   function signalFailure(result: number, syscall: string) {
-    const [code, errno] = result === -58 ? ["ENOTSUP", -95] : result === -28 ? ["EINVAL", -22] : ["EIO", -5];
+    const [code, errno] = signalErrors[result] ?? ["EIO", -5];
     return Object.assign(new Error(`${syscall} ${code}`), { code, errno, syscall });
+  }
+  function parseKillPid(pid: unknown): number {
+    if (typeof pid !== "number" && (typeof pid !== "string" || pid.trim() === "")) {
+      const received = internal.describe ? internal.describe(pid) : `type ${typeof pid}`;
+      throw Object.assign(new TypeError(`The "pid" argument must be of type number. Received ${received}`), { code: "ERR_INVALID_ARG_TYPE" });
+    }
+    const target = Number(pid);
+    if (!Number.isInteger(target)) {
+      throw Object.assign(new TypeError(`The "pid" argument must be of type number. Received type number (${pid})`), { code: "ERR_INVALID_ARG_TYPE" });
+    }
+    return target;
   }
 
   let execveWarned = false;
@@ -501,11 +519,20 @@
       throw Object.assign(new TypeError("The feature process.execve is unavailable on the current platform, which is being used to run Node.js"), { code: "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM" });
     },
     kill(pid: unknown, signal: unknown = "SIGTERM") {
+      const target = parseKillPid(pid);
       const number = typeof signal === "number" ? signal : signals[String(signal).toUpperCase()];
-      if (!Number.isInteger(number) || number < 0 || number > 64) throw new TypeError(`Unknown signal: ${signal}`);
-      if (pid === process.pid) {
+      if (!Number.isInteger(number) || number < 0 || number > 64) {
+        throw Object.assign(new TypeError(`Unknown signal: ${signal}`), { code: "ERR_UNKNOWN_SIGNAL" });
+      }
+      if (target === process.pid) {
         if (number === 0) return true;
         const result = native.hostSignal(number, 3);
+        if (result < 0) throw signalFailure(result, "kill");
+        return true;
+      }
+      if (number === 0 && target > 0) {
+        if (target > 0x7fffffff) throw signalFailure(-71, "kill");
+        const result = native.procProbeProcess(target);
         if (result < 0) throw signalFailure(result, "kill");
         return true;
       }

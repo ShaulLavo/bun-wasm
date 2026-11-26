@@ -455,8 +455,8 @@ fn bundled_roots_lazy_set_and_full_der_parsing() {
         &meter,
     )
     .unwrap();
-    assert_eq!(unsafe { ffi::X509_LAZY_CERT_SET_num(set.pointer()) }, 121);
-    for index in 0..121 {
+    assert_eq!(unsafe { ffi::X509_LAZY_CERT_SET_num(set.pointer()) }, 118);
+    for index in 0..118 {
         assert!(!unsafe { ffi::X509_LAZY_CERT_SET_get0(set.pointer(), index) }.is_null());
     }
     drop(set);

@@ -20,13 +20,13 @@ function fixture() {
     evidence.receive({ kind, target, port: 5173, generation, realm: "worker", sequence, ask: 1, channel: 3, clientURL: "http://localhost/app", ...(kind === "claim-reply" && extra.reply === "head" ? { status: 200 } : {}), ...extra });
   };
   const page = (kind: string, extra: RoutingRow = {}) => row(kind, { generation: "page", realm: "page", realmURL: "http://localhost/app", router: 4, replyPort: 5, request: 7, ...extra });
-  const native = () => evidence.request({ kind: "request", url, page: 1, request: 1 });
+  const native = () => evidence.request({ kind: "request", url, page: 1, request: 1, navigation: true, frame: 1 });
   const first = () => JSON.stringify(evidence.summaries()[1]);
   return { evidence, row, page, native, first };
 }
-function forward(f: ReturnType<typeof fixture>) { f.native(); f.row("forward", { url }); }
-function claim(f: ReturnType<typeof fixture>) {
-  forward(f); f.row("discovery"); f.row("claim-open"); f.row("claim-post"); f.row("claim-post-return");
+function forward(f: ReturnType<typeof fixture>, drop?: Drop) { f.native(); if (drop !== "forward") f.row("forward", { url }); }
+function claim(f: ReturnType<typeof fixture>, drop?: Drop) {
+  forward(f, drop); f.row("discovery"); f.row("claim-open"); f.row("claim-post"); f.row("claim-post-return");
 }
 function accepted(f: ReturnType<typeof fixture>) {
   claim(f); f.page("page-receive"); f.page("request-dispatch", { current: 11 });
@@ -165,16 +165,18 @@ test("missing scalar stream coverage refuses attribution and qualification", () 
   expect(coverage?.missing).toBe(2);
 });
 
-function complete(f: ReturnType<typeof fixture>, receipt: RoutingRow = {}, sent: RoutingRow = {}) {
-  claim(f);
+// A routing record that `complete` leaves out, to prove the check needs it.
+type Drop = "forward" | "head" | "end";
+function complete(f: ReturnType<typeof fixture>, receipt: RoutingRow = {}, sent: RoutingRow = {}, drop?: Drop) {
+  claim(f, drop);
   f.page("page-receive", receipt);
   f.page("request-dispatch", { current: 11 });
   f.page("runtime-router", { runtime: 2 });
   f.page("helper-projection", { capability: 11, helper: 12 });
   f.page("helper-request-return", { helper: 12, accepted: true });
   f.page("page-send-return", { reply: "head", ...sent });
-  f.row("claim-reply", { reply: "head" });
-  f.row("claim-reply", { reply: "end" });
+  if (drop !== "head") f.row("claim-reply", { reply: "head" });
+  if (drop !== "end") f.row("claim-reply", { reply: "end" });
 }
 
 test("native response and completion must belong to the same page and request", () => {
@@ -212,6 +214,65 @@ test("a loading redirect is distinct from the completed native response matching
   f.evidence.request({ kind: "response", page: 1, request: 2, url, status: 200, fromServiceWorker: true });
   f.evidence.request({ kind: "requestfinished", page: 1, request: 2, url });
   expect(() => f.evidence.qualify([target])).not.toThrow();
+});
+
+const loadingUrl = "http://localhost/__preview/.loading/123e4567-e89b-12d3-a456-426614174000";
+type Abort = {
+  errorText?: string; navigation?: boolean; extraAbort?: boolean; drop?: Drop;
+  loading?: "complete" | "unfinished" | "other-preview" | "missing" | "late" | "late-response";
+  loadingFrame?: number; matchFrame?: number; matchNavigation?: boolean;
+};
+// Firefox reports the first navigation as aborted and then navigates to the loading page itself.
+// The fixture's own native request 1 (frame 1) is the aborted navigation.
+function abortedThenCompleted(abort: Abort): ReturnType<typeof fixture> {
+  const f = fixture();
+  complete(f, {}, {}, abort.drop);
+  const request = (row: RoutingRow) => f.evidence.request(row);
+  const loading = abort.loading ?? "complete";
+  const address = loading === "other-preview" ? "http://localhost/other/__preview/.loading/123e4567-e89b-12d3-a456-426614174000" : loadingUrl;
+  const loadingFrame = abort.loadingFrame ?? 1;
+  const loadingStart = () => request({ kind: "request", page: 1, request: 2, url: address, navigation: true, frame: loadingFrame });
+  const loadingEnd = () => {
+    request({ kind: "response", page: 1, request: 2, url: address, status: 200, fromServiceWorker: false, navigation: true, frame: loadingFrame });
+    if (loading !== "unfinished") request({ kind: "requestfinished", page: 1, request: 2, url: address, navigation: true, frame: loadingFrame });
+  };
+  request({ kind: "requestfailed", page: 1, request: 1, url, navigation: abort.navigation ?? true, frame: 1, errorText: abort.errorText ?? "NS_BINDING_ABORTED" });
+  if (abort.extraAbort) {
+    request({ kind: "request", page: 1, request: 4, url, navigation: true, frame: 1 });
+    request({ kind: "requestfailed", page: 1, request: 4, url, navigation: true, frame: 1, errorText: "NS_BINDING_ABORTED" });
+  }
+  if (loading !== "missing" && loading !== "late") { loadingStart(); if (loading !== "late-response") loadingEnd(); }
+  request({ kind: "request", page: 1, request: 3, url, navigation: abort.matchNavigation ?? true, frame: abort.matchFrame ?? 1 });
+  if (loading === "late") loadingStart();
+  if (loading === "late" || loading === "late-response") loadingEnd();
+  request({ kind: "response", page: 1, request: 3, url, status: 200, fromServiceWorker: true, navigation: abort.matchNavigation ?? true, frame: abort.matchFrame ?? 1 });
+  request({ kind: "requestfinished", page: 1, request: 3, url, navigation: abort.matchNavigation ?? true, frame: abort.matchFrame ?? 1 });
+  return f;
+}
+
+test("an aborted navigation followed by the loading page is the loading redirect", () => {
+  expect(() => abortedThenCompleted({}).evidence.qualify([target])).not.toThrow();
+});
+
+test("an aborted navigation without a finished loading page in this preview stays a routing failure", () => {
+  for (const abort of [{ errorText: "NS_ERROR_NET_RESET" }, { navigation: false }, { loading: "missing" }, { loading: "late" }, { loading: "unfinished" }, { loading: "other-preview" }, { extraAbort: true }] as Abort[]) {
+    expect(() => abortedThenCompleted(abort).evidence.qualify([target])).toThrow("coverage missing");
+  }
+});
+
+test("the loading redirect needs the loading page to answer before the retry starts", () => {
+  expect(() => abortedThenCompleted({ loading: "late-response" }).evidence.qualify([target])).toThrow("coverage missing");
+});
+
+test("the loading redirect needs all three navigations in one frame", () => {
+  for (const abort of [{ loadingFrame: 2 }, { matchFrame: 2 }, { matchNavigation: false }] as Abort[]) {
+    expect(() => abortedThenCompleted(abort).evidence.qualify([target])).toThrow("coverage missing");
+  }
+});
+
+test("the loading redirect does not stand in for a missing service worker forward, head or end", () => {
+  expect(() => abortedThenCompleted({ drop: "forward" }).evidence.qualify([target])).toThrow("missing SW forward");
+  for (const drop of ["head", "end"] as const) expect(() => abortedThenCompleted({ drop }).evidence.qualify([target])).toThrow("coverage missing");
 });
 
 test("native completion rejects a different status and duplicate matching response lifecycles", () => {

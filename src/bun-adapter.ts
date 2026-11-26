@@ -22,6 +22,8 @@ export interface BunAdapterOptions extends LoadBunWasmOptions {
   readonly engine?: Engine;
   /** Absolute canonical executable paths; defaults to bun, node and nodejs in the selected engine bin directory. */
   readonly executables?: readonly string[];
+  /** Loads bun-tools.wasm for `bun lint`, `bun fmt` and `bun check`, on their first use. Without it they exit 1. */
+  readonly loadTools?: () => Promise<WebAssembly.Module>;
 }
 
 export interface BunAdapterInstallation {
@@ -31,9 +33,13 @@ export interface BunAdapterInstallation {
 
 const installations = new WeakMap<ProcessRuntime, BunAdapterInstallation>();
 const installing = new WeakSet<ProcessRuntime>();
-function moduleLoader(options: BunAdapterOptions, engine: Engine): () => Promise<WebAssembly.Module> {
+function onceLoader(load: () => Promise<WebAssembly.Module>): () => Promise<WebAssembly.Module> {
   let loading: Promise<WebAssembly.Module> | undefined;
-  return () => loading ??= selectedModule(options, engine).catch(error => { loading = undefined; throw error; });
+  return () => loading ??= load().catch(error => { loading = undefined; throw error; });
+}
+
+function moduleLoader(options: BunAdapterOptions, engine: Engine): () => Promise<WebAssembly.Module> {
+  return onceLoader(() => selectedModule(options, engine));
 }
 
 async function selectedModule(options: BunAdapterOptions, engine: Engine): Promise<WebAssembly.Module> {
@@ -76,7 +82,8 @@ export async function installBunAdapters(runtime: ProcessRuntime, options: BunAd
     packages = packageService(runtime);
     const defaults: readonly Engine[] = pairedEngines;
     const adapters = defaults.concat(["browser"], engine === "spidermonkey" ? [engine] : []);
-    for (const name of adapters) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), notificationWorkerUrl: options.notificationWorkerUrl.toString(), runtime, network: options.network })));
+    const loadTools = options.loadTools && onceLoader(options.loadTools);
+    for (const name of adapters) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), notificationWorkerUrl: options.notificationWorkerUrl.toString(), loadTools, runtime, network: options.network })));
     const loadModule = moduleLoader(options, engine);
     for (const name of names) unregisters.push(runtime.registerProgram(name, {
       adapter: `bun:${engine}`, cooperative: true, module: loadModule,

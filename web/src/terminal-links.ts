@@ -7,7 +7,7 @@ import type { Terminal } from "@xterm/xterm";
  */
 export function linkLocalUrls(
   term: Terminal,
-  previews: { serves(port: number): boolean; url(port: number, path?: string): string },
+  previews: { serves(port: number): boolean; url(port: number, path?: string): string; linkUrl?(port: number, path?: string): string },
   activate: (url: string) => void = url => void window.open(url, "_blank", "noopener"),
 ): { dispose(): void } {
   const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{1,5})(\/[^\s'"`)]*)?/g;
@@ -19,7 +19,7 @@ export function linkLocalUrls(
         .map((m) => ({
           text: m[0],
           range: { start: { x: m.index + 1, y }, end: { x: m.index + m[0].length, y } },
-          activate: () => { if (previews.serves(Number(m[1]))) activate(previews.url(Number(m[1]), m[2] ?? "/")); },
+          activate: () => { if (previews.serves(Number(m[1]))) activate(previews.linkUrl?.(Number(m[1]), m[2] ?? "/") ?? previews.url(Number(m[1]), m[2] ?? "/")); },
         }));
       callback(links.length > 0 ? links : undefined);
     },

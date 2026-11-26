@@ -5,8 +5,14 @@ import { ready, run, writeFile } from "./playground.mjs";
 import { stopShell } from "./stop-shell";
 
 export async function checkDelayedStop(page: Page, base: string, browser: string, engine: string): Promise<boolean> {
-  await navigateTestPage(page, `${base}?mode=memory&engine=${engine}&prompt=off`);
+  await navigateTestPage(page, `${base}?engine=${engine}&prompt=off`);
   assert.match(await ready(page), /ready/);
+  const markerPresent = await page.evaluate(async () => {
+    const fs = Reflect.get(globalThis, "playground").fs;
+    if (await fs.lookup("/home/user/stop-release")) await fs.remove("/home/user/stop-release");
+    return Boolean(await fs.lookup("/home/user/stop-release"));
+  });
+  assert.equal(markerPresent, false, "persistent stop-release marker must be absent before starting guest");
   await writeFile(page, "/home/user/forever.ts", 'const fs = require("node:fs"); process.on("SIGINT", () => { console.log("STOP_DELAYED"); setInterval(() => { if (fs.existsSync("/home/user/stop-release")) process.exit(130); }, 10); }); setInterval(() => {}, 1000); console.log("STOP_READY");');
   const done = page.evaluate(() => {
     const shell = Reflect.get(globalThis, "playground").shell;
@@ -40,7 +46,7 @@ async function waitForMarker(page: Page, marker: string): Promise<void> {
 
 export async function checkRootSignals(page: Page, base: string, browser: string, engine: string): Promise<void> {
   for (const mode of ["handled", "handled7", "default", "removed", "once"]) {
-    await navigateTestPage(page, `${base}?mode=memory&engine=${engine}&prompt=off`);
+    await navigateTestPage(page, `${base}?engine=${engine}&prompt=off`);
     assert.match(await ready(page), /ready/);
     await page.evaluate(async () => {
       const state = Reflect.get(globalThis, "playground");
@@ -80,7 +86,7 @@ export async function checkRootSignals(page: Page, base: string, browser: string
 
 
 export async function checkPipelineReader(page: Page, base: string, browser: string, engine: string): Promise<void> {
-  await navigateTestPage(page, `${base}?mode=memory&engine=${engine}&prompt=off`);
+  await navigateTestPage(page, `${base}?engine=${engine}&prompt=off`);
   assert.match(await ready(page), /ready/);
   await writeFile(page, "/home/user/pipe-left.ts", 'process.on("SIGINT", () => { console.error("PIPE_LEFT_EXIT0"); process.exit(0); }); setInterval(() => {}, 1000); console.error("PIPE_LEFT_READY");');
   await writeFile(page, "/home/user/pipe-right.ts", 'process.on("SIGINT", () => console.error("PIPE_RIGHT_HANDLED")); process.stdin.setEncoding("utf8"); let input = ""; process.stdin.on("data", data => { input += data; if (!input.includes(String.fromCharCode(10)) && !input.includes(String.fromCharCode(13))) return; console.log("PIPE_READER:" + input.trim()); process.exit(0); }); setInterval(() => {}, 1000); console.error("PIPE_RIGHT_READY");');

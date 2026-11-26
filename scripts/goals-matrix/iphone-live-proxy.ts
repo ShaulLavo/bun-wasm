@@ -14,7 +14,7 @@ export const livePlaygroundPath = "playground/";
 export function liveSiteURL(value: string): string {
   let url: URL;
   try { url = new URL(value); } catch { throw new Error(`--base-url is not a URL: ${value}`); }
-  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/") throw new Error("--base-url must be an https site root such as https://bun.sprockt.dev/, without path, query or credentials");
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/") throw new Error("--base-url must be an https site root such as https://bun.shaulavo.dev/, without path, query or credentials");
   return url.href;
 }
 

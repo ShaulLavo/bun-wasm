@@ -267,7 +267,17 @@ const ownerInputs = {
     "web/tests/foreground.ts",
     "web/tests/navigate-test-page.ts",
     "web/tests/playground-cleanup.ts",
-    "web/tests/playground.mjs"
+    "web/tests/playground.mjs",
+    "src/bun-adapter.ts",
+    "src/executable-marker.ts",
+    "src/package-continuation-installation.ts",
+    "web/scripts/ci-process-bundles.ts",
+    "web/tests/bun-runtime-proc-browser.ts",
+    "web/tests/bun-runtime-proc-fixtures.ts",
+    "web/tests/bun-runtime-proc-main.ts",
+    "web/tests/bun-runtime-proc-diagnostics.ts",
+    "web/tests/bun-runtime-proc-smoke.ts",
+    "web/tests/runtime-proc-fixtures.ts"
   ]
 } satisfies Record<CoverageOwner, readonly string[]>;
 

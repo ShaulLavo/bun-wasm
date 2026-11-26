@@ -79,10 +79,10 @@ test("selected batches keep existing Storage/default cells and narrower engines"
     }
     return outputs.join("\n");
   };
-  verify([], ["10-storage", "11-multitab", "default"], 4);
-  expect(verify([{ owner: "installer-links", engines: ["quickjs"] }], ["10-storage", "11-multitab", "20-installer-links", "default"], 4)).toContain("needed=true\njsc=false");
+  verify([], ["10-storage", "11-multitab", "12-playground-demos", "default"], 4);
+  expect(verify([{ owner: "installer-links", engines: ["quickjs"] }], ["10-storage", "11-multitab", "12-playground-demos", "20-installer-links", "default"], 4)).toContain("needed=true\njsc=false");
   expect(browserCoverageOutputs([{ owner: "installer-links", engines: ["jsc"] }])).toContain("jsc=true");
-  verify(fullBrowserGuestSelection, ["10-storage", "11-multitab", "20-installer-links", "21-subprocess-aliases", "22-preview-websocket-headers", "23-engine-interruption", "24-worker-modules", "25-terminal-stdin", "26-tools-integrity", "default"], 4);
+  verify(fullBrowserGuestSelection, ["10-storage", "11-multitab", "12-playground-demos", "20-installer-links", "21-subprocess-aliases", "22-preview-websocket-headers", "23-engine-interruption", "24-worker-modules", "25-terminal-stdin", "26-tools-integrity", "default"], 4);
 });
 
 test("11-multitab dispatches chromium and firefox in parallel and propagates firefox failure nonzero", () => {

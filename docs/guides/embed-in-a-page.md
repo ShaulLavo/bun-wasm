@@ -1,130 +1,70 @@
 # Embed bun-wasm in a page
 
-Register Bun as a program on a [Waffle](https://github.com/ShaulLavo/waffle) `Runtime` that your page already owns, then run `bun` commands and read their output. After this guide, `/bin/bun` and `/bin/node` resolve to bun-wasm for every process that Runtime spawns. This guide assumes you know Vite and the page owns the `Runtime`. [Browser package](../browser-package.md) is the full reference for exports, ownership and acceptance gates.
+Register Bun as a program on a [Waffle](https://github.com/ShaulLavo/waffle) `Runtime` that your page owns. Once installed, `/bin/bun`, `/bin/node` and `/bin/nodejs` resolve to bun-wasm for every process that Runtime spawns. This guide assumes you use Vite and that your page owns the `Runtime`. See [Browser package](../browser-package.md) for the full export, ownership and acceptance reference.
 
-Once the package, the guest and the workers below are in place, running Bun takes three calls:
+bun-wasm is not on npm. Install it as a Git dependency.
 
-```ts
-const runtime = createRuntime({ filesystem: { workerURL: "/fs-worker.js", mode: "memory" } });
-await installBunAdapters(runtime, { workerUrl, notificationWorkerUrl, asset });
-const { exitCode, stdout } = await runBun(runtime, ["-e", "console.log(Bun.version)"]);
-```
-
-bun-wasm is not on npm. You install it as a Git dependency.
-
-> **Early API.** The embedding API and Waffle's public API are still changing. The snippets follow the package tests. Recheck them when you update either pin.
+> **Early API.** The embedding API and Waffle's public API still change. The snippets below match the package tests at this revision; recheck them when you move either pin.
 
 ## Install the package
 
-Pin bun-wasm to an exact commit. Use that checkout's `waffle` development pin
-for the app's runtime.
+Pin bun-wasm to an exact commit and match that checkout's `waffle` pin:
 
 ```json
 {
 	"dependencies": {
 		"bun-wasm": "github:ShaulLavo/bun-wasm#<commit>",
-		"waffle": "npm:@waffle-os/runtime@0.0.149"
+		"waffle": "npm:@waffle-os/runtime@0.0.151"
 	},
 	"trustedDependencies": ["bun-wasm"]
 }
 ```
 
-Run `bun install`. The bun-wasm Git dependency generates its Node entry points
-during `prepare`. The npm runtime ships its Node entry points. The guest
-downloads at run time.
+Run `bun install`. The bun-wasm Git dependency generates its Node entry points during `prepare`, and the npm Waffle runtime ships its own. The default `browser` guest downloads at run time from the verified Bun 1.4.5 descriptor in `BUN_WASM_ASSET`.
 
-## Build and host the guest
+## Bundle the workers
 
-No guest is published for the current source, so the package has no default
-(`BUN_WASM_ASSET` is `null`). Build the browser guest from the same bun-wasm
-commit you pinned, then serve `dist/bun-browser.wasm` (or a gzip copy) from
-your own host:
-
-```sh
-source env.sh
-scripts/sync-bun.sh
-scripts/build-bun-browser.sh
-sha256sum dist/bun-browser.wasm && stat -c %s dist/bun-browser.wasm
-```
-
-The hash and byte count go into the `asset` descriptor below. They cover the
-uncompressed file.
-
-## Bundle the worker
-
-The package exports `bun-wasm/worker`, a module-worker entry. Bundle it as a worker and never import it into the page. In Vite, set the worker format to ES modules:
+The package exports two module-worker entries: `bun-wasm/worker` and `bun-wasm/notification-worker`. Waffle exports its filesystem worker at `waffle/browser/fs-worker`. Bundle all three as workers and never import them directly into the page. In Vite, set the worker output format to ES modules:
 
 ```ts
 // vite.config.ts
 export default { worker: { format: "es" } };
 ```
 
-Add `/// <reference types="vite/client" />` to your environment declarations for the `?worker&url` import.
+Add `/// <reference types="vite/client" />` to your environment declarations so TypeScript recognizes `?worker&url`. If you bundle without Vite, for instance with `bun build`, create a one-line `fs-worker.ts` containing `import "waffle/browser/fs-worker";` and pass its built URL to `filesystem.workerURL`.
 
 ## Install Bun on the Runtime
 
 ```ts
 import { createRuntime } from "waffle";
+import fsWorkerUrl from "waffle/browser/fs-worker?worker&url";
 import { installBunAdapters } from "bun-wasm";
 import bunWorkerUrl from "bun-wasm/worker?worker&url";
 import notificationWorkerUrl from "bun-wasm/notification-worker?worker&url";
 
-// Skip createRuntime if your page already created the Runtime.
-const runtime = createRuntime({ filesystem: { workerURL: "/fs-worker.js", mode: "memory" } });
+// Skip createRuntime and fsWorkerUrl if your page already owns a Runtime.
+const runtime = createRuntime({ filesystem: { workerURL: fsWorkerUrl, mode: "memory" } });
 
-const asset = { kind: "single", core: { url: "/bun-browser.wasm", sha256: "<sha256>", bytes: 0 /* uncompressed size */ } } as const;
-const installation = await installBunAdapters(runtime, { workerUrl: bunWorkerUrl, notificationWorkerUrl, asset });
+const installation = await installBunAdapters(runtime, {
+	workerUrl: bunWorkerUrl,
+	notificationWorkerUrl,
+});
 
-// Later, to unregister Bun. Running processes continue.
+// Later, to unregister Bun. Running processes keep running.
 installation.dispose();
 ```
 
-`installBunAdapters` never creates or disposes the `Runtime`. It registers the Bun launchers, registers the programs, and writes a small marker file at each executable path. `/bin/bun` and `/bin/node` are the default paths for the `browser` engine. Pass `executables: ["/opt/bun/browser"]` to use other absolute paths, or `executables: []` to register none.
+`installBunAdapters` never creates or disposes the `Runtime`. It registers the Bun adapters and programs, then writes a small marker file at each executable path. For the default `browser` engine, those paths are `/bin/bun`, `/bin/node` and `/bin/nodejs`. Pass `executables: ["/opt/bun/browser"]` to pick other absolute paths, or `executables: []` to register none.
 
-The guest downloads on the first spawn, not during installation. Without `asset` or `module`, that spawn fails with `BunWasmAssetError: No matching Bun guest has been published; provide asset or module`.
+`bun lint`, `bun fmt` and `bun check` run in a separate module, `bun-tools.wasm`. Pass `loadTools: () => WebAssembly.compileStreaming(fetch(toolsUrl))` to enable them; it is called once, on the first such command. Without it those commands exit 1.
 
-## Run a command
+The default `browser` guest downloads on the first spawn, not during installation, using `BUN_WASM_ASSET` and verifying its uncompressed byte count and SHA-256 before compiling. You do not need to pass `asset` or `module` for the default `browser` engine.
 
-`runBun(runtime, args, options)` runs `bun <args>` as a process in the Runtime. It resolves after Bun, its children and their output have finished:
-
-```ts
-import { runBun } from "bun-wasm";
-
-await runtime.filesystem.mkdirp("/app");
-await runtime.filesystem.writeFile("/app/index.ts", "const n: number = 42;\nconsole.log(n);\n");
-
-const result = await runBun(runtime, ["index.ts"], { cwd: "/app" });
-// result.exitCode === 0, result.stdout === "42\n"
-
-await runBun(runtime, ["test"], { cwd: "/app" }); // bun test prints its summary to stderr
-```
-
-`exitCode` is what a shell reports: the exit code, 128 plus the signal number, or 126 or 127 when the process could not start. `exit` keeps Waffle's typed outcome. `stdout` and `stderr` hold the first 1 MiB of each stream as text, and `truncated` says whether either went past it.
-
-Options:
-
-- `cwd` (default `/`) and `env`. The executable's directory goes first on `PATH`.
-- `stdin`: a string, bytes, or a `ReadableStream<Uint8Array>`. A stream stays open until it ends. Without it, Bun reads end of file.
-- `onStdout` and `onStderr` receive each chunk as it arrives, past the capture limit too. `outputLimitBytes` sets the limit; 0 keeps nothing.
-- `signal`: an `AbortSignal` that stops the process tree.
-- `onLeaderExit: "stop"` stops children that outlive Bun. By default the result waits for them.
-- `executable`, when Bun is registered somewhere other than `/bin/bun`, such as `/opt/bun/quickjs/bin/bun`.
-
-For a process that keeps running, such as a server or a language server, `startBun` takes the same arguments and returns a handle:
-
-```ts
-import { startBun } from "bun-wasm";
-
-const server = startBun(runtime, ["run", "server.ts"], { cwd: "/app", onStdout: chunk => console.log(new TextDecoder().decode(chunk)) });
-await server.kill(2);  // SIGINT to Bun's job; server.kill() stops the whole tree
-const { exitCode, stopped } = await server.result;
-```
-
-Both are built on Waffle's `startCommand`, the same process path a Waffle shell such as bash-web uses when it spawns `/bin/bun`.
+How you launch a process depends on your Waffle host. A Waffle shell such as bash-web spawns `/bin/bun` like any other command. Waffle's `startCommand` from `waffle/command` does not run Bun yet. It admits only interruptible byte-backed guests, while Bun registers as a cooperative adapter program, so `startCommand` exits with `EACCES`. The playground launches runs through `startRun` in `web/src/runner.ts`, which is not part of the package exports.
 
 ## Serve the page
 
-Send these headers. Waffle needs them for shared process state, and the Bun network bridge needs them for servers and `fetch`.
+Send these headers on your page response. Waffle needs cross-origin isolation for shared process state, and the Bun network bridge needs it for servers and `fetch`.
 
 ```
 Cross-Origin-Opener-Policy: same-origin
@@ -133,7 +73,7 @@ Cross-Origin-Embedder-Policy: require-corp
 
 ## Choose an engine
 
-`engine` defaults to `"browser"`, which runs your code on the page's own JavaScript engine. `"quickjs"` and `"jsc"` need their matching guest, and `installBunAdapters` throws a `TypeError` without one:
+`engine` defaults to `"browser"`, which runs user code on the worker's own JavaScript engine. `"quickjs"`, `"jsc"` and the experimental opt-in `"spidermonkey"` engine each require their matching paired guest with `core` and `side` files. `installBunAdapters` throws a `TypeError` without `asset` or `module`:
 
 ```ts
 await installBunAdapters(runtime, {
@@ -148,25 +88,44 @@ await installBunAdapters(runtime, {
 });
 ```
 
-The QuickJS and JSC executables register under `/opt/bun/quickjs/bin` and `/opt/bun/jsc/bin`. Never use the browser descriptor for them.
+By default, QuickJS registers under `/opt/bun/quickjs/bin`, JSC under `/opt/bun/jsc/bin`, and SpiderMonkey under `/opt/bun/spidermonkey/bin`. Never pass the `browser` descriptor to an in-Wasm engine.
 
 ## Control where the guest comes from
 
-`loadBunWasm({ asset, wasmUrl, module, fetch })` downloads the guest and checks its decompressed byte count and SHA-256 before compiling. A mismatch rejects with `BunWasmAssetError`:
+`loadBunWasm({ asset, wasmUrl, module, fetch })` downloads the guest and checks its uncompressed byte count and SHA-256 before compiling. Calling `loadBunWasm()` with no options loads the published default browser guest from `BUN_WASM_ASSET`. A mismatch rejects with `BunWasmAssetError`:
 
 ```
-BunWasmAssetError: Guest SHA-256 mismatch: expected 0000…0000, received e63f4b4f…cb6d2f3
+BunWasmAssetError: Guest SHA-256 mismatch: expected 0000...0000, received e63f4b4f...cb6d2f3
 ```
 
-- Pass `asset` to download a guest you host. This is the normal path, because `BUN_WASM_ASSET` is `null` until a matching guest is published again.
-- Pass `wasmUrl` with `asset` to fetch the same bytes from another URL. The integrity values still apply.
-- Pass `module`, a compiled `WebAssembly.Module`, to skip the network. Use it for offline pages and tests.
+- Omit `asset`, `wasmUrl` and `module` to download the published default `browser` guest from `BUN_WASM_ASSET`.
+- Pass `wasmUrl` to serve that same published guest from your own host while keeping the integrity checks in `BUN_WASM_ASSET`, or pass `wasmUrl` with `asset` to override your descriptor's core URL.
+- Pass `asset` to download a guest you built and host yourself.
+- Pass `module`, a compiled `WebAssembly.Module`, to skip the network in tests or offline pages.
 
-A guest must come from the same source revision as the host package. Do not substitute a mutable URL. [Guest artifact publishing](../guest-publishing.md) covers building and publishing your own.
+To build and self-host the `browser` guest from the same bun-wasm commit you pinned, run:
+
+```sh
+source env.sh
+scripts/sync-bun.sh
+scripts/build-bun-browser.sh
+sha256sum dist/bun-browser.wasm && stat -c %s dist/bun-browser.wasm
+```
+
+Serve `dist/bun-browser.wasm`, or a gzip copy of it, and put that hash and uncompressed byte count into `asset`:
+
+```ts
+const asset = {
+	kind: "single",
+	core: { url: "/bun-browser.wasm", sha256: "<sha256>", bytes: 0 /* uncompressed size */ },
+} as const;
+```
+
+Build self-hosted guests from the same source commit as the host package and avoid mutable URLs. [Guest artifact publishing](../guest-publishing.md) covers building and publishing your own artifacts.
 
 ## If it fails
 
-If `installBunAdapters` rejects, find the error in [Troubleshooting](../troubleshooting.md#installbunadapters-rejects). To check the package itself, run its tests in a bun-wasm checkout:
+If `installBunAdapters` rejects, look up the error in [Troubleshooting](../troubleshooting.md#installbunadapters-rejects). To verify the package itself inside a bun-wasm checkout:
 
 ```sh
 source env.sh

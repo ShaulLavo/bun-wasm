@@ -263,7 +263,10 @@ impl Runtime {
         argv: &[String],
         base: &'a wasmtime::Module,
     ) -> anyhow::Result<&'a wasmtime::Module> {
-        if crate::tool_args::before_command(argv.get(1..).unwrap_or_default()).is_none() {
+        let executable = argv.first().map_or("", String::as_str);
+        if crate::tool_args::is_node(executable)
+            || crate::tool_args::before_command(argv.get(1..).unwrap_or_default()).is_none()
+        {
             return Ok(base);
         }
         let tools = self.tools.get_or_init(|| {
@@ -927,6 +930,17 @@ impl Processes {
         }
     }
 
+    fn controls(&self, state: &Supervisor, target_pid: i32) -> bool {
+        let mut target = target_pid;
+        while target != self.pid {
+            let Some(&parent) = state.parents.get(&target) else {
+                return false;
+            };
+            target = parent;
+        }
+        true
+    }
+
     pub fn kill(&self, pid: i32, signal: i32) -> i32 {
         if let Err(error) = validate_signal(signal, true) {
             return error;
@@ -935,16 +949,36 @@ impl Processes {
         let Some(child) = state.processes.get(&pid) else {
             return SRCH;
         };
-        let mut target = pid;
-        while target != self.pid {
-            let Some(&parent) = state.parents.get(&target) else {
-                return PERM;
-            };
-            target = parent;
+        if !self.controls(&state, pid) {
+            return PERM;
+        }
+        if signal == 0 {
+            return 0;
         }
         child.cancel.kill(signal);
         self.notify.bump();
         0
+    }
+
+    pub fn probe_process(&self, process_id: i32) -> i32 {
+        let state = self.runtime.state.lock().unwrap();
+        if !state.processes.contains_key(&self.pid) || self.cancel.is_finished() {
+            return SRCH;
+        }
+        if process_id <= 0 {
+            return SRCH;
+        }
+        let mut found = false;
+        for (&exec_pid, child) in &state.processes {
+            if child.membership.identity().pair().0 != process_id {
+                continue;
+            }
+            found = true;
+            if self.controls(&state, exec_pid) {
+                return 0;
+            }
+        }
+        if found { PERM } else { SRCH }
     }
 
     pub fn kill_job(&self, job: i32, signal: i32) -> i32 {
@@ -957,6 +991,9 @@ impl Processes {
         };
         if record.owner != self.pid {
             return PERM;
+        }
+        if signal == 0 {
+            return 0;
         }
         for child in state.processes.values().filter(|child| child.job == job) {
             child.cancel.kill(signal);

@@ -4,7 +4,7 @@ Class **Host feature**, **original adapter**. No upstream implementation is copi
 
 The browser engine converts synchronous `require(esm)` modules with Bun's bundler.
 With every dependency external, upstream `src/js_printer/lib.rs` at
-`9510e74152073d850a18758ca41114d8f214ffa6` emits
+`a7733435cf40429e3b35c36072769df2052b80f1` emits
 `__toESM(require(specifier), 1)` for static imports. The Node-mode flag makes the
 complete required value the default, even when the dependency is itself an ES
 module. Angular CLI reaches this through strip-ansi importing ansi-regex.
@@ -38,7 +38,7 @@ bootstrap.
 Upstream references are rquickjs-sys 0.13.0's bundled QuickJS-ng 0.16.2
 `quickjs.c`, Bun's WebKit fork at
 `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`, and Bun at
-`9510e74152073d850a18758ca41114d8f214ffa6`, and Mozilla at
+`a7733435cf40429e3b35c36072769df2052b80f1`, and Mozilla at
 `a5df22d986d4b626f771b4f8885241941601c35c`. No new upstream source is copied.
 
 - `third_party/rquickjs-sys/quickjs/quickjs.c` gives `JS_CLASS_MODULE_NS` a

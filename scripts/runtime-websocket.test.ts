@@ -42,7 +42,8 @@ test("WebSocket rejects unsupported TLS options before native connection or head
   expect(() => new Socket("ws://127.0.0.1/", { proxy: "fixture" })).toThrow("WebSocket proxy and TLS options are not supported by this networking host");
 });
 
-const originalHash = "dc216befcf12f2d82ced593f19185a9e74c97e65c72fbe48b84ccb0bc882d795";
+// Updated when close() without a code began sending no status (docs/bun-patches/typed-websocket-byte-stream-adapter.md).
+const originalHash = "52130e8a4f609bbc951ec9dea899c5259a836ac5fe8512a4d6ddf24c96c521c4";
 const sourcePath = join(root, "crates/bunwasm-runtime/src/js/websocket.ts");
 
 function emittedSource() {

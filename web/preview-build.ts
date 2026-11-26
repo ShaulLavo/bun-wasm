@@ -1,9 +1,9 @@
 import { join } from "node:path";
 
-/** Bundle the shared runtime client without evaluating source inside the preview page. */
-export async function previewWebsocketScript(): Promise<string> {
+/** Bundle a page script that uses the shared runtime WebSocket client, without evaluating source inside the page. */
+async function runtimeWebsocketBundle(entry: string): Promise<string> {
   const result = await Bun.build({
-    entrypoints: [join(import.meta.dir, "src/preview-websocket-client.ts")],
+    entrypoints: [join(import.meta.dir, entry)],
     target: "browser", format: "iife", minify: true,
     plugins: [{
       name: "runtime-websocket-factory",
@@ -18,4 +18,14 @@ export async function previewWebsocketScript(): Promise<string> {
   });
   if (!result.success) throw new Error(`Preview WebSocket build failed: ${result.logs.join("\n")}`);
   return result.outputs[0]!.text();
+}
+
+/** The WebSocket shim of mounted `/__preview/` pages. */
+export function previewWebsocketScript(): Promise<string> {
+  return runtimeWebsocketBundle("src/preview-websocket-client.ts");
+}
+
+/** The page shim of preview origins: the same WebSocket client plus cookies and frame reports. */
+export function previewOriginShimScript(): Promise<string> {
+  return runtimeWebsocketBundle("src/preview-origin/page-shim.ts");
 }

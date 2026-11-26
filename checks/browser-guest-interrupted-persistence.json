@@ -4,6 +4,7 @@
   "inputs": [
     "scripts/browser-build.ts",
     "scripts/browser-guest-site.ts",
+    "scripts/preview-loading-noise.ts",
     "sandbox/build.ts",
     "sandbox/index.html",
     "sandbox/src/sandbox.ts",

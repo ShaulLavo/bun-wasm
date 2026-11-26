@@ -79,6 +79,14 @@ declare namespace BunWasm {
     hostLookup?: (hostname: string, family: 0 | 4 | 6, hints: number) => Promise<Array<{ address: string; family: 4 | 6 }>>;
     hostClose(handle: number): number;
     registerObjectModule(name: string): string;
+    /** mock.module(spec) from `from`: later imports and requires of its target load the returned module key. */
+    mockModule(spec: string, from: string): string;
+    /** The path or builtin name a mock.module() key replaces. */
+    mockTarget(key: string): string | undefined;
+    /** Bun.markdown (bunwasm-build markdown.rs): ("html" | "ansi", text, options JSON). */
+    markdown(mode: "html" | "ansi", text: Uint8Array, options: string): string;
+    /** Bun.color (bunwasm-build color.rs): (format, CSS text) or (format, undefined, r, g, b, a). */
+    color(format: string, css?: Uint8Array, red?: number, green?: number, blue?: number, alpha?: number): unknown;
     clearObjectModules(): void;
     readonly engine: "quickjs" | "jsc" | "host" | "hermes" | "spidermonkey";
     /** The running engine's `process.versions` entry; absent when the host reports none. */
@@ -122,6 +130,16 @@ declare namespace BunWasm {
     require(name: "zone_ids"): Record<string, string>;
     readonly native: Native;
     readonly builtinFactories: Record<string, () => object>;
+    /** bun_test.js: settles async mock.module() factories before a module graph that loads `name` links. */
+    mockImportReady?: (name: string) => Promise<void> | undefined;
+    /** Drops a cached builtin so its factory's settled value replaces it. */
+    forgetBuiltin(id: string): void;
+    /** Builtins whose `default` key is their default export: mock.module() results. */
+    readonly esmShapedBuiltins: Set<string>;
+    /** A builtin's exports and default export, for import. */
+    builtinImport(id: string): [unknown, unknown];
+    /** bun_test.js: a mock.module() key's exports for import. */
+    mockImport?: (id: string) => unknown;
     readonly realTimers: import("./immediate_queue-types").ImmediateTimers;
     require(name: "net_address"): {
       isIP(value: string): 0 | 4 | 6;
@@ -242,6 +260,12 @@ declare namespace BunWasm {
     nodeDigest(algorithm: string, data: Uint8Array, outputLength?: number): Uint8Array;
     nodeHmac(algorithm: string, key: Uint8Array, data: Uint8Array): Uint8Array;
     nodePbkdf2(algorithm: string, password: Uint8Array, salt: Uint8Array, iterations: number, keylen: number): Uint8Array;
+    /** Bun.password (password.rs): (password, algorithm, bcrypt cost, argon2 memoryCost KiB, argon2 timeCost). */
+    passwordHash(password: Uint8Array, algorithm: string, cost: number, memoryCost: number, timeCost: number): string;
+    passwordVerify(password: Uint8Array, hash: Uint8Array, algorithm?: string): boolean;
+    /** Bun.CSRF (csrf.rs): (algorithm, format, expiresIn ms, secret?, sessionId?). */
+    csrfGenerate(algorithm: string, format: string, expiresIn: number, secret?: Uint8Array, sessionId?: Uint8Array): string;
+    csrfVerify(token: Uint8Array, algorithm: string, format: string, maxAge: number, secret?: Uint8Array, sessionId?: Uint8Array): boolean;
     streams: {
       /** A node:zlib native handle: (mode, options JSON, dictionary). */
       codec(mode: string, options?: string, dictionary?: Uint8Array): number;

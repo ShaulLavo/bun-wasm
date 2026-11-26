@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/bun-probe-cli",
+  "engines": ["quickjs", "jsc", "browser"]
+}

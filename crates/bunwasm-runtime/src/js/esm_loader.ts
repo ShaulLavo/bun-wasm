@@ -698,6 +698,12 @@ type RecordSessionBindings = BunWasm.RecordSessionBindings;
       try {
         name = native.resolveImport ? native.resolveImport(text, referrer, mode) : mode === "text" ? requests.resolve(text, referrer, mode) : native.resolve(text, referrer);
         ready = native.prepare === undefined ? resolvePromise() : native.prepare(name);
+        // An async mock.module() factory settles before its module loads (bun_test.js).
+        const mocked = (globalThis as { __bunwasm_mockImportReady?: (name: string) => Promise<void> | undefined }).__bunwasm_mockImportReady?.(name);
+        if (mocked) {
+          const prepared = ready;
+          ready = new NativePromise<void>((settle, fail) => then(mocked, () => then(prepared, () => settle(), fail), fail));
+        }
       } catch (error) {
         reject(error);
         return;

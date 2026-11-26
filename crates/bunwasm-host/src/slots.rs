@@ -663,6 +663,14 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
     )?;
     linker.func_wrap(
         "runtime_proc",
+        "probe_process",
+        |caller: Caller<'_, Host>, pid: i32| -> Result<i32> {
+            caller.data().cancel.check()?;
+            Ok(caller.data().processes.probe_process(pid))
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_proc",
         "exec",
         |mut caller: Caller<'_, Host>, _ptr: i32, _len: i32| -> Result<i32> {
             caller.data().cancel.check()?;

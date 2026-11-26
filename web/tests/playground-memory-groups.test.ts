@@ -15,12 +15,12 @@ test("playground boot admits Bun group cores with their declared memory and stac
     const { Playground } = await import("./src/playground/playground.ts");
     console.error = error => { assert.equal(error, stop); };
     for (const engine of ["quickjs", "jsc", "browser"]) {
-      await new Playground("?engine=" + engine + "&template=nuxt&mode=memory").start();
+      await new Playground("?engine=" + engine + "&template=nuxt").start();
     }
     assert.equal(requests.length, 3);
     for (const options of requests) {
       assert.deepEqual(options.memoryGroups, { maximumPages: 32768, memberPages: 16384, stackBytes: 8 << 20 });
-      assert.deepEqual(options.filesystem, { mode: "memory", name: "bun-wasm-workspace-nuxt" });
+      assert.deepEqual(options.filesystem, { mode: "fast", name: "bun-wasm-workspace-nuxt" });
     }
     process.exit(0);
   `;

@@ -96,6 +96,37 @@ impl Table {
 }
 
 /// Node's (code, negative Linux errno, description) for an I/O error.
+/// Bun's `password_error_instance`: `Password hashing failed with error "WeakParameters"`,
+/// code `PASSWORD_WEAK_PARAMETERS`.
+fn password_error(err: crate::password::Error, verb: &str) -> NativeError {
+    if let crate::password::Error::OutOfMemory(kib) = err {
+        return NativeError::error(format!(
+            "Password {verb} failed: an Argon2 memory cost of {kib} KiB is more memory than bun-wasm can allocate"
+        ))
+        .prop("code", "PASSWORD_OUT_OF_MEMORY");
+    }
+    let name = err.name();
+    let mut code = String::from("PASSWORD");
+    for ch in name.chars() {
+        if ch.is_ascii_uppercase() {
+            code.push('_');
+        }
+        code.push(ch.to_ascii_uppercase());
+    }
+    NativeError::error(format!("Password {verb} failed with error \"{name}\"")).prop("code", code)
+}
+
+fn csrf_error(err: crate::csrf::CsrfError) -> NativeError {
+    match err {
+        crate::csrf::CsrfError::NoSecret => NativeError::error(
+            "Failed to create the default CSRF secret: no secure random source".to_string(),
+        ),
+        crate::csrf::CsrfError::TokenCreationFailed => {
+            NativeError::error("Failed to create CSRF token".to_string())
+        }
+    }
+}
+
 fn errno_info(err: &io::Error) -> (&'static str, i32, &'static str) {
     use io::ErrorKind as K;
     match err.raw_os_error() {
@@ -760,6 +791,7 @@ pub fn table(state: &Rc<State>) -> Table {
     });
     crate::glob::install(&mut t);
     crate::semver::install(&mut t);
+    crate::test_diff::install(&mut t);
     t.add("bunStringRoundTrip", |a| {
         bun_string_round_trip(a.bytes(0)?, a.str(1)?)
     });
@@ -806,12 +838,13 @@ fn bun_string_round_trip(bytes: &[u8], encoding: &str) -> NativeResult {
             .collect(),
         _ => Vec::new(),
     };
-    let string = match encoding {
-        "latin1" => bun_core::String::ascii(&owned),
-        "utf8" => bun_core::String::borrow_utf8(&owned),
-        "utf16le" => bun_core::String::borrow_utf16(&words),
+    let encoded = match encoding {
+        "latin1" => bun_core::EncodedSlice::latin1(&owned),
+        "utf8" => bun_core::EncodedSlice::utf8(&owned),
+        "utf16le" => bun_core::EncodedSlice::utf16(&words),
         _ => return Err(NativeError::type_error("unsupported encoding")),
     };
+    let string = bun_core::StringView::from_encoded(encoded);
     let decoded = string.byte_slice();
     Ok(Val::Object(vec![
         ("address".into(), Val::Num(decoded.as_ptr() as usize as f64)),
@@ -1712,6 +1745,17 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         Ok(st.resolver.register_object_module(a.str(0)?).into())
     });
     let st = state.clone();
+    t.add("mockModule", move |a| {
+        Ok(st.resolver.register_mock(a.str(0)?, a.str(1)?).into())
+    });
+    let st = state.clone();
+    t.add("mockTarget", move |a| {
+        Ok(st
+            .resolver
+            .mock_target(a.str(0)?)
+            .map_or(Val::Undefined, Val::Str))
+    });
+    let st = state.clone();
     t.add("clearObjectModules", move |_| {
         st.resolver.clear_object_modules();
         Ok(Val::Undefined)
@@ -1841,6 +1885,72 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
             .set("outputs", Val::Array(outputs))
             .set("logs", result.logs)
             .into())
+    });
+    // `Bun.color` (js/bun_color.ts reads JavaScript inputs): (format, CSS text) or
+    // (format, undefined, r, g, b, a).
+    let st = state.clone();
+    t.add("color", move |a| {
+        use crate::{ColorInput, ColorValue};
+        let input = match a.opt_bytes(1) {
+            Some(text) => ColorInput::Css(text),
+            None => ColorInput::Rgba([
+                a.num(2)? as u8,
+                a.num(3)? as u8,
+                a.num(4)? as u8,
+                a.num(5)? as u8,
+            ]),
+        };
+        Ok(
+            match st
+                .transpiler
+                .color(input, a.str(0)?)
+                .map_err(NativeError::type_error)?
+            {
+                ColorValue::Null => Val::Null,
+                ColorValue::Text(text) => Val::Str(text),
+                ColorValue::Number(number) => Val::Num(number),
+                ColorValue::Array(items) => Val::Array(items.into_iter().map(Val::Num).collect()),
+                ColorValue::Object(fields) => fields
+                    .into_iter()
+                    .fold(Record::new(), |record, (key, value)| record.set(key, value))
+                    .into(),
+            },
+        )
+    });
+    // `Bun.markdown.html`/`.ansi` (js/bun_markdown.ts reads the options): (mode, text, options JSON).
+    let st = state.clone();
+    t.add("markdown", move |a| {
+        let options: serde_json::Value = serde_json::from_str(a.str(2)?)
+            .map_err(|error| NativeError::type_error(error.to_string()))?;
+        let flag = |key: &str| options.get(key).and_then(serde_json::Value::as_bool);
+        let flags = options
+            .get("flags")
+            .and_then(serde_json::Value::as_object)
+            .map(|fields| {
+                fields
+                    .iter()
+                    .filter_map(|(name, value)| value.as_bool().map(|value| (name.clone(), value)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let request = crate::MarkdownRequest {
+            text: a.bytes(1)?,
+            ansi: a.str(0)? == "ansi",
+            flags,
+            colors: flag("colors"),
+            hyperlinks: flag("hyperlinks"),
+            kitty_graphics: flag("kittyGraphics"),
+            light: flag("light"),
+            columns: options
+                .get("columns")
+                .and_then(serde_json::Value::as_u64)
+                .map(|columns| columns.min(u64::from(u16::MAX)) as u16),
+        };
+        let out = st
+            .transpiler
+            .markdown(&request)
+            .map_err(NativeError::error)?;
+        Ok(Val::Str(String::from_utf8_lossy(&out).into_owned()))
     });
     let st = state.clone();
     t.add("devServerOpen", move |a| {
@@ -2026,6 +2136,63 @@ fn install_crypto(t: &mut Table) {
             Err(DigestError::OutOfMemory) => Err(NativeError::range_error("Out of memory")),
         }
     });
+    // Bun.password (js/bun_password.ts validates the arguments): (password, algorithm, cost,
+    // memoryCost, timeCost) and (password, hash, algorithm?).
+    t.add("passwordHash", |a| {
+        use crate::password::{Algorithm, Params, hash};
+        let algorithm = Algorithm::parse(a.str(1)?)
+            .ok_or_else(|| NativeError::type_error("unknown password algorithm".to_string()))?;
+        let params = Params {
+            algorithm,
+            cost: a.num(2)? as u32,
+            memory_cost: a.num(3)? as u32,
+            time_cost: a.num(4)? as u32,
+        };
+        hash(a.bytes(0)?, params)
+            .map(Val::Str)
+            .map_err(|err| password_error(err, "hashing"))
+    });
+    t.add("passwordVerify", |a| {
+        use crate::password::{Algorithm, verify};
+        let algorithm = match a.opt_str(2) {
+            Some(name) => Some(Algorithm::parse(name).ok_or_else(|| {
+                NativeError::type_error("unknown password algorithm".to_string())
+            })?),
+            None => None,
+        };
+        verify(a.bytes(0)?, a.bytes(1)?, algorithm)
+            .map(Val::Bool)
+            .map_err(|err| password_error(err, "verification"))
+    });
+    // Bun.CSRF (js/bun_csrf.ts validates the options): (algorithm, format, expiresIn ms,
+    // secret?, sessionId?) and (token, algorithm, format, maxAge ms, secret?, sessionId?).
+    t.add("csrfGenerate", |a| {
+        let format = crate::csrf::TokenFormat::parse(a.str(1)?)
+            .ok_or_else(|| NativeError::type_error("Invalid format".to_string()))?;
+        crate::csrf::generate(
+            a.opt_bytes(3),
+            a.opt_bytes(4).unwrap_or(&[]),
+            a.num(2)? as u64,
+            a.str(0)?,
+            format,
+        )
+        .map(Val::Str)
+        .map_err(csrf_error)
+    });
+    t.add("csrfVerify", |a| {
+        let format = crate::csrf::TokenFormat::parse(a.str(2)?)
+            .ok_or_else(|| NativeError::type_error("Invalid format".to_string()))?;
+        crate::csrf::verify(
+            a.bytes(0)?,
+            a.opt_bytes(4),
+            a.opt_bytes(5).unwrap_or(&[]),
+            a.num(3)? as u64,
+            a.str(1)?,
+            format,
+        )
+        .map(Val::Bool)
+        .map_err(csrf_error)
+    });
     // node:crypto pbkdf2: (canonical name, password, salt, iterations, keylen).
     t.add("nodePbkdf2", |a| {
         use crate::node_digest::{DigestError, pbkdf2};
@@ -2048,8 +2215,23 @@ fn install_crypto(t: &mut Table) {
             .ok_or_else(|| NativeError::type_error(format!("Invalid digest: {alg}")))?;
         Ok(Val::Bytes(digest))
     });
+    // Bun.hash.cityHash32 and friends: (algorithm, data, seed high 32 bits, seed low 32 bits).
+    t.add("bunHash", |a| {
+        use crate::bun_hash::{Output, hash};
+        let name = a.str(0)?;
+        let seed = ((a.num(2)? as u64) << 32) | a.num(3)? as u64;
+        match hash(name, a.bytes(1)?, seed) {
+            Some(Output::U32(n)) => Ok(Val::Num(f64::from(n))),
+            Some(Output::U64(n)) => Ok(Val::BigUint(n)),
+            None => Err(NativeError::type_error(format!(
+                "Unknown hash algorithm: {name}"
+            ))),
+        }
+    });
     t.add("wyhash", |a| {
-        let seed = a.opt_num(1).unwrap_or(0.0) as u64;
+        // Bun.hash: (data, seed high 32 bits, seed low 32 bits).
+        let seed =
+            ((a.opt_num(1).unwrap_or(0.0) as u64) << 32) | a.opt_num(2).unwrap_or(0.0) as u64;
         Ok(Val::BigUint(bun_wyhash::hash_with_seed(seed, a.bytes(0)?)))
     });
     // node:zlib's processChunkSync for the sync and callback convenience
@@ -2284,6 +2466,9 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     });
     t.add("procKillJob", |a| {
         Ok(host::proc_kill_job(a.i32(0)?, a.i32(1)?).into())
+    });
+    t.add("procProbeProcess", |a| {
+        Ok(host::proc_probe_process(a.i32(0)?).into())
     });
     t.add("procPoll", |a| {
         Ok(match host::proc_poll(a.bytes(0)?, a.i32(1)?) {

@@ -8,8 +8,7 @@ use std::path::Path;
 
 use bun_lint_driver::{Environment, Outcome, Script, Stream, bunfig, cli, fmt, git, js_plugin};
 
-#[path = "../../../vendor/bun/src/runtime/cli/typescript_libs.rs"]
-mod typescript_libs;
+use crate::typescript_libs;
 
 #[path = "configuration_process.rs"]
 mod configuration_process;
@@ -74,7 +73,7 @@ fn execute(
     let (cwd, help, all, format_required) = match command {
         "lint" => {
             let options = cli::Options::parse(args).map_err(|err| err.0)?;
-            let format_required = options.names_a_format_rule();
+            let format_required = options.mentions_format_rule();
             (options.cwd, options.help, options.all, format_required)
         }
         _ => {
@@ -97,7 +96,7 @@ fn execute(
     let cwd = cwd.to_string_lossy();
     bun_paths::fs::FileSystem::init(cwd.as_bytes());
     // WASI preview 1 has one thread. This also keeps nested parser regions off Bun's worker pool.
-    bun_sema_driver::keep_regions_on_this_thread();
+    bun_sema_driver::run_regions_inline_on_this_thread();
     let process_args: Vec<String> = std::env::args().skip(1).collect();
     let command_line: Vec<&[u8]> = process_args.iter().map(|arg| arg.as_bytes()).collect();
     let environment = Environment {
@@ -129,15 +128,15 @@ fn execute(
     )?;
     if command == "fmt" {
         let options = match format {
-            Some(defaults) => fmt::cli::Options::parse_over(defaults, args),
+            Some(defaults) => fmt::cli::Options::parse_with_defaults(defaults, args),
             None => fmt::cli::Options::parse(args),
         }
         .map_err(|err| err.0)?;
         return Ok(fmt::run(&options, &environment));
     }
     let mut defaults = lint.unwrap_or_default();
-    defaults.of_bun_format = format.map(Box::new);
-    let options = cli::Options::parse_over(defaults, args).map_err(|err| err.0)?;
+    defaults.bun_format_defaults = format.map(Box::new);
+    let options = cli::Options::parse_with_defaults(defaults, args).map_err(|err| err.0)?;
     Ok(bun_lint_driver::run(&options, &environment))
 }
 
@@ -148,7 +147,7 @@ fn config_error(log: &bun_ast::Log) -> CommandError {
     CommandError::Config(message.into_bytes())
 }
 
-fn config_refusal(source: &bun_ast::Source, refusal: bunfig::Refusal) -> CommandError {
+fn config_refusal(source: &bun_ast::Source, refusal: bunfig::BunfigError) -> CommandError {
     let mut log = bun_ast::Log::init();
     log.add_error(Some(source), refusal.at, refusal.message);
     config_error(&log)
@@ -224,7 +223,7 @@ impl BunfigSearch<'_> {
         }
         match (&self.lint, &self.format) {
             (Some(_), Some(_)) => Above::Unwanted,
-            (Some(options), None) if options.names_a_format_rule() || self.format_required => {
+            (Some(options), None) if options.mentions_format_rule() || self.format_required => {
                 Above::Needed
             }
             (Some(_), None) => Above::Optional,
@@ -254,7 +253,7 @@ impl BunfigSearch<'_> {
         let refusal = |error| config_refusal(&source, error);
         if self.linting && self.lint.is_none() {
             self.lint = bunfig::lint(&file).map_err(refusal)?.map(|options| {
-                options.of_bunfig_at(
+                options.from_bunfig_at(
                     label.as_bytes(),
                     self.named,
                     self.cwd.as_os_str().as_encoded_bytes(),
@@ -264,7 +263,7 @@ impl BunfigSearch<'_> {
         if self.format.is_none() {
             self.format = bunfig::format(&file)
                 .map_err(refusal)?
-                .map(|options| options.of_bunfig_at(label.as_bytes(), self.named));
+                .map(|options| options.from_bunfig_at(label.as_bytes(), self.named));
         }
         Ok(())
     }
@@ -331,7 +330,7 @@ fn run_script(script: &Script) -> Result<Vec<u8>, Vec<u8>> {
 struct NativeRules;
 
 impl js_plugin::Engine for NativeRules {
-    fn is_here(&self) -> bool {
+    fn thread_has_realm(&self) -> bool {
         false
     }
     fn with_vm_here(

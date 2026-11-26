@@ -984,6 +984,7 @@
   for (const name of Object.keys(sync)) {
     callbackApi[name.slice(0, -4)] = callbackify(name.slice(0, -4), sync[name]);
   }
+  callbackApi.realpath.native = callbackApi.realpath;
   // fs.exists(path, cb) passes only a boolean, so util.promisify needs its custom form.
   callbackApi.exists = function exists(path, callback) {
     if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
@@ -1219,11 +1220,7 @@
     return internal.require("bun_builtins").require("internal:streams/fast-utf8-stream");
   }
 
-  function watchUnsupported() {
-    throw Object.assign(new Error("fs.watch is not supported in bun-wasm"), { code: "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM" });
-  }
-
-  const { watch, FSWatcher } = internal.require("fs_watch")({ statSync, toPath, absolute });
+  const { watch, FSWatcher, watchFile, unwatchFile } = internal.require("fs_watch")({ statSync, makeStats, toPath, absolute });
   promises.watch = (path, options) => internal.require("fs_promises_watch")(watch, toPath)(path, options);
   // The getter below is a function named `promises`, which would shadow the object.
   const promisesApi = promises;
@@ -1236,8 +1233,8 @@
     createWriteStream,
     watch,
     FSWatcher,
-    watchFile: function watchFile() { watchUnsupported(); },
-    unwatchFile: () => {},
+    watchFile,
+    unwatchFile,
     // Bun's src/js/node/fs.ts: a lazily read Bun.file Blob.
     openAsBlob: function openAsBlob(path, options) {
       return Promise.resolve(internal.builtin("bun").file(path, options));

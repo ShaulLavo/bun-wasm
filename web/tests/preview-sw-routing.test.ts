@@ -172,7 +172,7 @@ test("Previews direct root-mode resolves ready immediately and formats routed UR
   expect(await rootPreviews.ready).toBe("ready");
   rootPreviews.dispose();
 
-  const routed = new Previews({ baseURL: "https://bun.sprockt.dev/", prefix: "__preview", route: "ws-demo" });
-  expect(routed.url(5173, "/app?a=1")).toBe("https://bun.sprockt.dev/__preview/r/ws-demo/5173/app?a=1");
+  const routed = new Previews({ baseURL: "https://bun.shaulavo.dev/", prefix: "__preview", route: "ws-demo" });
+  expect(routed.url(5173, "/app?a=1")).toBe("https://bun.shaulavo.dev/__preview/r/ws-demo/5173/app?a=1");
   routed.dispose();
 });

@@ -7,6 +7,8 @@ import { installBunAdapters, runBun, startBun, type BunRunResult } from "bun-was
 // same worker sources under these names.
 const workerUrl = "/worker.js";
 const notificationWorkerUrl = "/notification-worker.js";
+// The documented example omits `asset` and downloads the published guest. The test swaps in
+// the guest built from this commit, so it checks that commit rather than the published one.
 const asset = await (await fetch("/guest.json")).json();
 
 function summary(result: BunRunResult) {
@@ -14,10 +16,13 @@ function summary(result: BunRunResult) {
 }
 
 async function scenarios() {
-  // The documented example, line for line.
+  // The documented example, line for line apart from `asset`.
   const runtime = createRuntime({ filesystem: { workerURL: "/fs-worker.js", mode: "memory" } });
   await installBunAdapters(runtime, { workerUrl, notificationWorkerUrl, asset });
   const { exitCode, stdout } = await runBun(runtime, ["-e", "console.log(Bun.version)"]);
+
+  // Collected output is a pipe, not a terminal: no colour codes around inspected values.
+  const inspected = await runBun(runtime, ["-e", "console.log({ a: 1 }); console.error([true]); console.log(process.stdout.isTTY ?? false)"]);
 
   await runtime.filesystem.mkdirp("/app");
   await runtime.filesystem.writeFile("/app/index.ts", "const greeting: string = 'hello from TypeScript';\nconsole.log(greeting);\nconsole.error('to stderr');\nprocess.exit(3);\n");
@@ -41,6 +46,7 @@ async function scenarios() {
   await runtime.dispose();
   return {
     example: { exitCode, stdout },
+    inspected: summary(inspected),
     typescript: summary(typescript),
     tests: summary(tests),
     stdin: { ...summary(stdin), chunks: chunks.join("") },

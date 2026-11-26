@@ -16,10 +16,12 @@ use std::rc::Rc;
 use std::time::Instant;
 
 mod archive;
+mod bun_hash;
 mod compression;
 mod crypto;
 mod crypto_ec;
 mod crypto_pqc;
+mod csrf;
 pub(crate) mod data;
 mod directory;
 mod encoding;
@@ -47,6 +49,7 @@ mod node_rsa;
 #[cfg(any(feature = "engine-split", not(feature = "engine-host")))]
 pub(crate) mod ops;
 mod parse_env;
+mod password;
 #[cfg(all(test, feature = "engine-split"))]
 #[allow(dead_code)]
 #[path = "../../bunwasm-engine-quickjs/src/vm.rs"]
@@ -54,12 +57,15 @@ mod quickjs_embedding;
 #[cfg(all(test, feature = "engine-split"))]
 #[path = "../../bunwasm-engine-quickjs/src/rejection_queue.rs"]
 mod rejection_queue;
+// Bun's diff printer, copied from vendor/bun (docs/bun-patches/test-diff-printer.md).
+mod print_diff;
 mod resolve;
 mod semver;
 mod source_column;
 mod sourcemap;
 mod sqlite;
 mod streams;
+mod test_diff;
 mod time_zone;
 mod tls;
 pub mod transpiler;
@@ -83,8 +89,9 @@ compile_error!("bunwasm-runtime needs an engine: feature engine-split or engine-
 
 pub use data::{NativeError, Val};
 pub use transpiler::{
-    BuildArtifact, BuildRequest, BuildResult, DevServerFile, DevServerResult, Loader,
-    PassthroughTranspiler, RecordError, Transpiled, Transpiler,
+    BuildArtifact, BuildRequest, BuildResult, ColorInput, ColorValue, DevServerFile,
+    DevServerResult, Loader, MarkdownRequest, PassthroughTranspiler, RecordError, Transpiled,
+    Transpiler,
 };
 
 /// Bun version this runtime reports (from vendor/bun/package.json).

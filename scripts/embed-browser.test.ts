@@ -66,6 +66,7 @@ for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").spl
       expect(result.ok, result.error).toBe(true);
       expect(result.example.exitCode).toBe(0);
       expect(result.example.stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
+      expect(result.inspected).toEqual({ exitCode: 0, stdout: "{\n  a: 1,\n}\nfalse\n", stderr: "[ true ]\n", stopped: false });
       expect(result.typescript).toEqual({ exitCode: 3, stdout: "hello from TypeScript\n", stderr: "to stderr\n", stopped: false });
       expect(result.tests.exitCode, result.tests.stderr).toBe(0);
       expect(result.tests.stderr).toContain("1 pass");
