@@ -18,6 +18,7 @@ module-mocks.test.ts:
 (pass) a factory waiting on another mock's factory is not a cycle
 (pass) async mocks registered while settling are settled before linking
 (pass) a factory that re-registers its own target does not hold up other imports
+(pass) a sync mock replaced by an async one while settling links with the async value
 (pass) mock.module argument errors
 
 probe.test.ts:
@@ -45,9 +46,9 @@ probe.test.ts:
 1 tests todo:
 (todo) async and modifiers > todo later
 
- 33 pass
+ 34 pass
  1 skip
  1 todo
  0 fail
- 2 snapshots, 69 expect() calls
-Ran 35 tests across 2 files. [TIME]
+ 2 snapshots, 70 expect() calls
+Ran 36 tests across 2 files. [TIME]

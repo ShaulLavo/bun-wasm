@@ -844,14 +844,14 @@
 
   // Settles the mocks whose targets are not in `seen`, then again for any a factory registered
   // meanwhile. Each target settles once per link, so a factory that keeps replacing a mock does
-  // not start another round.
+  // not start another round; a sync mock is not settled, so an async replacement still is.
   function settleAll(name, seen) {
     const waits = [];
     for (const key of Array.from(moduleMocks.keys())) {
       const entry = liveMock(key);
-      if (!entry || seen.has(entry.target)) continue;
+      if (!entry || seen.has(entry.target) || (key !== name && !entry.async)) continue;
       seen.add(entry.target);
-      const pending = key === name || entry.async ? entry.settle() : undefined;
+      const pending = entry.settle();
       if (pending) waits.push(pending);
     }
     return waits.length ? Promise.allSettled(waits).then(() => settleAll(name, seen)) : undefined;
