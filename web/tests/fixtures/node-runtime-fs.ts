@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WASI } from "node:wasi";
@@ -35,8 +35,8 @@ interface WatchExports {
 const EBADF = 8, EFAULT = 21, EINVAL = 28, ENOTSUP = 58, PAGE = 65536, UNTOUCHED = 0xdeadbeef;
 const scratch = mkdtempSync(join(process.argv[2] ?? tmpdir(), "bun-wasm-node-runtime-fs-"));
 const owned: ReturnType<typeof createNodeProcess>[] = [];
-function host() {
-  const created = createNodeProcess({ transport: createWorkerProcessTransport(), preopenCount: 1,
+function host(preopens?: Record<string, string>) {
+  const created = createNodeProcess({ transport: createWorkerProcessTransport(), preopenCount: 1, preopens,
     postMessage() {}, finish(code): never { throw new Error(`unexpected exit ${code}`); } });
   owned.push(created);
   const wasi = new WASI({ version: "preview1", preopens: { "/": scratch }, env: {}, args: [], returnOnExit: true });
@@ -49,7 +49,7 @@ try {
   let instance: WebAssembly.Instance | undefined;
   const { proc } = created.install(imports, () => instance!);
   instance = new WebAssembly.Instance(guest, imports);
-  assert.deepEqual(Object.keys(imports.runtime_fs!).toSorted(), ["path_permissions_get", "watch_close", "watch_open", "watch_read", "watch_ready"]);
+  assert.deepEqual(Object.keys(imports.runtime_fs!).toSorted(), ["path_permissions_get", "path_realpath", "watch_close", "watch_open", "watch_read", "watch_ready"]);
   const permissions = imports.runtime_fs!.path_permissions_get;
   if (typeof permissions !== "function") throw new Error("missing path_permissions_get import");
   assert.equal(permissions(-1, -1, -1, -1, -1), ENOTSUP);
@@ -85,6 +85,38 @@ try {
   assert.deepEqual([open(3, 2), open(pipe, 0), open(99, 0), open(3, 0, PAGE - 2)], [EINVAL, EINVAL, EBADF, EFAULT]);
   assert.deepEqual([guestFs.read(1, 512, 64, 128), guestFs.read(1, PAGE - 8, 64, 128), guestFs.read(1, 512, 64, PAGE - 2)], [EBADF, EFAULT, EFAULT]);
   assert.equal(guestFs.close(1), EBADF);
+
+  // path_realpath (Waffle docs/host-abi.md): without a guest namespace a valid descriptor is
+  // ENOTSUP; pointers, overlapping outputs and descriptors are checked first.
+  const realpath = imports.runtime_fs!.path_realpath as (...args: number[]) => number;
+  new Uint8Array(guestFs.memory.buffer).set(name, 256);
+  assert.deepEqual([realpath(3, 256, name.length, 512, 64, 128), realpath(99, 256, name.length, 512, 64, 128),
+    realpath(3, PAGE - 2, 8, 512, 64, 128), realpath(3, 256, name.length, 512, 64, 512)], [ENOTSUP, EBADF, EFAULT, EINVAL]);
+  new Uint8Array(guestFs.memory.buffer).set([0xff], 256);
+  assert.equal(realpath(3, 256, 1, 512, 64, 128), EINVAL);
+
+  // With the guest namespace it answers in one call: links followed, the guest path back.
+  mkdirSync(join(scratch, "real/dir"), { recursive: true });
+  writeFileSync(join(scratch, "real/dir/file.txt"), "x");
+  symlinkSync("real/dir", join(scratch, "link"));
+  const named = host({ "/": scratch });
+  let namedInstance: WebAssembly.Instance | undefined;
+  named.created.install(named.imports, () => namedInstance!);
+  namedInstance = new WebAssembly.Instance(guest, named.imports);
+  named.wasi.start(namedInstance as Parameters<typeof wasi.start>[0]);
+  const namedMemory = (namedInstance.exports as unknown as WatchExports).memory;
+  const resolveReal = (path: string, capacity = 64) => {
+    const input = new TextEncoder().encode(path);
+    new Uint8Array(namedMemory.buffer).set(input, 256);
+    const errno = (named.imports.runtime_fs!.path_realpath as (...args: number[]) => number)(3, 256, input.length, 512, capacity, 128);
+    const used = new DataView(namedMemory.buffer).getUint32(128, true);
+    return [errno, new TextDecoder().decode(new Uint8Array(namedMemory.buffer, 512, errno === 0 ? used : 0)), used];
+  };
+  assert.deepEqual(resolveReal("link/file.txt"), [0, "/real/dir/file.txt", 18]);
+  assert.deepEqual(resolveReal("link/file.txt", 4), [42, "", 18]);
+  symlinkSync("real/dir/file.txt/", join(scratch, "slashed"));
+  assert.deepEqual([resolveReal("link/missing")[0], resolveReal("real/dir/file.txt/")[0], resolveReal("/real")[0]], [44, 54, 63]);
+  assert.deepEqual([resolveReal("real/dir/file.txt/.")[0], resolveReal("slashed")[0], resolveReal("link/.")[1]], [54, 54, "/real/dir"]);
 
   // A guest that fails before wasi.start() still releases its process host; the unstarted Node
   // WASI keeps its preopen, so release must not surface ERR_WASI_NOT_STARTED.

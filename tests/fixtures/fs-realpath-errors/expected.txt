@@ -1,0 +1,28 @@
+link store/pkg@1/node_modules/pkg/lib/index.js
+dotdot sync app/node_modules
+dotdot sync native store/pkg@1/node_modules
+dotdot callback app/node_modules
+dotdot callback native store/pkg@1/node_modules
+dotdot promises store/pkg@1/node_modules
+trailing file sync store/pkg@1/node_modules/pkg/lib/index.js
+trailing file sync native ENOTDIR
+trailing file callback store/pkg@1/node_modules/pkg/lib/index.js
+trailing file callback native ENOTDIR
+trailing file promises ENOTDIR
+native store/pkg@1/node_modules/pkg
+relative store/pkg@1/node_modules/pkg/lib app
+promise store/pkg@1/node_modules/pkg
+relative "node_modules/pkg/.." store/pkg@1/node_modules store/pkg@1/node_modules
+relative "node_modules/pkg/lib/index.js/" ENOTDIR ENOTDIR
+relative "./node_modules/pkg/../node_modules" ENOENT ENOENT
+relative "node_modules/pkg/lib/index.js/." ENOTDIR ENOTDIR
+relative "" ENOENT ENOENT
+long true true
+missing ENOENT
+missing parent ENOENT
+dangling ENOENT
+not a directory ENOTDIR
+loop ELOOP
+file dot ENOTDIR ENOTDIR
+slashed link ENOTDIR ENOTDIR
+callback ENOENT
