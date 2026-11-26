@@ -19,12 +19,12 @@ Three test sets measure compatibility:
 | `bun test` | Supported. See [Bun upstream test suite](#bun-upstream-test-suite). |
 | `bun build`, `Bun.build` | Supported through Bun's bundler. |
 | `bun install`, `bun i`, `bun ci`, `bun add`, `bun remove`, `bun update`, `bun x`, `bun pm` | Supported when the host supplies network access. See [Installing npm packages](install.md). |
-| `bun lint`, `bun fmt` | Run in a separate guest, `bun-tools.wasm`. Without that file, the playground warns that lint and fmt are unavailable. |
+| `bun lint`, `bun fmt`, `bun check` | Supported. They run single-threaded in `bun-tools.wasm`, a separate guest loaded on first use. `bun check` runs Bun's TypeScript type checker. Without `bun-tools.wasm`, these commands exit 1. |
 | `bun exec <script>`, `Bun.$` | Supported. Both run through `/bin/sh` or `/bin/bash`, supplied by bash-web's `installShellCommands`. |
 | `bun init` | Supported for the blank and minimal templates. With no template picker, it always takes Blank; `--react` is not supported. |
 | `bun create <template>` | Supported for npm `create-<template>` packages such as `bun create vite`. GitHub and local templates are not supported. |
 | `bun repl` | Supported for piped input only. Interactive terminal input from bash-web does not reach Bun yet. |
-| `bun upgrade`, `link`, `unlink`, `outdated`, `publish`, `patch`, `patch-commit`, `info`, `why`, `audit`, `completions`, `getcompletes`, `discord`, `dedupe`, `prune`, `check`, `deploy`, `cloud`, `config`, `use`, `auth`, `login`, `logout` | Not supported. Each prints `error: bun <command> is not supported in bun-wasm` and exits 1. |
+| `bun upgrade`, `link`, `unlink`, `outdated`, `publish`, `patch`, `patch-commit`, `info`, `why`, `audit`, `completions`, `getcompletes`, `discord`, `dedupe`, `prune`, `deploy`, `cloud`, `config`, `use`, `auth`, `login`, `logout` | Not supported. Each prints `error: bun <command> is not supported in bun-wasm` and exits 1. |
 
 ## Engines
 

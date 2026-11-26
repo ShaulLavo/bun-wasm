@@ -20,7 +20,7 @@ Pin bun-wasm to an exact commit and match that checkout's `waffle` pin:
 }
 ```
 
-Run `bun install`. The bun-wasm Git dependency generates its Node entry points during `prepare`, and the npm Waffle runtime ships its own. The default `browser` guest downloads at run time from the verified descriptor in `BUN_WASM_ASSET`. Until that descriptor is republished, it serves a pre-1.4.5 build from commit `7b25271e`, published in PR 1073. Build from source below if you need Bun 1.4.5.
+Run `bun install`. The bun-wasm Git dependency generates its Node entry points during `prepare`, and the npm Waffle runtime ships its own. The default `browser` guest downloads at run time from the verified Bun 1.4.5 descriptor in `BUN_WASM_ASSET`.
 
 ## Bundle the workers
 

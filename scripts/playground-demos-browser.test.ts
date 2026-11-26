@@ -32,6 +32,7 @@ type Scenario = (browser: Browser, url: string) => Promise<void>;
 
 for (const browserName of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",")) {
   test(`${browserName}: demos run in one click, keep edits, restore deleted files and survive reload`, () => withBrowser(browserName, oneTab));
+  test(`${browserName}: bun check demo reports TS2322 with a non-zero exit, then exits 0 after fixing the file`, () => withBrowser(browserName, bunCheckDemo));
   test(`${browserName}: two tabs never share demo databases or overwrite a peer's restored file`, () => withBrowser(browserName, twoTabs));
   test(`${browserName}: a returning visitor's unedited old examples are upgraded and edited ones kept`, () => withBrowser(browserName, returningVisitor));
   test(`${browserName}: Run cannot slip into a preparing demo, and Stop cancels it`, () => withBrowser(browserName, runStopRace));
@@ -363,6 +364,66 @@ async function oneTab(browser: Browser, url: string): Promise<void> {
     expect(listed.code, listed.output).toBe(0);
     expect(listed.output).toContain("math.js");
     expect(listed.output).not.toMatch(/\.sqlite\b/);
+  } finally {
+    await context.close();
+  }
+}
+
+async function bunCheckDemo(browser: Browser, url: string): Promise<void> {
+  const context = await browser.newContext();
+  try {
+    const page = await open(context, url);
+    let toolsDownloads = 0;
+    page.on("request", request => {
+      if (request.url().includes("bun-tools.wasm")) toolsDownloads++;
+    });
+
+    // Clicking the bun check demo opens src/check.ts, downloads bun-tools.wasm once, reports TS2322, and exits 1.
+    const diagnostic = "src/check.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.";
+    const failed = await runDemo(page, "check", [diagnostic]);
+    expect(failed).toContain(diagnostic);
+    expect(await page.evaluate(() => (Reflect.get(globalThis, "playground") as unknown as { editor: { path: string } }).editor.path)).toBe("/home/user/src/check.ts");
+    expect((await run(page, "echo $?", 30_000)).output.trim()).toBe("1");
+    expect(toolsDownloads).toBe(1);
+
+    // Direct `bun check` reports the same diagnostic and exits 1 without redownloading tools.
+    const plain = await run(page, "bun check", 30_000);
+    expect(plain.code, plain.output).toBe(1);
+    expect(plain.output).toContain(diagnostic);
+    expect(toolsDownloads).toBe(1);
+
+    // Fixing src/check.ts in the editor and rerunning the demo clears the error and exits 0.
+    const fixed = "export const total: number = 3;\n";
+    await setEditorText(page, fixed);
+    const passed = await runDemo(page, "check", ["No type errors"]);
+    expect(passed).not.toContain("TS2322");
+    expect(await readText(page, "/home/user/src/check.ts")).toBe(fixed);
+    expect((await run(page, "echo $?", 30_000)).output.trim()).toBe("0");
+    expect(toolsDownloads).toBe(1);
+
+    // Pressing Run while src/check.ts is open also runs bun check rather than bun run.
+    await setEditorText(page, 'export const total: number = "four";\n');
+    await page.locator("#run").click();
+    const rerun = await waitForOutput(page, "check", [diagnostic]);
+    expect(rerun).toContain(diagnostic);
+    expect((await run(page, "echo $?", 30_000)).output.trim()).toBe("1");
+
+    // Restoring a deleted tsconfig.json keeps the visitor's fixed src/check.ts and works from another cwd.
+    await setEditorText(page, fixed);
+    expect((await run(page, "rm tsconfig.json && cd /tmp", 30_000)).code).toBe(0);
+    await page.locator('.demo[data-demo="check"]').click();
+    await page.waitForFunction(() => {
+      const api = Reflect.get(globalThis, "playground") as unknown as PageApi;
+      if (api.shell.running || document.querySelector("#run")?.getAttribute("data-state") !== "run") return false;
+      const buffer = api.term.buffer.active;
+      let text = "";
+      for (let row = 0; row < buffer.length; row++) text += buffer.getLine(row)?.translateToString(true) ?? "";
+      return text.includes("No type errors") && !text.includes("TS2322");
+    }, undefined, { timeout: HANG_MS });
+    expect((await run(page, "echo $?", 30_000)).output.trim()).toBe("0");
+    expect(await readText(page, "/home/user/src/check.ts")).toBe(fixed);
+    expect(await readText(page, "/home/user/tsconfig.json")).toBe(examples["tsconfig.json"]!);
+    expect(toolsDownloads).toBe(1);
   } finally {
     await context.close();
   }

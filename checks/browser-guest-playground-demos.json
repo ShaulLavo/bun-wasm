@@ -14,6 +14,7 @@
     "web/src/playground/editor-pane.tsx",
     "web/src/playground/playground.ts",
     "web/src/playground/preview-dock.tsx",
-    "web/src/playground/showcase-copy.ts"
+    "web/src/playground/showcase-copy.ts",
+    "web/src/tool-command.ts"
   ]
 }

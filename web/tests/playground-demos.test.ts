@@ -3,7 +3,7 @@ import { examples } from "../src/examples";
 import { demo, demos } from "../src/playground/demos";
 import { copy } from "../src/playground/showcase-copy";
 import { orderFiles } from "../src/playground/editor-pane";
-import { visibleLength, wrapWords } from "../src/playground/playground";
+import { launchCommand, visibleLength, wrapWords } from "../src/playground/playground";
 
 test("every demo runs a seeded example and restores only seeded files", () => {
   expect(demos.map(entry => entry.id)).toEqual(Object.keys(copy.demos) as typeof demos[number]["id"][]);
@@ -16,8 +16,30 @@ test("every demo runs a seeded example and restores only seeded files", () => {
 test("demo ids from the address resolve, unknown ones do not", () => {
   expect(demo("serve")?.file).toBe("serve.ts");
   expect(demo("test")?.files).toEqual(["math.test.ts", "math.ts"]);
+  expect(demo("check")?.file).toBe("src/check.ts");
+  expect(demo("check")?.files).toEqual(["src/check.ts", "tsconfig.json"]);
+  expect(demo("check")?.command).toBe("bun check");
   expect(demo("nope")).toBeUndefined();
   expect(demo(null)).toBeUndefined();
+});
+
+test("the bun check demo isolates its tsconfig to src/ and has a type error on line 1", () => {
+  const tsconfig = JSON.parse(examples["tsconfig.json"]!) as { compilerOptions: Record<string, unknown>; include: string[] };
+  expect(tsconfig).toEqual({
+    compilerOptions: { strict: true, lib: ["es2022"], noEmit: true },
+    include: ["src"],
+  });
+  expect(examples["src/check.ts"]?.split("\n")[0]).toBe('export const total: number = "three";');
+});
+
+test("launchCommand runs bun check for the check demo and its files in the examples workspace", () => {
+  const check = demo("check")!;
+  expect(launchCommand({ path: "/home/user/src/check.ts", argument: "src/check.ts", demo: check })).toBe("bun check");
+  expect(launchCommand({ path: "/home/user/src/check.ts", argument: "/home/user/src/check.ts" }, true)).toBe("bun check --cwd /home/user");
+  expect(launchCommand({ path: "/home/user/tsconfig.json", argument: "/home/user/tsconfig.json" }, true)).toBe("bun check --cwd /home/user");
+  expect(launchCommand({ path: "/home/user/src/check.ts", argument: "/home/user/src/check.ts" }, false)).toBe("bun run /home/user/src/check.ts");
+  expect(launchCommand({ path: "/home/user/math.test.ts", argument: "math.test.ts", demo: demo("test") })).toBe("bun test math.test.ts");
+  expect(launchCommand({ path: "/home/user/serve.ts", argument: "serve.ts", demo: demo("serve") })).toBe("bun run serve.ts");
 });
 
 test("the Bun.serve demo listens on a fixed port so its preview and Restart find it", () => {

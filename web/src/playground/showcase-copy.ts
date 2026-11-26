@@ -12,6 +12,7 @@ export const copy = {
     sqlite: { label: "bun:sqlite", title: "Create a SQLite table in memory, insert rows in a transaction, and query it" },
     test: { label: "bun test", title: "Run bun:test with describe, test.each, mocks, and async assertions" },
     build: { label: "Bun.build", title: "Bundle and minify TSX and TypeScript into dist/ with linked sourcemaps" },
+    check: { label: "bun check", title: "Type-check src/check.ts with Bun's TypeScript checker; first run downloads bun-tools.wasm once, about 7 MB" },
     shell: { label: "Bun.$", title: "Run shell globs, pipes, argument escaping, .json(), and exit codes" },
     file: { label: "Bun.file", title: "Write and read text and JSON with Bun.write on the persistent browser filesystem" },
   },
@@ -46,7 +47,7 @@ export const copy = {
     sandbox: "Sandbox",
     sandboxTitle: "Open the browser app sandbox with live preview",
     playground: "Bun APIs",
-    playgroundTitle: "Run Bun.serve, bun:sqlite, bun test, Bun.build, Bun.$, and Bun.file in the playground",
+    playgroundTitle: "Run Bun.serve, bun:sqlite, bun test, Bun.build, bun check, Bun.$, and Bun.file in the playground",
   },
   /** The header's main button: Run when idle, Stop while a command runs. */
   run: {
