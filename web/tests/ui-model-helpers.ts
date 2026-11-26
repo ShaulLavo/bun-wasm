@@ -202,8 +202,12 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
       onWorkerRecovered() { return () => {}; }
       serves(port: number) { return this.active.has(port); }
       url() { return "https://preview.test/"; }
+      linkFor(url: string) { return url; }
+      linkUrl() { return this.url(); }
       dispose() { this.active.clear(); }
     },
+    // Chosen only with a configured preview domain, which these page models never have.
+    RootPreviews: class {},
     HostedPreviews: class {
       ready = Promise.resolve("ready" as const);
       attachRuntime() {}
@@ -241,7 +245,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     "browser-programs": ["BrowserPrograms", "ProvisionAbortedError", "ProvisionRollbackError"],
     "workspace-storage": ["WorkspaceStorage"],
     "engine-loader": ["ENGINES", "WasmMissing", "createToolsLoader", "engineBuildHint", "engineUnavailable", "isEngine", "loadEngineProgram", "loadWasm", "mb", "registerModuleScope"],
-    "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],
+    "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "root-previews": ["RootPreviews"], "terminal-links": ["linkLocalUrls"],
     "terminal-mount": ["openTerminal"],
     "preview-links": ["installPreviewLinks"],
     "runner": ["startRun"], "bash-web/session": ["BrowserSession"], "bash-web/prompt": ["createPrompt"], "examples": ["examples", "HOME"],

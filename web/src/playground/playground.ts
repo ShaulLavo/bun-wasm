@@ -14,6 +14,8 @@ import { normalize } from "../fs";
 import { HostedPreviews } from "../hosted-previews";
 import type { BunNetworkOptions, BunProcessStart, RuntimeNetworkHelper } from "../net/helper";
 import { Previews } from "../preview";
+import { previewHostEnv, resolvePreviewOriginConfig, type PreviewOriginConfig } from "../preview-origin/protocol";
+import { RootPreviews, type FrameWatch } from "../preview-origin/root-previews";
 import { installRuntimeSharedObjects } from "../shared-objects/runtime";
 import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "../shared-fs";
 import type { BrowserSession, SessionState } from "bash-web/session";
@@ -117,6 +119,7 @@ const BANNER_COLUMNS = 60;
 /** The playground page: one Waffle runtime, the ~ workspace, bun.wasm, and an interactive bash-web shell. */
 export class Playground extends TypedEventTarget<{ change: Event }> {
   readonly tabId = crypto.randomUUID();
+  private previewOrigins: PreviewOriginConfig | null = null;
   readonly engine: Engine;
   readonly profile: PlaygroundProfile;
   private readonly requestedProfile: PlaygroundProfile | undefined;
@@ -124,7 +127,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   /** The demo the visitor last started; `?demo=<id>` starts one when the page is ready. */
   activeDemo: Demo | undefined;
   /** A server started in the examples workspace, shown docked next to the terminal. */
-  dockedPreview: { url: string; port: number; key: number; launch: Launch | undefined } | undefined;
+  /** `link` opens the preview in a new tab: the URL itself, or the IDE-origin wrapper page of a preview origin. */
+  dockedPreview: { url: string; link: string; port: number; key: number; launch: Launch | undefined } | undefined;
   /** The pane a phone shows in the examples workspace. */
   pane: Pane = "code";
   /** Who owns the foreground: nothing, a demo or Restart preparing, or a launch the playground submitted. */
@@ -293,6 +297,15 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
 
   private trackUnsettled(promise: Promise<void>): Promise<void> {
     return trackUnsettledPromise(promise, this.unsettledDisposals, this.terminalDisposalFailures);
+  }
+
+  /** Preview origins when configured, else previews mounted under this page's `/__preview/`. */
+  private createPreviews(route: string, runtime: () => Runtime): Previews {
+    if (this.params.has("root-previews")) return new HostedPreviews(runtime, location.href, { managePageHide: false });
+    this.previewOrigins = resolvePreviewOriginConfig(location, Reflect.get(globalThis, "__bunwasmPreviewOrigin"));
+    if (!this.previewOrigins) return new Previews({ baseURL: location.href, prefix: "__preview", route });
+    // Servers belong to this tab, so their origins do too.
+    return new RootPreviews({ config: this.previewOrigins, identity: route });
   }
 
   private admitProvision<T>(runtime: Runtime, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -614,9 +627,17 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
    * process has none, so its preview offers no Restart.
    */
   private dockPreview(url: string, port: number, launch: Launch | undefined): void {
-    this.dockedPreview = { url, port, key: ++this.previewKey, launch };
+    this.dockedPreview = { url, link: this.previews?.linkFor(url) ?? url, port, key: ++this.previewKey, launch };
     if (launch?.demo) this.pane = "preview";
     this.changed();
+  }
+
+  /**
+   * A preview on its own origin says for itself when its frame loaded or failed. Mounted previews
+   * return undefined: their frame is same-origin and the dock reads it.
+   */
+  watchPreviewFrame(frame: HTMLIFrameElement, watch: FrameWatch): (() => void) | undefined {
+    return this.previews instanceof RootPreviews ? this.previews.watchFrame(frame, watch) : undefined;
   }
 
   closePreview(): void {
@@ -1018,10 +1039,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     programsReady.catch(() => {});
     stage("workspace-ready");
 
-    const previewRoute = `pg-${this.tabId}`;
-    const previews = this.previews = this.params.has("root-previews")
-      ? new HostedPreviews(() => runtime!, location.href, { managePageHide: false })
-      : new Previews({ baseURL: location.href, prefix: "__preview", route: previewRoute });
+    const previews = this.previews = this.createPreviews(`pg-${this.tabId}`, () => runtime!);
 
     const term = this.term = createTerminal();
     term.loadAddon(this.fit);
@@ -1223,7 +1241,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const shell = await BrowserSession.create({
       runtime,
       cwd: HOME,
-      env: { ...engineEnv, HOME, USER: "user", PATH: `${ENGINE_BIN[this.engine]}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
+      env: { ...engineEnv, ...previewHostEnv(this.previewOrigins), HOME, USER: "user", PATH: `${ENGINE_BIN[this.engine]}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
       cols: term.cols,
       rows: term.rows,
       wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
@@ -1366,7 +1384,7 @@ function createTerminal(): Terminal {
 /** The short `localhost:<port>` text links to the real preview URL. */
 function previewLine(previews: Previews, port: number, state: string): string {
   if (state !== "ready") return `\x1b[2m[preview] port ${port}: preview transport is ${state}\x1b[0m\r\n`;
-  const url = previews.url(port);
+  const url = previews.linkUrl(port);
   return `\x1b[2m[${copy.terminal.previewLabel}]\x1b[0m \x1b]8;;${url}\x07\x1b[4;36mlocalhost:${port}\x1b[0m\x1b]8;;\x07 \x1b[2m${copy.terminal.previewHint}\x1b[0m\r\n`;
 }
 

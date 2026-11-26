@@ -1,9 +1,12 @@
-import { on, type Handle } from "@remix-run/component";
+import { on, ref, type Handle } from "@remix-run/component";
 import type { Playground } from "./playground";
 import { copy } from "./showcase-copy";
 
 type Props = { playground: Playground };
 type FrameState = "waiting" | "loaded" | "failed";
+
+/** How often a preview origin's frame is loaded again after its service worker reported a passing failure. */
+const ORIGIN_RETRIES = 4;
 
 /**
  * The preview service worker first serves a same-origin loading page while the server
@@ -28,10 +31,14 @@ function loadingFailed(status: HTMLElement): boolean {
  * stays hidden on the page's own ground until its page loads, so no blank document flashes;
  * when the preview request fails the dock says so instead of spinning.
  * Restart appears only when the playground started the server (Run or a demo).
+ *
+ * A preview on its own origin cannot be read from here, and its frame's `load` event fires for
+ * error pages too, so the playground reports what that frame says about itself.
  */
 export function PreviewDock(handle: Handle<Props>) {
   let state: FrameState = "waiting";
   let watch: MutationObserver | undefined;
+  let ownOrigin = false;
   handle.signal.addEventListener("abort", () => watch?.disconnect());
   const settle = (next: FrameState) => {
     if (state !== "waiting") return;
@@ -44,7 +51,26 @@ export function PreviewDock(handle: Handle<Props>) {
     void playground.restartPreview().catch(playground.report);
   });
   const close = on<HTMLButtonElement>("click", () => handle.props.playground.closePreview());
+  const observe = ref((node, signal) => {
+    const frame = node as HTMLIFrameElement;
+    let retries = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stop = handle.props.playground.watchPreviewFrame(frame, {
+      loaded: () => settle("loaded"),
+      failed(transient) {
+        if (!transient || retries >= ORIGIN_RETRIES) { settle("failed"); return; }
+        clearTimeout(timer);
+        timer = setTimeout(() => { frame.src = handle.props.playground.dockedPreview?.url ?? frame.src; }, 250 * ++retries);
+      },
+    });
+    ownOrigin = stop !== undefined;
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      stop?.();
+    });
+  });
   const load = on<HTMLIFrameElement>("load", (event) => {
+    if (ownOrigin) return;
     const status = loadingStatus(event.currentTarget);
     if (!status) return settle("loaded");
     watch?.disconnect();
@@ -66,13 +92,13 @@ export function PreviewDock(handle: Handle<Props>) {
           {preview.launch
             ? <button type="button" class="control" title={copy.preview.restartTitle} disabled={!playground.canStartDemo} mix={restart}>{copy.preview.restart}</button>
             : null}
-          <a class="control" href={preview.url} target="_blank" rel="noopener" title={copy.preview.openTitle}>{copy.preview.open}</a>
+          <a class="control" href={preview.link} target="_blank" rel="noopener" title={copy.preview.openTitle}>{copy.preview.open}</a>
           <button type="button" class="control" title={copy.preview.closeTitle} mix={close}>{copy.preview.close}</button>
         </div>
         <div class="preview-frame">
           {state === "waiting" ? <p class="preview-waiting" role="status"><span class="spinner" aria-hidden="true" />{copy.preview.waiting}</p> : null}
           {state === "failed" ? <p class="preview-waiting preview-failed" role="alert">{copy.preview.failed}</p> : null}
-          <iframe title={copy.preview.frameTitle} src={preview.url} mix={load} />
+          <iframe title={copy.preview.frameTitle} src={preview.url} mix={[observe, load]} />
         </div>
       </section>
     );

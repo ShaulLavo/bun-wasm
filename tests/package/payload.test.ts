@@ -39,6 +39,11 @@ test("packed package includes a working public worker, no demo or guest binaries
     expect(files).toContain("package/web/src/nested/module-info.ts");
     expect(files).toContain("package/web/src/nested/wire.ts");
     expect(files).toContain("package/dist/package/index.js");
+    // Preview origins: the IDE-side source, and the preview host's files prebuilt.
+    expect(files).toContain("package/src/preview-origins.ts");
+    expect(files).toContain("package/web/src/preview-origin/root-previews.ts");
+    expect(files).toContain("package/dist/package/preview-origins.js");
+    for (const name of ["sw.js", "relay.html", "bootstrap.html", "top.html"]) expect(files).toContain(`package/dist/package/preview-origin/${name}`);
     expect(files.some(name => name.endsWith(".js.map"))).toBe(false);
     expect(files.some(name => /\.wasm(?:\.gz)?$/.test(name))).toBe(false);
     expect(files).not.toContain("package/web/src/main.ts");
@@ -54,6 +59,11 @@ test("packed package includes a working public worker, no demo or guest binaries
       import "bun-wasm/worker";
       import "bun-wasm/notification-worker";
       import type { Runtime } from "waffle";
+      import { RootPreviews, handlePreviewOriginRequest, showPreviewFrame, type PreviewOriginConfig } from "bun-wasm/preview-origins";
+      const previewConfig: PreviewOriginConfig = { domain: "sprockt.dev" };
+      export const previews = () => new RootPreviews({ config: previewConfig, identity: "workspace" });
+      export const previewHost = (request: Request) => handlePreviewOriginRequest(request, { domain: previewConfig.domain, ideOrigins: ["https://sprockt.dev"], asset: name => name });
+      export const previewFrame = () => showPreviewFrame(previewConfig);
       export async function install(runtime: Runtime) { return installBunAdapters(runtime, { workerUrl: "https://example.test/worker.js", notificationWorkerUrl: "https://example.test/notification-worker.js" }); }
       export { loadBunWasm, BunWasmExecutableConflictError };
     `);

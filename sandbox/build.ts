@@ -4,6 +4,7 @@
 // BUN_TOOLS_WASM overrides ../dist/bun-tools.wasm; BASH_WEB_GUESTS_DIR overrides ../dist for bash-web guests (scripts/build-bash-web-shell.sh).
 import { existsSync, rmSync, statSync } from "node:fs";
 import { previewWebsocketScript } from "../web/preview-build";
+import { previewOriginStartup, writePreviewOriginAssets } from "../web/preview-origin-build";
 import { buildBrowserEntries, buildClassicWorker, buildShellAssets, publishVersionedEntries, rewriteEntryHtml, VERSIONED_WORKER_FILES } from "../scripts/browser-build";
 import { dirname, join, resolve } from "node:path";
 import { templates } from "./src/template-catalog";
@@ -30,6 +31,7 @@ const sw = await buildClassicWorker(join(web, "src/sw.ts"), out, {
 }, join(here, "src/main.ts"));
 
 await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
+await writePreviewOriginAssets(out);
 await Bun.write(join(out, "_headers"), Bun.file(join(web, "_headers")));
 
 // ---------- engines ----------
@@ -86,6 +88,6 @@ const entries = await publishVersionedEntries(out);
 const workerAssets = Object.fromEntries(VERSIONED_WORKER_FILES.map(name => [name, entries[name]!]));
 await Bun.write(join(out, "engine-builds.json"), JSON.stringify(builds));
 const index = rewriteEntryHtml(await Bun.file(join(here, "index.html")).text(), entries);
-await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>globalThis.__bunwasmBuilds=${JSON.stringify(pageBuilds)};globalThis.__bunwasmAssets=${JSON.stringify(workerAssets)}</script>`));
+await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>${previewOriginStartup()}globalThis.__bunwasmBuilds=${JSON.stringify(pageBuilds)};globalThis.__bunwasmAssets=${JSON.stringify(workerAssets)}</script>`));
 
 for (const output of page.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);

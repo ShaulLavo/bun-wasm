@@ -1,5 +1,6 @@
 import { createPreviewServiceWorker, type PreviewClient } from "waffle/browser/service-worker";
 import type { PreviewMessage, PreviewReply } from "waffle/browser/preview-protocol";
+import { insertAfterDoctype } from "./preview-html";
 
 export const UNROUTED_KEY = "__unrouted__";
 const ROUTE_ID_PATTERN = /^(?:ws|mem|pg)-[a-zA-Z0-9._-]+$/;
@@ -59,34 +60,7 @@ function injectSocket(
   route: string | undefined,
 ): ReadableStream<Uint8Array> {
   const routeAttr = route ? ` data-bun-route="${route}"` : "";
-  const script = `<script src="${socketScriptPath}" data-bun-wasm-socket="shim" data-bun-port="${port}" data-bun-prefix="${routePrefix}"${routeAttr}></script>`;
-  const reader = stream.getReader();
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const chunks: Uint8Array[] = [];
-      let length = 0;
-      while (length < 1024) {
-        const { value, done } = await reader.read();
-        if (value) { chunks.push(value); length += value.length; }
-        if (done || value?.includes(62)) break;
-      }
-      const initial = new Uint8Array(length);
-      let at = 0;
-      for (const chunk of chunks) { initial.set(chunk, at); at += chunk.length; }
-      const decoded = new TextDecoder().decode(initial);
-      const doctype = /^\s*<!doctype[^>]*>/i.exec(decoded)?.[0] ?? "";
-      const offset = new TextEncoder().encode(doctype).length;
-      controller.enqueue(initial.subarray(0, offset));
-      controller.enqueue(new TextEncoder().encode(script));
-      controller.enqueue(initial.subarray(offset));
-    },
-    async pull(controller) {
-      const { value, done } = await reader.read();
-      if (done) controller.close();
-      else controller.enqueue(value);
-    },
-    cancel(reason) { return reader.cancel(reason); },
-  });
+  return insertAfterDoctype(stream, `<script src="${socketScriptPath}" data-bun-wasm-socket="shim" data-bun-port="${port}" data-bun-prefix="${routePrefix}"${routeAttr}></script>`);
 }
 
 function clientIdentity(client: RoutedPreviewClient): string | undefined {
