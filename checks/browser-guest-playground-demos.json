@@ -1,5 +1,6 @@
 {
   "owner": "browser-guest",
+  "batch": "12-playground-demos",
   "path": "scripts/playground-demos-browser.test.ts",
   "inputs": [
     ".github/actions/native-setup/action.yml",
