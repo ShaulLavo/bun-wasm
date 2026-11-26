@@ -8,7 +8,7 @@ import { runInNewContext } from "node:vm";
 setDefaultTimeout(120_000);
 
 // The runtime module with a recording spawn: what bun run hands the system shell.
-const load = (name: string) => runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync("globalThis.factory = " + readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url), "utf8")), { Blob, Response, ReadableStream, ArrayBuffer });
+const load = (name: string) => runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync("globalThis.factory = " + readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url), "utf8")), { Blob, Response, ReadableStream, ArrayBuffer, URL });
 const { escape } = load("bun_shell")({ require: () => ({}), builtin: () => ({}), BunFile: class {} });
 const factory = load("package_scripts");
 
@@ -255,7 +255,7 @@ function manyPackages(cwd: string, count: number) {
 }
 const modulesReads = (reads: string[], cwd: string) => reads.filter(file => file.startsWith(cwd + "/node_modules/"));
 
-for (const command of ["bun run node_modules/nuxt/bin/nuxt.mjs dev --port 1", "bunx vite", "node server.js", "bun test"]) {
+for (const command of ["bun run node_modules/nuxt/bin/nuxt.mjs dev --port 1", "node server.js", "bun test"]) {
   test(`the script "${command}" reads no package manifest in node_modules`,() => project({ dev: command }, async cwd => {
     manyPackages(cwd, 40);
     const reads: string[] = [];
@@ -291,3 +291,46 @@ test("a binary linked in node_modules/.bin resolves without reading any manifest
   expect(plan.main.command).toBe("linked-tool --flag");
   expect(modulesReads(reads, cwd)).toEqual([]);
 }));
+
+// A package that declares a binary under `name` without any node_modules/.bin link.
+function manifestOnlyBin(cwd: string, name: string) {
+  const directory = path.join(cwd, "node_modules/collision");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: "collision", bin: { [name]: "cli.ts" } }));
+  writeFileSync(path.join(directory, "cli.ts"), 'console.log("manifest bin");');
+  return path.join(directory, "cli.ts");
+}
+
+for (const name of ["bun", "node"]) {
+  test(`a script starting with ${name} ignores a manifest-only ${name} bin`, () => project({ dev: `${name} --flag` }, async cwd => {
+    manifestOnlyBin(cwd, name);
+    const f = runtime(cwd, "dev");
+    f.guest.execPath = process.execPath;
+    expect(f.scripts.continuationPlan(f.scripts.resolve(path.join(cwd, "dev"))).main.command).toBe(`${name} --flag`);
+  }));
+}
+
+test("a script starting with bunx still runs a manifest-only bunx bin, since not every host supplies bunx", () => project({ dev: "bunx --version" }, async cwd => {
+  const entry = manifestOnlyBin(cwd, "bunx");
+  const reads: string[] = [];
+  const f = runtime(cwd, "dev", [], { reads });
+  f.guest.execPath = process.execPath;
+  const plan = f.scripts.continuationPlan(f.scripts.resolve(path.join(cwd, "dev")));
+  expect(plan.main.command).toBe(`${escape(process.execPath)} ${escape(entry)} --version`);
+  expect(modulesReads(reads, cwd).length).toBeGreaterThan(0);
+}));
+
+for (const name of ["bun", "bunx", "node"]) {
+  test(`a direct bun run ${name} still resolves a manifest-only ${name} bin`, () => project({}, async cwd => {
+    const entry = manifestOnlyBin(cwd, name);
+    const f = runtime(cwd, name);
+    expect(f.scripts.resolve(path.join(cwd, name))).toBe(entry);
+  }));
+
+  test(`spawning ${name} still resolves a manifest-only ${name} bin`, () => project({}, async cwd => {
+    const entry = manifestOnlyBin(cwd, name);
+    const f = runtime(cwd, "dev");
+    const argv = f.scripts.spawnArguments([name, "--flag"], cwd);
+    expect(argv).toEqual(name === "bunx" ? ["bun", "x", "--flag"] : ["bun", entry, "--flag"]);
+  }));
+}
