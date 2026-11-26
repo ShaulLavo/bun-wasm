@@ -1,4 +1,4 @@
-//! Cold installs read each archive once and skip checks that cannot find anything.
+//! Cold installs read each shared archive once.
 use std::{fs, path::Path, process::Command};
 
 use serde_json::json;
@@ -97,11 +97,6 @@ fn a_shared_archive_is_read_once_per_install() {
     let (installed, _) = install_packages(&mut resolver(&all)).unwrap();
     assert_eq!(installed, 3);
     assert_eq!(trace::calls("cache-read"), 2, "each archive is read once");
-    assert_eq!(
-        trace::calls("present-check"),
-        0,
-        "nothing is installed without node_modules"
-    );
     for package in all {
         let manifest = fs::read(package.path().join("package.json")).unwrap();
         assert_eq!(
@@ -150,27 +145,141 @@ fn kept_archives_follow_their_remaining_uses() {
     archives.release(&second.tarball, vec![1]);
     assert!(!archives.holds(&second.tarball));
 
-    // Past the memory budget, a later use fetches again.
+    // Past the memory budget, a later use fetches again. The budget counts allocations.
     let mut archives = Archives::new([&first, &second]);
     archives.release(&first.tarball, vec![0; super::SHARED_ARCHIVES + 1]);
     assert!(!archives.holds(&first.tarball));
+    let mut spare = Vec::with_capacity(super::SHARED_ARCHIVES + 1);
+    spare.push(1u8);
+    let mut archives = Archives::new([&first, &second]);
+    archives.release(&first.tarball, spare);
+    assert!(
+        !archives.holds(&first.tarball),
+        "one used byte, but the whole allocation counts"
+    );
 }
 
 #[test]
-fn the_cache_listing_answers_for_missing_files() {
-    if std::env::var_os("BUN_WASM_CACHE_LISTING_CHILD").is_none() {
+fn the_cache_writer_recreates_a_removed_directory() {
+    if std::env::var_os("BUN_WASM_CACHE_WRITER_CHILD").is_none() {
         return in_child(
-            "the_cache_listing_answers_for_missing_files",
-            "BUN_WASM_CACHE_LISTING_CHILD",
+            "the_cache_writer_recreates_a_removed_directory",
+            "BUN_WASM_CACHE_WRITER_CHILD",
         );
     }
-    let url = "https://registry.invalid/tool/-/tool-1.0.0.tgz";
-    let mut index = io::CacheIndex::listed();
-    assert!(!index.may_hold(url), "no cache directory yet");
-    index.store(url, b"archive");
-    assert!(index.may_hold(url), "entries written later are known");
-    assert!(io::CacheIndex::listed().may_hold(url));
-    assert!(!io::CacheIndex::listed().may_hold("https://registry.invalid/other.tgz"));
+    let mut writer = io::CacheWriter::default();
+    let first = "https://registry.invalid/a/-/a-1.0.0.tgz";
+    let second = "https://registry.invalid/b/-/b-1.0.0.tgz";
+    writer.store(first, b"a");
+    assert_eq!(fs::read_dir(io::cache_dir()).unwrap().count(), 1);
+    // Another process clears the cache between two writes.
+    fs::remove_dir_all(io::cache_dir()).unwrap();
+    writer.store(second, b"b");
+    assert_eq!(
+        fs::read_dir(io::cache_dir()).unwrap().count(),
+        1,
+        "the second write recreated it"
+    );
+
+    // A write that fails while the directory is there is not retried: the entry stays absent.
+    let third = "https://registry.invalid/c/-/c-1.0.0.tgz";
+    let mut calls = 0;
+    writer.store_with(third, b"c", |_, _| {
+        calls += 1;
+        Err("Permission denied (os error 13)".into())
+    });
+    assert_eq!(calls, 1, "a permission error is not retried");
+    assert_eq!(fs::read_dir(io::cache_dir()).unwrap().count(), 1);
+    // The same writer, after the directory vanished: one retry, and the entry is written.
+    fs::remove_dir_all(io::cache_dir()).unwrap();
+    let mut calls = 0;
+    writer.store_with(third, b"c", |path, bytes| {
+        calls += 1;
+        io::write(path, bytes)
+    });
+    assert_eq!(calls, 2);
+    assert_eq!(fs::read_dir(io::cache_dir()).unwrap().count(), 1);
+}
+
+fn integrity(bytes: &[u8]) -> String {
+    use sha2::Sha512;
+    format!(
+        "sha512-{}",
+        crate::encoding::base64_encode(&Sha512::digest(bytes), false)
+    )
+}
+
+#[test]
+fn an_archive_that_failed_is_not_reused() {
+    if std::env::var_os("BUN_WASM_FAILED_REUSE_CHILD").is_none() {
+        return in_child(
+            "an_archive_that_failed_is_not_reused",
+            "BUN_WASM_FAILED_REUSE_CHILD",
+        );
+    }
+    // Two aliases of one archive: the optional one expects other bytes and fails, the
+    // required one after it must read the archive again and install.
+    let mut optional = package("tool", &["a-optional"]);
+    let mut required = package("tool", &["b-required"]);
+    seed_cache(&[&required]);
+    let cached = io::cache_dir().join(format!("{:x}", Sha256::digest(required.tarball.as_bytes())));
+    let bytes = fs::read(cached).unwrap();
+    optional.optional = true;
+    optional.integrity = integrity(b"other bytes");
+    required.integrity = integrity(&bytes);
+    trace::start();
+    let mut resolver = resolver(&[&optional, &required]);
+    let (installed, _) = install_packages(&mut resolver).unwrap();
+    assert_eq!(installed, 1);
+    assert_eq!(
+        trace::calls("cache-read"),
+        2,
+        "the failed bytes were not kept for the next alias"
+    );
+    assert!(required.path().join("package.json").is_file());
+    assert!(!resolver.packages.contains_key("a-optional"));
+}
+
+#[test]
+fn a_manifest_that_cannot_be_read_back_still_fails_validation() {
+    if std::env::var_os("BUN_WASM_UNREADABLE_CHILD").is_none() {
+        return in_child(
+            "a_manifest_that_cannot_be_read_back_still_fails_validation",
+            "BUN_WASM_UNREADABLE_CHILD",
+        );
+    }
+    // A default ACL gives new files write access without read access.
+    fs::create_dir("node_modules").unwrap();
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // Lets the parent remove the tree: unreadable directories cannot be listed.
+            let _ = Command::new("setfacl")
+                .args(["-R", "-b", "node_modules"])
+                .status();
+            let _ = Command::new("chmod")
+                .args(["-R", "u+rwX", "node_modules"])
+                .status();
+        }
+    }
+    let _restore = Restore;
+    let acl = Command::new("setfacl")
+        .args(["-d", "-m", "u::-wx,g::---,o::---", "node_modules"])
+        .status();
+    if !acl.is_ok_and(|status| status.success()) {
+        println!("setfacl is unavailable; skipped");
+        return;
+    }
+    fs::write("node_modules/probe", b"x").unwrap();
+    if fs::read("node_modules/probe").is_ok() {
+        println!("this filesystem grants read access anyway; skipped");
+        return;
+    }
+    fs::remove_file("node_modules/probe").unwrap();
+    let tool = package("tool", &["tool"]);
+    seed_cache(&[&tool]);
+    let error = install_packages(&mut resolver(&[&tool])).unwrap_err();
+    assert!(error.contains("Tarball has no package.json"), "{error}");
 }
 
 #[test]
@@ -184,14 +293,16 @@ fn a_host_without_an_install_cache_reads_and_writes_none() {
             ],
         );
     }
-    let url = "https://registry.invalid/tool/-/tool-1.0.0.tgz";
-    fs::create_dir_all(io::cache_dir()).unwrap();
-    let cached = io::cache_dir().join(format!("{:x}", Sha256::digest(url.as_bytes())));
-    fs::write(&cached, b"stale").unwrap();
-    let mut index = io::CacheIndex::new();
-    assert!(!index.enabled());
-    assert!(!index.may_hold(url), "existing cache files are not read");
-    index.store("https://registry.invalid/other.tgz", b"archive");
+    // The archive is in the cache, but the host turned the cache off: the install must ask
+    // the network (which a native test does not have) and write nothing.
+    let tool = package("tool", &["tool"]);
+    seed_cache(&[&tool]);
+    let error = install_packages(&mut resolver(&[&tool])).unwrap_err();
+    assert!(error.contains("networking support"), "{error}");
+    assert_eq!(trace::calls("cache-read"), 0);
+    let mut writer = io::CacheWriter::default();
+    assert!(!writer.enabled());
+    writer.store("https://registry.invalid/other.tgz", b"x");
     assert_eq!(
         fs::read_dir(io::cache_dir()).unwrap().count(),
         1,

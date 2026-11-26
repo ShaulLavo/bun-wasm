@@ -445,12 +445,6 @@ fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, 
     let keys: Vec<_> = resolver.packages.keys().cloned().collect();
     let mut downloads = io::Downloads::new(io::TARBALL_PREFETCHES);
     let mut archives = Archives::new(resolver.packages.values());
-    // Without node_modules nothing is installed yet, and only this run's own installs write
-    // the source records that a present package needs.
-    let fresh = matches!(
-        fs::symlink_metadata("node_modules"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    );
     let mut lookahead = keys.iter();
     // Lookahead already found these missing. Only their own installs add them; reinstalling a
     // parent can remove a nested package, so positive answers are checked again.
@@ -461,14 +455,10 @@ fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, 
             downloads: &mut downloads,
             archives: &archives,
             absent: &mut absent,
-            fresh,
         };
         prefetch.fill(&mut lookahead);
         let package = &resolver.packages[key];
-        if !fresh
-            && !absent.remove(key)
-            && trace::time("present-check", || package_present(package))
-        {
+        if !absent.remove(key) && trace::time("present-check", || package_present(package)) {
             archives.skip(package);
             continue;
         }
@@ -479,7 +469,6 @@ fn install_packages(resolver: &mut Resolver) -> Result<(usize, BTreeMap<String, 
                 registry: &resolver.registry,
                 downloads: &mut downloads,
                 archives: &mut archives,
-                fresh,
             },
         );
         if let Err(error) = result {
@@ -508,7 +497,6 @@ struct Prefetch<'a> {
     downloads: &'a mut io::Downloads,
     archives: &'a Archives,
     absent: &'a mut BTreeSet<String>,
-    fresh: bool,
 }
 
 impl Prefetch<'_> {
@@ -520,8 +508,7 @@ impl Prefetch<'_> {
             let Some(package) = self.resolver.packages.get(key) else {
                 continue;
             };
-            if package.local.is_some()
-                || !self.fresh && trace::time("present-check", || package_present(package))
+            if package.local.is_some() || trace::time("present-check", || package_present(package))
             {
                 continue;
             }
@@ -575,11 +562,12 @@ impl Archives {
     /// The kept archive for `url`, if an earlier package fetched it.
     fn take(&mut self, url: &str) -> Option<Vec<u8>> {
         let bytes = self.kept.remove(url)?;
-        self.kept_bytes -= bytes.len();
+        self.kept_bytes -= bytes.capacity();
         Some(bytes)
     }
 
-    /// One package that uses `url` is done with `bytes`; keep them while others still need them.
+    /// One package that uses `url` is done with `bytes`, which installed it. Keeps them while
+    /// others still need them, counting their whole allocation against the budget.
     fn release(&mut self, url: &str, bytes: Vec<u8>) {
         let Some(left) = self.uses.get_mut(url) else {
             return;
@@ -589,8 +577,8 @@ impl Archives {
             self.uses.remove(url);
             return;
         }
-        if self.kept_bytes + bytes.len() <= SHARED_ARCHIVES {
-            self.kept_bytes += bytes.len();
+        if self.kept_bytes + bytes.capacity() <= SHARED_ARCHIVES {
+            self.kept_bytes += bytes.capacity();
             self.kept.insert(url.into(), bytes);
         }
     }
@@ -616,8 +604,6 @@ struct Install<'a> {
     registry: &'a io::Registry,
     downloads: &'a mut io::Downloads,
     archives: &'a mut Archives,
-    /// No `node_modules` existed when the install started.
-    fresh: bool,
 }
 
 fn install_package(package: &Package, install: Install<'_>) -> Result<Option<Value>> {
@@ -626,33 +612,39 @@ fn install_package(package: &Package, install: Install<'_>) -> Result<Option<Val
         registry,
         downloads,
         archives,
-        fresh,
     } = install;
     if let Some(local) = &package.local {
         forget_installed_source(&package.path())?;
         return local::link(&local.path, &package.path()).map(|()| None);
     }
-    let fetched = match archives.take(&package.tarball) {
+    // A request that bypasses the cache (`--force`) always downloads, as each package did.
+    let bypass = refresh && !package.explicit_tarball;
+    let kept = if bypass {
+        None
+    } else {
+        archives.take(&package.tarball)
+    };
+    let fetched = match kept {
         Some(bytes) => Ok(bytes),
-        None => downloads.fetch(
-            &package.tarball,
-            true,
-            refresh && !package.explicit_tarball,
-            registry,
-        ),
+        None => downloads.fetch(&package.tarball, true, bypass, registry),
     };
     let bytes = fetched.inspect_err(|_| archives.skip(package))?;
-    let result = extract_package(package, &bytes, downloads, registry, fresh);
-    archives.release(&package.tarball, bytes);
+    let mut tick = || downloads.tick(registry);
+    let result = extract_package(package, &bytes, &mut tick);
+    // Only archives that installed a package are kept for the next one.
+    match &result {
+        Ok(_) if !bypass => archives.release(&package.tarball, bytes),
+        _ => archives.skip(package),
+    }
     result
 }
 
+/// Checks, extracts and publishes one archive. `tick` runs during extraction so downloads
+/// keep moving.
 fn extract_package(
     package: &Package,
     bytes: &[u8],
-    downloads: &mut io::Downloads,
-    registry: &io::Registry,
-    fresh: bool,
+    tick: &mut dyn FnMut(),
 ) -> Result<Option<Value>> {
     trace::time("integrity", || io::integrity(bytes, &package.integrity))?;
     let path = package.path();
@@ -661,12 +653,11 @@ fn extract_package(
         package.name.rsplit('/').next().unwrap()
     ));
     empty_directory(&staging)?;
-    let mut tick = || downloads.tick(registry);
-    let result = trace::time("extract", || io::extract(bytes, &staging, &mut tick))
-        .and_then(|manifest| validate_package(&staging, package, manifest))
+    let result = trace::time("extract", || io::extract(bytes, &staging, tick))
+        .and_then(|()| validate_package(&staging, package))
         .and_then(|bins| {
             trace::time("publish", || {
-                publish_package(&staging, &path, package, fresh, io::write)
+                publish_package(&staging, &path, package, io::write)
             })?;
             Ok(Some(bins))
         });
@@ -692,18 +683,14 @@ fn empty_directory(path: &Path) -> Result<()> {
 /// Moves the extracted package into place, then records where it came from. The old record
 /// goes first, so new bytes never sit beside an older record: if writing the new record
 /// fails, the package simply reads as missing. A fresh install is one rename; only a failed
-/// rename (an existing package) removes the old directory. In a `fresh` install (no
-/// `node_modules` when it started) there is no old record to remove.
+/// rename (an existing package) removes the old directory.
 fn publish_package(
     staging: &Path,
     path: &Path,
     package: &Package,
-    fresh: bool,
     write_record: impl FnOnce(&Path, &[u8]) -> Result<()>,
 ) -> Result<()> {
-    if !fresh {
-        forget_installed_source(path)?;
-    }
+    forget_installed_source(path)?;
     if fs::rename(staging, path).is_err() {
         if path.exists() {
             fs::remove_dir_all(path).map_err(|e| e.to_string())?;
@@ -746,17 +733,12 @@ fn bin_fields(manifest: &Value) -> Value {
     }
 }
 
-/// Checks the staged root `package.json`: the bytes extraction wrote, when no other entry
-/// could have replaced them under any filesystem's case and normalization rules, or else
-/// the file read back from disk. Returns the fields binary linking needs, so it need not
-/// read the manifest again.
-fn validate_package(staging: &Path, package: &Package, written: Option<Vec<u8>>) -> Result<Value> {
-    let bytes = match written {
-        Some(bytes) => bytes,
-        None => {
-            fs::read(staging.join("package.json")).map_err(|_| "Tarball has no package.json")?
-        }
-    };
+/// Checks the staged root `package.json`, read from disk so the checked bytes are the ones
+/// that will be published under every filesystem's case and normalization rules. Returns
+/// the fields binary linking needs, so it need not read the manifest again.
+fn validate_package(staging: &Path, package: &Package) -> Result<Value> {
+    let bytes =
+        fs::read(staging.join("package.json")).map_err(|_| "Tarball has no package.json")?;
     let manifest: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if manifest["name"] != package.name || manifest["version"] != package.version {
         return Err("Tarball name/version does not match registry metadata".into());
