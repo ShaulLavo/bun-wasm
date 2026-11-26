@@ -180,6 +180,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private runScript: "install" | "dev" | null = null;
   /** Why `stopDevServer` ended a run, printed when that run's `command()` returns. */
   private readonly stopReasons = new WeakMap<Run, string>();
+  /** A watch reconcile arrived during `bun install`; the file list refreshes when it exits. */
+  private refreshAfterInstall = false;
   private readonly stopping = new Set<StoppingRun>();
   private server: Server | null = null;
   private preview: PreviewNavigation | null = null;
@@ -717,7 +719,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private async handleWatchReconcile(reason: ReconcileReason | "ui-reconcile"): Promise<void> {
     if (this.disposed || this.resetting || this.localResetting || this.coordinator?.hasActiveResetIntent()) return;
-    await this.refreshFiles().catch(() => {});
+    // Listing the workspace walks every node_modules file: mid-install that is one filesystem
+    // task over about 30,000 files, which stalls every other call. List once the install exits.
+    if (this.runScript === "install" && reason !== "ui-reconcile") this.refreshAfterInstall = true;
+    else await this.refreshFiles().catch(() => {});
     await this.editorInstance?.syncFromFs().catch(() => {});
     if (reason === "ui-reconcile") {
       if (this.serverState.state === "starting" && !this.run) {
@@ -1992,6 +1997,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const result = await current.done;
     stage(`${script}-done`);
     output.flush();
+    if (script === "install" && this.refreshAfterInstall) {
+      this.refreshAfterInstall = false;
+      void this.refreshFiles().catch(() => {});
+    }
     if (result.error) term.write(`\x1b[31m${result.error}\x1b[0m\r\n`);
     if (this.run !== current) {
       // Say why the run ended, so a restart is never silent.

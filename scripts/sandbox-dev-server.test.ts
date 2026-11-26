@@ -175,6 +175,21 @@ test("a watch reconcile during installation leaves the install running", async (
   } finally { await f.cleanup(); }
 });
 
+test("a watch reconcile during installation lists the workspace once the install exits", async () => {
+  const f = await fixture();
+  try {
+    const fs = f.page.fixture.fs;
+    const listFiles = fs.listFiles.bind(fs);
+    let lists = 0;
+    fs.listFiles = (root) => { lists++; return listFiles(root); };
+    const reconcile = method<Reconcile>(f.sandbox, "handleWatchReconcile");
+    for (const reason of restartReasons) await reconcile(reason);
+    expect(lists).toBe(0);
+    await f.dev();
+    expect(lists).toBe(1);
+  } finally { await f.cleanup(); }
+});
+
 test("a watch reconcile during the dev server restarts it and says why the old one ended", async () => {
   const f = await fixture();
   try {
