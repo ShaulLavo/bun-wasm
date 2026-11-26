@@ -469,7 +469,7 @@ impl State {
     /// A path changed through this process's natives: forget remembered require() targets and
     /// the read a pending compile would reuse.
     pub fn paths_changed(&self) {
-        self.resolver.forget_found();
+        self.resolver.forget_required();
         self.fresh_source.take();
     }
 

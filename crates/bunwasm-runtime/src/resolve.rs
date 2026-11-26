@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use serde_json::Value as Json;
 
-/// Remembered resolution targets; the cache starts over when it reaches this many.
-const FOUND_LIMIT: usize = 4096;
+/// Remembered require() targets; the cache starts over when it reaches this many.
+const REQUIRED_LIMIT: usize = 4096;
 
 /// Whether the specifier came from `import`/`import()` or from `require()`.
 /// Picks the `exports` condition and the main field.
@@ -209,11 +209,8 @@ pub struct Resolver {
     package_json: RefCell<HashMap<String, Option<Rc<Json>>>>,
     package_errors: RefCell<HashMap<String, ResolveNote>>,
     notes: RefCell<Vec<ResolveNote>>,
-    /// Found targets by kind, importing directory and specifier (see `resolve_unmocked`).
-    found: RefCell<HashMap<String, String>>,
-    /// Whether import targets are kept too. `--hot` turns this off: each reload re-resolves
-    /// its graph against the files as they are now.
-    remember_imports: Cell<bool>,
+    /// Found require() targets by importing directory and specifier (see `resolve`).
+    required: RefCell<HashMap<String, String>>,
 }
 
 #[derive(Clone)]
@@ -244,8 +241,7 @@ impl Resolver {
             package_json: RefCell::new(HashMap::new()),
             package_errors: RefCell::new(HashMap::new()),
             notes: RefCell::new(Vec::new()),
-            found: RefCell::new(HashMap::new()),
-            remember_imports: Cell::new(true),
+            required: RefCell::new(HashMap::new()),
         }
     }
 
@@ -267,7 +263,7 @@ impl Resolver {
             .borrow_mut()
             .insert(name.to_owned(), key.clone());
         // An `imports` alias remembered before may now name this module.
-        self.forget_found();
+        self.forget_required();
         key
     }
 
@@ -279,9 +275,6 @@ impl Resolver {
     /// Mocking the same target again replaces the earlier mock.
     pub fn register_mock(&self, spec: &str, from: &str) -> String {
         let key = self.next_object_key();
-        // A mock replaces what the specifier names now, not a target remembered before a file
-        // was added or removed.
-        self.forget_found();
         let suspended = std::mem::take(&mut *self.suspended_mocks.borrow_mut());
         let resolved = self.resolve_target(spec, from);
         *self.suspended_mocks.borrow_mut() = suspended;
@@ -306,7 +299,7 @@ impl Resolver {
             }
         };
         self.mock_targets.borrow_mut().insert(key.clone(), original);
-        self.forget_found();
+        self.forget_required();
         key
     }
 
@@ -350,20 +343,13 @@ impl Resolver {
         self.mocked_files.borrow_mut().clear();
         self.mocked_builtins.borrow_mut().clear();
         self.mock_targets.borrow_mut().clear();
-        self.forget_found();
+        self.forget_required();
     }
 
     /// Drop every remembered require() target: a path was added, removed or renamed, or the
     /// plugin modules changed, so an earlier resolution may no longer be the one Bun would make.
-    pub fn forget_found(&self) {
-        self.found.borrow_mut().clear();
-    }
-
-    /// Keep found import targets as well as require() ones (the default), or re-resolve every
-    /// import, as `--hot` reloads need.
-    pub fn remember_imports(&self, remember: bool) {
-        self.remember_imports.set(remember);
-        self.forget_found();
+    pub fn forget_required(&self) {
+        self.required.borrow_mut().clear();
     }
 
     /// Resolve `spec` imported from the file `from` (or a directory path ending
@@ -424,25 +410,23 @@ impl Resolver {
             dirname(from)
         };
         let from_dir = if from_dir.is_empty() { "/" } else { from_dir };
-        if kind == Kind::Import && !self.remember_imports.get() {
+        if kind == Kind::Import {
             return self.resolve_in(spec, from, from_dir, kind);
         }
-        // Callers re-resolve on every require() and every import edge, and each resolution
-        // probes many paths, so a found target is kept until this process changes a path or a
-        // plugin module (`forget_found`), as Node keeps its module path and resolve caches for
-        // the life of a process. Failures are never kept.
-        let tag = if kind == Kind::Import { 'i' } else { 'r' };
-        let key = format!("{tag}{from_dir}\0{spec}");
-        if let Some(path) = self.found.borrow().get(&key) {
+        // Callers re-resolve on every require(), and each resolution probes many paths, so a
+        // found target is kept until this process changes a path or a plugin module
+        // (`forget_required`). Failures are never kept.
+        let key = format!("{from_dir}\0{spec}");
+        if let Some(path) = self.required.borrow().get(&key) {
             return Ok(Resolved::File(path.clone()));
         }
         let resolved = self.resolve_in(spec, from, from_dir, kind);
         if let Ok(Resolved::File(path)) = &resolved {
-            let mut found = self.found.borrow_mut();
-            if found.len() >= FOUND_LIMIT {
-                found.clear();
+            let mut required = self.required.borrow_mut();
+            if required.len() >= REQUIRED_LIMIT {
+                required.clear();
             }
-            found.insert(key, path.clone());
+            required.insert(key, path.clone());
         }
         resolved
     }

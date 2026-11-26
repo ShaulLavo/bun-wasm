@@ -570,8 +570,7 @@ fn require_keeps_found_targets_and_retries_failures() {
         resolver.resolve("./lib/b", &from, Kind::Require),
         Ok(Resolved::File(fixture.path("lib/b.js")))
     );
-    // Each kind keeps its own targets: this first import sees the current files. The key
-    // includes the importing directory too.
+    // Imports resolve against the current files, and the key includes the importing directory.
     assert_eq!(
         resolver.resolve("./lib/a", &from, Kind::Import),
         Ok(Resolved::File(fixture.path("lib/a.ts")))
@@ -581,62 +580,10 @@ fn require_keeps_found_targets_and_retries_failures() {
         Ok(Resolved::File(fixture.path("lib/a.ts")))
     );
     // A path change through the runtime's natives forgets every remembered target.
-    resolver.forget_found();
+    resolver.forget_required();
     assert_eq!(
         resolver.resolve("./lib/a", &from, Kind::Require),
         Ok(Resolved::File(fixture.path("lib/a.ts")))
-    );
-}
-
-#[test]
-fn import_keeps_found_targets_per_kind_unless_told_to_forget() {
-    let fixture = Fixture::new();
-    fixture.write(
-        "node_modules/p/package.json",
-        r#"{"exports":{"import":"./esm.js","require":"./cjs.js"}}"#,
-    );
-    fixture.file("node_modules/p/esm.js");
-    fixture.file("node_modules/p/cjs.js");
-    fixture.file("lib/a.js");
-    let resolver = Resolver::new();
-    let from = fixture.path("index.js");
-    let import = |spec: &str| resolver.resolve(spec, &from, Kind::Import);
-    assert_eq!(
-        import("p"),
-        Ok(Resolved::File(fixture.path("node_modules/p/esm.js")))
-    );
-    assert_eq!(
-        resolver.resolve("p", &from, Kind::Require),
-        Ok(Resolved::File(fixture.path("node_modules/p/cjs.js")))
-    );
-    assert_eq!(
-        import("./lib/a"),
-        Ok(Resolved::File(fixture.path("lib/a.js")))
-    );
-    assert!(import("./lib/b").is_err());
-
-    // A change another process made keeps a found import target, like Node's resolve cache;
-    // a failure is probed again.
-    fixture.file("lib/a.ts");
-    fixture.file("lib/b.js");
-    assert_eq!(
-        import("./lib/a"),
-        Ok(Resolved::File(fixture.path("lib/a.js")))
-    );
-    assert_eq!(
-        import("./lib/b"),
-        Ok(Resolved::File(fixture.path("lib/b.js")))
-    );
-    // `--hot` re-resolves every import against the current files.
-    resolver.remember_imports(false);
-    assert_eq!(
-        import("./lib/a"),
-        Ok(Resolved::File(fixture.path("lib/a.ts")))
-    );
-    fs::remove_file(fixture.path("lib/a.ts")).unwrap();
-    assert_eq!(
-        import("./lib/a"),
-        Ok(Resolved::File(fixture.path("lib/a.js")))
     );
 }
 

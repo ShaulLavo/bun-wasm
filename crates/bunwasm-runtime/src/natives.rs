@@ -745,19 +745,20 @@ const PATH_CHANGES: &[(&str, Option<i32>)] = &[
     ("sqlite.open", Some(0x4)),
 ];
 
-/// After a native that may have changed which path a require() or import finds, forget the remembered
-/// targets and reads (`State::paths_changed`), whether or not the call succeeded.
-fn forget_found_after_path_changes(t: &mut Table, state: &Rc<State>) {
+/// After a native that may have changed which path a require() finds, forget the remembered
+/// targets and the read a pending compile would reuse (`State::paths_changed`), whether or
+/// not the call succeeded.
+fn forget_required_after_path_changes(t: &mut Table, state: &Rc<State>) {
     for (name, function) in t.functions.iter_mut() {
         let change = PATH_CHANGES.iter().find(|(key, _)| key == name);
         if let Some(&(_, create_flag)) = change {
-            *function = forgetting_found(function.clone(), state.clone(), create_flag);
+            *function = forgetting_required(function.clone(), state.clone(), create_flag);
         }
     }
 }
 
 /// `inner`, followed by `State::paths_changed` unless its flags rule out creating a path.
-fn forgetting_found(inner: DataFn, st: Rc<State>, create_flag: Option<i32>) -> DataFn {
+fn forgetting_required(inner: DataFn, st: Rc<State>, create_flag: Option<i32>) -> DataFn {
     Rc::new(move |a| {
         let changes =
             create_flag.is_none_or(|bit| a.opt_num(1).is_some_and(|flags| flags as i32 & bit != 0));
@@ -819,7 +820,7 @@ pub fn table(state: &Rc<State>) -> Table {
     #[cfg(feature = "engine-split")]
     crate::wasm::install(&mut t);
     // Last, so it sees every native that can create a path.
-    forget_found_after_path_changes(&mut t, state);
+    forget_required_after_path_changes(&mut t, state);
     t.constants.push(("platformInfo", platform_info()));
     t
 }
@@ -2421,26 +2422,12 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
         })
     });
     t.add("fsWatchReady", |_| Ok(host::fs_watch_ready().into()));
-    let st = state.clone();
-    t.add("fsWatchRead", move |a| {
-        let read = host::fs_watch_read(a.u32(0)?);
-        // A delivered change (or a lost one: overflow, a failed watch) may be a file another
-        // writer created, removed or renamed: re-resolve from now on, as Bun's watcher busts
-        // its resolver's directory cache. EAGAIN (6) is only "nothing pending".
-        if !matches!(read, Err(6)) {
-            st.resolver.forget_found();
-        }
-        Ok(match read {
+    t.add("fsWatchRead", |a| {
+        Ok(match host::fs_watch_read(a.u32(0)?) {
             Ok(bytes) if bytes.is_empty() => 0.into(),
             Ok(bytes) => Val::Bytes(bytes),
             Err(errno) => (-errno).into(),
         })
-    });
-    // fs.watchFile saw a polled change (fs_watch.ts): the same, for stat-polling watchers.
-    let st = state.clone();
-    t.add("fsChangeObserved", move |_| {
-        st.resolver.forget_found();
-        Ok(Val::Undefined)
     });
     t.add("fsWatchClose", |a| {
         Ok((-host::fs_watch_close(a.u32(0)?)).into())
@@ -2692,7 +2679,7 @@ mod builtin_tests {
     }
 
     #[test]
-    fn path_changing_natives_forget_remembered_targets() {
+    fn path_changing_natives_forget_remembered_require_targets() {
         use crate::resolve::{Kind, Resolved};
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
         let name = format!(
@@ -2708,13 +2695,11 @@ mod builtin_tests {
         let mut natives = Table::default();
         install_fs(&mut natives, &state);
         install_fds(&mut natives, &state);
-        forget_found_after_path_changes(&mut natives, &state);
+        forget_required_after_path_changes(&mut natives, &state);
         let from = path("index.js");
-        let found = || {
-            [Kind::Import, Kind::Require].map(|kind| state.resolver.resolve("./lib/a", &from, kind))
-        };
-        let index = [0, 1].map(|_| Ok(Resolved::File(path("lib/a/index.js"))));
-        let file = [0, 1].map(|_| Ok(Resolved::File(path("lib/a.js"))));
+        let found = || state.resolver.resolve("./lib/a", &from, Kind::Require);
+        let index = Ok(Resolved::File(path("lib/a/index.js")));
+        let file = Ok(Resolved::File(path("lib/a.js")));
         assert_eq!(found(), index);
         // A higher-precedence file written by this process wins at once.
         let source: Val = "module.exports = 2;\n".into();
