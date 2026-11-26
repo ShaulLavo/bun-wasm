@@ -21,19 +21,24 @@ export function launchProcess(command: string[], cwd: string, env: NodeJS.Proces
   const child = spawn(command[0]!, command.slice(1), { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout?.pipe(stdout); child.stderr?.pipe(stderr);
   const observation: { exit: Bracket | null } = { exit: null };
-  const exited = new Promise<number>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", code => {
-      observation.exit = { beforeMs: performance.now(), afterMs: performance.now() };
-      if (code === null) reject(new Error("Process terminated by signal"));
-      else resolve(code);
-    });
-  });
-  void exited.catch(() => {});
   const filesClosed = Promise.all([stdout, stderr].map(stream => new Promise<void>((resolve, reject) => {
     stream.once("finish", resolve); stream.once("error", reject);
   })));
   void filesClosed.catch(() => {});
+  // The child's "close" fires once its pipes end, but the piped file streams may not have opened or flushed yet.
+  // Resolve only after both files are complete so callers can read stdout.txt and stderr.txt right after `exited`.
+  // A file error (for example the exclusive open failing) rejects at once and stops the child, which would
+  // otherwise block forever writing into a pipe nobody drains.
+  const exited = new Promise<number>((resolve, reject) => {
+    child.once("error", reject);
+    filesClosed.catch(error => { void stopGroup(child).catch(() => {}); reject(error); });
+    child.once("close", code => {
+      observation.exit = { beforeMs: performance.now(), afterMs: performance.now() };
+      if (code === null) { reject(new Error("Process terminated by signal")); return; }
+      filesClosed.then(() => resolve(code), reject);
+    });
+  });
+  void exited.catch(() => {});
   let closing: Promise<void> | undefined;
   const close = () => closing ??= (async () => { await stopGroup(child); await bounded(() => filesClosed, 5000); })();
   return { child, exited, observation, close };

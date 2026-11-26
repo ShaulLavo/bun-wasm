@@ -81,6 +81,16 @@ test("real exit and output checks reject both nonzero builds and successful empt
   expect(() => validateLifecycle(failed)).toThrow();
   expect(() => validateLifecycle(empty)).toThrow();
 });
+test("a failed output file rejects exited and stops the child instead of leaving it blocked on its pipe", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-lifecycle-file-error-"));
+  await writeFile(join(root, "stdout.txt"), "existing");
+  const job = launchProcess(["head", "-c", "33554432", "/dev/zero"], root, process.env, root);
+  try {
+    await expect(bounded(() => job.exited, 20000)).rejects.toThrow("EEXIST");
+    const pid = job.child.pid!;
+    expect(await until(() => live(pid), value => !value, 10000)).toBe(false);
+  } finally { await job.close().catch(() => {}); await rm(root, { recursive: true, force: true }); }
+}, 60000);
 function live(pid: number): Promise<boolean> {
   return readFile(`/proc/${pid}/stat`, "utf8").then(text => text.slice(text.lastIndexOf(")") + 2).split(" ")[0] !== "Z").catch(() => false);
 }

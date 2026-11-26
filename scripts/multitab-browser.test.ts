@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
 import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
+import { isCancelledLoadingStatusPoll } from "./preview-loading-noise";
 
 // Tests here start real processes and browsers. The limit only catches a hang.
 setDefaultTimeout(240_000);
@@ -20,6 +21,13 @@ afterEach(async () => {
     await fn();
   }
 });
+
+function collectPageErrors(page: Page, label: string, errors: string[]): void {
+  page.on("pageerror", (error) => {
+    if (isCancelledLoadingStatusPoll(error)) return;
+    errors.push(`${label}: ${error.message}`);
+  });
+}
 
 async function withSite(
   browserName: string,
@@ -84,6 +92,90 @@ async function waitForSandboxReady(page: Page, timeout = 120_000): Promise<void>
       };
     }).catch(() => null);
     throw new Error(`${String(error)} | sandboxDiag=${JSON.stringify(diag)}`);
+  }
+}
+
+/** Role, status and Web Locks of a Sandbox tab, attached to a failed wait so a hang names its stage. */
+async function sandboxDiagnostics(page: Page): Promise<unknown> {
+  if (page.isClosed()) return "closed";
+  return page.evaluate(async () => {
+    const api = Reflect.get(globalThis, "sandbox");
+    const locks = await navigator.locks.query();
+    const names = (list: readonly LockInfo[] | undefined) => (list ?? []).map((lock) => `${lock.mode === "shared" ? "s" : "x"}:${lock.name}`);
+    return {
+      role: api?.role?.() ?? null,
+      status: document.querySelector("#status")?.textContent ?? null,
+      serverDot: document.querySelector("#server-dot")?.getAttribute("data-state") ?? null,
+      previewSrc: document.querySelector("#preview")?.getAttribute("src") ?? null,
+      ownershipLost: api?.fs?.ownershipLost ?? null,
+      held: names(locks.held),
+      pending: names(locks.pending),
+    };
+  }).catch((error: unknown) => `unavailable: ${String(error)}`);
+}
+
+async function waitForSandboxRole(page: Page, role: "owner" | "follower", peers: Record<string, Page>, timeout = 120_000): Promise<void> {
+  try {
+    await page.waitForFunction(
+      (expected) => Reflect.get(globalThis, "sandbox")?.role?.() === expected && document.querySelector("#server-dot")?.getAttribute("data-state") === "up",
+      role,
+      { timeout },
+    );
+  } catch (error) {
+    const diagnostics: Record<string, unknown> = {};
+    for (const [name, peer] of Object.entries(peers)) diagnostics[name] = await sandboxDiagnostics(peer);
+    throw new Error(`${String(error)} | waiting for ${role} | ${JSON.stringify(diagnostics)}`);
+  }
+}
+
+/** Waits until exactly one tab owns the dev server (up) and every other tab follows it (up). */
+async function waitForSingleOwner(tabs: Record<string, Page>, timeout = 120_000): Promise<{ owner: Page; follower: Page }> {
+  const pages = Object.values(tabs);
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const states = await Promise.all(pages.map((page) => page.evaluate(() =>
+      `${Reflect.get(globalThis, "sandbox")?.role?.() ?? ""}|${document.querySelector("#server-dot")?.getAttribute("data-state") ?? ""}`,
+    ).catch(() => "")));
+    const owners = pages.filter((_, index) => states[index] === "owner|up");
+    const followers = pages.filter((_, index) => states[index] === "follower|up");
+    if (owners.length === 1 && followers.length === pages.length - 1) return { owner: owners[0]!, follower: followers[0]! };
+    await Bun.sleep(250);
+  }
+  const diagnostics: Record<string, unknown> = {};
+  for (const [name, page] of Object.entries(tabs)) diagnostics[name] = await sandboxDiagnostics(page);
+  throw new Error(`No single dev server owner within ${timeout} ms | ${JSON.stringify(diagnostics)}`);
+}
+
+async function playgroundDiagnostics(page: Page): Promise<unknown> {
+  if (page.isClosed()) return "closed";
+  return page.evaluate(async () => {
+    const pg = Reflect.get(globalThis, "playground") as { editor?: { path?: string }; fs?: { ownershipLost?: boolean } } | undefined;
+    const locks = await navigator.locks.query();
+    const names = (list: readonly LockInfo[] | undefined) => (list ?? []).map((lock) => `${lock.mode === "shared" ? "s" : "x"}:${lock.name}`);
+    const status = document.querySelector("#status");
+    return {
+      editorPath: pg?.editor?.path ?? null,
+      status: status?.textContent ?? null,
+      statusKind: status?.getAttribute("data-kind") ?? null,
+      ownershipLost: pg?.fs?.ownershipLost ?? null,
+      held: names(locks.held),
+      pending: names(locks.pending),
+    };
+  }).catch((error: unknown) => `unavailable: ${String(error)}`);
+}
+
+async function waitForPlaygroundReady(page: Page, peers: Record<string, Page>, timeout = 60_000): Promise<void> {
+  try {
+    await page.waitForFunction(
+      () => (Reflect.get(globalThis, "playground") as { editor?: { path?: string } } | undefined)?.editor?.path === "/home/user/index.ts"
+        && document.querySelector("#status")?.getAttribute("data-kind") === "ok",
+      null,
+      { timeout },
+    );
+  } catch (error) {
+    const diagnostics: Record<string, unknown> = {};
+    for (const [name, peer] of Object.entries(peers)) diagnostics[name] = await playgroundDiagnostics(peer);
+    throw new Error(`${String(error)} | waiting for Playground | ${JSON.stringify(diagnostics)}`);
   }
 }
 
@@ -164,29 +256,38 @@ async function runPlaygroundServer(page: Page, marker: string): Promise<string> 
     const pg = Reflect.get(globalThis, "playground") as unknown as { shell: { submit(command: string): Promise<void> } };
     void pg.shell.submit(`bun run ${file}`);
   }, `/home/user/srv-${marker}.ts`);
-  await page.waitForFunction(
-    (start) => {
-      const pg = Reflect.get(globalThis, "playground") as {
-        term?: { buffer?: { active?: { length: number; getLine(i: number): { isWrapped?: boolean; translateToString(trim: boolean): string } | undefined } } };
-      } | undefined;
-      const buf = pg?.term?.buffer?.active;
-      if (!buf) return false;
-      let text = "";
-      for (let i = 0; i < buf.length; i++) {
-        const line = buf.getLine(i);
-        if (!line) continue;
-        if (i > 0 && !line.isWrapped) text += "\n";
-        text += line.translateToString(!line.isWrapped);
-      }
-      return /\[preview\] http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\//.test(text.slice(start));
-    },
-    baseline,
-    { timeout: 60_000 },
-  );
-  const terminal = (await playgroundTerminalText(page)).slice(baseline);
-  const match = /\[preview\] (http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\/)/.exec(terminal);
-  expect(match?.[1]).toBeTruthy();
-  return match![1]!;
+  try {
+    await page.waitForFunction(
+      (start) => {
+        const pg = Reflect.get(globalThis, "playground") as {
+          term?: { buffer?: { active?: { length: number; getLine(i: number): { isWrapped?: boolean; translateToString(trim: boolean): string } | undefined } } };
+        } | undefined;
+        const buf = pg?.term?.buffer?.active;
+        if (!buf) return false;
+        let text = "";
+        for (let i = 0; i < buf.length; i++) {
+          const line = buf.getLine(i);
+          if (!line) continue;
+          if (i > 0 && !line.isWrapped) text += "\n";
+          text += line.translateToString(buf.getLine(i + 1)?.isWrapped !== true);
+        }
+        // The terminal names the server `localhost:3000`; its link targets the routed preview URL.
+        return /\[preview\] localhost:3000\b/.test(text.slice(start));
+      },
+      baseline,
+      { timeout: 60_000 },
+    );
+  } catch (error) {
+    const terminal = await playgroundTerminalText(page).catch(() => "");
+    throw new Error(`${String(error)} | baseline ${baseline} | terminal tail: ${JSON.stringify(terminal.slice(-1500))}`);
+  }
+  // The link's target is the tab's own routed preview, the same URL the terminal link opens.
+  const url = await page.evaluate(() => {
+    const pg = Reflect.get(globalThis, "playground") as unknown as { previews: { serves(port: number): boolean; url(port: number): string } };
+    return pg.previews.serves(3000) ? pg.previews.url(3000) : "";
+  });
+  expect(url).toMatch(/^http:\/\/[^\s]+\/__preview\/r\/pg-[^\s/]+\/3000\/$/);
+  return url;
 }
 
 for (const browserName of browsers) {
@@ -197,7 +298,7 @@ for (const browserName of browsers) {
 
       const errors: string[] = [];
       const tab1 = await context.newPage();
-      tab1.on("pageerror", (e) => errors.push(`tab1: ${e.message}`));
+      collectPageErrors(tab1, "tab1", errors);
       await navigateTestPage(tab1, `${origin}/sandbox/?template=vanilla`);
       await waitForSandboxReady(tab1);
 
@@ -221,7 +322,7 @@ for (const browserName of browsers) {
 
       // Open Tab 2 on the same persistent workspace: must attach (NO takeover!) and mirror preview.
       const tab2 = await context.newPage();
-      tab2.on("pageerror", (e) => errors.push(`tab2: ${e.message}`));
+      collectPageErrors(tab2, "tab2", errors);
       await navigateTestPage(tab2, `${origin}/sandbox/?template=vanilla`);
       await waitForSandboxReady(tab2);
 
@@ -252,50 +353,24 @@ for (const browserName of browsers) {
       expect(tab1Counter).toBe("count is 1");
       expect(tab2Counter).toBe("count is 1");
 
-      // Reload Tab 1 (Owner reload failover): delay only the reloaded document response briefly so
-      // Tab 1 unloads and releases its locks before booting again, letting Tab 2 deterministically
-      // take ownership even on fast WebKit reloads, and Tab 1 reattaches cleanly without ownershipLost.
-      const reloadUrl = tab1.url();
-      let delayedReload = false;
-      const delayReload = async (route: import("playwright").Route) => {
-        if (!delayedReload && route.request().isNavigationRequest() && route.request().url() === reloadUrl) {
-          delayedReload = true;
-          await new Promise((resolve) => setTimeout(resolve, 2_000));
-        }
-        await route.continue();
-      };
-      await tab1.route("**/*", delayReload);
-      try {
-        await tab1.reload();
-      } finally {
-        await tab1.unroute("**/*", delayReload);
-      }
-      await tab2.waitForFunction(
-        () => Reflect.get(globalThis, "sandbox")?.role?.() === "owner" && document.querySelector("#server-dot")?.getAttribute("data-state") === "up",
-        null,
-        { timeout: 120_000 },
-      );
+      // Reload the owner (Tab 1). Its old document keeps its locks until the reloaded document commits,
+      // and the reloaded tab boots from the cached engine at once, so Tab 2 and the reloaded Tab 1 race
+      // for ownership. Either may win: exactly one owner with the dev server up, the other attached
+      // as a follower without ownershipLost, and both previews still live.
+      await tab1.reload();
+      const { owner, follower } = await waitForSingleOwner({ tab1, tab2 });
       await waitForSandboxReady(tab1);
-      expect(await tab2.evaluate(() => Reflect.get(globalThis, "sandbox").role())).toBe("owner");
-      expect(await tab1.evaluate(() => Reflect.get(globalThis, "sandbox").role())).toBe("follower");
       expect(await tab1.evaluate(() => Reflect.get(globalThis, "sandbox").fs.ownershipLost)).toBe(false);
       expect(await tab2.evaluate(() => Reflect.get(globalThis, "sandbox").fs.ownershipLost)).toBe(false);
       await Promise.all([waitForPreviewText(tab1, marker1), waitForPreviewText(tab2, marker1)]);
 
-      // Close the current owner (Tab 2) -> surviving Tab 1 must become owner and serve a fresh edit!
-      await tab2.close();
-      await tab1.waitForFunction(
-        () => {
-          const api = Reflect.get(globalThis, "sandbox");
-          return api?.role?.() === "owner" && document.querySelector("#server-dot")?.getAttribute("data-state") === "up";
-        },
-        null,
-        { timeout: 120_000 },
-      );
-      await waitForPreviewText(tab1, marker1);
+      // Close the current owner -> the surviving tab must become owner and serve a fresh edit!
+      await owner.close();
+      await waitForSandboxRole(follower, "owner", { follower });
+      await waitForPreviewText(follower, marker1);
       const marker2 = `post-failover-${browserName}-${Date.now()}`;
-      await editSandboxFile(tab1, marker2);
-      await waitForPreviewText(tab1, marker2);
+      await editSandboxFile(follower, marker2);
+      await waitForPreviewText(follower, marker2);
 
       // Verify true response-body isolation: two mode=memory tabs on the same port 5173 serve distinct bodies!
       const mem1 = await context.newPage();
@@ -336,18 +411,15 @@ for (const browserName of browsers) {
       const errors: string[] = [];
       const tab1 = await context.newPage();
       const tab2 = await context.newPage();
-      tab1.on("pageerror", (e) => errors.push(`pg1: ${e.message}`));
-      tab2.on("pageerror", (e) => errors.push(`pg2: ${e.message}`));
+      collectPageErrors(tab1, "pg1", errors);
+      collectPageErrors(tab2, "pg2", errors);
 
       // Concurrent startup of both persistent Playground tabs (CI browser-guest site serves Playground at "/").
       await Promise.all([
         navigateTestPage(tab1, `${origin}/`),
         navigateTestPage(tab2, `${origin}/`),
       ]);
-      await Promise.all([
-        tab1.waitForFunction(() => (Reflect.get(globalThis, "playground") as any)?.editor?.path === "/home/user/index.ts" && document.querySelector("#status")?.getAttribute("data-kind") === "ok", null, { timeout: 60_000 }),
-        tab2.waitForFunction(() => (Reflect.get(globalThis, "playground") as any)?.editor?.path === "/home/user/index.ts" && document.querySelector("#status")?.getAttribute("data-kind") === "ok", null, { timeout: 60_000 }),
-      ]);
+      await Promise.all([waitForPlaygroundReady(tab1, { tab1, tab2 }), waitForPlaygroundReady(tab2, { tab1, tab2 })]);
 
       expect(await tab1.evaluate(() => (Reflect.get(globalThis, "playground") as any).fs.ownershipLost)).toBe(false);
       expect(await tab2.evaluate(() => (Reflect.get(globalThis, "playground") as any).fs.ownershipLost)).toBe(false);

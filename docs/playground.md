@@ -17,6 +17,33 @@ The build compresses each engine's wasm from `../dist` into `dist/<name>.wasm.br
 without that negotiation the page decompresses the `.gz` twin itself. If one is missing the build still succeeds and that engine says it is missing. `?wasm=<url>`
 loads a different module at runtime; `?trace` logs every WASI call to the worker's console.
 
+## One-click Bun demos
+
+The examples workspace shows a demo bar: Bun.serve, bun:sqlite, bun test, Bun.build, Bun.$ and
+Bun.file. A click stops any running command, restores the demo's files if they were deleted (edits
+are kept), opens the file and runs it from `~` (it runs `cd ~`, clears the screen and echoes
+`bun run serve.ts`). Restoring is one exclusive-create call, so it never replaces a file another
+tab wrote meanwhile, and an existing file is always the visitor's. When a demo's code changes in
+a way an old copy would get wrong, the demo gets a new file name (main's `db.ts` became
+`sqlite.ts` and `files.ts` became `bun-file.ts`), so old workspaces simply gain the new file.
+While a demo prepares, Run stays out and Stop cancels it. Demos resolve their files from
+`import.meta.dir`, so they work from any shell directory, and the SQLite demos use in-memory
+databases: every tab runs its own processes, and SQLite here allows one writer per file.
+
+While a command runs, Run becomes Stop (Ctrl-C; a second Stop forces it). A server started there
+opens in a preview above the terminal. Each Run or demo launch carries a unique
+`BUNWASM_LAUNCH_ID` into its processes; Restart belongs only to a server whose process inherited a
+live launch's id, so a server from any other process gets no Restart. A second Stop on a launch
+kills its jobs with SIGKILL, so a program that handles Ctrl-C still stops. If the preview request
+fails, the dock says so instead of waiting (the loading page marks its status element with
+`data-preview-loading`). At 800 px and narrower the examples workspace shows
+one pane at a time (Code, Preview, Terminal). `?demo=<id>` (for example `/playground/?demo=serve`)
+starts a demo once the page is ready, and the address follows the last demo clicked. The page
+switch in both headers links the sandbox at `/` and `?demo=serve`. Visible strings live in
+`web/src/playground/showcase-copy.ts`; the demo programs are in `web/src/examples.ts`.
+`scripts/playground-demos-browser.test.ts` checks every demo, Restart, Close, Stop, edits, file
+restore, reload, and two tabs (separate databases and the restore race).
+
 ## Run Vite with React
 
 Open `/playground/?template=vite-react` on the deployed site, or choose **Vite + React**

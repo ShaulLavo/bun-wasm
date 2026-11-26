@@ -1,6 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { ENGINES, isEngine, loadWasm } from "../src/engine-loader";
+import { copy } from "../src/playground/showcase-copy";
 
 const valid = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const substituted = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 0, 2, 1, 120]);
@@ -10,10 +11,9 @@ test("the loader and ordinary menu register SpiderMonkey alongside the other eng
   expect(Object.keys(ENGINES).sort()).toEqual(["browser", "jsc", "quickjs", "spidermonkey"]);
   expect(isEngine("spidermonkey")).toBe(true);
   for (const name of ["hermes", "unknown"]) expect(isEngine(name)).toBe(false);
+  expect(Object.keys(copy.engineOptions)).toEqual(["browser", "quickjs", "jsc", "spidermonkey"]);
   const source = readFileSync(new URL("../src/playground/app.tsx", import.meta.url), "utf8");
-  const options = source.match(/^const ENGINE_OPTIONS = (.+)$/m)?.[1];
-  if (!options) throw new Error("Missing ready engine menu options");
-  expect(Array.from(options.matchAll(/\["([^"]+)"/g), match => match[1])).toEqual(["browser", "quickjs", "jsc", "spidermonkey"]);
+  expect(source).toMatch(/^const ENGINE_OPTIONS = Object\.entries\(copy\.engineOptions\)/m);
 });
 
 for (const source of ["download", "cache"] as const) {
