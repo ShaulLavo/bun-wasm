@@ -231,6 +231,19 @@ export function frameMessage(value: unknown): FrameMessage | null {
   };
 }
 
+// ---- IDE tab -> the other IDE tabs of its origin (BroadcastChannel) ----
+
+/** Where the tab that runs a dev server tells the others what the server answered to frame navigations. */
+export const NAVIGATION_CHANNEL = "bunwasm-preview-navigations";
+/** The response head a server sent for the navigation of a frame to `url`. `location` is its redirect target, if it is one. */
+export interface NavigationAnswer { url: string; status: number; location: string | null }
+
+export function navigationAnswer(value: unknown): NavigationAnswer | null {
+  if (!record(value) || !text(value.url) || !count(value.status)) return null;
+  if (value.location !== null && !text(value.location)) return null;
+  return { url: value.url, status: value.status, location: value.location };
+}
+
 // ---- service worker <-> relay frame and preview pages (ServiceWorker.postMessage) ----
 
 export const SW_ATTACH = "bunwasm-preview-attach";

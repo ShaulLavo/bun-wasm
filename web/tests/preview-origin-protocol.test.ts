@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import {
-  frameMessage, isPreviewOrigin, parsePreviewHost, previewFrameLink, previewHostEnv, previewOrigin, previewOriginId, relayMessage,
+  frameMessage, isPreviewOrigin, navigationAnswer, parsePreviewHost, previewFrameLink, previewHostEnv, previewOrigin, previewOriginId, relayMessage,
   resolvePreviewOriginConfig, sessionRequest, socketRequest,
 } from "../src/preview-origin/protocol";
 
@@ -152,6 +152,14 @@ test("requests from the preview origin are rebuilt from known fields or dropped"
   expect(socketRequest({ type: "open", url: "wss://p.test/hmr", method: "GET", headers: [], authorization: {} })).toEqual({ type: "open", url: "wss://p.test/hmr", method: "GET", headers: [] });
   expect(socketRequest({ type: "data", chunk: "text" })).toBeNull();
   expect(socketRequest({ type: "grant" })).toBeNull();
+});
+
+test("a navigation answer from another tab is taken by shape only", () => {
+  expect(navigationAnswer({ url: "https://p.test/a", status: 302, location: "/b", extra: 1 })).toEqual({ url: "https://p.test/a", status: 302, location: "/b" });
+  expect(navigationAnswer({ url: "https://p.test/a", status: 200, location: null })).toEqual({ url: "https://p.test/a", status: 200, location: null });
+  for (const bad of [null, "x", {}, { url: 5, status: 200, location: null }, { url: "https://p.test/", status: "200", location: null }, { url: "https://p.test/", status: 200 }, { url: "https://p.test/", status: 200, location: 5 }]) {
+    expect(navigationAnswer(bad)).toBeNull();
+  }
 });
 
 test("the relay's frame questions and answers are taken by shape only", () => {

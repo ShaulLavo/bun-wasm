@@ -359,6 +359,117 @@ test("a tab that only shows another tab's server mounts the relay page to look, 
   expect(frames.every(item => item.removed)).toBe(true);
 });
 
+test("an answer counts only for the navigation that asked, and only from the relay page that was asked", async () => {
+  const { previews, origin } = await setup();
+  previews.registerListener(5173, server());
+  previews.registerListener(3000, server());
+  await settle();
+  const otherOrigin = origin.replace("-5173-pv", "-3000-pv");
+  const relay = frames.find(item => item.src === `${origin}${RELAY_PATH}`)!;
+  const otherRelay = frames.find(item => item.src === `${otherOrigin}${RELAY_PATH}`)!;
+  deliver(relay, origin, { type: RELAY_MESSAGE, event: "ready" });
+  deliver(otherRelay, otherOrigin, { type: RELAY_MESSAGE, event: "ready" });
+  const frame = new FakePreviewFrame(`${origin}/plain`);
+  const { events, stop } = watch(previews, frame);
+
+  // /plain finishes loading, the IDE sends the frame to /hang, and only then the answer about /plain arrives.
+  frame.load();
+  frame.src = `${origin}/hang`;
+  await answer(relay, origin, questions(relay).at(-1), "server");
+  expect(events).toEqual([]);
+  // Back at the first address, the old answer still belongs to a navigation that was replaced.
+  frame.src = `${origin}/plain`;
+  frame.load();
+  frame.load();
+  const [stale, current] = questions(relay).slice(-2);
+  await answer(relay, origin, stale, "server");
+  expect(events).toEqual([]);
+  // Another relay page of this tab was never asked about this frame: its word is not taken.
+  deliver(otherRelay, otherOrigin, { type: RELAY_MESSAGE, event: "inspected", id: current!.id, document: "server" });
+  await settle();
+  expect(events).toEqual([]);
+  await answer(relay, origin, current, "server");
+  expect(events).toEqual(["loaded null"]);
+  stop();
+  await previews.dispose();
+});
+
+/** A dev server that answers every request with a short plain-text page, and `/old` with a redirect to another site. */
+const answering = (): PreviewServer => ({
+  request: () => false,
+  connect: (_port, sink) => ({
+    write(request) {
+      const away = new TextDecoder().decode(request).startsWith("GET /old ");
+      const response = away
+        ? "HTTP/1.1 302 Found\r\nlocation: https://example.com/landing\r\ncontent-length: 0\r\n\r\n"
+        : "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-security-policy: sandbox\r\ncontent-length: 2\r\n\r\nok";
+      void sink.data(new TextEncoder().encode(response));
+    },
+    close() {},
+  }),
+});
+
+test("a document the relay page cannot read settles once the server answered that frame's navigation, in the owner tab and in another", async () => {
+  const owner = await setup();
+  const follower = await setup();
+  const { origin } = owner;
+  const token = owner.previews.registerListener(5173, answering());
+  await settle();
+  const relay = frames[0]!;
+  deliver(relay, origin, { type: RELAY_MESSAGE, event: "ready" });
+  const port = relay.posted[0]!.ports[0]!;
+  const replies = acknowledge(port);
+  expect(await owner.previews.waitUntilRegistered(5173, token)).toBe("ready");
+  const heads = () => replies.filter(reply => reply.t === "output" && reply.output.type === "head").length;
+  const navigate = async (id: number, path: string) => {
+    const before = heads();
+    port.postMessage({ t: "open", id, url: `${origin}${path}`, method: "GET", headers: [["sec-fetch-mode", "navigate"], ["sec-fetch-dest", "iframe"]], body: null, credentials: "include" });
+    while (heads() === before) await Bun.sleep(1);
+  };
+
+  // The server's page has an opaque origin (a `sandbox` policy): neither the relay page nor a report can vouch for it.
+  const frame = new FakePreviewFrame(`${origin}/sandboxed`);
+  const { events, stop } = watch(owner.previews, frame);
+  // A browser error page loads unread before the server answered anything: nothing.
+  frame.load();
+  await answer(relay, origin, questions(relay).at(-1), "unreadable");
+  // Another address's answer is not this frame's.
+  await navigate(1, "/");
+  frame.load();
+  await answer(relay, origin, questions(relay).at(-1), "unreadable");
+  expect(events).toEqual([]);
+  await navigate(2, "/sandboxed");
+  frame.load();
+  await answer(relay, origin, questions(relay).at(-1), "unreadable");
+  expect(events).toEqual(["loaded null"]);
+  // One answer settles one document.
+  frame.load();
+  await answer(relay, origin, questions(relay).at(-1), "unreadable");
+  expect(events).toEqual(["loaded null"]);
+  // A redirect to another site: the frame's next load ends the wait.
+  frame.src = `${origin}/old`;
+  await navigate(3, "/old");
+  frame.load();
+  await answer(relay, origin, questions(relay).at(-1), "unreadable");
+  expect(events).toEqual(["loaded null", "loaded null"]);
+  stop();
+
+  // The tab that only shows the preview hears the owner's answers, before or after its frame loads.
+  const shown = new FakePreviewFrame(`${origin}/sandboxed`);
+  const other = watch(follower.previews, shown);
+  shown.load();
+  const inspector = frames.find(item => item.src === `${origin}${RELAY_PATH}${RELAY_INSPECT_QUERY}`)!;
+  deliver(inspector, origin, { type: RELAY_MESSAGE, event: "ready" });
+  await answer(inspector, origin, questions(inspector).at(-1), "unreadable");
+  expect(other.events).toEqual([]);
+  await navigate(4, "/sandboxed");
+  while (other.events.length === 0) await Bun.sleep(1);
+  expect(other.events).toEqual(["loaded null"]);
+  other.stop();
+  await owner.previews.dispose();
+  await follower.previews.dispose();
+});
+
 test("an identity that cannot be read fails the listener and is asked for again next time", async () => {
   let reads = 0;
   const previews = new RootPreviews({ config, identity: async () => { if (++reads === 1) throw new Error("workspace not ready"); return "workspace-1"; }, ideOrigin: IDE, frameBase: `${IDE}/`, relayTimeoutMs: 300 });

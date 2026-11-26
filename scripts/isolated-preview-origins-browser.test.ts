@@ -288,6 +288,7 @@ Bun.serve({ port: 3000, fetch(req: Request) {
   if (path === "/hang") return new Promise<Response>(() => {});
   if (path === "/moved") return new Response(null, { status: 302, headers: { location: "/plain?moved" } });
   if (path === "/detour") return new Response(null, { status: 302, headers: { location: "/hang?detour" } });
+  if (path === "/sandboxed") return new Response("<!doctype html><title>sandboxed</title><h1>sandboxed</h1>", { headers: { "content-type": "text/html", "content-security-policy": "sandbox allow-scripts" } });
   if (path === "/plain") return new Response("plain text, no markup", { headers: { "content-type": "text/plain; charset=utf-8" } });
   if (path === "/locked") return new Response("<!doctype html><title>locked</title><h1>locked</h1>", { headers: { "content-type": "text/html", "content-security-policy": "script-src 'none'" } });
   const headers = new Headers({ "content-type": "text/html", "set-cookie": "theme=dock; Path=/" });
@@ -677,7 +678,9 @@ for (const browserName of browsers) {
       // Documents that cannot report settle too: plain text, a page whose policy keeps every script out, and
       // plain text behind a redirect. Each settles by its own server response: the server was asked for it,
       // the frame's initial blank document settled nothing, and neither did a frame still waiting for its own.
-      for (const [path, served] of [["/plain", "/plain"], ["/locked", "/locked"], ["/moved", "/plain"]] as const) {
+      // The last has an opaque origin (a `sandbox` policy), which no page of the preview origin can read:
+      // it settles because the server answered that frame's navigation.
+      for (const [path, served] of [["/plain", "/plain"], ["/locked", "/locked"], ["/moved", "/plain"], ["/sandboxed", "/sandboxed"]] as const) {
         const before = (await dockRequests(ide)).length;
         expect(await frameSettles(ide, `${src.origin}${path}`)).toEqual({ outcome: "loaded null", blank: [], waiting: [] });
         const asked = (await dockRequests(ide)).slice(before);

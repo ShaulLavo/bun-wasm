@@ -163,9 +163,17 @@ The relay page shares the preview's origin, so it can read the frame through `pa
 the IDE page cannot. A tab that only shows another tab's server mounts the relay page with
 `?inspect` for this check alone. The frame must be a frame of the IDE page itself.
 
+The relay page cannot read a document of another origin: the server redirected the frame away, or
+gave the document an opaque origin with a `sandbox` policy. Such a document settles the frame once
+the server has sent the final response of that frame's navigation, followed through redirects. The
+tab that runs the server tells the workspace's other tabs about those responses over a
+`BroadcastChannel`.
+
 The injected script must pass every `Content-Security-Policy` header on the response, from both the
 app and any proxy. Its `<script>` tag carries a nonce, a one-time token, accepted by every policy
-that requires one. If no single tag passes all policies, such as under a hash-only policy, the
+that requires one. Chromium, Firefox, and Safari differ in how an `http` host source covers an
+`https` page, so the worker applies the rule of the browser it runs in. If no single tag passes all
+policies, such as under a hash-only policy, the
 worker skips injection and leaves the policies unchanged. The page still loads, without WebSocket or
 `document.cookie` support.
 

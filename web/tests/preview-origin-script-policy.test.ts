@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
-import { shimAdmission } from "../src/preview-origin/script-policy";
+import { policyEngine, shimAdmission, type PolicyEngine } from "../src/preview-origin/script-policy";
 
 const ORIGIN = `https://${"a".repeat(52)}-5173-pv.sprockt.dev`;
 const SHIM = `${ORIGIN}/__bunwasm-preview/ws.js`;
-const admission = (header: string | null, shim = SHIM) => shimAdmission(header, shim);
+// Where the engines agree, Chromium stands for all three; the tests of the upgrade name each engine.
+const admission = (header: string | null, shim = SHIM, engine: PolicyEngine | null = "chromium") => shimAdmission(header, shim, engine);
 const OPEN = { allowed: true } as const;
 const BLOCKED = { allowed: false } as const;
 
@@ -40,6 +41,52 @@ test("a source list admits the shim's own URL by 'self', a wildcard, a scheme or
   expect(admission("script-src http:", local)).toEqual(OPEN);
   expect(admission("script-src *.localhost", local)).toEqual(BLOCKED);
   expect(admission("script-src *.localhost:4173", local)).toEqual(OPEN);
+});
+
+test("each engine's own rule decides how an http host source covers an https page, and an unknown engine gets the strictest", () => {
+  const host = new URL(ORIGIN).hostname;
+  const onPort = `https://${host}:8443/__bunwasm-preview/ws.js`;
+  const plain = `http://${host}:8080/__bunwasm-preview/ws.js`;
+  // [source, the page script's URL, the engines that run the script under that source]
+  const cases: [string, string, PolicyEngine[]][] = [
+    // An explicit port that is not a default one: Gecko and WebKit let the scheme upgrade on its own, Chromium does not.
+    [`http://${host}:8443`, onPort, ["gecko", "webkit"]],
+    [`https://${host}:8443`, onPort, ["chromium", "gecko", "webkit"]],
+    [`${host}:8443`, onPort, ["chromium", "gecko", "webkit"]],
+    [`http://${host}`, onPort, []],
+    [`http://${host}:80`, onPort, []],
+    [`http://${host}:8444`, onPort, []],
+    // The default ports: 80 stands for 443 in Chromium (with the scheme) and in WebKit, never in Gecko.
+    [`http://${host}:80`, SHIM, ["chromium", "webkit"]],
+    [`https://${host}:80`, SHIM, ["webkit"]],
+    [`${host}:80`, SHIM, ["webkit"]],
+    [`http://${host}`, SHIM, ["chromium", "gecko", "webkit"]],
+    [`http://${host}:443`, SHIM, ["chromium", "gecko", "webkit"]],
+    [`https://${host}:443`, SHIM, ["chromium", "gecko", "webkit"]],
+    [`${host}`, SHIM, ["chromium", "gecko", "webkit"]],
+    // Plain http on its own port: nothing upgrades anywhere.
+    [`http://${host}:8080`, plain, ["chromium", "gecko", "webkit"]],
+    [`${host}:8080`, plain, ["chromium", "gecko", "webkit"]],
+    [`http://${host}`, plain, []],
+    [`https://${host}:8080`, plain, []],
+  ];
+  for (const [source, shim, running] of cases) {
+    for (const engine of ["chromium", "gecko", "webkit"] as const) {
+      expect([source, shim, engine, admission(`script-src ${source}`, shim, engine).allowed]).toEqual([source, shim, engine, running.includes(engine)]);
+    }
+    // No tag is written for an unknown browser unless every engine would run it.
+    expect([source, shim, admission(`script-src ${source}`, shim, null).allowed]).toEqual([source, shim, running.length === 3]);
+  }
+});
+
+test("the engine is read from the service worker's user agent", () => {
+  expect(policyEngine("Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0")).toBe("gecko");
+  expect(policyEngine("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")).toBe("chromium");
+  expect(policyEngine("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.0.0 Safari/537.36 Edg/140.0")).toBe("chromium");
+  expect(policyEngine("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15")).toBe("webkit");
+  expect(policyEngine("Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1")).toBe("webkit");
+  expect(policyEngine("TestAgent/1")).toBeNull();
+  expect(policyEngine(undefined)).toBeNull();
 });
 
 test("an http host source covers the same host over https when scheme and port upgrade together", () => {

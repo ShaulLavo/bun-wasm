@@ -6,12 +6,12 @@ import type { PreviewServer } from "waffle/browser/preview";
 import type { PreviewHostRelay } from "waffle/browser/preview-host";
 import { Previews, type PreviewState } from "../preview.js";
 import { CookieJar } from "./cookie-jar.js";
-import { frameIndex, type FrameWatch } from "./frame-watch.js";
+import { frameIndex, UnreadableNavigation, withoutFragment, type FrameWatch } from "./frame-watch.js";
 import { PortSession } from "./port-session.js";
 import {
-  frameMessage, isPreviewOrigin, loopbackHost, previewFrameLink, previewOrigin, previewOriginId,
+  frameMessage, isPreviewOrigin, loopbackHost, NAVIGATION_CHANNEL, navigationAnswer, previewFrameLink, previewOrigin, previewOriginId,
   RELAY_INSPECT_QUERY, RELAY_MESSAGE, RELAY_PATH, relayMessage,
-  type FrameDocument, type FrameMessage, type PreviewOriginConfig, type RelayMessage,
+  type FrameDocument, type FrameMessage, type NavigationAnswer, type PreviewOriginConfig, type RelayMessage,
 } from "./protocol.js";
 
 export type { FrameWatch } from "./frame-watch.js";
@@ -107,8 +107,12 @@ export class RootPreviews extends Previews {
    */
   private readonly inspectors = new Map<string, RelayFrame>();
   /** Questions to relay pages about this page's frames, by id, until they are answered. */
-  private readonly inspections = new Map<number, (document: FrameDocument) => void>();
+  private readonly inspections = new Map<number, { helper: RelayFrame; answer(document: FrameDocument): void }>();
   private nextInspection = 1;
+  /** The frames being watched, for what the servers answer to frame navigations. */
+  private readonly watchers = new Set<(answer: NavigationAnswer) => void>();
+  /** Tells the workspace's other tabs what this tab's servers answered to frame navigations, and hears theirs. */
+  private readonly navigations: BroadcastChannel | null;
   private originId: Promise<string> | undefined;
   private rootDisposed = false;
 
@@ -120,9 +124,11 @@ export class RootPreviews extends Previews {
     const helper = [relay, this.inspectors.get(event.origin)].find(item => item?.frame.contentWindow === event.source);
     if (!helper) return;
     if (message.event === "inspected") {
-      const answer = this.inspections.get(message.id);
+      // Only the helper that was asked may answer: another origin's relay page knows nothing of this frame.
+      const asked = this.inspections.get(message.id);
+      if (asked?.helper !== helper) return;
       this.inspections.delete(message.id);
-      answer?.(message.document);
+      asked.answer(message.document);
       return;
     }
     if (message.event !== "ready" && message.event !== "need-port") return;
@@ -152,6 +158,22 @@ export class RootPreviews extends Previews {
     this.cookieStore = options.persistCookies ? storage() : null;
     if (this.cookieStore) sweepCookies(this.cookieStore, Date.now());
     window.addEventListener("message", this.onWindowMessage);
+    this.navigations = typeof BroadcastChannel === "function" ? new BroadcastChannel(NAVIGATION_CHANNEL) : null;
+    if (this.navigations) this.navigations.onmessage = (event: MessageEvent<unknown>) => {
+      // Only pages of this IDE origin can post here. A tab hears every workspace's answers and matches them by URL.
+      const answer = navigationAnswer(event.data);
+      if (answer) this.tellWatchers(answer);
+    };
+  }
+
+  private tellWatchers(answer: NavigationAnswer): void {
+    for (const hear of Array.from(this.watchers)) hear(answer);
+  }
+
+  /** A server of this tab sent a response head for a frame's navigation: this tab's watches and the other tabs' hear of it. */
+  private navigationAnswered(answer: NavigationAnswer): void {
+    this.tellWatchers(answer);
+    try { this.navigations?.postMessage(answer); } catch { /* A closed channel: the other tabs settle readable frames only. */ }
   }
 
   /**
@@ -181,29 +203,28 @@ export class RootPreviews extends Previews {
     return Array.from(this.listening.values()).find(item => item.origin === origin);
   }
 
-  /** The preview origin `frame` was sent to (its `src`), or null while it has no preview address. */
-  private previewOriginOf(frame: HTMLIFrameElement): string | null {
-    if (!frame.src) return null;
-    try {
-      const { origin } = new URL(frame.src);
-      return isPreviewOrigin(origin, this.config) ? origin : null;
-    } catch {
-      return null;
-    }
+  private onPreviewOrigin(url: string): boolean {
+    try { return isPreviewOrigin(new URL(url).origin, this.config); } catch { return false; }
+  }
+
+  /** The preview URL `frame` was sent to (its `src`, without a fragment), or null while it has none. */
+  private previewAddress(frame: HTMLIFrameElement): string | null {
+    const address = frame.src ? withoutFragment(frame.src) : null;
+    return address !== null && this.onPreviewOrigin(address) ? address : null;
   }
 
   /**
    * What `frame` holds, as a page of `origin` sees it: this tab's relay frame of that origin, or
-   * the relay page mounted here for looking only. The answer is about this frame alone, and
-   * "unreadable" when the page's frames changed while the question travelled.
+   * the relay page mounted here for looking only. Null when there is no answer about this frame:
+   * it is no frame of this page, or the page's frames changed while the question travelled.
    */
-  private inspect(frame: HTMLIFrameElement, origin: string): Promise<FrameDocument> {
+  private inspect(frame: HTMLIFrameElement, origin: string): Promise<FrameDocument | null> {
     const index = frameIndex(frame);
-    if (index < 0 || this.rootDisposed) return Promise.resolve("unreadable");
+    if (index < 0 || this.rootDisposed) return Promise.resolve(null);
     const helper = this.relays.get(origin) ?? this.inspectors.get(origin) ?? this.mountRelay(this.inspectors, origin, RELAY_INSPECT_QUERY);
     return new Promise((resolve) => {
       const id = this.nextInspection++;
-      this.inspections.set(id, document => resolve(frameIndex(frame) === index ? document : "unreadable"));
+      this.inspections.set(id, { helper, answer: document => resolve(frameIndex(frame) === index ? document : null) });
       const ask = () => helper.frame.contentWindow?.postMessage({ type: RELAY_MESSAGE, event: "inspect", id, index } satisfies RelayMessage, origin);
       if (helper.ready) ask();
       else helper.waiting.push(ask);
@@ -213,28 +234,51 @@ export class RootPreviews extends Previews {
   /**
    * Tells when the preview document in `frame` settled: by the page's own report, by the service
    * worker's error report, or, for a document that cannot report, by the frame's `load` event once
-   * the relay page of the frame's origin finds a loaded document of the server in that very frame
-   * (frame-watch.ts). The initial blank document, the cold-load page and error pages settle
-   * nothing. The frame must be a frame of this page; it may get its address before or after the
-   * watch begins.
+   * the relay page of the frame's origin finds a loaded document of the server in that very frame.
+   * A document the relay page cannot read (the server redirected to another origin, or gave the
+   * document an opaque origin) settles once the server sent the final response of the frame's
+   * current navigation (frame-watch.ts). The initial blank document, the cold-load page and error
+   * pages settle nothing. The frame must be a frame of this page; it may get its address before or
+   * after the watch begins.
    */
   watchFrame(frame: HTMLIFrameElement, watch: FrameWatch): () => void {
     let watching = true;
+    // What replaces a navigation of the frame: a later load, and any new assignment of its address.
+    let navigation = 0;
+    const unreadable = new UnreadableNavigation(url => this.onPreviewOrigin(url));
+    const assigned = typeof MutationObserver === "function" ? new MutationObserver(() => {
+      navigation++;
+      unreadable.restart();
+    }) : null;
+    assigned?.observe(frame, { attributes: true, attributeFilter: ["src"] });
+    const hear = (answer: NavigationAnswer) => {
+      if (unreadable.answer(answer, this.previewAddress(frame))) watch.loaded(null);
+    };
+    this.watchers.add(hear);
     const stopReports = this.observeFrame(frame, (message) => {
+      if (message.event === "commit") return;
+      unreadable.restart();
       if (message.event === "load") watch.loaded(message.href);
-      if (message.event === "error") watch.failed(message.transient === true);
+      else watch.failed(message.transient === true);
     });
     const domLoad = (event: Event) => {
-      const origin = event.isTrusted ? this.previewOriginOf(frame) : null;
-      if (origin === null) return;
+      const address = event.isTrusted ? this.previewAddress(frame) : null;
+      if (address === null) return;
+      const asked = ++navigation;
+      const { origin } = new URL(address);
       void this.inspect(frame, origin).then((document) => {
-        // The frame may have been sent elsewhere while the question travelled; its next `load` asks again.
-        if (watching && document === "server" && this.previewOriginOf(frame) === origin) watch.loaded(null);
+        // The answer is about the navigation that asked. A later load or a new address replaced it.
+        if (!watching || asked !== navigation || this.previewAddress(frame) !== address) return;
+        if (document === "server") unreadable.restart();
+        const settled = document === "server" || (document === "unreadable" && unreadable.unreadable(address, this.listenerAt(origin) !== undefined));
+        if (settled) watch.loaded(null);
       });
     };
     frame.addEventListener("load", domLoad);
     return () => {
       watching = false;
+      assigned?.disconnect();
+      this.watchers.delete(hear);
       stopReports();
       frame.removeEventListener("load", domLoad);
     };
@@ -326,6 +370,7 @@ export class RootPreviews extends Previews {
       cookiesChanged: () => this.saveJar(entry),
       attached: () => this.attached(entry),
       wrapper: this.linkFor(`${entry.origin}/`),
+      navigationAnswered: answer => this.navigationAnswered(answer),
     });
     target.postMessage({ type: RELAY_MESSAGE, event: "attach" }, entry.origin, [channel.port2]);
   }
@@ -430,6 +475,8 @@ export class RootPreviews extends Previews {
     this.rootDisposed = true;
     window.removeEventListener("message", this.onWindowMessage);
     this.inspections.clear();
+    this.navigations?.close();
+    this.watchers.clear();
     for (const [port, entry] of Array.from(this.listening)) {
       this.retire(entry);
       try { this.unregisterRouter(port, entry.server); } catch {}

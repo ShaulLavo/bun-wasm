@@ -38,7 +38,7 @@ class Ide {
 
 interface FakeClient extends OriginClient { readonly messages: unknown[] }
 
-function setup(options: { relays?: number; ideOrigins?: string[]; attachWaitMs?: number } = {}) {
+function setup(options: { relays?: number; ideOrigins?: string[]; attachWaitMs?: number; userAgent?: string } = {}) {
   const clients = new Map<string, FakeClient>();
   const client = (id: string, url: string): FakeClient => {
     const item: FakeClient = { id, url, messages: [], postMessage(message) { item.messages.push(message); } };
@@ -52,7 +52,7 @@ function setup(options: { relays?: number; ideOrigins?: string[]; attachWaitMs?:
     clients: { get: async id => clients.get(id), matchAll: async () => Array.from(clients.values()) },
     shimScript: "/* shim */",
     ideOrigins: options.ideOrigins ?? [IDE],
-    userAgent: "TestAgent/1",
+    userAgent: options.userAgent ?? "TestAgent/1",
     attachWaitMs: options.attachWaitMs ?? 2_000,
     pingTimeoutMs: 200,
     cookieAckMs: 200,
@@ -114,6 +114,26 @@ test("only the relay page may attach a port, and the worker confirms it on the p
   expect(worker.attachments.length).toBe(1);
   stray.port1.close();
   ide.port.close();
+});
+
+test("whether the shim tag is written under an upgraded http source follows the browser the worker runs in", async () => {
+  // `http://<host>:80` on this https origin: Chromium and WebKit run the script, Gecko does not, and an unknown browser gets no tag.
+  const policy = `script-src http://${new URL(ORIGIN).hostname}:80`;
+  const agents: [string, boolean][] = [
+    ["Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.0.0 Safari/537.36", true],
+    ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15", true],
+    ["Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0", false],
+    ["TestAgent/1", false],
+  ];
+  for (const [userAgent, written] of agents) {
+    const { worker, attach } = setup({ userAgent });
+    const ide = attach();
+    const pending = worker.fetch(request("/", { mode: "navigate", destination: "iframe" }), "")!;
+    const open = await ide.next("open");
+    respond(ide, open.id, [["content-type", "text/html"], ["content-security-policy", policy]], ["<!doctype html><p>page</p>"]);
+    expect((await (await pending).text()).includes(SHIM_PATH)).toBe(written);
+    ide.port.close();
+  }
 });
 
 test("a relay page that only looks at frames is never asked for a port, and the worker's own answer is marked as its own", async () => {

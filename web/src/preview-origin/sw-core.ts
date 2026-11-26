@@ -8,7 +8,7 @@ import {
   type ScriptCookie, type SessionReply, type SessionRequest,
 } from "./protocol";
 import { insertAfterDoctype } from "../preview-html";
-import { shimAdmission } from "./script-policy";
+import { policyEngine, shimAdmission } from "./script-policy";
 import { HttpExchange, type ResponseHead } from "./sw-exchange";
 
 export interface OriginClient {
@@ -308,7 +308,7 @@ export function createPreviewOriginServiceWorker(options: OriginWorkerOptions) {
    * document loads without the shim, and its embedder settles it from the frame (RootPreviews.watchFrame).
    */
   function shimTag(policy: string | null): string | null {
-    const admission = shimAdmission(policy, `${options.origin}${SHIM_PATH}`);
+    const admission = shimAdmission(policy, `${options.origin}${SHIM_PATH}`, policyEngine(options.userAgent));
     if (!admission.allowed) return null;
     const nonce = admission.nonce ? ` nonce="${escapeHtml(admission.nonce)}"` : "";
     const opener = wrapper ? ` data-wrapper="${escapeHtml(wrapper)}"` : "";

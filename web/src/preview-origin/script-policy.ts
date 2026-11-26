@@ -40,52 +40,100 @@ function pathMatches(pattern: string, pathname: string): boolean {
   return wanted.endsWith("/") ? pathname.startsWith(wanted) : pathname === wanted;
 }
 
+/**
+ * The engines differ in how an http host source covers an https URL, so the scheme and port of a
+ * host source are matched as the engine that will load the page does it.
+ */
+export type PolicyEngine = "chromium" | "gecko" | "webkit";
+const ENGINES: readonly PolicyEngine[] = ["chromium", "gecko", "webkit"];
+
+/** The engine behind a user agent string, or null when it names none of the three. */
+export function policyEngine(userAgent: string | undefined): PolicyEngine | null {
+  if (!userAgent) return null;
+  if (/Firefox\//.test(userAgent)) return "gecko";
+  // Headless Chromium says "HeadlessChrome/". Every browser on iOS is WebKit and names neither.
+  if (/Chrom(?:e|ium)\//.test(userAgent)) return "chromium";
+  return /AppleWebKit\//.test(userAgent) ? "webkit" : null;
+}
+
+/** The scheme and port of one host source; both are undefined when the source does not name them. */
+interface SourceAuthority { scheme: string | undefined; port: string | undefined }
+
 /** How one part of a host source covers the URL: as written, by the http-to-https upgrade, for any value, or not. */
 type PartMatch = "exact" | "upgrade" | "any" | "none";
 
 /** A host source without a scheme takes the page's own, which is the URL's: the script is same-origin. */
-function hostSourceScheme(sourceScheme: string | undefined, url: URL): PartMatch {
-  if (sourceScheme === undefined) return "exact";
-  const scheme = `${sourceScheme.toLowerCase()}:`;
-  if (scheme === url.protocol) return "exact";
-  return scheme === "http:" && url.protocol === "https:" ? "upgrade" : "none";
+function schemePart(scheme: string | undefined, url: URL): PartMatch {
+  if (scheme === undefined || `${scheme}:` === url.protocol) return "exact";
+  return scheme === "http" && url.protocol === "https:" ? "upgrade" : "none";
 }
 
 /**
- * `url.port` is empty for the scheme's default port. A source for port 80, or an http source that
- * names no port, also covers the same host on 443: the port half of the http-to-https upgrade.
+ * Chromium (CSPSourceMatches, csp_source.cc): `url.port` is empty for the scheme's default port. A
+ * source for port 80, or an http source without a port, also covers 443, and scheme and port
+ * upgrade together or not at all: `http://host:80` covers `https://host`, `https://host:80` and
+ * `http://host:8443` (for `https://host:8443`) do not.
  */
-function hostSourcePort(sourcePort: string | undefined, httpSource: boolean, url: URL): PartMatch {
-  if (sourcePort === "*") return "any";
-  const port = sourcePort ?? "";
-  if (port === url.port) return port === "" ? "any" : "exact";
+function chromiumCovers(source: SourceAuthority, url: URL): boolean {
+  const scheme = schemePart(source.scheme, url);
+  const port = source.port ?? "";
+  const httpSource = source.scheme === undefined ? url.protocol === "http:" : source.scheme === "http";
   const secureDefault = url.protocol === "https:" && (url.port === "" || url.port === "443");
-  if (secureDefault && (port === "80" || (httpSource && (port === "" || port === "443")))) return "upgrade";
-  return url.port === "" && port === DEFAULT_PORT[url.protocol] ? "exact" : "none";
+  let match: PartMatch = url.port === "" && port === DEFAULT_PORT[url.protocol] ? "exact" : "none";
+  if (secureDefault && (port === "80" || (httpSource && (port === "" || port === "443")))) match = "upgrade";
+  if (port === url.port) match = port === "" ? "any" : "exact";
+  if (source.port === "*") match = "any";
+  if (scheme === "none" || match === "none") return false;
+  const upgrades = scheme === "upgrade" || match === "upgrade";
+  return !upgrades || (scheme === "upgrade" && match !== "exact");
 }
 
 /**
- * Whether a scheme source (`https:`) or host source (`https://*.example.com:443/dir/`) covers `url`.
- * Scheme and port upgrade together or not at all, as browsers apply it: `http://host:80` covers
- * `https://host` (both upgrade), `https://host:80` does not (only the port would).
+ * Gecko (nsCSPHostSrc::permits, nsCSPUtils.cpp): the scheme may upgrade on its own. A named port
+ * must be the URL's port. Without one, the URL must be on the source scheme's default port or on
+ * 443: `http://host:8443` covers `https://host:8443`, `http://host:80` does not cover `https://host`.
  */
-function urlSourceMatches(source: string, url: URL): boolean {
+function geckoCovers(source: SourceAuthority, url: URL): boolean {
+  if (schemePart(source.scheme, url) === "none") return false;
+  if (source.port === "*") return true;
+  const port = url.port || DEFAULT_PORT[url.protocol];
+  if (source.port !== undefined) return source.port === port;
+  return port === DEFAULT_PORT[`${source.scheme ?? url.protocol.slice(0, -1)}:`] || port === "443";
+}
+
+/**
+ * WebKit (ContentSecurityPolicySource.cpp): the scheme may upgrade on its own, and port 80 stands
+ * for 443 whatever the scheme: `http://host:8443` covers `https://host:8443`, and `http://host:80`
+ * and `https://host:80` cover `https://host`.
+ */
+function webkitCovers(source: SourceAuthority, url: URL): boolean {
+  if (schemePart(source.scheme, url) === "none") return false;
+  if (source.port === "*" || (source.port ?? "") === url.port) return true;
+  if (source.port === "80" && url.protocol === "https:" && (url.port === "" || url.port === "443")) return true;
+  return url.port === "" && source.port === DEFAULT_PORT[url.protocol];
+}
+
+const COVERS: Record<PolicyEngine, (source: SourceAuthority, url: URL) => boolean> = { chromium: chromiumCovers, gecko: geckoCovers, webkit: webkitCovers };
+
+/**
+ * Whether a scheme source (`https:`) or host source (`https://*.example.com:443/dir/`) covers
+ * `url` in `engine`. For an unknown engine it must cover the URL in all three: a tag is written
+ * only where the script will run.
+ */
+function urlSourceMatches(source: string, url: URL, engine: PolicyEngine | null): boolean {
   const scheme = /^([a-z][a-z0-9+.-]*):$/i.exec(source);
   if (scheme) return schemeMatches(scheme[1]!, url);
   const host = /^(?:([a-z][a-z0-9+.-]*):\/\/)?(\*|(?:\*\.)?[a-z0-9.-]+)(?::(\d+|\*))?(\/[^?#]*)?$/i.exec(source);
   if (!host) return false;
   const [, sourceScheme, sourceHost = "", sourcePort, sourcePath = ""] = host;
-  const schemeMatch = hostSourceScheme(sourceScheme, url);
-  const httpSource = sourceScheme === undefined ? url.protocol === "http:" : sourceScheme.toLowerCase() === "http";
-  const portMatch = hostSourcePort(sourcePort, httpSource, url);
-  if (schemeMatch === "none" || portMatch === "none") return false;
-  const upgrades = schemeMatch === "upgrade" || portMatch === "upgrade";
-  if (upgrades && (schemeMatch !== "upgrade" || portMatch === "exact")) return false;
+  const authority: SourceAuthority = { scheme: sourceScheme?.toLowerCase(), port: sourcePort };
+  const engines = engine ? [engine] : ENGINES;
+  if (!engines.every(name => COVERS[name](authority, url))) return false;
   return hostMatches(sourceHost, url.hostname) && pathMatches(sourcePath, url.pathname);
 }
 
 /** What one policy asks of a script element that loads `url` from the page's own origin. */
-function policyAdmission(policy: string, url: URL): { open: boolean; nonces: string[] } {
+function policyAdmission(policy: string, url: URL, engine: PolicyEngine | null): { open: boolean; nonces: string[] } {
   const sources = scriptSources(policy);
   if (sources === undefined) return { open: true, nonces: [] };
   const nonces = sources.flatMap(source => NONCE.exec(source)?.[1] ?? []);
@@ -95,7 +143,7 @@ function policyAdmission(policy: string, url: URL): { open: boolean; nonces: str
     const keyword = source.toLowerCase();
     if (keyword === "'self'") return true;
     if (keyword === "*") return url.protocol === "http:" || url.protocol === "https:";
-    return !keyword.startsWith("'") && urlSourceMatches(source, url);
+    return !keyword.startsWith("'") && urlSourceMatches(source, url, engine);
   });
   return { open, nonces };
 }
@@ -104,11 +152,12 @@ function policyAdmission(policy: string, url: URL): { open: boolean; nonces: str
  * Whether a script element for `shimUrl` (a URL of the page's own origin) passes every policy of a
  * Content-Security-Policy header value, and the nonce it needs for that. Policies that only match
  * by hash, or that ask for different nonces, admit no such element: the answer is then "not
- * allowed", and nobody's policy is widened.
+ * allowed", and nobody's policy is widened. `engine` is the browser engine that will load the page
+ * (`policyEngine`), or null when it is unknown.
  */
-export function shimAdmission(header: string | null, shimUrl: string): ShimAdmission {
+export function shimAdmission(header: string | null, shimUrl: string, engine: PolicyEngine | null): ShimAdmission {
   const url = new URL(shimUrl);
-  const demanding = (header ?? "").split(",").map(policy => policyAdmission(policy, url)).filter(policy => !policy.open);
+  const demanding = (header ?? "").split(",").map(policy => policyAdmission(policy, url, engine)).filter(policy => !policy.open);
   const [first, ...rest] = demanding;
   if (!first) return { allowed: true };
   const nonce = first.nonces.find(candidate => rest.every(policy => policy.nonces.includes(candidate)));

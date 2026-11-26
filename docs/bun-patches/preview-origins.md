@@ -18,7 +18,7 @@ user-facing behavior.
 | `web/src/preview-origin/relay.ts`, `bootstrap.ts`, `frame-page.ts`, `frame-entry.ts` | Relay page, cold-load page, and new-tab wrapper |
 | `web/src/preview-origin/page-shim.ts`, `new-tab.ts` | Injected page script for cookies, service-worker guard, frame reports, and IDE-wrapped new tabs |
 | `web/src/preview-origin/frame-watch.ts` | What a preview frame holds, as the relay page reads it for the IDE watcher |
-| `web/src/preview-origin/script-policy.ts` | Checks whether Content-Security-Policy headers admit the page script, using CSP Level 3 source matching and the http-to-https upgrade browsers apply to scheme and port together |
+| `web/src/preview-origin/script-policy.ts` | Checks whether Content-Security-Policy headers admit the page script, using CSP Level 3 source matching and each engine's own http-to-https upgrade rule (Chromium `csp_source.cc`, Gecko `nsCSPUtils.cpp`, WebKit `ContentSecurityPolicySource.cpp`; the rules are restated here, no code is copied) |
 | `web/src/preview-origin/host.ts`, `site/preview-worker.ts` | Static preview host |
 | `web/src/preview-origin/workspace-identity.ts` | Stored workspace preview identity |
 | `web/src/preview-html.ts` | Script insertion after the doctype, moved out of `web/src/sw-routing.ts` so both workers share it |
@@ -64,7 +64,9 @@ user-facing behavior.
   plain-text responses and script-blocked pages have no other signal. The relay page reads the frame
   itself, so the answer is about one frame and the document it holds, not about a response for the
   same URL. The origin's own pages carry `data-bunwasm-preview-page` so they are not mistaken for
-  the server's.
+  the server's. Only a document the relay page cannot read (another origin after a redirect, or an
+  opaque origin under a `sandbox` policy) falls back to the server's final response for that frame's
+  navigation, which the owner tab also broadcasts to the other tabs.
 - The worker inserts the page script tag only when it passes every `Content-Security-Policy` header
   on the response. A blocked tag triggers a violation report, and the preview must not weaken an
   app's policy.
