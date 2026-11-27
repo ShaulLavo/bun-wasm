@@ -129,10 +129,16 @@ fn execute(
         root_manifest.clone()
     };
     let old_manifest = manifest.clone();
+    let member_catalogs = if command == "update" && member.is_some() {
+        validate_member_update_names(&manifest, &opts)?;
+        Some(referenced_catalog_keys(&manifest, &root_manifest, &opts)?)
+    } else {
+        None
+    };
     if command == "update" {
         update_manifest(&mut manifest, &opts)?;
-        if member.is_some() {
-            update_manifest_catalogs(&mut root_manifest, &opts)?;
+        if let Some(scope) = &member_catalogs {
+            update_manifest_catalogs(&mut root_manifest, &opts, Some(scope))?;
         }
     }
     if command == "remove" {
@@ -164,16 +170,10 @@ fn execute(
         let mut resolution_lock = locked.clone();
         if command == "update" {
             opts.refresh = true;
-            let unlock_root = if member.is_some() {
-                &root_manifest
-            } else {
-                &manifest
-            };
             unlock(
                 &mut resolution_lock,
                 &opts,
                 &manifest,
-                unlock_root,
                 member.as_ref().and_then(|_| manifest["name"].as_str()),
             );
         }
@@ -197,6 +197,7 @@ fn execute(
                     .into_keys()
                     .filter(|name| selected(name, &opts))
                     .collect(),
+                catalogs: member_catalogs.clone().unwrap_or_default(),
             });
         }
         let project_manifest = if member.is_some() {
@@ -233,7 +234,13 @@ fn execute(
             )?;
             write_manifest = manifest != old_manifest;
             if member.is_some() {
-                finalize_catalog_updates(&mut root_manifest, &old_root_manifest, &opts, &resolver);
+                finalize_catalog_updates(
+                    &mut root_manifest,
+                    &old_root_manifest,
+                    &opts,
+                    &resolver,
+                    member_catalogs.as_ref(),
+                );
                 write_root = root_manifest != old_root_manifest;
                 if seeded_catalogs && !write_root {
                     root_manifest = unseeded_root.clone();
@@ -1331,15 +1338,65 @@ fn update_manifest(manifest: &mut Value, opts: &Options) -> Result<()> {
             }
         }
     }
-    update_manifest_catalogs(manifest, opts)
+    update_manifest_catalogs(manifest, opts, None)
 }
 
-fn update_manifest_catalogs(manifest: &mut Value, opts: &Options) -> Result<()> {
+fn validate_member_update_names(manifest: &Value, opts: &Options) -> Result<()> {
+    if opts.names.is_empty() {
+        return Ok(());
+    }
+    let deps = resolve::dependencies(manifest, opts.production, true);
+    for input in &opts.names {
+        let (name, _) = resolve::spec(input)?;
+        if !deps.contains_key(&name) {
+            return Err(format!("\"{name}\" is not a dependency of this workspace"));
+        }
+    }
+    Ok(())
+}
+
+fn referenced_catalog_keys(
+    manifest: &Value,
+    root_manifest: &Value,
+    opts: &Options,
+) -> Result<BTreeSet<(Option<String>, String)>> {
+    let overrides = overrides::Overrides::new(root_manifest, &json!({}))?;
+    let catalogs = catalog::Catalogs::from_manifest(root_manifest, &json!({}))?;
+    let mut keys = BTreeSet::new();
+    for (name, (range, _, _)) in resolve::dependencies(manifest, opts.production, true) {
+        if !selected(&name, opts) {
+            continue;
+        }
+        if let Some(key) = resolve::resolved_catalog_key(&name, &range, &overrides, &catalogs, true)
+        {
+            keys.insert(key);
+        }
+    }
+    Ok(keys)
+}
+
+fn catalog_in_scope(
+    group: Option<&str>,
+    name: &str,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
+) -> bool {
+    let Some(scope) = scope else {
+        return true;
+    };
+    let group_key = group.filter(|g| *g != "default").map(str::to_owned);
+    scope.contains(&(group_key, name.to_owned()))
+}
+
+fn update_manifest_catalogs(
+    manifest: &mut Value,
+    opts: &Options,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
+) -> Result<()> {
     for input in &opts.names {
         let (name, range) = resolve::spec(input)?;
         if input.rfind('@').is_some_and(|at| at > 0) {
-            for_each_manifest_catalog_mut(manifest, |entries| {
-                if entries.contains_key(&name) {
+            for_each_manifest_catalog_mut(manifest, |group, entries| {
+                if catalog_in_scope(group, &name, scope) && entries.contains_key(&name) {
                     entries.insert(name.clone(), range.clone().into());
                 }
             });
@@ -1348,35 +1405,17 @@ fn update_manifest_catalogs(manifest: &mut Value, opts: &Options) -> Result<()> 
     if !opts.latest {
         return Ok(());
     }
-    for_each_manifest_catalog_mut(manifest, |entries| {
+    for_each_manifest_catalog_mut(manifest, |group, entries| {
         for (name, range) in entries {
-            if selected(name, opts) && range.as_str().is_some_and(|r| !r.contains(':')) {
+            if selected(name, opts)
+                && catalog_in_scope(group, name, scope)
+                && range.as_str().is_some_and(|r| !r.contains(':'))
+            {
                 *range = "latest".into();
             }
         }
     });
     Ok(())
-}
-
-fn manifest_catalog_names(manifest: &Value) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    let Some(workspaces) = manifest.get("workspaces").filter(|v| !v.is_null()) else {
-        return names;
-    };
-    let nested = workspaces.as_object().is_some_and(|ws| {
-        ws.get("catalog").is_some_and(|v| !v.is_null())
-            || ws.get("catalogs").is_some_and(|v| !v.is_null())
-    });
-    let container = if nested { workspaces } else { manifest };
-    if let Some(entries) = container.get("catalog").and_then(Value::as_object) {
-        names.extend(entries.keys().cloned());
-    }
-    if let Some(catalogs) = container.get("catalogs").and_then(Value::as_object) {
-        for entries in catalogs.values().filter_map(Value::as_object) {
-            names.extend(entries.keys().cloned());
-        }
-    }
-    names
 }
 
 fn has_explicit_version(name: &str, opts: &Options) -> bool {
@@ -1388,7 +1427,7 @@ fn has_explicit_version(name: &str, opts: &Options) -> bool {
 
 fn for_each_manifest_catalog_mut(
     manifest: &mut Value,
-    mut visit: impl FnMut(&mut serde_json::Map<String, Value>),
+    mut visit: impl FnMut(Option<&str>, &mut serde_json::Map<String, Value>),
 ) {
     let Some(workspaces) = manifest.get("workspaces").filter(|v| !v.is_null()) else {
         return;
@@ -1403,11 +1442,13 @@ fn for_each_manifest_catalog_mut(
         manifest
     };
     if let Some(entries) = container.get_mut("catalog").and_then(Value::as_object_mut) {
-        visit(entries);
+        visit(None, entries);
     }
     if let Some(catalogs) = container.get_mut("catalogs").and_then(Value::as_object_mut) {
-        for entries in catalogs.values_mut().filter_map(Value::as_object_mut) {
-            visit(entries);
+        for (group, entries) in catalogs {
+            if let Some(entries) = entries.as_object_mut() {
+                visit(Some(group.as_str()), entries);
+            }
         }
     }
 }
@@ -1436,28 +1477,14 @@ fn lock_leaf_name(key: &str) -> &str {
     }
 }
 
-fn unlock(
-    locked: &mut Value,
-    opts: &Options,
-    manifest: &Value,
-    root_manifest: &Value,
-    workspace: Option<&str>,
-) {
-    let mut sources = resolve::tarball::locked_sources(locked, root_manifest);
+fn unlock(locked: &mut Value, opts: &Options, manifest: &Value, workspace: Option<&str>) {
     if workspace.is_some() {
-        sources.extend(resolve::tarball::locked_sources(locked, manifest));
+        return;
     }
+    let sources = resolve::tarball::locked_sources(locked, manifest);
     let Some(packages) = locked["packages"].as_object_mut() else {
         return;
     };
-    if workspace.is_some() {
-        let catalog_names = manifest_catalog_names(root_manifest);
-        packages.retain(|key, _| {
-            let leaf = lock_leaf_name(key);
-            !catalog_names.contains(leaf) || !selected(leaf, opts) || sources.contains(key)
-        });
-        return;
-    }
     packages.retain(|key, _| !selected(lock_leaf_name(key), opts) || sources.contains(key));
 }
 
@@ -1494,7 +1521,7 @@ fn finalize_updates(
     if member.is_some() {
         return Ok(());
     }
-    finalize_catalog_updates(manifest, old_manifest, opts, resolver);
+    finalize_catalog_updates(manifest, old_manifest, opts, resolver, None);
     Ok(())
 }
 
@@ -1516,6 +1543,7 @@ fn finalize_catalog_updates(
     old_manifest: &Value,
     opts: &Options,
     resolver: &Resolver,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
 ) {
     let Some(workspaces) = manifest.get("workspaces").filter(|v| !v.is_null()) else {
         return;
@@ -1530,7 +1558,14 @@ fn finalize_catalog_updates(
         (manifest, old_manifest)
     };
     if let Some(entries) = container.get_mut("catalog").and_then(Value::as_object_mut) {
-        finalize_catalog_entries(entries, &old_container["catalog"], None, opts, resolver);
+        finalize_catalog_entries(
+            entries,
+            &old_container["catalog"],
+            None,
+            opts,
+            resolver,
+            scope,
+        );
     }
     let Some(catalogs) = container.get_mut("catalogs").and_then(Value::as_object_mut) else {
         return;
@@ -1543,6 +1578,7 @@ fn finalize_catalog_updates(
                 Some(group.as_str()),
                 opts,
                 resolver,
+                scope,
             );
         }
     }
@@ -1554,10 +1590,11 @@ fn finalize_catalog_entries(
     group: Option<&str>,
     opts: &Options,
     resolver: &Resolver,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
 ) {
     let group_key = group.filter(|g| *g != "default").map(str::to_owned);
     for (name, range) in entries {
-        if !selected(name, opts) {
+        if !selected(name, opts) || !catalog_in_scope(group, name, scope) {
             continue;
         }
         let old = old_entries[name.as_str()]

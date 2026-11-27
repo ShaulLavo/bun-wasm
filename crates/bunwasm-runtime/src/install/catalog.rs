@@ -21,6 +21,11 @@ pub(super) fn is_protocol(range: &str) -> bool {
     range.trim_start().starts_with("catalog:")
 }
 
+pub(super) fn ref_group(spec: &str) -> Option<Option<String>> {
+    let group = spec.trim_start().strip_prefix("catalog:")?.trim();
+    Some((!group.is_empty() && group != "default").then(|| group.to_owned()))
+}
+
 pub(super) fn has_manifest_catalogs(manifest: &Value) -> bool {
     let (default, named) = manifest_catalog_sources(manifest);
     default.is_some() || named.is_some()
@@ -281,10 +286,12 @@ impl Catalogs {
     }
 
     pub fn write_to_manifest(&self, manifest: &mut Value) -> bool {
-        if self.is_empty() || manifest.get("workspaces").is_none_or(Value::is_null) {
+        if self.is_empty() || !manifest.is_object() {
             return false;
         }
-        if let Some(packages) = manifest["workspaces"].as_array().cloned() {
+        if manifest.get("workspaces").is_none_or(Value::is_null) {
+            manifest["workspaces"] = serde_json::json!({});
+        } else if let Some(packages) = manifest["workspaces"].as_array().cloned() {
             manifest["workspaces"] = serde_json::json!({ "packages": packages });
         }
         let Some(workspaces) = manifest["workspaces"].as_object_mut() else {

@@ -175,6 +175,7 @@ fn add_dependencies(
 pub struct MemberUpdate {
     pub member: String,
     pub dependencies: BTreeSet<String>,
+    pub catalogs: BTreeSet<(Option<String>, String)>,
 }
 
 #[derive(Clone, Copy)]
@@ -285,7 +286,16 @@ impl Resolver {
                 Err(_) if *optional => continue,
                 Err(error) => return Err(error),
             };
-            self.add(name, &range, vec![name.clone()], *optional, None)?;
+            let lookup = if self.overrides.changed.contains(name)
+                || cat_key
+                    .as_ref()
+                    .is_some_and(|key| self.is_member_catalog_update(key))
+            {
+                LockLookup::Skip
+            } else {
+                LockLookup::Use
+            };
+            self.add_with_lookup(name, &range, vec![name.clone()], *optional, None, lookup)?;
             if let Some(cat_key) = cat_key
                 && let Some(pkg) = self.packages.get(name)
             {
@@ -424,7 +434,9 @@ impl Resolver {
             if *peer && !workspace && super::catalog::is_protocol(&range) {
                 continue;
             }
-            let Some(target) = self.target(parent, name, &range, is_optional, *peer)? else {
+            let Some(target) =
+                self.target(parent, name, &range, is_optional, *peer, cat_key.as_ref())?
+            else {
                 continue;
             };
             let placed_key = match self.placement(parent, name, &target, *peer, is_optional) {
@@ -607,6 +619,25 @@ impl Resolver {
         format!("{}/{}", self.registry.url, name.replace('/', "%2f"))
     }
 
+    fn is_member_catalog_update(&self, key: &(Option<String>, String)) -> bool {
+        self.member_update
+            .as_ref()
+            .is_some_and(|update| update.catalogs.contains(key))
+    }
+
+    fn is_member_update(
+        &self,
+        parent: &Package,
+        name: &str,
+        cat_key: Option<&(Option<String>, String)>,
+    ) -> bool {
+        let Some(update) = &self.member_update else {
+            return false;
+        };
+        (update.member == parent.name && update.dependencies.contains(name))
+            || cat_key.is_some_and(|key| update.catalogs.contains(key))
+    }
+
     fn target(
         &mut self,
         parent: &Package,
@@ -614,13 +645,12 @@ impl Resolver {
         range: &str,
         optional: bool,
         peer: bool,
+        cat_key: Option<&(Option<String>, String)>,
     ) -> Result<Option<String>> {
         if tarball::is_specifier(range) || self.local_package(name, range)?.is_some() {
             return Ok(Some(range.into()));
         }
-        if self.member_update.as_ref().is_some_and(|update| {
-            update.member == parent.name && update.dependencies.contains(name)
-        }) {
+        if self.is_member_update(parent, name, cat_key) {
             return self.member_update_target(parent, name, range, optional, peer);
         }
         if let Some(version) = self.locked_child(parent, name, range, peer) {
@@ -874,15 +904,27 @@ impl Resolver {
         optional: bool,
         parent: Option<&str>,
     ) -> Result<()> {
-        if chain.len() > 128 || self.packages.len() >= 10000 {
-            return Err("Dependency graph exceeds install limit".into());
-        }
-        valid_name(name)?;
         let lookup = if self.overrides.changed.contains(name) {
             LockLookup::Skip
         } else {
             LockLookup::Use
         };
+        self.add_with_lookup(name, range, chain, optional, parent, lookup)
+    }
+
+    fn add_with_lookup(
+        &mut self,
+        name: &str,
+        range: &str,
+        chain: Vec<String>,
+        optional: bool,
+        parent: Option<&str>,
+        lookup: LockLookup,
+    ) -> Result<()> {
+        if chain.len() > 128 || self.packages.len() >= 10000 {
+            return Err("Dependency graph exceeds install limit".into());
+        }
+        valid_name(name)?;
         let result = self.package(name, range, chain, optional, lookup);
         let package = match result {
             Ok(package) => package,
@@ -1198,12 +1240,7 @@ fn is_tag_spec(range: &str) -> bool {
     is_tag(target_range.as_deref().unwrap_or(range))
 }
 
-fn catalog_ref_group(spec: &str) -> Option<Option<String>> {
-    let group = spec.trim_start().strip_prefix("catalog:")?.trim();
-    Some((!group.is_empty() && group != "default").then(|| group.to_owned()))
-}
-
-fn resolved_catalog_key(
+pub(super) fn resolved_catalog_key(
     name: &str,
     declared: &str,
     overrides: &Overrides,
@@ -1211,15 +1248,15 @@ fn resolved_catalog_key(
     workspace: bool,
 ) -> Option<(Option<String>, String)> {
     if let Some(replacement) = overrides.replacement(name, declared) {
-        return catalog_ref_group(replacement).map(|group| (group, name.to_owned()));
+        return super::catalog::ref_group(replacement).map(|group| (group, name.to_owned()));
     }
     let expanded = workspace
         .then(|| catalogs.resolve(name, declared).ok().flatten())
         .flatten()?;
     if let Some(replacement) = overrides.replacement(name, expanded) {
-        return catalog_ref_group(replacement).map(|group| (group, name.to_owned()));
+        return super::catalog::ref_group(replacement).map(|group| (group, name.to_owned()));
     }
-    catalog_ref_group(declared).map(|group| (group, name.to_owned()))
+    super::catalog::ref_group(declared).map(|group| (group, name.to_owned()))
 }
 
 fn resolve_declared<'a>(

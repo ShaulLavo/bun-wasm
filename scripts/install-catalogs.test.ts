@@ -12,7 +12,14 @@ function install(target: InstallFixtureTarget, directory: string, registry: stri
   return installFixture(directory, registry, args, expected, true, [], target);
 }
 
-async function runGuestUpdate(target: InstallFixtureTarget, directory: string, registry: string, args: string[], guestPwd = "/") {
+async function runGuestUpdate(
+  target: InstallFixtureTarget,
+  directory: string,
+  registry: string,
+  args: string[],
+  guestPwd = "/",
+  expected = 0,
+) {
   const [program, argv] = installFixtureCommand(directory, registry, args, true, [], target);
   const cmdIndex = argv.lastIndexOf("install");
   assert.ok(cmdIndex >= 0);
@@ -30,7 +37,7 @@ async function runGuestUpdate(target: InstallFixtureTarget, directory: string, r
     child.once("error", reject);
     child.once("close", resolve);
   });
-  assert.equal(code, 0, output);
+  assert.equal(code, expected, output);
   return output;
 }
 
@@ -330,16 +337,24 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
     // and plain `bun update` preserving catalog dist-tags must all match native Bun.
     const memberUpdateRoot = join(directory, "update-member-catalog");
     mkdirSync(join(memberUpdateRoot, "packages/a"), { recursive: true });
+    mkdirSync(join(memberUpdateRoot, "packages/b"), { recursive: true });
     writeFileSync(join(memberUpdateRoot, "package.json"), JSON.stringify({
       name: "update-member-root",
-      workspaces: { packages: ["packages/*"], catalog: { versioned: "^1.0.0" } },
+      workspaces: { packages: ["packages/*"], catalog: { versioned: "^1.0.0", "is-number": "^7.0.0" } },
     }, null, 2));
     writeFileSync(join(memberUpdateRoot, "packages/a/package.json"), JSON.stringify({
       name: "@fixture/member-cat-a",
       version: "1.0.0",
       dependencies: { versioned: "catalog:" },
     }, null, 2));
+    writeFileSync(join(memberUpdateRoot, "packages/b/package.json"), JSON.stringify({
+      name: "@fixture/member-cat-b",
+      version: "1.0.0",
+      dependencies: { "is-number": "catalog:" },
+    }, null, 2));
     await install(target, memberUpdateRoot, registry.base);
+    const outOfScopeOutput = await runGuestUpdate(target, memberUpdateRoot, registry.base, ["is-number", "--latest"], "/packages/a", 1);
+    assert.match(outOfScopeOutput, /is not a dependency of this workspace/);
     await runGuestUpdate(target, memberUpdateRoot, registry.base, ["--latest"], "/packages/a");
     assert.equal(
       (JSON.parse(readFileSync(join(memberUpdateRoot, "package.json"), "utf8")) as {
@@ -350,25 +365,35 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
     assert.equal(installedVersion(memberUpdateRoot, "versioned"), "2.0.0");
     await install(target, memberUpdateRoot, registry.base, ["--frozen-lockfile"]);
 
-    const pnpmUpdateRoot = join(directory, "update-pnpm-catalog");
-    mkdirSync(join(pnpmUpdateRoot, "packages/a"), { recursive: true });
-    writeFileSync(join(pnpmUpdateRoot, "package.json"), JSON.stringify({ name: "update-pnpm-root" }, null, 2));
-    writeFileSync(join(pnpmUpdateRoot, "pnpm-workspace.yaml"), "packages:\n  - packages/*\ncatalog:\n  versioned: ^1.0.0\n");
-    writeFileSync(join(pnpmUpdateRoot, "packages/a/package.json"), JSON.stringify({
-      name: "@fixture/pnpm-cat-a",
-      version: "1.0.0",
-      dependencies: { versioned: "catalog:" },
-    }, null, 2));
-    await install(target, pnpmUpdateRoot, registry.base);
-    await runGuestUpdate(target, pnpmUpdateRoot, registry.base, ["--latest"]);
-    assert.equal(
-      (JSON.parse(readFileSync(join(pnpmUpdateRoot, "package.json"), "utf8")) as {
-        workspaces: { catalog: { versioned: string } };
-      }).workspaces.catalog.versioned,
-      "^2.0.0",
-    );
-    assert.equal(installedVersion(pnpmUpdateRoot, "versioned"), "2.0.0");
-    await install(target, pnpmUpdateRoot, registry.base, ["--frozen-lockfile"]);
+    for (const [label, hasPackages] of [["with-packages", true], ["root-only", false]] as const) {
+      const pnpmUpdateRoot = join(directory, `update-pnpm-catalog-${label}`);
+      mkdirSync(join(pnpmUpdateRoot, "packages/a"), { recursive: true });
+      writeFileSync(
+        join(pnpmUpdateRoot, "package.json"),
+        JSON.stringify(hasPackages ? { name: `update-pnpm-${label}` } : { name: `update-pnpm-${label}`, dependencies: { versioned: "catalog:" } }, null, 2),
+      );
+      writeFileSync(
+        join(pnpmUpdateRoot, "pnpm-workspace.yaml"),
+        `${hasPackages ? "packages:\n  - packages/*\n" : ""}catalog:\n  versioned: ^1.0.0\n`,
+      );
+      if (hasPackages) {
+        writeFileSync(join(pnpmUpdateRoot, "packages/a/package.json"), JSON.stringify({
+          name: "@fixture/pnpm-cat-a",
+          version: "1.0.0",
+          dependencies: { versioned: "catalog:" },
+        }, null, 2));
+      }
+      await install(target, pnpmUpdateRoot, registry.base);
+      await runGuestUpdate(target, pnpmUpdateRoot, registry.base, ["--latest"]);
+      assert.equal(
+        (JSON.parse(readFileSync(join(pnpmUpdateRoot, "package.json"), "utf8")) as {
+          workspaces: { catalog: { versioned: string } };
+        }).workspaces.catalog.versioned,
+        "^2.0.0",
+      );
+      assert.equal(installedVersion(pnpmUpdateRoot, "versioned"), "2.0.0");
+      await install(target, pnpmUpdateRoot, registry.base, ["--frozen-lockfile"]);
+    }
 
     const tagUpdateRoot = join(directory, "update-tag-catalog");
     mkdirSync(join(tagUpdateRoot, "packages/a"), { recursive: true });
