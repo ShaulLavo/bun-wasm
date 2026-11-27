@@ -1079,7 +1079,7 @@ fn locked_version<'a>(row: &'a Value, name: &str) -> Option<&'a str> {
     (resolved_name == platform_package(name, version)).then_some(version)
 }
 
-fn is_tag(range: &str) -> bool {
+pub(super) fn is_tag(range: &str) -> bool {
     range
         .as_bytes()
         .first()

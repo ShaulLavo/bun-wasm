@@ -449,6 +449,7 @@ fn expand_root_catalogs(
 fn expand_manifest_catalogs(meta: &Value, catalogs: &Catalogs) -> Result<Value> {
     let mut expanded = meta.clone();
     remove_optional_duplicates(&mut expanded);
+    remove_shadowed_peers(&mut expanded);
     let peer_meta = expanded["peerDependenciesMeta"].clone();
     for field in [
         "dependencies",
@@ -604,16 +605,15 @@ fn snapshot_field(meta: &mut Value, field: &str, value: &Value) -> Result<()> {
 fn pnpm_importer(
     manifest: &Value,
     importer: &Value,
+    source_catalogs: &Value,
     catalogs: &Catalogs,
     lock_catalogs: &Catalogs,
 ) -> Result<Value> {
     let mut normalized = manifest.clone();
     remove_optional_duplicates(&mut normalized);
     let mut meta = normalized.clone();
-    let peer_meta = normalized["peerDependenciesMeta"].clone();
-    if let Some(peers) = meta["peerDependencies"].as_object_mut() {
-        expand_dependency_map(peers, catalogs, false, true, &peer_meta)?;
-    }
+    remove_shadowed_peers(&mut meta);
+    expand_pnpm_peers(&mut meta, source_catalogs, catalogs)?;
     for field in ["dependencies", "devDependencies", "optionalDependencies"] {
         pnpm_importer_field(
             &mut meta,
@@ -625,6 +625,60 @@ fn pnpm_importer(
         )?;
     }
     Ok(meta)
+}
+
+fn expand_pnpm_peers(meta: &mut Value, source_catalogs: &Value, catalogs: &Catalogs) -> Result<()> {
+    let peer_meta = meta["peerDependenciesMeta"].clone();
+    let Some(peers) = meta
+        .get_mut("peerDependencies")
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    let raw_peers: Vec<(String, String)> = peers
+        .iter()
+        .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned())))
+        .collect();
+    expand_dependency_map(peers, catalogs, false, true, &peer_meta)?;
+    for (name, raw) in raw_peers {
+        let Some(expanded) = peers.get(&name).and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(locked) = pnpm_locked_catalog_peer(source_catalogs, &raw, &name, expanded) {
+            peers.insert(name, locked.into());
+        }
+    }
+    Ok(())
+}
+
+fn pnpm_locked_catalog_peer(
+    source_catalogs: &Value,
+    raw: &str,
+    name: &str,
+    expanded: &str,
+) -> Option<String> {
+    let catalog_name = raw.trim_start().strip_prefix("catalog:")?.trim();
+    let (target_name, target_range) = peer_target(name, expanded);
+    if !resolve::is_tag(&target_range) {
+        return None;
+    }
+    let group = if catalog_name.is_empty() {
+        "default"
+    } else {
+        catalog_name
+    };
+    let entry = &source_catalogs[group][name];
+    if let Some(specifier) = entry["specifier"].as_str()
+        && super::catalog::without_npm_protocol(specifier) != expanded
+    {
+        return None;
+    }
+    let version = entry["version"].as_str()?.split('(').next()?;
+    let reference = pnpm_reference(name, version);
+    if reference.starts_with("npm:") || !expanded.starts_with("npm:") {
+        return Some(reference);
+    }
+    Some(format!("npm:{target_name}@{reference}"))
 }
 
 fn pnpm_importer_field(
@@ -770,7 +824,13 @@ fn pnpm(
         let source_importer = source["importers"]
             .get(&importer)
             .ok_or("Missing pnpm importer")?;
-        let mut meta = pnpm_importer(manifest, source_importer, catalogs, lock_catalogs)?;
+        let mut meta = pnpm_importer(
+            manifest,
+            source_importer,
+            &source["catalogs"],
+            catalogs,
+            lock_catalogs,
+        )?;
         validate_pnpm_links(&mut meta, manifest, &cwd.join(&importer), members, catalogs)?;
         selected.push((parent.clone(), meta));
     }
@@ -939,15 +999,27 @@ fn validate_ranges(meta: &Value, include_dev: bool, catalogs: Option<&Catalogs>)
     Ok(())
 }
 
+fn peer_target(name: &str, range: &str) -> (String, String) {
+    if let Some(alias) = range.strip_prefix("npm:")
+        && let Ok((target_name, target_range)) = resolve::spec(alias)
+    {
+        return (target_name, target_range);
+    }
+    (name.to_owned(), range.to_owned())
+}
+
 fn peer_satisfied(packages: &BTreeMap<String, Value>, name: &str, range: Option<&str>) -> bool {
     let Some(range) = range else {
         return false;
     };
+    let (target_name, target_range) = peer_target(name, range);
     packages
         .get(name)
         .and_then(|row| row[0].as_str())
         .and_then(|id| id.rsplit_once('@'))
-        .is_some_and(|(_, version)| resolve::matches(version, range))
+        .is_some_and(|(pkg_name, version)| {
+            pkg_name == target_name && resolve::matches(version, &target_range)
+        })
 }
 
 fn graph_children(meta: &Value) -> Result<BTreeMap<String, (String, bool, bool)>> {
@@ -1032,18 +1104,41 @@ fn remove_optional_duplicates(meta: &mut Value) {
     }
 }
 
+fn remove_shadowed_peers(meta: &mut Value) {
+    let shadowed: Vec<String> = meta["peerDependencies"]
+        .as_object()
+        .into_iter()
+        .flat_map(|peers| peers.keys())
+        .filter(|name| {
+            ["dependencies", "devDependencies", "optionalDependencies"]
+                .iter()
+                .any(|field| meta[field].get(name.as_str()).is_some())
+        })
+        .cloned()
+        .collect();
+    if let Some(peers) = meta
+        .get_mut("peerDependencies")
+        .and_then(Value::as_object_mut)
+    {
+        for name in shadowed {
+            peers.shift_remove(&name);
+        }
+    }
+}
+
 fn peer_record<'a>(
     records: &'a BTreeMap<String, Value>,
     name: &str,
     range: &str,
 ) -> Option<&'a Value> {
+    let (target_name, target_range) = peer_target(name, range);
     records
         .iter()
         .filter_map(|(key, value)| {
             let (logical, _) = key.split('(').next()?.rsplit_once('@')?;
             let version = value["version"].as_str()?;
-            ((logical == name || value["name"].as_str() == Some(name))
-                && resolve::matches(version, range))
+            ((logical == target_name || value["name"].as_str() == Some(target_name.as_str()))
+                && resolve::matches(version, &target_range))
             .then_some((version, value))
         })
         .max_by(|(left, _), (right, _)| resolve::order(left, right))

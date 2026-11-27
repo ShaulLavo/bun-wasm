@@ -1953,34 +1953,50 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
         "pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_not_pin_tag",
         || {
             // 1. pnpm-lock.yaml with autoInstallPeers=false omits peer from workspace importer when
-            // root already provides it; migration must expand `catalog:` peer range before matching.
+            // root already provides it; migration must expand semver, dist-tag, and npm-alias
+            // catalog peer ranges while ignoring peers shadowed by direct dependencies.
             seed_registry_package("is-number", &["7.0.0"]);
+            seed_registry_package("versioned", &["1.0.0", "2.0.0"]);
             write_workspace(
                 json!({
                     "name": "root",
-                    "dependencies": { "is-number": "catalog:" }
+                    "dependencies": {
+                        "is-number": "catalog:",
+                        "versioned": "catalog:",
+                        "num-alias": "catalog:"
+                    }
                 }),
                 "packages/a",
                 json!({
                     "name": "@fixture/a",
                     "version": "1.0.0",
-                    "peerDependencies": { "is-number": "catalog:" }
+                    "dependencies": { "shadowed": "1.0.0" },
+                    "peerDependencies": {
+                        "is-number": "catalog:",
+                        "versioned": "catalog:",
+                        "num-alias": "catalog:",
+                        "shadowed": "catalog:missing"
+                    }
                 }),
             );
+            seed_registry_package("shadowed", &["1.0.0"]);
             fs::write(
                 "pnpm-workspace.yaml",
-                "packages:\n  - packages/*\ncatalog:\n  is-number: ^7.0.0\n",
+                "packages:\n  - packages/*\ncatalog:\n  is-number: ^7.0.0\n  versioned: latest\n  num-alias: npm:is-number@^7.0.0\n",
             )
             .unwrap();
             fs::write(
                 "pnpm-lock.yaml",
-                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    is-number:\n      specifier: ^7.0.0\n      version: 7.0.0\nimporters:\n  .:\n    dependencies:\n      is-number:\n        specifier: 'catalog:'\n        version: 7.0.0\n  packages/a: {}\npackages:\n  is-number@7.0.0:\n    resolution:\n      integrity: ''\n",
+                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    is-number:\n      specifier: ^7.0.0\n      version: 7.0.0\n    versioned:\n      specifier: latest\n      version: 2.0.0\n    num-alias:\n      specifier: npm:is-number@^7.0.0\n      version: is-number@7.0.0\nimporters:\n  .:\n    dependencies:\n      is-number:\n        specifier: 'catalog:'\n        version: 7.0.0\n      versioned:\n        specifier: 'catalog:'\n        version: 2.0.0\n      num-alias:\n        specifier: 'catalog:'\n        version: is-number@7.0.0\n  packages/a:\n    dependencies:\n      shadowed:\n        specifier: 1.0.0\n        version: 1.0.0\npackages:\n  is-number@7.0.0:\n    resolution:\n      integrity: ''\n  versioned@2.0.0:\n    resolution:\n      integrity: ''\n  shadowed@1.0.0:\n    resolution:\n      integrity: ''\n",
             )
             .unwrap();
             install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
             install("install", &[]).unwrap();
             let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
             assert_eq!(lock["packages"]["is-number"][0], "is-number@7.0.0");
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@2.0.0");
+            assert_eq!(lock["packages"]["num-alias"][0], "is-number@7.0.0");
+            assert_eq!(lock["packages"]["shadowed"][0], "shadowed@1.0.0");
             assert_eq!(
                 lock["workspaces"]["packages/a"]["peerDependencies"]["is-number"],
                 "catalog:"
