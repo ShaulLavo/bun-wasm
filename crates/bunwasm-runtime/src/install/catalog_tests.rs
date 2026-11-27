@@ -1775,3 +1775,80 @@ fn pnpm_migration_preserves_workspace_member_nested_catalog_version() {
         },
     );
 }
+
+#[test]
+fn workspace_explicit_tarball_is_not_reused_for_root_registry_exact_version() {
+    isolated(
+        "workspace_explicit_tarball_is_not_reused_for_root_registry_exact_version",
+        || {
+            seed_registry_package("versioned", &["1.0.0", "2.0.0"]);
+            let tarball_url = "https://packages.invalid/custom-versioned-1.0.0.tgz";
+            let custom_archive = resolve::test_support::archive(&json!({
+                "name": "versioned",
+                "version": "1.0.0",
+                "description": "from-explicit-tarball"
+            }));
+            resolve::test_support::cache_archive(tarball_url, &custom_archive);
+
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "dependencies": { "versioned": "2.0.0" },
+                    "workspaces": {
+                        "packages": ["packages/*"],
+                        "catalog": { "versioned": tarball_url }
+                    }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "catalog:" }
+                }),
+            );
+            install("install", &[]).unwrap();
+            let initial_lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(
+                initial_lock["packages"]["@fixture/a/versioned"][1],
+                tarball_url
+            );
+
+            // Switch root from registry 2.0.0 to exact registry 1.0.0: root must resolve from the
+            // registry, never reuse @fixture/a's explicit 1.0.0 tarball lock row.
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "dependencies": { "versioned": "1.0.0" },
+                    "workspaces": {
+                        "packages": ["packages/*"],
+                        "catalog": { "versioned": tarball_url }
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            install("install", &[]).unwrap();
+
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert_eq!(
+                lock["packages"]["versioned"][1],
+                "http://registry.invalid/versioned/-/versioned-1.0.0.tgz"
+            );
+            assert_eq!(lock["packages"]["@fixture/a/versioned"][1], tarball_url);
+
+            let root_pkg =
+                parse_json(&fs::read("node_modules/versioned/package.json").unwrap()).unwrap();
+            assert!(
+                root_pkg.get("description").is_none(),
+                "root installed explicit tarball instead of registry package: {root_pkg}"
+            );
+            let member_pkg = parse_json(
+                &fs::read("node_modules/@fixture/a/node_modules/versioned/package.json").unwrap(),
+            )
+            .unwrap();
+            assert_eq!(member_pkg["description"], "from-explicit-tarball");
+        },
+    );
+}

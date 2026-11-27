@@ -957,8 +957,9 @@ impl Resolver {
         chain: &[String],
         optional: bool,
     ) -> Option<Package> {
-        let row = &self.locked["packages"][chain.join("/")];
-        if let Some(package) = self.locked_row(row, name, range, chain, optional) {
+        let key = chain.join("/");
+        let row = &self.locked["packages"][&key];
+        if let Some(package) = self.locked_row(row, &key, name, range, chain, optional) {
             return Some(package);
         }
         Version::parse_exact(SlicedString::init(range.as_bytes(), range.as_bytes()))?;
@@ -966,7 +967,7 @@ impl Resolver {
             .as_object()?
             .iter()
             .find_map(|(key, row)| {
-                let mut package = self.locked_row(row, name, range, chain, optional)?;
+                let mut package = self.locked_row(row, key, name, range, chain, optional)?;
                 package.source_chain = Some(super::chain_from_lock(key, row).ok()?);
                 Some(package)
             })
@@ -975,6 +976,7 @@ impl Resolver {
     fn locked_row(
         &self,
         row: &Value,
+        row_key: &str,
         name: &str,
         range: &str,
         chain: &[String],
@@ -996,7 +998,7 @@ impl Resolver {
             return None;
         }
         let source = row[1].as_str()?;
-        if self.explicit_sources.contains(&chain.join("/")) {
+        if self.explicit_sources.contains(row_key) {
             return None;
         }
         let tarball = if source.is_empty() {

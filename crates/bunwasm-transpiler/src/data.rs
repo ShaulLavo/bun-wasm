@@ -92,7 +92,7 @@ struct Graph<'a> {
     pending: Vec<(Expr, usize)>,
     depth: usize,
     yaml_source: Option<&'a [u8]>,
-    yaml_tokens: Option<Vec<bun_parsers::yaml::SourceToken>>,
+    yaml_aliases: Option<HashMap<usize, &'a str>>,
 }
 
 impl Graph<'_> {
@@ -181,20 +181,17 @@ impl Graph<'_> {
         ]))
     }
 
-    fn yaml_raw_number(&mut self, start: i32) -> Option<String> {
+    fn yaml_raw_number(&mut self, start: i32) -> Option<&str> {
         let bytes = self.yaml_source?;
         let start = usize::try_from(start).ok()?;
         let rest = bytes.get(start..)?;
         if rest.first() != Some(&b'*') {
-            return yaml_plain_number(rest).map(str::to_owned);
+            return yaml_plain_number(rest);
         }
-        if self.yaml_tokens.is_none() {
-            let tokens =
-                bun_parsers::yaml::YAML::parse_as_written(bytes, |_, tokens| tokens.to_vec())
-                    .ok()?;
-            self.yaml_tokens = Some(tokens);
-        }
-        resolve_yaml_alias_scalar(bytes, self.yaml_tokens.as_deref()?, start).map(str::to_owned)
+        let aliases = self
+            .yaml_aliases
+            .get_or_insert_with(|| index_yaml_alias_scalars(bytes));
+        aliases.get(&start).copied()
     }
 }
 
@@ -220,35 +217,58 @@ fn yaml_plain_number(rest: &[u8]) -> Option<&str> {
     std::str::from_utf8(&rest[..len]).ok()
 }
 
-fn resolve_yaml_alias_scalar<'a>(
-    source: &'a [u8],
-    tokens: &[bun_parsers::yaml::SourceToken],
-    mut alias_start: usize,
-) -> Option<&'a str> {
-    use bun_parsers::yaml::SourceTokenKind;
-    for _ in 0..64 {
-        let alias_idx = tokens.iter().position(|tok| {
-            tok.kind == SourceTokenKind::Alias && tok.start as usize == alias_start
-        })?;
-        let alias_tok = tokens[alias_idx];
-        let name = source.get(alias_tok.start as usize + 1..alias_tok.end as usize)?;
-        let anchor_idx = tokens[..alias_idx].iter().rposition(|tok| {
-            tok.kind == SourceTokenKind::Anchor
-                && source.get(tok.start as usize + 1..tok.end as usize) == Some(name)
-        })?;
-        let target = tokens[anchor_idx + 1..]
-            .iter()
-            .find(|tok| !matches!(tok.kind, SourceTokenKind::Tag | SourceTokenKind::Comment))?;
-        match target.kind {
-            SourceTokenKind::Scalar => {
-                let raw = source.get(target.start as usize..target.end as usize)?;
-                return yaml_plain_number(raw);
+fn index_yaml_alias_scalars(source: &[u8]) -> HashMap<usize, &str> {
+    use bun_parsers::yaml::{SourceTokenKind, YAML};
+    let Ok(tokens) = YAML::parse_as_written(source, |_, tokens| tokens.to_vec()) else {
+        return HashMap::new();
+    };
+    let mut anchors: HashMap<&[u8], &str> = HashMap::new();
+    let mut aliases = HashMap::new();
+    for (idx, tok) in tokens.iter().enumerate() {
+        let Some(name) = source.get(tok.start as usize + 1..tok.end as usize) else {
+            continue;
+        };
+        if tok.kind == SourceTokenKind::Anchor {
+            match anchor_scalar_value(source, &tokens[idx + 1..], &anchors) {
+                Some(raw) => {
+                    anchors.insert(name, raw);
+                }
+                None => {
+                    anchors.remove(name);
+                }
             }
-            SourceTokenKind::Alias => alias_start = target.start as usize,
-            _ => return None,
+            continue;
+        }
+        if tok.kind == SourceTokenKind::Alias
+            && let Some(&raw) = anchors.get(name)
+        {
+            aliases.insert(tok.start as usize, raw);
         }
     }
-    None
+    aliases
+}
+
+fn anchor_scalar_value<'a>(
+    source: &'a [u8],
+    rest: &[bun_parsers::yaml::SourceToken],
+    anchors: &HashMap<&'a [u8], &'a str>,
+) -> Option<&'a str> {
+    use bun_parsers::yaml::SourceTokenKind;
+    let target = rest
+        .iter()
+        .find(|tok| !matches!(tok.kind, SourceTokenKind::Tag | SourceTokenKind::Comment))?;
+    match target.kind {
+        SourceTokenKind::Scalar => {
+            let raw = source.get(target.start as usize..target.end as usize)?;
+            let text = std::str::from_utf8(raw).ok()?.trim();
+            (yaml_plain_number(text.as_bytes()) == Some(text)).then_some(text)
+        }
+        SourceTokenKind::Alias => {
+            let name = source.get(target.start as usize + 1..target.end as usize)?;
+            anchors.get(name).copied()
+        }
+        _ => None,
+    }
 }
 
 fn string(s: &bun_ast::E::String) -> String {
@@ -446,5 +466,11 @@ mod tests {
             ),
             "2.10"
         );
+        // Many numeric aliases resolve in a single linear pass.
+        let mut many = String::from("catalog:\n  p0: &a 1.10\n");
+        for i in 1..2000 {
+            many.push_str(&format!("  p{i}: *a\n"));
+        }
+        assert_eq!(raw_catalog_entry(&many, "p1999"), "1.10");
     }
 }
