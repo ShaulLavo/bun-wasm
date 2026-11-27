@@ -96,6 +96,29 @@ async function missingCatalogAndFetchErrorContext(target: InstallFixtureTarget) 
     const fetchOutput = await install(target, fetchDir, `http://127.0.0.1:${deadPort}`, [], 1);
     assert.ok(fetchOutput.includes("waffle-base"), `expected package specifier in output:\n${fetchOutput}`);
     assert.ok(fetchOutput.includes(tarballUrl), `expected failing URL in output:\n${fetchOutput}`);
+
+    // A loopback 302 redirect to a tarball must be followed cleanly by the installer.
+    const registry = await createRegistry();
+    const redirector = createServer((req, res) => {
+      res.writeHead(302, { location: `${registry.base}${req.url ?? "/"}` });
+      res.end();
+    });
+    try {
+      await new Promise<void>(resolve => redirector.listen(0, "127.0.0.1", resolve));
+      const redirectAddress = redirector.address();
+      assert.ok(redirectAddress && typeof redirectAddress === "object");
+      const redirectDir = join(directory, "loopback-redirect");
+      mkdirSync(redirectDir, { recursive: true });
+      writeFileSync(join(redirectDir, "package.json"), JSON.stringify({
+        name: "redirect-root",
+        dependencies: { "is-number": `http://127.0.0.1:${redirectAddress.port}/tarballs/is-number-7.0.0.tgz` },
+      }));
+      await install(target, redirectDir, registry.base);
+      assert.equal(installedVersion(redirectDir, "is-number"), "7.0.0");
+    } finally {
+      await new Promise<void>(resolve => redirector.close(() => resolve()));
+      await registry.close();
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

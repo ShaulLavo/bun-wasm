@@ -50,11 +50,11 @@ impl Catalogs {
         }
         let default_from_yarn = default_source.is_none();
         let named_from_yarn = named_source.is_none();
-        let yarn_config = read_optional_yaml(
-            &root.join(yarn_rc_filename()),
-            default_from_yarn || named_from_yarn,
-            parser,
-        )?;
+        let yarn_config = if default_from_yarn || named_from_yarn {
+            read_optional_yaml_lenient(&root.join(yarn_rc_filename()), parser)
+        } else {
+            None
+        };
         if let Some(config) = &yarn_config {
             fill_catalog_sources(config, &mut default_source, &mut named_source);
         }
@@ -94,6 +94,32 @@ impl Catalogs {
 
     pub fn is_empty(&self) -> bool {
         self.default.is_empty() && self.named.is_empty()
+    }
+
+    pub fn merge_declared(&mut self, declared: &Self) {
+        let use_named_default = declared.named.contains_key("default");
+        if use_named_default && !self.default.is_empty() {
+            let entries = std::mem::take(&mut self.default);
+            let target = self.named.entry("default".into()).or_default();
+            for (pkg, specifier) in entries {
+                target.entry(pkg).or_insert(specifier);
+            }
+        }
+        if !use_named_default {
+            for (pkg, specifier) in &declared.default {
+                self.default
+                    .entry(pkg.clone())
+                    .or_insert_with(|| specifier.clone());
+            }
+        }
+        for (catalog_name, entries) in &declared.named {
+            let target = self.named.entry(catalog_name.clone()).or_default();
+            for (pkg, specifier) in entries {
+                target
+                    .entry(pkg.clone())
+                    .or_insert_with(|| specifier.clone());
+            }
+        }
     }
 
     fn merge_pnpm_lock(

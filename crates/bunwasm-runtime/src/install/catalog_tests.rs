@@ -1127,6 +1127,100 @@ fn yarn_migration_keeps_missing_optional_catalog_shadowing_regular_dependency() 
 }
 
 #[test]
+fn pnpm_frozen_install_keeps_unused_workspace_catalog_entries_and_rejects_out_of_range_selection() {
+    isolated(
+        "pnpm_frozen_install_keeps_unused_workspace_catalog_entries_and_rejects_out_of_range_selection",
+        || {
+            seed_registry_package("versioned", &["1.0.0"]);
+            write_workspace(
+                json!({ "name": "root", "workspaces": ["packages/*"] }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "catalog:" }
+                }),
+            );
+            fs::write(
+                "pnpm-workspace.yaml",
+                "packages:\n  - packages/*\ncatalog:\n  versioned: ^1.0.0\n  unused: ^2.0.0\n",
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    versioned:\n      specifier: ^1.0.0\n      version: 1.0.0\nimporters:\n  .:\n    dependencies: {}\n  packages/a:\n    dependencies:\n      versioned:\n        specifier: 'catalog:'\n        version: 1.0.0\npackages:\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+
+            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+            let _ = fs::remove_file("bun.lock");
+
+            // Omitted pnpm-lock catalog entry must validate against the expanded workspace range.
+            fs::write(
+                "pnpm-workspace.yaml",
+                "packages:\n  - packages/*\ncatalog:\n  versioned: ^2.0.0\n",
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies: {}\n  packages/a:\n    dependencies:\n      versioned:\n        specifier: 'catalog:'\n        version: 1.0.0\npackages:\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+            assert!(
+                install("install", &["--lockfile-only"])
+                    .unwrap_err()
+                    .contains("does not satisfy")
+            );
+        },
+    );
+}
+
+#[test]
+fn yarn_migration_ignores_catalog_ref_shadowed_by_optional_and_malformed_yarnrc_does_not_block_bun()
+{
+    isolated(
+        "yarn_migration_ignores_catalog_ref_shadowed_by_optional_and_malformed_yarnrc_does_not_block_bun",
+        || {
+            seed_registry_package("versioned", &["1.0.0"]);
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "dependencies": { "versioned": "catalog:unused" },
+                    "optionalDependencies": { "versioned": "1.0.0" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                "yarn.lock",
+                "__metadata:\n  version: 8\n\n\"root@workspace:.\":\n  version: 0.0.0-use.local\n  resolution: \"root@workspace:.\"\n  optionalDependencies:\n    versioned: \"1.0.0\"\n\n\"versioned@npm:1.0.0\":\n  version: 1.0.0\n  resolution: \"versioned@npm:1.0.0\"\n",
+            )
+            .unwrap();
+
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+
+            // Unrelated malformed .yarnrc.yml must not break a frozen Bun install.
+            fs::remove_file("yarn.lock").unwrap();
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "dependencies": { "versioned": "1.0.0" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            install("install", &[]).unwrap();
+            fs::write(".yarnrc.yml", "not: [valid: yaml\n").unwrap();
+            install("install", &["--frozen-lockfile"]).unwrap();
+        },
+    );
+}
+
+#[test]
 fn missing_optional_catalog_and_empty_yarn_rc_do_not_break_install() {
     assert_eq!(catalog::yarn_rc_filename_from(None), ".yarnrc.yml");
     assert_eq!(catalog::yarn_rc_filename_from(Some("")), ".yarnrc.yml");

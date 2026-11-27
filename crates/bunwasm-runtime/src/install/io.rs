@@ -649,7 +649,10 @@ enum Body {
 struct Download {
     handle: i32,
     url: String,
+    current_url: url::Url,
     tarball: bool,
+    refresh: bool,
+    redirects: u8,
     body: Vec<u8>,
     state: Body,
 }
@@ -659,7 +662,10 @@ impl Download {
         Ok(Self {
             handle: start_request(url, tarball, refresh, registry)?,
             url: url.as_str().into(),
+            current_url: url.clone(),
             tarball,
+            refresh,
+            redirects: 0,
             body: Vec::new(),
             state: Body::Head,
         })
@@ -797,18 +803,77 @@ impl Download {
                 return true;
             }
         };
-        match response_status(&head) {
-            Ok(status) if (200..300).contains(&status) => self.state = Body::Reading,
-            Ok(status) => self.fail(format!("GET {} - {status}", self.url)),
+        match response_head(&head) {
+            Ok((status, _)) if (200..300).contains(&status) => self.state = Body::Reading,
+            Ok((status, Some(location)))
+                if matches!(status, 301 | 302 | 303 | 307 | 308)
+                    && is_loopback_url(&self.current_url) =>
+            {
+                self.follow_redirect(&location, registry);
+            }
+            Ok((status, _)) => self.fail(format!("GET {} - {status}", self.url)),
             Err(error) => self.fail(format_fetch_error(&self.url, &error, registry)),
         }
         true
     }
+
+    fn follow_redirect(&mut self, location: &str, registry: &Registry) {
+        let next = match resolve_redirect(&self.current_url, location, self.redirects) {
+            Ok(url) => url,
+            Err(error) => {
+                self.fail(format_fetch_error(&self.url, &error, registry));
+                return;
+            }
+        };
+        match start_request(&next, self.tarball, self.refresh, registry) {
+            Ok(handle) => {
+                host::close(self.handle);
+                self.handle = handle;
+                self.current_url = next;
+                self.redirects += 1;
+                self.state = Body::Head;
+            }
+            Err(error) => self.fail(error),
+        }
+    }
 }
 
-fn response_status(head: &[u8]) -> Result<u64> {
+fn response_head(head: &[u8]) -> Result<(u64, Option<String>)> {
     let head: Value = serde_json::from_slice(head).map_err(|e| e.to_string())?;
-    Ok(head["status"].as_u64().unwrap_or(0))
+    let status = head["status"].as_u64().unwrap_or(0);
+    let location = head["headers"].as_array().and_then(|headers| {
+        headers.iter().find_map(|entry| {
+            let name = entry.get(0)?.as_str()?;
+            name.eq_ignore_ascii_case("location")
+                .then(|| entry.get(1)?.as_str().map(str::to_owned))
+                .flatten()
+        })
+    });
+    Ok((status, location))
+}
+
+fn is_loopback_url(url: &url::Url) -> bool {
+    url.scheme() == "http"
+        && matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "0.0.0.0" | "[::1]" | "[::]")
+        )
+}
+
+fn resolve_redirect(current: &url::Url, location: &str, redirects: u8) -> Result<url::Url> {
+    if redirects >= 20 {
+        return Err("Fetch redirect limit exceeded".into());
+    }
+    let next = current
+        .join(location)
+        .map_err(|e| format!("Invalid redirect URL: {e}"))?;
+    if !matches!(next.scheme(), "http" | "https") {
+        return Err("UnsupportedRedirectProtocol".into());
+    }
+    if !next.username().is_empty() || next.password().is_some() {
+        return Err("Fetch redirect contains credentials".into());
+    }
+    Ok(next)
 }
 
 fn idle_timeout() -> Duration {
@@ -861,7 +926,12 @@ fn start_request(
             .unwrap()
             .push(json!(["cache-control", "no-cache"]));
     }
-    let meta = json!({"method":"GET", "url":url, "headers":headers, "redirect":"follow", "credentialPolicy":"package"});
+    let redirect = if is_loopback_url(url_value) {
+        "manual"
+    } else {
+        "follow"
+    };
+    let meta = json!({"method":"GET", "url":url, "headers":headers, "redirect":redirect, "credentialPolicy":"package"});
     let handle = host::fetch(meta.to_string().as_bytes(), &[]);
     if handle < 0 {
         return Err(network_error(handle, url, registry));
@@ -1409,10 +1479,14 @@ mod tests {
     #[test]
     fn a_failed_download_drops_its_buffered_body() {
         let registry = Registry::new("https://registry.invalid").unwrap();
+        let url = url::Url::parse("https://registry.invalid/package").unwrap();
         let mut download = Download {
             handle: 1,
-            url: "https://registry.invalid/package".into(),
+            url: url.as_str().into(),
+            current_url: url,
             tarball: true,
+            refresh: false,
+            redirects: 0,
             body: vec![0; 4096],
             state: Body::Reading,
         };
@@ -1420,6 +1494,30 @@ mod tests {
         assert!(download.advance(usize::MAX, &mut [0; 8], &registry));
         assert!(matches!(download.state, Body::Failed(_)));
         assert_eq!(download.body.capacity(), 0);
+    }
+
+    #[test]
+    fn loopback_redirects_validate_scheme_credentials_and_limit() {
+        let loopback = url::Url::parse("http://127.0.0.1:4873/pkg.tgz").unwrap();
+        assert!(is_loopback_url(&loopback));
+        assert!(!is_loopback_url(
+            &url::Url::parse("https://github.com/org/repo/pkg.tgz").unwrap()
+        ));
+        assert_eq!(
+            resolve_redirect(&loopback, "https://github.com/org/repo/pkg.tgz", 0)
+                .unwrap()
+                .as_str(),
+            "https://github.com/org/repo/pkg.tgz"
+        );
+        assert_eq!(
+            resolve_redirect(&loopback, "/v2/pkg.tgz", 0)
+                .unwrap()
+                .as_str(),
+            "http://127.0.0.1:4873/v2/pkg.tgz"
+        );
+        assert!(resolve_redirect(&loopback, "file:///etc/passwd", 0).is_err());
+        assert!(resolve_redirect(&loopback, "https://user:pass@example.com/p.tgz", 0).is_err());
+        assert!(resolve_redirect(&loopback, "https://example.com/p.tgz", 20).is_err());
     }
 }
 

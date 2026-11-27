@@ -36,7 +36,7 @@ pub fn read(
     } else {
         None
     };
-    let pnpm_lock_catalogs = match &pnpm_lock {
+    let mut pnpm_lock_catalogs = match &pnpm_lock {
         Some(lock) => Catalogs::from_pnpm_lock(lock)?,
         None => Catalogs::default(),
     };
@@ -87,6 +87,7 @@ pub fn read(
     eprintln!("migrated lockfile from {source}");
     let mut lock = json!({"lockfileVersion": 2, "configVersion": if source == "pnpm-lock.yaml" { 1 } else { 0 }, "workspaces": workspaces, "packages": packages});
     let lock_catalogs = if source == "pnpm-lock.yaml" && !pnpm_lock_catalogs.is_empty() {
+        pnpm_lock_catalogs.merge_declared(&catalogs);
         &pnpm_lock_catalogs
     } else {
         &catalogs
@@ -444,6 +445,7 @@ fn expand_root_catalogs(
 
 fn expand_manifest_catalogs(meta: &Value, catalogs: &Catalogs) -> Result<Value> {
     let mut expanded = meta.clone();
+    remove_optional_duplicates(&mut expanded);
     let mut skipped_optional = Vec::new();
     for field in [
         "dependencies",
@@ -680,7 +682,9 @@ fn pnpm_importer_field(
             .or_else(|| value.as_str())
             .ok_or("Invalid pnpm dependency version")?;
         let validation_range = if requested.is_some_and(super::catalog::is_protocol) {
-            locked_specifier.unwrap_or("*")
+            locked_specifier
+                .or(resolved)
+                .ok_or("Invalid pnpm importer specifier")?
         } else {
             resolved.ok_or("Invalid pnpm importer specifier")?
         };
