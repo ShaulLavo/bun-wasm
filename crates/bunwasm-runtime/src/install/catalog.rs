@@ -21,6 +21,11 @@ pub(super) fn is_protocol(range: &str) -> bool {
     range.trim_start().starts_with("catalog:")
 }
 
+pub(super) fn has_manifest_catalogs(manifest: &Value) -> bool {
+    let (default, named) = manifest_catalog_sources(manifest);
+    default.is_some() || named.is_some()
+}
+
 pub(super) fn yarn_rc_filename() -> String {
     yarn_rc_filename_from(std::env::var("YARN_RC_FILENAME").ok().as_deref())
 }
@@ -273,6 +278,43 @@ impl Catalogs {
             out.insert(name.clone(), entries_value(entries));
         }
         Some(Value::Object(out))
+    }
+
+    pub fn write_to_manifest(&self, manifest: &mut Value) -> bool {
+        if self.is_empty() || manifest.get("workspaces").is_none_or(Value::is_null) {
+            return false;
+        }
+        if let Some(packages) = manifest["workspaces"].as_array().cloned() {
+            manifest["workspaces"] = serde_json::json!({ "packages": packages });
+        }
+        let Some(workspaces) = manifest["workspaces"].as_object_mut() else {
+            return false;
+        };
+        if !self.default.is_empty() {
+            workspaces.insert(
+                "catalog".into(),
+                self.normalized_entries_value(&self.default),
+            );
+        }
+        if !self.named.is_empty() {
+            let mut out = Map::new();
+            for (name, entries) in &self.named {
+                out.insert(name.clone(), self.normalized_entries_value(entries));
+            }
+            workspaces.insert("catalogs".into(), Value::Object(out));
+        }
+        true
+    }
+
+    fn normalized_entries_value(&self, entries: &BTreeMap<String, String>) -> Value {
+        let mut map = Map::new();
+        for (name, range) in entries {
+            map.insert(
+                name.clone(),
+                Value::String(self.normalize_resolved(range).to_owned()),
+            );
+        }
+        Value::Object(map)
     }
 }
 

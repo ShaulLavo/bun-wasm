@@ -505,7 +505,7 @@ fn https_update_retains_hash_but_not_registry_selection_pins() {
                 {},
                 ""
             ]);
-            unlock(&mut lock, &Options::default(), &manifest, None);
+            unlock(&mut lock, &Options::default(), &manifest, &manifest, None);
             assert_eq!(lock["packages"]["tool"], original);
             assert!(lock["packages"]["registry"].is_null());
             cache_archive(

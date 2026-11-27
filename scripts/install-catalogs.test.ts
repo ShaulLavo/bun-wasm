@@ -325,6 +325,75 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
       assert.equal(installedVersion(aliasPeerRoot, "logical-alias"), "1.0.0");
       await install(target, aliasPeerRoot, registry.base, ["--frozen-lockfile"]);
     }
+
+    // `bun update --latest` from a member, `bun update --latest` with `pnpm-workspace.yaml`,
+    // and plain `bun update` preserving catalog dist-tags must all match native Bun.
+    const memberUpdateRoot = join(directory, "update-member-catalog");
+    mkdirSync(join(memberUpdateRoot, "packages/a"), { recursive: true });
+    writeFileSync(join(memberUpdateRoot, "package.json"), JSON.stringify({
+      name: "update-member-root",
+      workspaces: { packages: ["packages/*"], catalog: { versioned: "^1.0.0" } },
+    }, null, 2));
+    writeFileSync(join(memberUpdateRoot, "packages/a/package.json"), JSON.stringify({
+      name: "@fixture/member-cat-a",
+      version: "1.0.0",
+      dependencies: { versioned: "catalog:" },
+    }, null, 2));
+    await install(target, memberUpdateRoot, registry.base);
+    await runGuestUpdate(target, memberUpdateRoot, registry.base, ["--latest"], "/packages/a");
+    assert.equal(
+      (JSON.parse(readFileSync(join(memberUpdateRoot, "package.json"), "utf8")) as {
+        workspaces: { catalog: { versioned: string } };
+      }).workspaces.catalog.versioned,
+      "^2.0.0",
+    );
+    assert.equal(installedVersion(memberUpdateRoot, "versioned"), "2.0.0");
+    await install(target, memberUpdateRoot, registry.base, ["--frozen-lockfile"]);
+
+    const pnpmUpdateRoot = join(directory, "update-pnpm-catalog");
+    mkdirSync(join(pnpmUpdateRoot, "packages/a"), { recursive: true });
+    writeFileSync(join(pnpmUpdateRoot, "package.json"), JSON.stringify({ name: "update-pnpm-root" }, null, 2));
+    writeFileSync(join(pnpmUpdateRoot, "pnpm-workspace.yaml"), "packages:\n  - packages/*\ncatalog:\n  versioned: ^1.0.0\n");
+    writeFileSync(join(pnpmUpdateRoot, "packages/a/package.json"), JSON.stringify({
+      name: "@fixture/pnpm-cat-a",
+      version: "1.0.0",
+      dependencies: { versioned: "catalog:" },
+    }, null, 2));
+    await install(target, pnpmUpdateRoot, registry.base);
+    await runGuestUpdate(target, pnpmUpdateRoot, registry.base, ["--latest"]);
+    assert.equal(
+      (JSON.parse(readFileSync(join(pnpmUpdateRoot, "package.json"), "utf8")) as {
+        workspaces: { catalog: { versioned: string } };
+      }).workspaces.catalog.versioned,
+      "^2.0.0",
+    );
+    assert.equal(installedVersion(pnpmUpdateRoot, "versioned"), "2.0.0");
+    await install(target, pnpmUpdateRoot, registry.base, ["--frozen-lockfile"]);
+
+    const tagUpdateRoot = join(directory, "update-tag-catalog");
+    mkdirSync(join(tagUpdateRoot, "packages/a"), { recursive: true });
+    writeFileSync(join(tagUpdateRoot, "package.json"), JSON.stringify({
+      name: "update-tag-root",
+      workspaces: { packages: ["packages/*"], catalog: { versioned: "latest" } },
+    }, null, 2));
+    writeFileSync(join(tagUpdateRoot, "packages/a/package.json"), JSON.stringify({
+      name: "@fixture/tag-cat-a",
+      version: "1.0.0",
+      dependencies: { versioned: "catalog:" },
+    }, null, 2));
+    registry.latest.set("versioned", "1.0.0");
+    await install(target, tagUpdateRoot, registry.base);
+    assert.equal(installedVersion(tagUpdateRoot, "versioned"), "1.0.0");
+    registry.latest.set("versioned", "2.0.0");
+    await runGuestUpdate(target, tagUpdateRoot, registry.base, []);
+    assert.equal(
+      (JSON.parse(readFileSync(join(tagUpdateRoot, "package.json"), "utf8")) as {
+        workspaces: { catalog: { versioned: string } };
+      }).workspaces.catalog.versioned,
+      "latest",
+    );
+    assert.equal(installedVersion(tagUpdateRoot, "versioned"), "2.0.0");
+    await install(target, tagUpdateRoot, registry.base, ["--frozen-lockfile"]);
   } finally {
     await registry.close();
     rmSync(directory, { recursive: true, force: true });

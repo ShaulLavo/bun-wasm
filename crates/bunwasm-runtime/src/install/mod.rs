@@ -113,7 +113,12 @@ fn execute(
             &BUN_REVISION[..9.min(BUN_REVISION.len())]
         );
     }
-    let root_manifest = manifest(command, parser)?;
+    let mut root_manifest = manifest(command, parser)?;
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let unseeded_root = root_manifest.clone();
+    let seeded_catalogs =
+        command == "update" && seed_external_catalogs(&cwd, &mut root_manifest, parser)?;
+    let old_root_manifest = root_manifest.clone();
     let manifest_path = member.as_ref().map_or_else(
         || Path::new("package.json").to_owned(),
         |path| path.join("package.json"),
@@ -126,6 +131,9 @@ fn execute(
     let old_manifest = manifest.clone();
     if command == "update" {
         update_manifest(&mut manifest, &opts)?;
+        if member.is_some() {
+            update_manifest_catalogs(&mut root_manifest, &opts)?;
+        }
     }
     if command == "remove" {
         remove_names(&mut manifest, &opts.names)?;
@@ -156,10 +164,16 @@ fn execute(
         let mut resolution_lock = locked.clone();
         if command == "update" {
             opts.refresh = true;
+            let unlock_root = if member.is_some() {
+                &root_manifest
+            } else {
+                &manifest
+            };
             unlock(
                 &mut resolution_lock,
                 &opts,
                 &manifest,
+                unlock_root,
                 member.as_ref().and_then(|_| manifest["name"].as_str()),
             );
         }
@@ -190,7 +204,6 @@ fn execute(
         } else {
             &manifest
         };
-        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
         resolver.workspaces = local::workspaces(&cwd, project_manifest, parser)?;
         resolver.catalogs =
             catalog::Catalogs::load(&cwd, project_manifest, &resolver.locked, parser)?;
@@ -208,6 +221,8 @@ fn execute(
         if command != "remove" && command != "update" {
             finalize_additions(&mut manifest, &opts, &resolver, member.as_deref())?;
         }
+        let mut write_manifest = manifest != old_manifest;
+        let mut write_root = false;
         if command == "update" {
             finalize_updates(
                 &mut manifest,
@@ -216,10 +231,23 @@ fn execute(
                 &resolver,
                 member.as_deref(),
             )?;
-            if member.is_none() {
-                resolver.catalogs =
-                    catalog::Catalogs::load(&cwd, &manifest, &resolver.locked, parser)?;
+            write_manifest = manifest != old_manifest;
+            if member.is_some() {
+                finalize_catalog_updates(&mut root_manifest, &old_root_manifest, &opts, &resolver);
+                write_root = root_manifest != old_root_manifest;
+                if seeded_catalogs && !write_root {
+                    root_manifest = unseeded_root.clone();
+                }
+            } else if seeded_catalogs && !write_manifest {
+                manifest = unseeded_root.clone();
             }
+            let finalized_root = if member.is_some() {
+                &root_manifest
+            } else {
+                &manifest
+            };
+            resolver.catalogs =
+                catalog::Catalogs::load(&cwd, finalized_root, &resolver.locked, parser)?;
         }
         if let Some(member) = &member
             && let Some(local) = resolver
@@ -248,10 +276,20 @@ fn execute(
             trace::time("link-bins", || link_bins(&resolver, &manifests))?;
             count
         };
-        if manifest != old_manifest {
+        if write_manifest {
             io::write(
                 &manifest_path,
                 format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()).as_bytes(),
+            )?;
+        }
+        if write_root {
+            io::write(
+                Path::new("package.json"),
+                format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&root_manifest).unwrap()
+                )
+                .as_bytes(),
             )?;
         }
         if !opts.frozen
@@ -1239,6 +1277,18 @@ fn pm(opts: &Options, parser: &dyn Transpiler) -> Result<()> {
     Ok(())
 }
 
+fn seed_external_catalogs(
+    cwd: &Path,
+    root_manifest: &mut Value,
+    parser: &dyn Transpiler,
+) -> Result<bool> {
+    if catalog::has_manifest_catalogs(root_manifest) {
+        return Ok(false);
+    }
+    let external = catalog::Catalogs::load(cwd, root_manifest, &json!({}), parser)?;
+    Ok(external.write_to_manifest(root_manifest))
+}
+
 fn update_manifest(manifest: &mut Value, opts: &Options) -> Result<()> {
     for input in &opts.names {
         let (name, range) = resolve::spec(input)?;
@@ -1259,6 +1309,35 @@ fn update_manifest(manifest: &mut Value, opts: &Options) -> Result<()> {
                     manifest[field][&name] = range.clone().into();
                 }
             }
+        }
+    }
+    if opts.latest {
+        for field in [
+            "dependencies",
+            "devDependencies",
+            "optionalDependencies",
+            "peerDependencies",
+        ] {
+            if opts.production && field == "devDependencies" {
+                continue;
+            }
+            let Some(deps) = manifest[field].as_object_mut() else {
+                continue;
+            };
+            for (name, range) in deps {
+                if selected(name, opts) && range.as_str().is_some_and(|r| !r.contains(':')) {
+                    *range = "latest".into();
+                }
+            }
+        }
+    }
+    update_manifest_catalogs(manifest, opts)
+}
+
+fn update_manifest_catalogs(manifest: &mut Value, opts: &Options) -> Result<()> {
+    for input in &opts.names {
+        let (name, range) = resolve::spec(input)?;
+        if input.rfind('@').is_some_and(|at| at > 0) {
             for_each_manifest_catalog_mut(manifest, |entries| {
                 if entries.contains_key(&name) {
                     entries.insert(name.clone(), range.clone().into());
@@ -1269,24 +1348,6 @@ fn update_manifest(manifest: &mut Value, opts: &Options) -> Result<()> {
     if !opts.latest {
         return Ok(());
     }
-    for field in [
-        "dependencies",
-        "devDependencies",
-        "optionalDependencies",
-        "peerDependencies",
-    ] {
-        if opts.production && field == "devDependencies" {
-            continue;
-        }
-        let Some(deps) = manifest[field].as_object_mut() else {
-            continue;
-        };
-        for (name, range) in deps {
-            if selected(name, opts) && range.as_str().is_some_and(|r| !r.contains(':')) {
-                *range = "latest".into();
-            }
-        }
-    }
     for_each_manifest_catalog_mut(manifest, |entries| {
         for (name, range) in entries {
             if selected(name, opts) && range.as_str().is_some_and(|r| !r.contains(':')) {
@@ -1295,6 +1356,34 @@ fn update_manifest(manifest: &mut Value, opts: &Options) -> Result<()> {
         }
     });
     Ok(())
+}
+
+fn manifest_catalog_names(manifest: &Value) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let Some(workspaces) = manifest.get("workspaces").filter(|v| !v.is_null()) else {
+        return names;
+    };
+    let nested = workspaces.as_object().is_some_and(|ws| {
+        ws.get("catalog").is_some_and(|v| !v.is_null())
+            || ws.get("catalogs").is_some_and(|v| !v.is_null())
+    });
+    let container = if nested { workspaces } else { manifest };
+    if let Some(entries) = container.get("catalog").and_then(Value::as_object) {
+        names.extend(entries.keys().cloned());
+    }
+    if let Some(catalogs) = container.get("catalogs").and_then(Value::as_object) {
+        for entries in catalogs.values().filter_map(Value::as_object) {
+            names.extend(entries.keys().cloned());
+        }
+    }
+    names
+}
+
+fn has_explicit_version(name: &str, opts: &Options) -> bool {
+    opts.names.iter().any(|input| {
+        input.rfind('@').is_some_and(|at| at > 0)
+            && resolve::spec(input).is_ok_and(|(n, _)| n == name)
+    })
 }
 
 fn for_each_manifest_catalog_mut(
@@ -1347,14 +1436,28 @@ fn lock_leaf_name(key: &str) -> &str {
     }
 }
 
-fn unlock(locked: &mut Value, opts: &Options, manifest: &Value, workspace: Option<&str>) {
+fn unlock(
+    locked: &mut Value,
+    opts: &Options,
+    manifest: &Value,
+    root_manifest: &Value,
+    workspace: Option<&str>,
+) {
+    let mut sources = resolve::tarball::locked_sources(locked, root_manifest);
     if workspace.is_some() {
-        return;
+        sources.extend(resolve::tarball::locked_sources(locked, manifest));
     }
-    let sources = resolve::tarball::locked_sources(locked, manifest);
     let Some(packages) = locked["packages"].as_object_mut() else {
         return;
     };
+    if workspace.is_some() {
+        let catalog_names = manifest_catalog_names(root_manifest);
+        packages.retain(|key, _| {
+            let leaf = lock_leaf_name(key);
+            !catalog_names.contains(leaf) || !selected(leaf, opts) || sources.contains(key)
+        });
+        return;
+    }
     packages.retain(|key, _| !selected(lock_leaf_name(key), opts) || sources.contains(key));
 }
 
@@ -1461,6 +1564,10 @@ fn finalize_catalog_entries(
             .as_str()
             .unwrap_or_else(|| range.as_str().unwrap_or(""));
         if old.contains(':') {
+            continue;
+        }
+        if !opts.latest && !has_explicit_version(name, opts) && resolve::is_tag(old) {
+            *range = old.into();
             continue;
         }
         let key = (group_key.clone(), name.clone());
