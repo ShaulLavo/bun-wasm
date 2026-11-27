@@ -3,12 +3,13 @@
 import { NetHelper as RuntimeNetHelper, type NetNamespace, type NetHelperHooks } from "waffle/browser/net/helper";
 import type { NetConnect } from "waffle/browser/net/outbound";
 import { createInstallFetch, installFetch, markPackageFetchHeaders } from "./install-cache.js";
-import type { PackageRequest, PackageRequestKind, PackageUrlRewriter } from "./package-fetch.js";
+import type { PackageRequest, PackageRequestKind, PackageRewriteResult, PackageUrlRewriter } from "./package-fetch.js";
 
 export type { ConnectionSink, NetFetch, NetHelperHooks, PreviewConnection, PreviewSink } from "waffle/browser/net/helper";
 export type {
   PackageRequest as BunPackageRequest,
   PackageRequestKind as BunPackageRequestKind,
+  PackageRewriteResult as BunPackageRewriteResult,
   PackageUrlRewriter as BunPackageUrlRewriter,
 };
 

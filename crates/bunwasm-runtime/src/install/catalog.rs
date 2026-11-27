@@ -56,14 +56,7 @@ impl Catalogs {
         if let Some(config) = &yarn_config {
             (default_source, named_source) = object_catalog_sources(config);
         }
-        let normalize_yarn = from_yarn && yarn_config.is_some();
-        let mut catalogs = Self::parse(
-            default_source,
-            named_source,
-            locked,
-            normalize_yarn,
-            normalize_yarn,
-        )?;
+        let mut catalogs = Self::parse(default_source, named_source, locked)?;
         if default_source.is_none()
             && named_source.is_none()
             && !root.join("pnpm-workspace.yaml").is_file()
@@ -78,7 +71,7 @@ impl Catalogs {
 
     pub fn from_manifest(manifest: &Value, locked: &Value) -> Result<Self> {
         let (default_source, named_source) = manifest_catalog_sources(manifest);
-        Self::parse(default_source, named_source, locked, false, false)
+        Self::parse(default_source, named_source, locked)
     }
 
     pub fn from_pnpm_lock(pnpm_lock: &Value) -> Result<Self> {
@@ -186,15 +179,13 @@ impl Catalogs {
         default_source: Option<&Value>,
         named_source: Option<&Value>,
         locked: &Value,
-        normalize_default_yarn: bool,
-        normalize_named_yarn: bool,
     ) -> Result<Self> {
         let default = match default_source {
-            Some(value) => parse_entries(value, None, normalize_default_yarn)?,
+            Some(value) => parse_entries(value, None)?,
             None => BTreeMap::new(),
         };
         let named = match named_source {
-            Some(value) => parse_named(value, normalize_named_yarn)?,
+            Some(value) => parse_named(value)?,
             None => BTreeMap::new(),
         };
         check_default_conflicts(&default, &named)?;
@@ -301,21 +292,29 @@ fn manifest_catalog_sources(manifest: &Value) -> (Option<&Value>, Option<&Value>
     object_catalog_sources(manifest)
 }
 
-fn normalize_yarn_range(range: &str) -> &str {
+fn looks_like_semver_range(value: &str) -> bool {
+    let Some(first) = value.as_bytes().first().copied() else {
+        return false;
+    };
+    first.is_ascii_digit()
+        || matches!(first, b'^' | b'~' | b'>' | b'<' | b'=' | b'*')
+        || (matches!(first, b'v' | b'V') && value.as_bytes().get(1).is_some_and(u8::is_ascii_digit))
+}
+
+fn normalize_npm_range(range: &str) -> &str {
     let Some(rest) = range.strip_prefix("npm:") else {
         return range;
     };
     if rest.is_empty() || rest.starts_with('@') || rest.contains('@') {
         return range;
     }
+    if super::resolve::valid_name(rest).is_ok() && !looks_like_semver_range(rest) {
+        return range;
+    }
     rest
 }
 
-fn parse_entries(
-    value: &Value,
-    catalog_name: Option<&str>,
-    normalize_yarn: bool,
-) -> Result<BTreeMap<String, String>> {
+fn parse_entries(value: &Value, catalog_name: Option<&str>) -> Result<BTreeMap<String, String>> {
     let Some(entries) = value.as_object() else {
         return Err(match catalog_name {
             Some(name) => format!("Catalog \"{name}\" must be an object"),
@@ -337,12 +336,7 @@ fn parse_entries(
                 "Catalog entry for \"{name}\" cannot reference another catalog"
             ));
         }
-        let range = if normalize_yarn {
-            normalize_yarn_range(range)
-        } else {
-            range
-        };
-        parsed.insert(name.clone(), range.to_owned());
+        parsed.insert(name.clone(), normalize_npm_range(range).to_owned());
     }
     Ok(parsed)
 }
@@ -365,24 +359,18 @@ fn parse_pnpm_lock_entries(value: &Value, catalog_name: &str) -> Result<BTreeMap
                 "Catalog entry for \"{name}\" cannot reference another catalog"
             ));
         }
-        parsed.insert(name.clone(), specifier.to_owned());
+        parsed.insert(name.clone(), normalize_npm_range(specifier).to_owned());
     }
     Ok(parsed)
 }
 
-fn parse_named(
-    value: &Value,
-    normalize_yarn: bool,
-) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
+fn parse_named(value: &Value) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
     let Some(catalogs) = value.as_object() else {
         return Err("catalogs must be an object".into());
     };
     let mut parsed = BTreeMap::new();
     for (name, entries) in catalogs {
-        parsed.insert(
-            name.clone(),
-            parse_entries(entries, Some(name), normalize_yarn)?,
-        );
+        parsed.insert(name.clone(), parse_entries(entries, Some(name))?);
     }
     Ok(parsed)
 }

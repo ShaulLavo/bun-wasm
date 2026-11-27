@@ -379,14 +379,11 @@ impl Resolver {
     }
 
     fn children(&mut self, parent: &Package, peers: bool) -> Result<()> {
-        let dependencies: Vec<_> = dependencies(
-            &parent.meta,
-            self.production,
-            parent.local.as_ref().is_some_and(|p| p.workspace),
-        )
-        .into_iter()
-        .filter(|(_, (_, _, peer))| *peer == peers)
-        .collect();
+        let workspace = parent.local.as_ref().is_some_and(|p| p.workspace);
+        let dependencies: Vec<_> = dependencies(&parent.meta, self.production, workspace)
+            .into_iter()
+            .filter(|(_, (_, _, peer))| *peer == peers)
+            .collect();
         let mut lookahead = self.metadata_lookahead(&dependencies, Some(parent));
         for (index, (name, (range, optional, peer))) in dependencies.iter().enumerate() {
             self.prefetch_dependencies(&mut lookahead, index);
@@ -396,6 +393,9 @@ impl Resolver {
                 Err(_) if is_optional => continue,
                 Err(error) => return Err(error),
             };
+            if *peer && !workspace && super::catalog::is_protocol(&range) {
+                continue;
+            }
             let Some(target) = self.target(parent, name, &range, is_optional)? else {
                 continue;
             };

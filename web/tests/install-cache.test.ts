@@ -839,7 +839,7 @@ test("clearInstallCache drops queued puts, resets the key index, and deletes the
     expect(await (await installFetch(secondUrl, requestOptions())).text()).toBe(`fresh:${secondUrl}`);
 
     expect(await clearInstallCache()).toBe(true);
-    expect(env.deletes).toEqual(["bun-wasm-install-v2"]);
+    expect(env.deletes).toEqual(["bun-wasm-install-v2", "bun-wasm-install-v1"]);
 
     releaseFirst.resolve();
     await Bun.sleep(15);
@@ -994,16 +994,15 @@ test("responses with Cache-Control: no-store are not persisted in Cache Storage"
   const fetcher = createInstallFetch({
     packagePolicyToken: token,
     rewritePackageUrl: ({ url }) => `https://proxy.invalid/tarball?url=${encodeURIComponent(url)}`,
-    fetch: async url => {
-      seenUrls.push(url);
-      version++;
-      return new Response(`proxy-bytes-${version}`, {
-        status: 200,
-        headers: { "cache-control": "private, no-store, max-age=0" },
-      });
-    },
   });
-  await withStorage(env.storage, async () => new Response("unexpected"), async () => {
+  await withStorage(env.storage, async input => {
+    seenUrls.push(String(input));
+    version++;
+    return new Response(`proxy-bytes-${version}`, {
+      status: 200,
+      headers: { "cache-control": "private, no-store, max-age=0" },
+    });
+  }, async () => {
     const options: RequestInit = {
       method: "GET",
       headers: markPackageFetchHeaders({ accept: TARBALL }, token),
@@ -1019,7 +1018,8 @@ test("responses with Cache-Control: no-store are not persisted in Cache Storage"
 test("warm cache honors distinct proxy rewrites applied after a redirect", async () => {
   const env = indexedCacheStorage();
   const seenUrls: string[] = [];
-  const transport = async (url: string): Promise<Response> => {
+  const transport = async (input: string | URL | Request): Promise<Response> => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     seenUrls.push(url);
     if (url === "https://origin.invalid/start.tgz") {
       return new Response(null, { status: 302, headers: { location: "https://cdn.invalid/final.tgz" } });
@@ -1032,20 +1032,18 @@ test("warm cache honors distinct proxy rewrites applied after a redirect", async
   const tokenB = "policy-redirect-proxy-b";
   const fetcherA = createInstallFetch({
     packagePolicyToken: tokenA,
-    fetch: transport,
     rewritePackageUrl: ({ url }) => (url.startsWith("https://cdn.invalid/")
       ? `https://proxy-a.invalid/tarball?url=${encodeURIComponent(url)}`
       : null),
   });
   const fetcherB = createInstallFetch({
     packagePolicyToken: tokenB,
-    fetch: transport,
     rewritePackageUrl: ({ url }) => (url.startsWith("https://cdn.invalid/")
       ? `https://proxy-b.invalid/tarball?url=${encodeURIComponent(url)}`
       : null),
   });
 
-  await withStorage(env.storage, async () => new Response("unexpected"), async () => {
+  await withStorage(env.storage, transport, async () => {
     const first = await fetcherA("https://origin.invalid/start.tgz", {
       method: "GET",
       headers: markPackageFetchHeaders({ accept: TARBALL }, tokenA),
@@ -1068,40 +1066,78 @@ test("warm cache honors distinct proxy rewrites applied after a redirect", async
   expect(env.stored.has("https://origin.invalid/start.tgz")).toBe(false);
 });
 
-test("same-origin proxies and Cache-Control: private responses bypass shared Cache Storage", async () => {
+test("same-origin proxies bypass cache by default, opt into caching with credentials omit, and custom fetch stays uncached", async () => {
   const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
   Object.defineProperty(globalThis, "location", { configurable: true, value: { href: "https://app.invalid/workspace" } });
   try {
-    const env = indexedCacheStorage();
+    const publicPublished = deferred<void>();
+    const env = indexedCacheStorage({}, {
+      async put(url, response) {
+        env.putCalls.push(url);
+        env.stored.set(new URL(url).href, Response.prototype.clone.call(response));
+        await response.arrayBuffer();
+        publicPublished.resolve();
+      },
+    });
     let count = 0;
     const token = "policy-same-origin";
-    const sameOriginFetcher = createInstallFetch({
+    const credentialedSameOrigin = createInstallFetch({
       packagePolicyToken: token,
-      rewritePackageUrl: ({ url }) => `/api/tarball-proxy?url=${encodeURIComponent(url)}`,
-      fetch: async () => new Response(`account-${++count}`, { status: 200 }),
+      rewritePackageUrl: ({ url }) => `/api/private-proxy?url=${encodeURIComponent(url)}`,
     });
-    const privateCrossOriginFetcher = createInstallFetch({
+    const publicSameOrigin = createInstallFetch({
+      packagePolicyToken: token,
+      rewritePackageUrl: ({ url }) => ({ url: `/api/public-proxy?url=${encodeURIComponent(url)}`, credentials: "omit" }),
+    });
+    const privateCrossOrigin = createInstallFetch({
       packagePolicyToken: token,
       rewritePackageUrl: ({ url }) => `https://proxy.invalid/tarball?url=${encodeURIComponent(url)}`,
-      fetch: async () => new Response(`private-${++count}`, {
-        status: 200,
-        headers: { "cache-control": "private, max-age=60" },
-      }),
+    });
+    const customTransportCalls: string[] = [];
+    const customTransport = createInstallFetch({
+      packagePolicyToken: token,
+      rewritePackageUrl: ({ url }) => `https://proxy.invalid/custom?url=${encodeURIComponent(url)}`,
+      fetch: async url => {
+        customTransportCalls.push(url);
+        return new Response(`custom-${customTransportCalls.length}`);
+      },
     });
 
-    await withStorage(env.storage, async () => new Response("unexpected"), async () => {
+    await withStorage(env.storage, async input => {
+      const url = String(input);
+      count++;
+      if (url.startsWith("https://proxy.invalid/")) {
+        return new Response(`private-${count}`, { status: 200, headers: { "cache-control": "private, max-age=60" } });
+      }
+      return new Response(`body-${count}`, { status: 200 });
+    }, async () => {
       const options: RequestInit = {
         method: "GET",
         headers: markPackageFetchHeaders({ accept: TARBALL }, token),
       };
-      expect(await (await sameOriginFetcher("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("account-1");
-      expect(await (await sameOriginFetcher("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("account-2");
-      expect(await (await privateCrossOriginFetcher("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("private-3");
-      expect(await (await privateCrossOriginFetcher("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("private-4");
+      // Default same-origin rewrite stays uncached.
+      expect(await (await credentialedSameOrigin("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("body-1");
+      expect(await (await credentialedSameOrigin("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("body-2");
+      // Cross-origin Cache-Control: private stays uncached.
+      expect(await (await privateCrossOrigin("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("private-3");
+      expect(await (await privateCrossOrigin("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("private-4");
+      // Custom fetch transport stays out of shared Cache Storage.
+      expect(await (await customTransport("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("custom-1");
+      expect(await (await customTransport("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("custom-2");
+      expect(env.putCalls).toEqual([]);
+
+      // Public same-origin proxy with credentials: "omit" caches and hits on repeat fetch.
+      const firstPublic = await publicSameOrigin("https://github.com/org/repo/pkg.tgz", options);
+      expect(await firstPublic.text()).toBe("body-5");
+      await observeBeforeDeadline(publicPublished.promise, "public proxy tarball was not persisted");
+      await Bun.sleep(10);
+      const secondPublic = await publicSameOrigin("https://github.com/org/repo/pkg.tgz", options);
+      expect(await secondPublic.text()).toBe("body-5");
+      expect(count).toBe(5);
     });
 
-    expect(env.putCalls).toEqual([]);
-    expect(env.stored.size).toBe(0);
+    expect(customTransportCalls).toHaveLength(2);
+    expect(env.stored.size).toBe(1);
   } finally {
     if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation);
     else Reflect.deleteProperty(globalThis, "location");

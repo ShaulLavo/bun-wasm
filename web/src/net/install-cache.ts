@@ -18,6 +18,7 @@ export interface InstallFetchOptions {
 const METADATA = "application/vnd.npm.install-v1+json";
 const TARBALL = "application/vnd.bun.install-tarball";
 const CACHE = "bun-wasm-install-v2";
+const RETIRED_CACHES = ["bun-wasm-install-v1"] as const;
 const CACHE_METADATA_HEADER = "x-bun-wasm-cache-metadata";
 const CACHE_CAPTURE_LIMIT = 4 * 1024 * 1024;
 const PUT_QUEUE_BYTE_LIMIT = 8 * 1024 * 1024;
@@ -180,7 +181,10 @@ export async function clearInstallCache(): Promise<boolean> {
   invalidateSession(sessions.get(storage));
   broadcastClear();
   try {
-    return typeof storage.delete === "function" ? await storage.delete(CACHE) : false;
+    if (typeof storage.delete !== "function") return false;
+    const deleted = await storage.delete(CACHE);
+    const retired = await Promise.all(RETIRED_CACHES.map(name => storage.delete(name).catch(() => false)));
+    return deleted || retired.some(Boolean);
   } finally {
     invalidateSession(sessions.get(storage));
     broadcastClear();
@@ -267,7 +271,7 @@ async function runInstallFetch(
   }
   const kind: PackageRequestKind = accept === TARBALL ? "tarball" : "metadata";
   const rewrite: PackageRewrite | undefined = verifiedPackage && rewritePackageUrl ? { kind, rewriteUrl: rewritePackageUrl } : undefined;
-  if (accept === METADATA || typeof caches === "undefined" || headers.has("authorization")) {
+  if (accept === METADATA || typeof caches === "undefined" || transport !== undefined || headers.has("authorization")) {
     return packageFetch(url, options, fetcher, rewrite);
   }
   const requestDirectives = cacheControlDirectives(headers);

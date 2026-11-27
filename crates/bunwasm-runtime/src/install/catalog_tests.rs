@@ -748,6 +748,65 @@ fn standalone_catalog_field_and_workspace_unit_selection_install_like_native_bun
             let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
             assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
             assert!(lock.get("catalogs").is_none());
+
+            // Bun catalog supports `npm:<semver-range>` (e.g. `npm:^1.0.0`) while preserving real `npm:` aliases.
+            seed_registry_package("is-number", &["7.0.0"]);
+            fs::remove_file("bun.lock").unwrap();
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "workspaces": {
+                        "packages": ["packages/*"],
+                        "catalog": {
+                            "versioned": "npm:^1.0.0",
+                            "num-alias": "npm:is-number@7.0.0"
+                        }
+                    }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "dependencies": {
+                        "versioned": "catalog:",
+                        "num-alias": "catalog:"
+                    }
+                }),
+            );
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.1.0");
+            assert_eq!(lock["packages"]["num-alias"][0], "is-number@7.0.0");
+
+            // External `file:` dependency with a `catalog:` peer installs cleanly without a provider.
+            fs::remove_file("bun.lock").unwrap();
+            fs::create_dir_all("vendor/ext-peer").unwrap();
+            fs::write(
+                "vendor/ext-peer/package.json",
+                json!({
+                    "name": "ext-peer",
+                    "version": "1.0.0",
+                    "peerDependencies": { "is-number": "catalog:" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "dependencies": { "ext-peer": "file:./vendor/ext-peer" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(
+                lock["packages"]["ext-peer"][0],
+                "ext-peer@link:./vendor/ext-peer"
+            );
+            assert!(lock["packages"].get("is-number").is_none());
         },
     );
 }

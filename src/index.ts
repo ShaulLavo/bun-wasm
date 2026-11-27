@@ -8,6 +8,7 @@ export type {
   BunNetworkOptions,
   BunPackageRequest,
   BunPackageRequestKind,
+  BunPackageRewriteResult,
   BunPackageUrlRewriter,
   BunRelayOptions,
   RuntimeNetworkHelper,

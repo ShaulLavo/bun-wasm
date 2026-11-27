@@ -398,6 +398,7 @@ test("rewritePackageUrl only intercepts package-policy requests and ignores ordi
 
 test("rewritePackageUrl resolves the route before Cache Storage lookup and isolates distinct proxies", async () => {
   const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
+  const originalFetch = globalThis.fetch;
   const originalCaches = Object.getOwnPropertyDescriptor(globalThis, "caches");
   const stored = new Map<string, string>();
   const fetched: string[] = [];
@@ -418,17 +419,14 @@ test("rewritePackageUrl resolves the route before Cache Storage lookup and isola
       };
     },
   };
-  const makeClient = async (proxyUrl: string, body: string) => {
+  const makeClient = async (proxyUrl: string, customFetch?: BunNetworkOptions["fetch"]) => {
     const ring = createRing();
     const helper = createBunNetworkHelper(await runtime.network(), ring, {
       rewritePackageUrl: ({ url, kind }) => {
         rewriteCalls.push(`${proxyUrl}:${kind}`);
         return kind === "tarball" && url === tarball ? proxyUrl : undefined;
       },
-      fetch: async url => {
-        fetched.push(url);
-        return new Response(body);
-      },
+      fetch: customFetch,
     });
     const bunHost = new BunNetHost(ring, req => dispatchBunNetwork(helper, { type: "net", req }), undefined, { shared: true });
     const runtimeHost = bunHost.runtime;
@@ -450,10 +448,20 @@ test("rewritePackageUrl resolves the route before Cache Storage lookup and isola
     };
     return { helper, runFetch };
   };
-  const clientA = await makeClient(proxyA, "cached-via-proxy-a");
-  const clientB = await makeClient(proxyB, "cached-via-proxy-b");
+  const customCalls: string[] = [];
+  const clientA = await makeClient(proxyA);
+  const clientB = await makeClient(proxyB);
+  const clientCustom = await makeClient(proxyA, async url => {
+    customCalls.push(url);
+    return new Response(`custom-transport-${customCalls.length}`);
+  });
   try {
     Object.defineProperty(globalThis, "caches", { configurable: true, value: cache });
+    globalThis.fetch = Object.assign(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      fetched.push(url);
+      return new Response(url === proxyA ? "cached-via-proxy-a" : "cached-via-proxy-b");
+    }, { preconnect: originalFetch.preconnect });
     expect(await clientA.runFetch()).toBe("cached-via-proxy-a");
     for (let turn = 0; turn < 50 && !stored.has(proxyA); turn++) await Bun.sleep(2);
     expect(stored.has(proxyA)).toBe(true);
@@ -464,12 +472,18 @@ test("rewritePackageUrl resolves the route before Cache Storage lookup and isola
     expect(await clientB.runFetch()).toBe("cached-via-proxy-b");
     for (let turn = 0; turn < 50 && !stored.has(proxyB); turn++) await Bun.sleep(2);
     expect(stored.has(proxyB)).toBe(true);
+    // Custom fetch transport bypasses shared Cache Storage even when proxyA is warm.
+    expect(await clientCustom.runFetch()).toBe("custom-transport-1");
+    expect(await clientCustom.runFetch()).toBe("custom-transport-2");
+    expect(customCalls).toEqual([proxyA, proxyA]);
     expect(fetched).toEqual([proxyA, proxyB]);
-    expect(rewriteCalls).toEqual([`${proxyA}:tarball`, `${proxyA}:tarball`, `${proxyB}:tarball`]);
+    expect(rewriteCalls).toEqual([`${proxyA}:tarball`, `${proxyA}:tarball`, `${proxyB}:tarball`, `${proxyA}:tarball`, `${proxyA}:tarball`]);
   } finally {
     clientA.helper.dispose();
     clientB.helper.dispose();
+    clientCustom.helper.dispose();
     await runtime.dispose();
+    globalThis.fetch = originalFetch;
     if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches);
     else Reflect.deleteProperty(globalThis, "caches");
   }

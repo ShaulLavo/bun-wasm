@@ -8,12 +8,25 @@ export interface PackageRequest {
   readonly kind: PackageRequestKind;
 }
 
+export interface PackageRewriteResult {
+  readonly url: string | URL;
+  /**
+   * Fetch credentials mode for the rewritten request. Pass `"omit"` for a public/anonymous
+   * proxy (including same-origin proxies) so no ambient cookies are sent and responses can
+   * use shared Cache Storage.
+   */
+  readonly credentials?: RequestCredentials;
+}
+
 /**
  * Rewrites an outbound `bun install` metadata or tarball URL before the browser fetches it.
- * Return a replacement URL (absolute or same-origin relative path) to route the request through
- * a host proxy, or `null` / `undefined` to fetch the original URL directly.
+ * Return a replacement URL (absolute or same-origin relative path) or `{ url, credentials }`
+ * to route the request through a host proxy, or `null` / `undefined` to fetch the original
+ * URL directly.
  */
-export type PackageUrlRewriter = (request: PackageRequest) => string | URL | null | undefined;
+export type PackageUrlRewriter = (
+  request: PackageRequest,
+) => string | URL | PackageRewriteResult | null | undefined;
 
 export interface PackageRewrite {
   readonly kind: PackageRequestKind;
@@ -31,18 +44,27 @@ function stripCredentialsOnOriginChange(from: URL, to: URL, headers: Headers): v
   for (const name of CREDENTIAL_HEADERS) headers.delete(name);
 }
 
-function resolveRewrite(current: URL, rewrite?: PackageRewrite): URL {
-  if (!rewrite) return current;
+interface ResolvedRewrite {
+  readonly target: URL;
+  readonly rewritten: boolean;
+  readonly credentials?: RequestCredentials;
+}
+
+function resolveRewrite(current: URL, rewrite?: PackageRewrite): ResolvedRewrite {
+  if (!rewrite) return { target: current, rewritten: false };
   const rewritten = rewrite.rewriteUrl({ url: current.href, kind: rewrite.kind });
-  if (rewritten == null) return current;
-  if (typeof rewritten === "string" && !rewritten.trim()) {
+  if (rewritten == null) return { target: current, rewritten: false };
+  const isObject = typeof rewritten === "object" && !(rewritten instanceof URL);
+  const rawUrl = isObject ? rewritten.url : rewritten;
+  const credentials = isObject ? rewritten.credentials : undefined;
+  if (typeof rawUrl === "string" && !rawUrl.trim()) {
     throw new TypeError("Rewritten package URL must not be empty");
   }
-  const next = rewritten instanceof URL ? new URL(rewritten.href) : new URL(rewritten, baseHref());
+  const next = rawUrl instanceof URL ? new URL(rawUrl.href) : new URL(rawUrl, baseHref());
   if (!["https:", "http:"].includes(next.protocol) || next.username || next.password || AUTH_OPTION.test(next.href)) {
     throw new TypeError(`Rewritten package URL must use http or https without credentials: ${next.href}`);
   }
-  return next;
+  return { target: next, rewritten: true, credentials };
 }
 
 function packageRedirect(current: URL, location: string, headers: Headers): URL {
@@ -88,9 +110,10 @@ async function fetchHop(
   options: RequestInit,
   headers: Headers,
   rewritten: boolean,
+  rewriteCredentials: RequestCredentials | undefined,
   redirects: number,
 ): Promise<Response> {
-  const credentials = rewritten ? options.credentials : (options.credentials ?? "omit");
+  const credentials = rewritten ? (rewriteCredentials ?? options.credentials) : (options.credentials ?? "omit");
   const hopOptions: RequestInit = credentials === undefined
     ? { ...options, headers, redirect: "manual" }
     : { ...options, headers, redirect: "manual", credentials };
@@ -110,11 +133,10 @@ export async function packageFetch(
   let url = new URL(input);
   const headers = new Headers(options.headers);
   for (let redirects = 0; redirects <= 20; redirects++) {
-    const target = resolveRewrite(url, rewrite);
-    const rewritten = target !== url;
+    const { target, rewritten, credentials } = resolveRewrite(url, rewrite);
     const hopUrl = redirects === 0 && !rewritten ? input : target.href;
     stripCredentialsOnOriginChange(url, target, headers);
-    const response = await fetchHop(fetcher, hopUrl, target, options, headers, rewritten, redirects);
+    const response = await fetchHop(fetcher, hopUrl, target, options, headers, rewritten, credentials, redirects);
     if (response.type === "opaqueredirect") throw new Error("Package redirect destination is unavailable to this browser");
     const location = response.headers.get("location");
     if (!location || ![301, 302, 303, 307, 308].includes(response.status)) {

@@ -80,8 +80,11 @@ process. Stopping one process releases its helper without closing another proces
 The installer's fetch policy applies to roots and children. Browser host `fetch` remains subject
 to browser restrictions such as CORS. Pass `network.rewritePackageUrl` to `installBunAdapters` to
 route CORS-blocked `bun install` metadata or tarball URLs (such as GitHub Release `.tgz` archives)
-through a same-origin proxy without replacing the built-in tarball cache, redirect checks, or
-ordinary user `fetch` calls. Preview1 programs do not receive Bun networking helpers.
+through a host proxy without replacing the built-in redirect checks or ordinary user `fetch` calls.
+Return `{ url, credentials: "omit" }` for a public same-origin proxy so requests send no ambient
+cookies and remain eligible for shared Cache Storage; credentialed same-origin proxies and custom
+`network.fetch` transports bypass shared Cache Storage. Preview1 programs do not receive Bun
+networking helpers.
 
 To check a selected guest before browser acceptance, supply its absolute artifact path and an
 independently accepted `GuestBuildInputs` JSON file from `scripts/guest-build-receipt.ts inputs`.

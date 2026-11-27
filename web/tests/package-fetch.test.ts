@@ -244,3 +244,16 @@ test("packageFetch populates redacted response.url for synthetic error responses
   expect(response.status).toBe(404);
   expect(response.url).toBe("https://proxy.invalid/tarball");
 });
+
+test("packageFetch forwards explicit credentials from a structured rewrite result", async () => {
+  const seenCredentials: Array<RequestCredentials | undefined> = [];
+  const fetcher = Object.assign(async (_input: FetchInput, init?: FetchInit) => {
+    seenCredentials.push(init?.credentials);
+    return new Response("ok");
+  }, { preconnect: fetch.preconnect });
+  await packageFetch("https://github.com/org/repo/releases/download/v1/pkg.tgz", {}, fetcher, {
+    kind: "tarball",
+    rewriteUrl: ({ url }) => ({ url: `https://proxy.invalid/tarball?url=${encodeURIComponent(url)}`, credentials: "omit" }),
+  });
+  expect(seenCredentials).toEqual(["omit"]);
+});
