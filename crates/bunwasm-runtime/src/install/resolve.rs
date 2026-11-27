@@ -596,6 +596,9 @@ impl Resolver {
         if let Some(version) = self.locked_child(parent, name, range, peer) {
             return Ok(Some(version));
         }
+        if peer && let Some(version) = self.existing_peer_tag_target(parent, name, range) {
+            return Ok(Some(version));
+        }
         if (!is_tag(range) && !range.starts_with("npm:")) || self.workspaces.contains_key(name) {
             return Ok(Some(range.into()));
         }
@@ -623,6 +626,32 @@ impl Resolver {
             Err(_) if optional => Ok(None),
             Err(error) => Err(error),
         }
+    }
+
+    fn existing_peer_tag_target(
+        &self,
+        parent: &Package,
+        name: &str,
+        range: &str,
+    ) -> Option<String> {
+        let alias = range.strip_prefix("npm:").map(spec).transpose().ok()?;
+        let target_range = alias.as_ref().map_or(range, |(_, range)| range.as_str());
+        if !is_tag(target_range) {
+            return None;
+        }
+        for level in (0..=parent.chain.len()).rev() {
+            let mut candidate = parent.chain[..level].to_vec();
+            candidate.push(name.into());
+            let Some(found) = self.packages.get(&candidate.join("/")) else {
+                continue;
+            };
+            if let Some((target_name, _)) = &alias {
+                return (found.name == *target_name)
+                    .then(|| format!("npm:{target_name}@{}", found.version));
+            }
+            return Some(found.version.clone());
+        }
+        None
     }
 
     fn locked_parent_declaration(&self, parent: &Package) -> Option<(Vec<String>, &Value, bool)> {
@@ -687,7 +716,12 @@ impl Resolver {
             candidate.push(name.into());
             let key = candidate.join("/");
             let row = &self.locked["packages"][&key];
-            let Some(version) = locked_version(row, target_name) else {
+            let version = if peer && alias.is_none() {
+                locked_peer_version(row)
+            } else {
+                locked_version(row, target_name)
+            };
+            let Some(version) = version else {
                 continue;
             };
             if !peer && self.explicit_sources.contains(&key) {
@@ -1072,6 +1106,13 @@ fn platform_package<'a>(name: &'a str, version: &str) -> &'a str {
         return "@rollup/wasm-node";
     }
     name
+}
+
+fn locked_peer_version(row: &Value) -> Option<&str> {
+    let (_, version) = row[0].as_str()?.rsplit_once('@')?;
+    let bytes = version.as_bytes();
+    Version::parse_exact(SlicedString::init(bytes, bytes))?;
+    Some(version)
 }
 
 fn locked_version<'a>(row: &'a Value, name: &str) -> Option<&'a str> {

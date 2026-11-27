@@ -209,7 +209,17 @@ fn execute(
             finalize_additions(&mut manifest, &opts, &resolver, member.as_deref())?;
         }
         if command == "update" {
-            finalize_updates(&mut manifest, &opts, &resolver, member.as_deref())?;
+            finalize_updates(
+                &mut manifest,
+                &old_manifest,
+                &opts,
+                &resolver,
+                member.as_deref(),
+            )?;
+            if member.is_none() {
+                resolver.catalogs =
+                    catalog::Catalogs::load(&cwd, &manifest, &resolver.locked, parser)?;
+            }
         }
         if let Some(member) = &member
             && let Some(local) = resolver
@@ -1246,6 +1256,11 @@ fn update_manifest(manifest: &mut Value, opts: &Options) -> Result<()> {
                     manifest[field][&name] = range.clone().into();
                 }
             }
+            for_each_manifest_catalog_mut(manifest, |entries| {
+                if entries.contains_key(&name) {
+                    entries.insert(name.clone(), range.clone().into());
+                }
+            });
         }
     }
     if !opts.latest {
@@ -1269,7 +1284,40 @@ fn update_manifest(manifest: &mut Value, opts: &Options) -> Result<()> {
             }
         }
     }
+    for_each_manifest_catalog_mut(manifest, |entries| {
+        for (name, range) in entries {
+            if selected(name, opts) && range.as_str().is_some_and(|r| !r.contains(':')) {
+                *range = "latest".into();
+            }
+        }
+    });
     Ok(())
+}
+
+fn for_each_manifest_catalog_mut(
+    manifest: &mut Value,
+    mut visit: impl FnMut(&mut serde_json::Map<String, Value>),
+) {
+    let Some(workspaces) = manifest.get("workspaces").filter(|v| !v.is_null()) else {
+        return;
+    };
+    let nested = workspaces.as_object().is_some_and(|ws| {
+        ws.get("catalog").is_some_and(|v| !v.is_null())
+            || ws.get("catalogs").is_some_and(|v| !v.is_null())
+    });
+    let container = if nested {
+        &mut manifest["workspaces"]
+    } else {
+        manifest
+    };
+    if let Some(entries) = container.get_mut("catalog").and_then(Value::as_object_mut) {
+        visit(entries);
+    }
+    if let Some(catalogs) = container.get_mut("catalogs").and_then(Value::as_object_mut) {
+        for entries in catalogs.values_mut().filter_map(Value::as_object_mut) {
+            visit(entries);
+        }
+    }
 }
 
 fn selected(name: &str, opts: &Options) -> bool {
@@ -1280,6 +1328,22 @@ fn selected(name: &str, opts: &Options) -> bool {
             .any(|input| resolve::spec(input).is_ok_and(|(n, _)| n == name))
 }
 
+fn lock_leaf_name(key: &str) -> &str {
+    let mut rest = key;
+    loop {
+        let end = if rest.starts_with('@') {
+            rest.find('/')
+                .and_then(|first| rest[first + 1..].find('/').map(|second| first + 1 + second))
+        } else {
+            rest.find('/')
+        };
+        let Some(next) = end else {
+            return rest;
+        };
+        rest = &rest[next + 1..];
+    }
+}
+
 fn unlock(locked: &mut Value, opts: &Options, manifest: &Value, workspace: Option<&str>) {
     if workspace.is_some() {
         return;
@@ -1288,11 +1352,12 @@ fn unlock(locked: &mut Value, opts: &Options, manifest: &Value, workspace: Optio
     let Some(packages) = locked["packages"].as_object_mut() else {
         return;
     };
-    packages.retain(|key, _| !selected(key, opts) || sources.contains(key));
+    packages.retain(|key, _| !selected(lock_leaf_name(key), opts) || sources.contains(key));
 }
 
 fn finalize_updates(
     manifest: &mut Value,
+    old_manifest: &Value,
     opts: &Options,
     resolver: &Resolver,
     member: Option<&Path>,
@@ -1317,19 +1382,88 @@ fn finalize_updates(
             if old.contains(':') {
                 continue;
             }
-            let prefix = if opts.exact {
-                ""
-            } else if old.starts_with('~') {
-                "~"
-            } else if old.starts_with('^') || old == "latest" {
-                "^"
-            } else {
-                ""
-            };
-            *range = format!("{prefix}{}", package.version).into();
+            *range = updated_range(old, &package.version, opts.exact).into();
         }
     }
+    if member.is_some() {
+        return Ok(());
+    }
+    finalize_catalog_updates(manifest, old_manifest, opts, resolver);
     Ok(())
+}
+
+fn updated_range(old: &str, version: &str, exact: bool) -> String {
+    let prefix = if exact {
+        ""
+    } else if old.starts_with('~') {
+        "~"
+    } else if old.starts_with('^') || old == "latest" {
+        "^"
+    } else {
+        ""
+    };
+    format!("{prefix}{version}")
+}
+
+fn finalize_catalog_updates(
+    manifest: &mut Value,
+    old_manifest: &Value,
+    opts: &Options,
+    resolver: &Resolver,
+) {
+    let Some(workspaces) = manifest.get("workspaces").filter(|v| !v.is_null()) else {
+        return;
+    };
+    let nested = workspaces.as_object().is_some_and(|ws| {
+        ws.get("catalog").is_some_and(|v| !v.is_null())
+            || ws.get("catalogs").is_some_and(|v| !v.is_null())
+    });
+    let (container, old_container) = if nested {
+        (&mut manifest["workspaces"], &old_manifest["workspaces"])
+    } else {
+        (manifest, old_manifest)
+    };
+    if let Some(entries) = container.get_mut("catalog").and_then(Value::as_object_mut) {
+        finalize_catalog_entries(entries, &old_container["catalog"], opts, resolver);
+    }
+    let Some(catalogs) = container.get_mut("catalogs").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (group, entries) in catalogs {
+        if let Some(entries) = entries.as_object_mut() {
+            finalize_catalog_entries(entries, &old_container["catalogs"][group], opts, resolver);
+        }
+    }
+}
+
+fn finalize_catalog_entries(
+    entries: &mut serde_json::Map<String, Value>,
+    old_entries: &Value,
+    opts: &Options,
+    resolver: &Resolver,
+) {
+    for (name, range) in entries {
+        if !selected(name, opts) {
+            continue;
+        }
+        let old = old_entries[name.as_str()]
+            .as_str()
+            .unwrap_or_else(|| range.as_str().unwrap_or(""));
+        if old.contains(':') {
+            continue;
+        }
+        let package = resolver.packages.get(name).or_else(|| {
+            resolver
+                .packages
+                .iter()
+                .find(|(key, _)| lock_leaf_name(key) == name)
+                .map(|(_, pkg)| pkg)
+        });
+        match package {
+            Some(package) => *range = updated_range(old, &package.version, opts.exact).into(),
+            None => *range = old.into(),
+        }
+    }
 }
 
 fn link_package_bins(package: &Package, manifest: Option<&Value>) -> Result<()> {

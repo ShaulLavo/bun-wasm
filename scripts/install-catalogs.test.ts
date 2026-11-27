@@ -1,14 +1,32 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installFixture, installFixtureTargets, type InstallFixtureTarget } from "./install-fixture-command";
+import { installFixture, installFixtureCommand, installFixtureTargets, type InstallFixtureTarget } from "./install-fixture-command";
 import { createRegistry, packageFixture } from "../tests/install/registry.mjs";
 
 function install(target: InstallFixtureTarget, directory: string, registry: string, args: string[] = [], expected = 0) {
   return installFixture(directory, registry, args, expected, true, [], target);
+}
+
+async function runGuestUpdate(target: InstallFixtureTarget, directory: string, registry: string, args: string[]) {
+  const [program, argv] = installFixtureCommand(directory, registry, args, true, [], target);
+  const cmdIndex = argv.lastIndexOf("install");
+  assert.ok(cmdIndex >= 0);
+  argv[cmdIndex] = "update";
+  const child = spawn(program, argv, { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  child.stdout.on("data", bytes => { output += bytes; });
+  child.stderr.on("data", bytes => { output += bytes; });
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  assert.equal(code, 0, output);
+  return output;
 }
 
 function installedVersion(directory: string, relativePath: string): string {
@@ -182,6 +200,32 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
       const lock = readFileSync(join(root, "bun.lock"), "utf8");
       assert.match(lock, /"versioned":\s*"1\.10"/);
     }
+
+    // `bun update --latest` updates workspace catalog entries and installs the latest major version.
+    const updateRoot = join(directory, "update-latest");
+    mkdirSync(join(updateRoot, "packages/app"), { recursive: true });
+    writeFileSync(join(updateRoot, "package.json"), JSON.stringify({
+      name: "update-catalog-root",
+      workspaces: {
+        packages: ["packages/*"],
+        catalog: { versioned: "^1.0.0" },
+      },
+    }, null, 2));
+    writeFileSync(join(updateRoot, "packages/app/package.json"), JSON.stringify({
+      name: "@fixture/update-app",
+      version: "1.0.0",
+      dependencies: { versioned: "catalog:" },
+    }, null, 2));
+    registry.latest.set("versioned", "2.0.0");
+    await install(target, updateRoot, registry.base);
+    assert.equal(installedVersion(updateRoot, "versioned"), "1.10.0");
+    await runGuestUpdate(target, updateRoot, registry.base, ["--latest"]);
+    assert.equal(installedVersion(updateRoot, "versioned"), "2.0.0");
+    const updatedRootManifest = JSON.parse(readFileSync(join(updateRoot, "package.json"), "utf8")) as {
+      workspaces: { catalog: { versioned: string } };
+    };
+    assert.equal(updatedRootManifest.workspaces.catalog.versioned, "^2.0.0");
+    await install(target, updateRoot, registry.base, ["--frozen-lockfile"]);
   } finally {
     await registry.close();
     rmSync(directory, { recursive: true, force: true });

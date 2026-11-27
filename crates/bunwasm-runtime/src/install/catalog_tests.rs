@@ -2043,6 +2043,133 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
             assert_eq!(lock["packages"]["plain-alias"][0], "is-number@7.0.0");
             assert_eq!(lock["packages"]["tag-alias"][0], "is-number@7.0.0");
 
+            // 1c. Plain catalog dist-tag peer satisfied by an aliased root provider survives both
+            // migration and frozen/regular lock replay without fetching the alias name.
+            fs::remove_file("bun.lock").unwrap();
+            let _ = fs::remove_dir_all("node_modules");
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "dependencies": { "fixture-alias": "npm:is-number@7.0.0" }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "peerDependencies": { "fixture-alias": "catalog:" }
+                }),
+            );
+            fs::write(
+                "pnpm-workspace.yaml",
+                "packages:\n  - packages/*\ncatalog:\n  fixture-alias: latest\n",
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      fixture-alias:\n        specifier: npm:is-number@7.0.0\n        version: is-number@7.0.0\n  packages/a: {}\npackages:\n  is-number@7.0.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+            install("install", &[]).unwrap();
+            install("install", &["--frozen-lockfile"]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["fixture-alias"][0], "is-number@7.0.0");
+
+            // 1d. pnpm auto-installed conflicting catalog peer stays a peer so frozen migration passes.
+            fs::remove_file("bun.lock").unwrap();
+            let _ = fs::remove_dir_all("node_modules");
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "dependencies": { "versioned": "1.0.0" }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "peerDependencies": { "versioned": "catalog:" }
+                }),
+            );
+            fs::write(
+                "pnpm-workspace.yaml",
+                "packages:\n  - packages/*\ncatalog:\n  versioned: 2.0.0\n",
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    versioned:\n      specifier: 2.0.0\n      version: 2.0.0\nimporters:\n  .:\n    dependencies:\n      versioned:\n        specifier: 1.0.0\n        version: 1.0.0\n  packages/a:\n    dependencies:\n      versioned:\n        specifier: 'catalog:'\n        version: 2.0.0\npackages:\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n  versioned@2.0.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+            install("install", &[]).unwrap();
+            install("install", &["--frozen-lockfile"]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert!(lock["packages"].get("@fixture/a/versioned").is_none());
+
+            // 1e. `bun update --latest` updates workspace catalog entries, preserves unused entries,
+            // and unlocks nested workspace rows.
+            let mut root_manifest = json!({
+                "name": "root",
+                "workspaces": {
+                    "packages": ["packages/*"],
+                    "catalog": { "versioned": "^1.0.0", "unused": "~3.0.0" }
+                }
+            });
+            let old_manifest = root_manifest.clone();
+            let opts = Options {
+                latest: true,
+                names: vec!["versioned".into()],
+                ..Options::default()
+            };
+            update_manifest(&mut root_manifest, &opts).unwrap();
+            assert_eq!(
+                root_manifest["workspaces"]["catalog"]["versioned"],
+                "latest"
+            );
+            assert_eq!(root_manifest["workspaces"]["catalog"]["unused"], "~3.0.0");
+
+            let mut lock_for_unlock = json!({
+                "packages": {
+                    "@fixture/a/versioned": ["versioned@1.1.0", "", {}, ""],
+                    "other": ["other@1.0.0", "", {}, ""]
+                }
+            });
+            unlock(&mut lock_for_unlock, &opts, &root_manifest, None);
+            assert!(
+                lock_for_unlock["packages"]
+                    .get("@fixture/a/versioned")
+                    .is_none()
+            );
+            assert!(lock_for_unlock["packages"].get("other").is_some());
+
+            let mut resolver = Resolver::new(
+                io::Registry::new("http://registry.invalid").unwrap(),
+                json!({}),
+                false,
+            );
+            resolver.packages.insert(
+                "@fixture/a/versioned".into(),
+                Package {
+                    name: "versioned".into(),
+                    version: "2.0.0".into(),
+                    chain: vec!["@fixture/a".into(), "versioned".into()],
+                    source_chain: None,
+                    meta: json!({}),
+                    integrity: String::new(),
+                    tarball: String::new(),
+                    local: None,
+                    optional: false,
+                    explicit_tarball: false,
+                },
+            );
+            finalize_updates(&mut root_manifest, &old_manifest, &opts, &resolver, None).unwrap();
+            assert_eq!(
+                root_manifest["workspaces"]["catalog"]["versioned"],
+                "^2.0.0"
+            );
+            assert_eq!(root_manifest["workspaces"]["catalog"]["unused"], "~3.0.0");
+
             // 2. Moving `versioned: "latest"` from peerDependencies to dependencies must not pin
             // to a sibling's hoisted explicit catalog tarball version (`1.0.0` vs registry `2.0.0`).
             fs::remove_file("bun.lock").unwrap();

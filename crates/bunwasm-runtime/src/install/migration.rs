@@ -719,11 +719,14 @@ fn pnpm_importer_field(
         let specifier = value["specifier"]
             .as_str()
             .or_else(|| importer["specifiers"][name].as_str());
-        let requested = manifest[field][name].as_str().or_else(|| {
-            (field == "dependencies")
-                .then(|| manifest["peerDependencies"][name].as_str())
-                .flatten()
-        });
+        let from_peer = field == "dependencies"
+            && manifest[field].get(name).is_none()
+            && manifest["peerDependencies"].get(name).is_some();
+        let requested = if from_peer {
+            manifest["peerDependencies"][name].as_str()
+        } else {
+            manifest[field][name].as_str()
+        };
         let resolved = match requested.map(|range| catalogs.resolve_str(name, range)) {
             Some(Ok(resolved)) => Some(resolved),
             Some(Err(_)) if optional => continue,
@@ -748,7 +751,8 @@ fn pnpm_importer_field(
             resolved.ok_or("Invalid pnpm importer specifier")?
         };
         validate_pnpm_selection(name, validation_range, reference)?;
-        meta[field][name] = pnpm_reference(name, reference).into();
+        let target_field = if from_peer { "peerDependencies" } else { field };
+        meta[target_field][name] = pnpm_reference(name, reference).into();
     }
     Ok(())
 }
@@ -873,7 +877,12 @@ fn graph(
         if workspace_selected(roots, &name, &range, transparent_workspaces)? {
             continue;
         }
-        if peer_satisfied(packages, &name, peer.as_deref()) {
+        if let Some(peer_range) = peer.as_deref()
+            && let Some(row) = visible_row(packages, &parent, &name)
+        {
+            if !peer_row_satisfied(row, peer_range) {
+                eprintln!("warn: incorrect peer dependency \"{name}@{peer_range}\"");
+            }
             continue;
         }
         let meta = peer
@@ -1009,14 +1018,10 @@ fn peer_target(range: &str) -> (Option<String>, String) {
     (None, range.to_owned())
 }
 
-fn peer_satisfied(packages: &BTreeMap<String, Value>, name: &str, range: Option<&str>) -> bool {
-    let Some(range) = range else {
-        return false;
-    };
+fn peer_row_satisfied(row: &Value, range: &str) -> bool {
     let (alias_name, target_range) = peer_target(range);
-    packages
-        .get(name)
-        .and_then(|row| row[0].as_str())
+    row[0]
+        .as_str()
         .and_then(|id| id.rsplit_once('@'))
         .is_some_and(|(pkg_name, version)| {
             alias_name
