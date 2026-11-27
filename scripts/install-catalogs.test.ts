@@ -419,6 +419,66 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
     );
     assert.equal(installedVersion(tagUpdateRoot, "versioned"), "2.0.0");
     await install(target, tagUpdateRoot, registry.base, ["--frozen-lockfile"]);
+
+    // Sibling peer reusing root-pinned 1.0.0 must not overwrite member A's 1.10.0 during `--exact`.
+    const exactPeerRoot = join(directory, "update-exact-peer");
+    mkdirSync(join(exactPeerRoot, "packages/a"), { recursive: true });
+    mkdirSync(join(exactPeerRoot, "packages/b"), { recursive: true });
+    writeFileSync(join(exactPeerRoot, "package.json"), JSON.stringify({
+      name: "update-exact-peer-root",
+      dependencies: { versioned: "1.0.0" },
+      workspaces: { packages: ["packages/*"], catalog: { versioned: "^1.0.0" } },
+    }, null, 2));
+    writeFileSync(join(exactPeerRoot, "packages/a/package.json"), JSON.stringify({
+      name: "@fixture/exact-a",
+      version: "1.0.0",
+      dependencies: { versioned: "catalog:" },
+    }, null, 2));
+    writeFileSync(join(exactPeerRoot, "packages/b/package.json"), JSON.stringify({
+      name: "@fixture/exact-b",
+      version: "1.0.0",
+      peerDependencies: { versioned: "catalog:" },
+    }, null, 2));
+    await install(target, exactPeerRoot, registry.base);
+    await runGuestUpdate(target, exactPeerRoot, registry.base, ["--exact"], "/packages/a");
+    assert.equal(
+      (JSON.parse(readFileSync(join(exactPeerRoot, "package.json"), "utf8")) as {
+        workspaces: { catalog: { versioned: string } };
+      }).workspaces.catalog.versioned,
+      "1.10.0",
+    );
+    assert.equal(installedVersion(exactPeerRoot, "@fixture/exact-a/node_modules/versioned"), "1.10.0");
+    await install(target, exactPeerRoot, registry.base, ["--frozen-lockfile"]);
+
+    // Member's first `bun update --latest` with a `yarn.lock` migrates against the original catalog.
+    const yarnMemberUpdateRoot = join(directory, "update-yarn-member");
+    mkdirSync(join(yarnMemberUpdateRoot, "packages/a"), { recursive: true });
+    writeFileSync(join(yarnMemberUpdateRoot, "package.json"), JSON.stringify({
+      name: "update-yarn-member-root",
+      workspaces: { packages: ["packages/*"], catalog: { versioned: "^1.0.0" } },
+    }, null, 2));
+    writeFileSync(join(yarnMemberUpdateRoot, "packages/a/package.json"), JSON.stringify({
+      name: "@fixture/yarn-upd-a",
+      version: "1.0.0",
+      dependencies: { versioned: "catalog:" },
+    }, null, 2));
+    writeFileSync(join(yarnMemberUpdateRoot, "yarn.lock"), [
+      "# yarn lockfile v1",
+      "",
+      "versioned@^1.0.0:",
+      "  version \"1.10.0\"",
+      `  resolved "${registry.base}/versioned/-/versioned-1.10.0.tgz"`,
+      "",
+    ].join("\n"));
+    await runGuestUpdate(target, yarnMemberUpdateRoot, registry.base, ["--latest"], "/packages/a");
+    assert.equal(
+      (JSON.parse(readFileSync(join(yarnMemberUpdateRoot, "package.json"), "utf8")) as {
+        workspaces: { catalog: { versioned: string } };
+      }).workspaces.catalog.versioned,
+      "^2.0.0",
+    );
+    assert.equal(installedVersion(yarnMemberUpdateRoot, "versioned"), "2.0.0");
+    await install(target, yarnMemberUpdateRoot, registry.base, ["--frozen-lockfile"]);
   } finally {
     await registry.close();
     rmSync(directory, { recursive: true, force: true });

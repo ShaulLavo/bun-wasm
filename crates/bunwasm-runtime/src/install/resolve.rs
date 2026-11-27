@@ -449,15 +449,35 @@ impl Resolver {
                 Placement::Satisfied(key) => Some(key),
                 Placement::IncompatiblePeer => None,
             };
-            if let Some(cat_key) = cat_key
-                && let Some(key) = placed_key
-                && let Some(pkg) = self.packages.get(&key)
-                && (!*peer || pkg.name == *name || range.starts_with("npm:"))
-            {
-                self.used_catalogs.insert(cat_key, pkg.version.clone());
-            }
+            self.record_used_catalog(cat_key, placed_key.as_deref(), name, &range, *peer);
         }
         Ok(())
+    }
+
+    fn record_used_catalog(
+        &mut self,
+        cat_key: Option<(Option<String>, String)>,
+        placed_key: Option<&str>,
+        name: &str,
+        range: &str,
+        peer: bool,
+    ) {
+        let Some(cat_key) = cat_key else {
+            return;
+        };
+        let Some(pkg) = placed_key.and_then(|key| self.packages.get(key)) else {
+            return;
+        };
+        if peer && pkg.name != name && !range.starts_with("npm:") {
+            return;
+        }
+        if peer {
+            self.used_catalogs
+                .entry(cat_key)
+                .or_insert_with(|| pkg.version.clone());
+            return;
+        }
+        self.used_catalogs.insert(cat_key, pkg.version.clone());
     }
 
     fn resolve_range(&self, parent: Option<&Package>, name: &str, range: &str) -> Result<String> {

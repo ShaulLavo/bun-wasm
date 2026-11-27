@@ -156,16 +156,7 @@ fn execute(
         let locked = if Path::new("bun.lock").exists() {
             io::read(Path::new("bun.lock"), "JSONC", parser)?
         } else {
-            migration::read(
-                if member.is_some() {
-                    &root_manifest
-                } else {
-                    &old_manifest
-                },
-                parser,
-                &registry,
-            )?
-            .unwrap_or_else(|| json!({}))
+            migration::read(&unseeded_root, parser, &registry)?.unwrap_or_else(|| json!({}))
         };
         let mut resolution_lock = locked.clone();
         if command == "update" {
