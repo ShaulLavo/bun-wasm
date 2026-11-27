@@ -130,3 +130,102 @@ test("module scope drops the native encoding headers of an upstream body fetch a
   expect(response?.headers.get("cross-origin-embedder-policy")).toBe("require-corp");
   expect(await response?.text()).toBe("app chunk");
 });
+
+test("mounted preview WebSocket replies pong to router pings and closes on MessagePort close", async () => {
+  const { previewWebsocketScript } = await import("../preview-build.ts");
+  const bundle = await previewWebsocketScript();
+  const { runInNewContext } = await import("node:vm");
+  const clientPorts: MessagePort[] = [];
+  const serverPorts: MessagePort[] = [];
+  class TrackedMessageChannel extends MessageChannel {
+    constructor() {
+      super();
+      clientPorts.push(this.port1);
+    }
+  }
+  const fakeScript = {
+    getAttribute(name: string) {
+      if (name === "data-bun-port") return "8123";
+      if (name === "data-bun-prefix") return "/__preview/";
+      return null;
+    },
+  };
+  const sandbox: Record<string, unknown> = {
+    location: new URL("https://example.test/__preview/8123/"),
+    document: { currentScript: fakeScript },
+    navigator: {
+      serviceWorker: {
+        controller: {
+          postMessage(_msg: unknown, transfer?: Transferable[]) {
+            if (transfer?.[0]) serverPorts.push(transfer[0] as MessagePort);
+          },
+        },
+      },
+    },
+    WebSocket: class NativeWs {},
+    MessageChannel: TrackedMessageChannel,
+    TextEncoder,
+    TextDecoder,
+    URL,
+    Uint8Array,
+    ArrayBuffer,
+    DataView,
+    Headers,
+    Blob,
+    CloseEvent,
+    MessageEvent,
+    ErrorEvent,
+    Event,
+    EventTarget,
+    DOMException,
+    crypto,
+    btoa,
+    atob,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    queueMicrotask,
+    addEventListener() {},
+    removeEventListener() {},
+    console,
+  };
+  sandbox.globalThis = sandbox;
+  sandbox.self = sandbox;
+  runInNewContext(bundle, sandbox);
+  const PreviewWs = sandbox.WebSocket as new (url: string) => EventTarget & {
+    readonly readyState: number;
+    close(): void;
+  };
+  const ws = new PreviewWs("ws://example.test/__preview/8123/ws");
+  const clientPort = clientPorts[0];
+  const serverPort = serverPorts[0];
+  expect(clientPort).toBeDefined();
+  expect(serverPort).toBeDefined();
+
+  const received: unknown[] = [];
+  const pong = Promise.withResolvers<void>();
+  const onRouterMessage = (event: MessageEvent<unknown>) => {
+    received.push(event.data);
+    if (typeof event.data === "object" && event.data !== null && Reflect.get(event.data, "type") === "pong") {
+      pong.resolve();
+    }
+  };
+  serverPort!.onmessage = onRouterMessage;
+  try {
+    serverPort!.postMessage({ type: "accepted" });
+    serverPort!.postMessage({ type: "ping" });
+    await pong.promise;
+    expect(received).toContainEqual({ type: "pong" });
+
+    const closed = Promise.withResolvers<void>();
+    ws.addEventListener("close", () => closed.resolve(), { once: true });
+    clientPort!.dispatchEvent(new Event("close"));
+    await closed.promise;
+    expect(ws.readyState).toBe(3);
+  } finally {
+    ws.close();
+    clientPort!.close();
+    serverPort!.close();
+  }
+});

@@ -64,7 +64,7 @@ class Connection {
     this.timer = setTimeout(() => this.fail("Preview WebSocket connection timed out"), 10000);
     port.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data);
     // Chromium reports a port whose other end's tab is gone. watchPeer() covers the other browsers.
-    if (rootOrigin) port.addEventListener("close", this.peerGone);
+    port.addEventListener("close", this.peerGone);
   }
 
   private receive(message: unknown): void {
@@ -72,6 +72,7 @@ class Connection {
     this.answered = true;
     this.missedPings = 0;
     if (this.closed) { this.port.close(); return; }
+    if (message.type === "ping") { this.port.postMessage({ type: "pong" }); return; }
     if (message.type === "accepted") { clearTimeout(this.timer); this.watchPeer(); return; }
     if (message.type === "data" && "chunk" in message && message.chunk instanceof Uint8Array) { this.onData?.(message.chunk); return; }
     if (message.type === "end") { this.onEnd?.(); this.destroy(); return; }

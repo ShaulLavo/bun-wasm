@@ -33,9 +33,11 @@ test("split core guest omits unreachable bun_react_compiler and retains wasmi fo
   expect(hasCrate(tree, "wasmi")).toBe(true);
   expect(hasCrate(tree, "wasmparser")).toBe(true);
   expect(hasCrate(tree, "bunwasm-nested")).toBe(true);
+  expect(hasCrate(tree, "icu_collator")).toBe(true);
+  expect(hasCrate(tree, "icu_locale_fallback")).toBe(true);
 });
 
-test("host-engine browser guest omits unreachable bun_react_compiler, wasmi, wasmparser and bunwasm-nested", () => {
+test("host-engine browser guest omits unreachable bun_react_compiler, wasmi, wasmparser, bunwasm-nested and ICU collator", () => {
   const tree = cargoTree([
     "-p", "bunwasm-cli",
     "--target", "wasm32-wasip1",
@@ -46,6 +48,8 @@ test("host-engine browser guest omits unreachable bun_react_compiler, wasmi, was
   expect(hasCrate(tree, "wasmi")).toBe(false);
   expect(hasCrate(tree, "wasmparser")).toBe(false);
   expect(hasCrate(tree, "bunwasm-nested")).toBe(false);
+  expect(hasCrate(tree, "icu_collator")).toBe(false);
+  expect(hasCrate(tree, "icu_locale_fallback")).toBe(false);
 });
 
 test("bun-tools guest only reaches bun_react_compiler via bun_lint_react_compiler, not bun_js_parser", () => {

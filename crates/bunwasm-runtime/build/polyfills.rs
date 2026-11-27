@@ -24,6 +24,10 @@ pub fn embed(manifest: &Path, out: &Path) {
     let override_dir = std::env::var_os("BUNWASM_JS_OVERRIDE_DIR").map(std::path::PathBuf::from);
     // Debugging aid: keep every token at its source line and column (types erased only).
     println!("cargo:rerun-if-env-changed=BUNWASM_JS_PRESERVE_POSITIONS");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_ENGINE_HOST");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_ENGINE_SPLIT");
+    let host_only = std::env::var_os("CARGO_FEATURE_ENGINE_HOST").is_some()
+        && std::env::var_os("CARGO_FEATURE_ENGINE_SPLIT").is_none();
     let minify =
         std::env::var_os("BUNWASM_JS_PRESERVE_POSITIONS").is_none_or(|value| value.is_empty());
     fs::create_dir_all(out.join("runtime-js")).expect("create transpiled runtime directory");
@@ -32,17 +36,34 @@ pub fn embed(manifest: &Path, out: &Path) {
     let mut strip = Vec::new();
     let mut table = String::from("pub static POLYFILLS: &[(&str, &str)] = &[\n");
     for name in &names {
+        let stem = Path::new(name).file_stem().unwrap().to_str().unwrap();
+        assert!(
+            stems.insert(stem),
+            "duplicate runtime module {stem} (.js and .ts)"
+        );
+        // Host-engine builds (bun-browser.wasm) use the host JS engine's native Intl,
+        // Web Streams, WebAssembly, and local time zones, and have no split memory group.
+        if host_only
+            && matches!(
+                stem,
+                "intl"
+                    | "tz_data"
+                    | "streams_polyfill"
+                    | "webassembly"
+                    | "zone_names"
+                    | "worker_lane"
+                    | "time_zone"
+                    | "zone_ids"
+            )
+        {
+            continue;
+        }
         let path = override_dir
             .as_ref()
             .map(|dir| dir.join(name))
             .filter(|p| p.exists())
             .unwrap_or_else(|| js_dir.join(name));
         println!("cargo:rerun-if-changed={}", path.display());
-        let stem = Path::new(name).file_stem().unwrap().to_str().unwrap();
-        assert!(
-            stems.insert(stem),
-            "duplicate runtime module {stem} (.js and .ts)"
-        );
         let destination = out.join("runtime-js").join(format!("{stem}.js"));
         // The Intl data modules are another lane's and stay as written.
         let path = if minify && !matches!(stem, "intl" | "tz_data") {

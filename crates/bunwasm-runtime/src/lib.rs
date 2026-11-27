@@ -37,6 +37,7 @@ mod html_rewriter;
 pub mod import_requests;
 pub mod init;
 pub mod install;
+#[cfg(feature = "engine-split")]
 mod intl;
 mod mime_types;
 mod modules;
@@ -66,6 +67,7 @@ mod sourcemap;
 mod sqlite;
 mod streams;
 mod test_diff;
+#[cfg(feature = "engine-split")]
 mod time_zone;
 mod tls;
 pub mod transpiler;

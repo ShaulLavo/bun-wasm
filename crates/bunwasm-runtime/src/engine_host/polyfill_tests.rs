@@ -207,4 +207,26 @@ pub(crate) fn reentry() {
     assert_eq!(decode(&bytes), Val::from("outer\0é"));
     assert_eq!(call(index, &[Val::from("missing")]), (0, vec![T_UNDEFINED]));
     assert_eq!(decode(&bytes), Val::from("outer\0é"));
+
+    // Verify bunwasm_alloc reuses the scratch input buffer across consecutive calls
+    // and falls back cleanly when another allocation is already in use or exceeds the cap.
+    let first = bunwasm_alloc(16);
+    assert!(INPUT_IN_USE.get());
+    let second = bunwasm_alloc(16);
+    assert_ne!(first, second);
+    unsafe {
+        std::ptr::write(first, T_UNDEFINED);
+        std::ptr::write(second, T_UNDEFINED);
+        assert_eq!(bunwasm_call(index, second, 16), 1);
+        assert!(INPUT_IN_USE.get());
+        assert_eq!(bunwasm_call(index, first, 16), 1);
+        assert!(!INPUT_IN_USE.get());
+    }
+    let reused = bunwasm_alloc(16);
+    assert_eq!(reused, first);
+    unsafe {
+        std::ptr::write(reused, T_UNDEFINED);
+        assert_eq!(bunwasm_call(index, reused, 16), 1);
+    }
+    assert!(!INPUT_IN_USE.get());
 }
