@@ -54,8 +54,37 @@ function packageRedirect(current: URL, location: string, headers: Headers): URL 
   return next;
 }
 
-export function resolvePackageRewrite(input: string, rewrite?: PackageRewrite): URL {
-  return resolveRewrite(new URL(input), rewrite);
+function redactPackageUrl(url: URL): string {
+  if (AUTH_OPTION.test(url.href)) return "[redacted registry authentication]";
+  const safe = new URL(url.href);
+  safe.username = "";
+  safe.password = "";
+  safe.search = "";
+  safe.hash = "";
+  return safe.href;
+}
+
+function formatHopFetchError(target: URL, error: unknown, signal: AbortSignal | null | undefined): unknown {
+  if (signal?.aborted) return error;
+  const safeUrl = redactPackageUrl(target);
+  const detail = error instanceof Error ? error.message : String(error);
+  const message = detail.includes(safeUrl) ? detail : `GET ${safeUrl} - ${detail}`;
+  return new Error(message, { cause: error });
+}
+
+async function fetchHop(
+  fetcher: FetchLike,
+  hopUrl: string,
+  target: URL,
+  options: RequestInit,
+  headers: Headers,
+  redirects: number,
+): Promise<Response> {
+  try {
+    return await fetcher(hopUrl, { ...options, headers, redirect: "manual" });
+  } catch (error) {
+    throw redirects > 0 ? formatHopFetchError(target, error, options.signal) : error;
+  }
 }
 
 export async function packageFetch(
@@ -63,14 +92,14 @@ export async function packageFetch(
   options: RequestInit,
   fetcher: FetchLike = fetch,
   rewrite?: PackageRewrite,
-  initialTarget?: URL,
 ): Promise<Response> {
   let url = new URL(input);
   const headers = new Headers(options.headers);
   for (let redirects = 0; redirects <= 20; redirects++) {
-    const target = redirects === 0 && initialTarget ? initialTarget : resolveRewrite(url, rewrite);
+    const target = resolveRewrite(url, rewrite);
+    const hopUrl = redirects === 0 && target === url ? input : target.href;
     stripCredentialsOnOriginChange(url, target, headers);
-    const response = await fetcher(target.href, { ...options, headers, redirect: "manual" });
+    const response = await fetchHop(fetcher, hopUrl, target, options, headers, redirects);
     if (response.type === "opaqueredirect") throw new Error("Package redirect destination is unavailable to this browser");
     const location = response.headers.get("location");
     if (!location || ![301, 302, 303, 307, 308].includes(response.status)) return response;

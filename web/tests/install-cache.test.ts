@@ -1015,3 +1015,55 @@ test("responses with Cache-Control: no-store are not persisted in Cache Storage"
   expect(env.putCalls).toEqual([]);
   expect(env.stored.size).toBe(0);
 });
+
+test("warm cache honors distinct proxy rewrites applied after a redirect", async () => {
+  const env = indexedCacheStorage();
+  const seenUrls: string[] = [];
+  const transport = async (url: string): Promise<Response> => {
+    seenUrls.push(url);
+    if (url === "https://origin.invalid/start.tgz") {
+      return new Response(null, { status: 302, headers: { location: "https://cdn.invalid/final.tgz" } });
+    }
+    if (url.startsWith("https://proxy-a.invalid/")) return new Response("bytes-from-proxy-a");
+    if (url.startsWith("https://proxy-b.invalid/")) return new Response("bytes-from-proxy-b");
+    return new Response("unexpected", { status: 500 });
+  };
+  const tokenA = "policy-redirect-proxy-a";
+  const tokenB = "policy-redirect-proxy-b";
+  const fetcherA = createInstallFetch({
+    packagePolicyToken: tokenA,
+    fetch: transport,
+    rewritePackageUrl: ({ url }) => (url.startsWith("https://cdn.invalid/")
+      ? `https://proxy-a.invalid/tarball?url=${encodeURIComponent(url)}`
+      : null),
+  });
+  const fetcherB = createInstallFetch({
+    packagePolicyToken: tokenB,
+    fetch: transport,
+    rewritePackageUrl: ({ url }) => (url.startsWith("https://cdn.invalid/")
+      ? `https://proxy-b.invalid/tarball?url=${encodeURIComponent(url)}`
+      : null),
+  });
+
+  await withStorage(env.storage, async () => new Response("unexpected"), async () => {
+    const first = await fetcherA("https://origin.invalid/start.tgz", {
+      method: "GET",
+      headers: markPackageFetchHeaders({ accept: TARBALL }, tokenA),
+    });
+    expect(await first.text()).toBe("bytes-from-proxy-a");
+
+    const second = await fetcherB("https://origin.invalid/start.tgz", {
+      method: "GET",
+      headers: markPackageFetchHeaders({ accept: TARBALL }, tokenB),
+    });
+    expect(await second.text()).toBe("bytes-from-proxy-b");
+  });
+
+  expect(seenUrls).toEqual([
+    "https://origin.invalid/start.tgz",
+    `https://proxy-a.invalid/tarball?url=${encodeURIComponent("https://cdn.invalid/final.tgz")}`,
+    "https://origin.invalid/start.tgz",
+    `https://proxy-b.invalid/tarball?url=${encodeURIComponent("https://cdn.invalid/final.tgz")}`,
+  ]);
+  expect(env.stored.has("https://origin.invalid/start.tgz")).toBe(false);
+});

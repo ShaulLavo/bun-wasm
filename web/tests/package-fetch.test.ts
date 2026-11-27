@@ -205,3 +205,19 @@ test("packageFetch strips all credential headers before the first request on cro
   );
   expectCredentialHeaders(required(calls[0]).headers, null);
 });
+
+test("packageFetch preserves redacted hop URL when a redirected transport request rejects", async () => {
+  const { calls, fetcher } = createFetcher(currentCalls => {
+    if (currentCalls.length === 1) return redirectResponse("https://cdn.invalid/disconnected.tgz", () => {});
+    throw new TypeError("fetch failed");
+  });
+  await expect(
+    packageFetch("https://origin.invalid/start.tgz", {}, fetcher, {
+      kind: "tarball",
+      rewriteUrl: ({ url }) => (url.startsWith("https://cdn.invalid/")
+        ? `https://proxy.invalid/tarball?url=${encodeURIComponent(url)}`
+        : null),
+    }),
+  ).rejects.toThrow("GET https://proxy.invalid/tarball - fetch failed");
+  expect(calls).toHaveLength(2);
+});

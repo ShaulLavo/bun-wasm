@@ -818,10 +818,7 @@ impl Download {
         };
         match response_head(&head) {
             Ok((status, _, final_url)) if (200..300).contains(&status) => {
-                if let Some(url) = final_url.as_deref().and_then(|u| url::Url::parse(u).ok()) {
-                    self.current_url = url;
-                }
-                self.state = Body::Reading;
+                self.accept_head(final_url.as_deref());
             }
             Ok((status, Some(location), _))
                 if matches!(status, 301 | 302 | 303 | 307 | 308)
@@ -844,6 +841,13 @@ impl Download {
             )),
         }
         true
+    }
+
+    fn accept_head(&mut self, final_url: Option<&str>) {
+        if let Some(url) = final_url.and_then(|value| url::Url::parse(value).ok()) {
+            self.current_url = url;
+        }
+        self.state = Body::Reading;
     }
 
     fn follow_redirect(&mut self, location: &str, registry: &Registry) {
@@ -1006,10 +1010,16 @@ fn wait(pending: &mut Pending, url: &str) -> Result<()> {
 
 pub(super) const NO_NETWORK: &str = "Package installation needs a host with networking support";
 
+fn has_formatted_url(message: &str) -> bool {
+    message.starts_with("GET http://")
+        || message.starts_with("GET https://")
+        || message.starts_with("GET [redacted")
+}
+
 pub(super) fn format_fetch_error(url: &str, message: &str, registry: &Registry) -> String {
     let url = registry.redact(url);
     let message = registry.redact(message);
-    if message.contains(&url) {
+    if has_formatted_url(&message) || message.contains(&url) {
         return message;
     }
     format!("GET {url} - {message}")
@@ -1605,6 +1615,14 @@ mod tests {
         assert_eq!(
             format_fetch_error(parsed.2.as_deref().unwrap(), "404", &reg),
             "GET https://cdn.example/missing.tgz - 404"
+        );
+        assert_eq!(
+            format_fetch_error(
+                "http://127.0.0.1:4873/start.tgz",
+                "GET http://127.0.0.1:4873/disconnected.tgz - fetch failed",
+                &reg
+            ),
+            "GET http://127.0.0.1:4873/disconnected.tgz - fetch failed"
         );
     }
 }

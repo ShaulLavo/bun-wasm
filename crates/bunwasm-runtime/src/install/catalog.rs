@@ -97,26 +97,24 @@ impl Catalogs {
     }
 
     pub fn merge_declared(&mut self, declared: &Self) {
-        if let Some(named_default) = declared.named.get("default") {
-            let target = self.named.entry("default".into()).or_default();
-            for pkg in named_default.keys() {
-                if let Some(specifier) = self.default.remove(pkg) {
-                    target.entry(pkg.clone()).or_insert(specifier);
-                }
-            }
-        }
-        for (pkg, specifier) in &declared.default {
-            self.default
-                .entry(pkg.clone())
-                .or_insert_with(|| specifier.clone());
-        }
+        self.move_named_default_entries(declared);
+        insert_missing_entries(&mut self.default, &declared.default);
         for (catalog_name, entries) in &declared.named {
             let target = self.named.entry(catalog_name.clone()).or_default();
-            for (pkg, specifier) in entries {
-                target
-                    .entry(pkg.clone())
-                    .or_insert_with(|| specifier.clone());
-            }
+            insert_missing_entries(target, entries);
+        }
+    }
+
+    fn move_named_default_entries(&mut self, declared: &Self) {
+        let Some(named_default) = declared.named.get("default") else {
+            return;
+        };
+        let target = self.named.entry("default".into()).or_default();
+        for pkg in named_default.keys() {
+            let Some(specifier) = self.default.remove(pkg) else {
+                continue;
+            };
+            target.entry(pkg.clone()).or_insert(specifier);
         }
     }
 
@@ -131,24 +129,30 @@ impl Catalogs {
         };
         for (catalog_name, entries) in catalogs {
             let parsed = parse_pnpm_lock_entries(entries, catalog_name)?;
-            if catalog_name == "default" {
-                if !fill_default || self.named.contains_key("default") {
-                    continue;
-                }
-                for (pkg, specifier) in parsed {
-                    self.default.entry(pkg).or_insert(specifier);
-                }
-                continue;
-            }
-            if !fill_named {
-                continue;
-            }
-            let target = self.named.entry(catalog_name.clone()).or_default();
-            for (pkg, specifier) in parsed {
-                target.entry(pkg).or_insert(specifier);
-            }
+            self.merge_pnpm_catalog(catalog_name, parsed, fill_default, fill_named);
         }
         check_default_conflicts(&self.default, &self.named)
+    }
+
+    fn merge_pnpm_catalog(
+        &mut self,
+        catalog_name: &str,
+        parsed: BTreeMap<String, String>,
+        fill_default: bool,
+        fill_named: bool,
+    ) {
+        if catalog_name == "default" {
+            if !fill_default || self.named.contains_key("default") {
+                return;
+            }
+            merge_owned_entries(&mut self.default, parsed);
+            return;
+        }
+        if !fill_named {
+            return;
+        }
+        let target = self.named.entry(catalog_name.to_owned()).or_default();
+        merge_owned_entries(target, parsed);
     }
 
     fn recompute_changed(&mut self, locked: &Value) {
@@ -452,5 +456,22 @@ fn collect_diff(
         if before.get(name) != after.get(name) {
             out.insert(name.clone());
         }
+    }
+}
+
+fn insert_missing_entries(
+    target: &mut BTreeMap<String, String>,
+    entries: &BTreeMap<String, String>,
+) {
+    for (pkg, specifier) in entries {
+        target
+            .entry(pkg.clone())
+            .or_insert_with(|| specifier.clone());
+    }
+}
+
+fn merge_owned_entries(target: &mut BTreeMap<String, String>, entries: BTreeMap<String, String>) {
+    for (pkg, specifier) in entries {
+        target.entry(pkg).or_insert(specifier);
     }
 }

@@ -100,6 +100,15 @@ async function missingCatalogAndFetchErrorContext(target: InstallFixtureTarget) 
     // A loopback 302 redirect to a tarball must be followed cleanly by the installer.
     const registry = await createRegistry();
     const redirector = createServer((req, res) => {
+      if (req.url === "/disconnected.tgz") {
+        req.socket.destroy();
+        return;
+      }
+      if (req.url === "/start-disconnect.tgz") {
+        res.writeHead(302, { location: "/disconnected.tgz" });
+        res.end();
+        return;
+      }
       res.writeHead(302, { location: `${registry.base}${req.url ?? "/"}` });
       res.end();
     });
@@ -127,6 +136,19 @@ async function missingCatalogAndFetchErrorContext(target: InstallFixtureTarget) 
       const redirect404Output = await install(target, missingRedirectDir, registry.base, [], 1);
       assert.ok(redirect404Output.includes(`${registry.base}/tarballs/missing.tgz`), `expected redirected failing URL in output:\n${redirect404Output}`);
       assert.ok(!redirect404Output.includes(`${missingRedirectUrl} - 404`), `expected failing hop URL instead of original URL:\n${redirect404Output}`);
+
+      // A transport disconnect after a redirect must report the disconnected hop URL, not the initial URL.
+      const disconnectDir = join(directory, "loopback-redirect-disconnect");
+      mkdirSync(disconnectDir, { recursive: true });
+      const startDisconnectUrl = `http://127.0.0.1:${redirectAddress.port}/start-disconnect.tgz`;
+      const disconnectedUrl = `http://127.0.0.1:${redirectAddress.port}/disconnected.tgz`;
+      writeFileSync(join(disconnectDir, "package.json"), JSON.stringify({
+        name: "redirect-disconnect-root",
+        dependencies: { "disconnect-pkg": startDisconnectUrl },
+      }));
+      const disconnectOutput = await install(target, disconnectDir, registry.base, [], 1);
+      assert.ok(disconnectOutput.includes(disconnectedUrl), `expected disconnected hop URL in output:\n${disconnectOutput}`);
+      assert.ok(!disconnectOutput.includes(`${startDisconnectUrl} -`), `expected failing hop URL instead of initial URL:\n${disconnectOutput}`);
     } finally {
       await new Promise<void>(resolve => redirector.close(() => resolve()));
       await registry.close();

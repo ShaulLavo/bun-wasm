@@ -98,10 +98,11 @@ fn parse_yaml_map(
 fn split_yaml_entry(line: &str) -> std::result::Result<(&str, &str), String> {
     let mut quote = None;
     for (index, ch) in line.char_indices() {
-        if let Some(active) = quote {
-            if ch == active {
-                quote = None;
-            }
+        if quote == Some(ch) {
+            quote = None;
+            continue;
+        }
+        if quote.is_some() {
             continue;
         }
         if ch == '\'' || ch == '"' {
