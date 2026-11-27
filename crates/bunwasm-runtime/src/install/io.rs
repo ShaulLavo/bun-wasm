@@ -193,18 +193,34 @@ fn has_embedded_auth(value: &str) -> bool {
 }
 
 pub fn parsed(source: &[u8], format: &str, parser: &dyn Transpiler) -> Result<Value> {
-    let graph = parser.parse_data(source, format).map_err(|e| e.message)?;
-    let graph: Value = serde_json::from_str(&graph).map_err(|e| e.to_string())?;
-    decode(&graph["root"], &graph["nodes"], 0)
+    parsed_with_options(source, format, parser, false)
 }
 
-fn decode(value: &Value, nodes: &Value, depth: usize) -> Result<Value> {
+pub fn parsed_yaml_preserving_numbers(source: &[u8], parser: &dyn Transpiler) -> Result<Value> {
+    parsed_with_options(source, "YAML", parser, true)
+}
+
+fn parsed_with_options(
+    source: &[u8],
+    format: &str,
+    parser: &dyn Transpiler,
+    preserve_raw_numbers: bool,
+) -> Result<Value> {
+    let graph = parser.parse_data(source, format).map_err(|e| e.message)?;
+    let graph: Value = serde_json::from_str(&graph).map_err(|e| e.to_string())?;
+    decode(&graph["root"], &graph["nodes"], 0, preserve_raw_numbers)
+}
+
+fn decode(value: &Value, nodes: &Value, depth: usize, preserve_raw_numbers: bool) -> Result<Value> {
     if depth > 128 {
         return Err("Package data exceeds nesting limit".into());
     }
     match value[0].as_u64() {
         Some(0) => Ok(value[1].clone()),
         Some(4) => {
+            if preserve_raw_numbers && let Some(raw) = value[2].as_str() {
+                return Ok(Value::String(raw.to_owned()));
+            }
             serde_json::from_str(value[1].as_str().unwrap_or("null")).map_err(|e| e.to_string())
         }
         Some(5) => {
@@ -220,22 +236,31 @@ fn decode(value: &Value, nodes: &Value, depth: usize) -> Result<Value> {
             &nodes[value[1].as_u64().ok_or("Invalid data reference")? as usize],
             nodes,
             depth + 1,
+            preserve_raw_numbers,
         ),
         _ => Err("Unsupported value in package data".into()),
     }
 }
 
-fn decode_node(node: &Value, nodes: &Value, depth: usize) -> Result<Value> {
+fn decode_node(
+    node: &Value,
+    nodes: &Value,
+    depth: usize,
+    preserve_raw_numbers: bool,
+) -> Result<Value> {
     let items = node[1].as_array().ok_or("Invalid parsed data")?;
     if node[0] == "array" {
-        return items.iter().map(|v| decode(v, nodes, depth)).collect();
+        return items
+            .iter()
+            .map(|v| decode(v, nodes, depth, preserve_raw_numbers))
+            .collect();
     }
     let mut object = serde_json::Map::new();
     for item in items {
-        let key = decode(&item[0], nodes, depth)?;
+        let key = decode(&item[0], nodes, depth, preserve_raw_numbers)?;
         object.insert(
             key.as_str().ok_or("Invalid property name")?.into(),
-            decode(&item[1], nodes, depth)?,
+            decode(&item[1], nodes, depth, preserve_raw_numbers)?,
         );
     }
     Ok(Value::Object(object))
@@ -245,6 +270,13 @@ pub fn read(path: &Path, format: &str, parser: &dyn Transpiler) -> Result<Value>
     parsed(
         &fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?,
         format,
+        parser,
+    )
+}
+
+pub fn read_yaml_preserving_numbers(path: &Path, parser: &dyn Transpiler) -> Result<Value> {
+    parsed_yaml_preserving_numbers(
+        &fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?,
         parser,
     )
 }

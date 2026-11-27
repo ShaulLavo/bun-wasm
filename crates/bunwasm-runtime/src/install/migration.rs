@@ -32,7 +32,10 @@ pub fn read(
         && !Path::new("yarn.lock").exists()
         && Path::new("pnpm-lock.yaml").exists()
     {
-        Some(io::read(Path::new("pnpm-lock.yaml"), "YAML", parser)?)
+        Some(io::read_yaml_preserving_numbers(
+            Path::new("pnpm-lock.yaml"),
+            parser,
+        )?)
     } else {
         None
     };

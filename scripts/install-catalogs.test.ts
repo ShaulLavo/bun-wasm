@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installFixture, installFixtureTargets, type InstallFixtureTarget } from "./install-fixture-command";
-import { createRegistry } from "../tests/install/registry.mjs";
+import { createRegistry, packageFixture } from "../tests/install/registry.mjs";
 
 function install(target: InstallFixtureTarget, directory: string, registry: string, args: string[] = [], expected = 0) {
   return installFixture(directory, registry, args, expected, true, [], target);
@@ -158,7 +158,38 @@ async function missingCatalogAndFetchErrorContext(target: InstallFixtureTarget) 
   }
 }
 
+async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-catalog-yaml-num-"));
+  const registry = await createRegistry([packageFixture("versioned", "1.10.0")]);
+  try {
+    const cases: [string, string][] = [
+      ["flow", "{packages: ['packages/*'], catalog: { versioned: 1.10 }}\n"],
+      ["anchor", "packages:\n  - packages/*\ncatalog:\n  versioned: &pin 1.10\n  other: *pin\n"],
+    ];
+    for (const [name, yaml] of cases) {
+      const root = join(directory, name);
+      mkdirSync(join(root, "packages/app"), { recursive: true });
+      writeFileSync(join(root, "package.json"), JSON.stringify({ name: `yaml-${name}` }));
+      writeFileSync(join(root, "packages/app/package.json"), JSON.stringify({
+        name: `@fixture/${name}`,
+        version: "1.0.0",
+        dependencies: { versioned: "catalog:" },
+      }));
+      writeFileSync(join(root, "pnpm-workspace.yaml"), yaml);
+
+      await install(target, root, registry.base);
+      assert.equal(installedVersion(root, "versioned"), "1.10.0");
+      const lock = readFileSync(join(root, "bun.lock"), "utf8");
+      assert.match(lock, /"versioned":\s*"1\.10"/);
+    }
+  } finally {
+    await registry.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 for (const target of installFixtureTargets()) {
   test(`workspace catalogs and dist-tag lock replay work end-to-end (${target.engine})`, () => workspaceCatalogsRoundtrip(target), 120000);
   test(`missing catalog and failed tarball fetch report actionable diagnostics (${target.engine})`, () => missingCatalogAndFetchErrorContext(target), 120000);
+  test(`YAML catalogs preserve numeric scalar precision end-to-end (${target.engine})`, () => yamlCatalogPreservesNumericScalars(target), 120000);
 }

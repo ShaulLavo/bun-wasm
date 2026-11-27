@@ -12,19 +12,24 @@ impl Transpiler for TestParser {
     }
 
     fn parse_data(&self, source: &[u8], format: &str) -> std::result::Result<String, NativeError> {
-        let value = match format {
+        match format {
             "JSON" | "JSONC" => {
-                parse_json(source).map_err(|error| NativeError::error(error.to_string()))?
+                let value =
+                    parse_json(source).map_err(|error| NativeError::error(error.to_string()))?;
+                Ok(json!({"root": [0, value], "nodes": []}).to_string())
             }
-            "YAML" => parse_simple_yaml(std::str::from_utf8(source).unwrap())
-                .map_err(NativeError::error)?,
-            other => return Err(NativeError::error(format!("Unexpected format {other}"))),
-        };
-        Ok(json!({"root": [0, value], "nodes": []}).to_string())
+            "YAML" => {
+                let mut nodes = Vec::new();
+                let root = parse_simple_yaml(std::str::from_utf8(source).unwrap(), &mut nodes)
+                    .map_err(NativeError::error)?;
+                Ok(json!({"root": root, "nodes": nodes}).to_string())
+            }
+            other => Err(NativeError::error(format!("Unexpected format {other}"))),
+        }
     }
 }
 
-fn parse_simple_yaml(source: &str) -> std::result::Result<Value, String> {
+fn parse_simple_yaml(source: &str, nodes: &mut Vec<Value>) -> std::result::Result<Value, String> {
     let lines: Vec<(usize, &str)> = source
         .lines()
         .filter_map(|line| {
@@ -36,7 +41,7 @@ fn parse_simple_yaml(source: &str) -> std::result::Result<Value, String> {
             Some((indent, trimmed))
         })
         .collect();
-    let (value, _) = parse_yaml_block(&lines, 0, 0)?;
+    let (value, _) = parse_yaml_block(&lines, 0, 0, nodes)?;
     Ok(value)
 }
 
@@ -44,59 +49,85 @@ fn parse_yaml_block(
     lines: &[(usize, &str)],
     start: usize,
     indent: usize,
+    nodes: &mut Vec<Value>,
 ) -> std::result::Result<(Value, usize), String> {
     if start >= lines.len() {
-        return Ok((Value::Null, start));
+        return Ok((json!([0, Value::Null]), start));
     }
     if lines[start].1.starts_with("- ") {
-        return parse_yaml_list(lines, start, indent);
+        return parse_yaml_list(lines, start, indent, nodes);
     }
-    parse_yaml_map(lines, start, indent)
+    parse_yaml_map(lines, start, indent, nodes)
 }
 
 fn parse_yaml_list(
     lines: &[(usize, &str)],
     mut index: usize,
     indent: usize,
+    nodes: &mut Vec<Value>,
 ) -> std::result::Result<(Value, usize), String> {
     let mut items = Vec::new();
     while index < lines.len() && lines[index].0 == indent && lines[index].1.starts_with("- ") {
         let item = lines[index].1.strip_prefix("- ").unwrap().trim();
-        items.push(parse_yaml_scalar(item));
+        items.push(parse_yaml_scalar(item, nodes));
         index += 1;
     }
-    Ok((Value::Array(items), index))
+    let id = nodes.len();
+    nodes.push(json!(["array", items]));
+    Ok((json!([1, id]), index))
 }
 
 fn parse_yaml_map(
     lines: &[(usize, &str)],
     mut index: usize,
     indent: usize,
+    nodes: &mut Vec<Value>,
 ) -> std::result::Result<(Value, usize), String> {
-    let mut map = serde_json::Map::new();
+    let mut entries = Vec::new();
     while index < lines.len() && lines[index].0 == indent {
         let line = lines[index].1;
         let (raw_key, raw_value) = split_yaml_entry(line)?;
         let key = unquote_yaml(raw_key);
         index += 1;
         if !raw_value.is_empty() {
-            map.insert(key, parse_yaml_scalar(raw_value));
+            entries.push(json!([[0, key], parse_yaml_scalar(raw_value, nodes)]));
             continue;
         }
         if index < lines.len() && lines[index].0 > indent {
             let child_indent = lines[index].0;
-            let (child, next) = parse_yaml_block(lines, index, child_indent)?;
-            map.insert(key, child);
+            let (child, next) = parse_yaml_block(lines, index, child_indent, nodes)?;
+            entries.push(json!([[0, key], child]));
             index = next;
         } else {
-            map.insert(key, json!({}));
+            let empty_id = nodes.len();
+            nodes.push(json!(["object", []]));
+            entries.push(json!([[0, key], [1, empty_id]]));
         }
     }
-    Ok((Value::Object(map), index))
+    let id = nodes.len();
+    nodes.push(json!(["object", entries]));
+    Ok((json!([1, id]), index))
 }
 
 fn split_yaml_entry(line: &str) -> std::result::Result<(&str, &str), String> {
-    catalog::split_yaml_mapping(line).ok_or_else(|| format!("Invalid YAML line: {line}"))
+    let mut quote = None;
+    for (index, ch) in line.char_indices() {
+        if quote == Some(ch) {
+            quote = None;
+            continue;
+        }
+        if quote.is_some() {
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            continue;
+        }
+        if ch == ':' && (line[index + 1..].is_empty() || line[index..].starts_with(": ")) {
+            return Ok((line[..index].trim(), line[index + 1..].trim()));
+        }
+    }
+    Err(format!("Invalid YAML line: {line}"))
 }
 
 fn unquote_yaml(raw: &str) -> String {
@@ -108,28 +139,30 @@ fn unquote_yaml(raw: &str) -> String {
     raw.to_owned()
 }
 
-fn parse_yaml_scalar(raw: &str) -> Value {
+fn parse_yaml_scalar(raw: &str, nodes: &mut Vec<Value>) -> Value {
     if raw == "{}" {
-        return json!({});
+        let id = nodes.len();
+        nodes.push(json!(["object", []]));
+        return json!([1, id]);
     }
     if raw == "true" {
-        return Value::Bool(true);
+        return json!([0, true]);
     }
     if raw == "false" {
-        return Value::Bool(false);
+        return json!([0, false]);
     }
     if raw.starts_with('\'') || raw.starts_with('"') {
-        return Value::String(unquote_yaml(raw));
+        return json!([0, unquote_yaml(raw)]);
     }
     if let Ok(number) = raw.parse::<i64>() {
-        return Value::Number(number.into());
+        return json!([4, number.to_string(), raw]);
     }
     if let Ok(float) = raw.parse::<f64>()
-        && let Some(number) = serde_json::Number::from_f64(float)
+        && serde_json::Number::from_f64(float).is_some()
     {
-        return Value::Number(number);
+        return json!([4, float.to_string(), raw]);
     }
-    Value::String(raw.to_owned())
+    json!([0, raw])
 }
 
 struct TestDirectory(std::path::PathBuf);
@@ -918,13 +951,41 @@ fn standalone_catalog_field_and_workspace_unit_selection_install_like_native_bun
             assert!(retained.contains("@fixture/scoped"));
             assert!(retained.contains("versioned"));
 
-            // Inline named YAML flow catalogs preserve trailing zeros such as `2.10`.
-            let mut inline_val = json!({ "catalogs": { "nums": { "minor-pkg": 2.1 } } });
-            catalog::preserve_numeric_catalog_scalars(
-                &mut inline_val,
-                "catalogs: { nums: { minor-pkg: 2.10 } }\n",
-            );
-            assert_eq!(inline_val["catalogs"]["nums"]["minor-pkg"], "2.10");
+            // A YAML numeric node without exact raw scalar text must fail explicitly, never silently round.
+            struct UnrecoveredNumberParser;
+            impl Transpiler for UnrecoveredNumberParser {
+                fn transpile(
+                    &self,
+                    _: &str,
+                    _: &str,
+                    _: Loader,
+                ) -> std::result::Result<String, String> {
+                    unreachable!()
+                }
+                fn parse_data(
+                    &self,
+                    _: &[u8],
+                    _: &str,
+                ) -> std::result::Result<String, NativeError> {
+                    Ok(json!({
+                        "root": [1, 0],
+                        "nodes": [
+                            ["object", [[[0, "catalog"], [1, 1]]]],
+                            ["object", [[[0, "versioned"], [4, "1.1"]]]]
+                        ]
+                    })
+                    .to_string())
+                }
+            }
+            let decoded =
+                io::parsed_yaml_preserving_numbers(b"", &UnrecoveredNumberParser).unwrap();
+            assert!(decoded["catalog"]["versioned"].is_number());
+            let err = catalog::Catalogs::from_manifest(
+                &json!({ "workspaces": ["packages/*"], "catalog": decoded["catalog"] }),
+                &Value::Null,
+            )
+            .unwrap_err();
+            assert!(err.contains("non-empty string"), "{err}");
         },
     );
 }
