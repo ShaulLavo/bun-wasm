@@ -663,9 +663,6 @@ impl Resolver {
         name: &str,
         range: &str,
     ) -> Option<String> {
-        if self.refresh {
-            return None;
-        }
         let workspace = parent.local.as_ref().is_some_and(|local| local.workspace);
         if workspace && !self.root_deps.contains(name) {
             return None;
@@ -681,6 +678,9 @@ impl Resolver {
             let Some(found) = self.packages.get(&candidate.join("/")) else {
                 continue;
             };
+            if self.refresh && found.name == name {
+                return None;
+            }
             if let Some((target_name, _)) = &alias {
                 return (found.name == *target_name)
                     .then(|| format!("npm:{target_name}@{}", found.version));

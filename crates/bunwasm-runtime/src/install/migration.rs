@@ -902,13 +902,15 @@ fn graph(
         if let Some(peer_range) = peer.as_deref()
             && let Some(row) = visible_row(packages, &parent, &name)
         {
-            if peer_row_satisfied(row, peer_range) {
+            let effective = resolved_peer_requirement(records, &name, peer_range);
+            let required = effective.as_deref().unwrap_or(peer_range);
+            if peer_row_satisfied(row, required) {
                 continue;
             }
             let workspace_peer =
                 workspace_chains.contains(parent.as_slice()) && !root_deps.contains(&name);
             if !workspace_peer {
-                eprintln!("warn: incorrect peer dependency \"{name}@{peer_range}\"");
+                eprintln!("warn: incorrect peer dependency \"{name}@{required}\"");
                 continue;
             }
         }
@@ -1045,6 +1047,23 @@ fn peer_target(range: &str) -> (Option<String>, String) {
         return (Some(target_name), target_range);
     }
     (None, range.to_owned())
+}
+
+fn resolved_peer_requirement(
+    records: &BTreeMap<String, Value>,
+    name: &str,
+    range: &str,
+) -> Option<String> {
+    let (alias_name, target_range) = peer_target(range);
+    if !resolve::is_tag(&target_range) {
+        return None;
+    }
+    let meta = find_record(records, name, range)?;
+    let version = meta["version"].as_str()?;
+    Some(match alias_name {
+        Some(target_name) => format!("npm:{target_name}@{version}"),
+        None => version.to_owned(),
+    })
 }
 
 fn peer_row_satisfied(row: &Value, range: &str) -> bool {

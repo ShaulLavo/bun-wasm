@@ -2243,6 +2243,46 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
                     .contains_key(&(None, "versioned".into()))
             );
 
+            // 1d5. Yarn migration resolves a catalog tag peer through yarn.lock before checking a
+            // sibling's hoisted version, keeping bb/versioned@2.0.0 distinct from aa's 1.0.0.
+            let _ = fs::remove_file("bun.lock");
+            let _ = fs::remove_dir_all("node_modules");
+            let _ = fs::remove_dir_all("packages");
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "workspaces": ["packages/*"]
+                }),
+                "packages/aa",
+                json!({
+                    "name": "aa",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "1.0.0" }
+                }),
+            );
+            fs::create_dir_all("packages/bb").unwrap();
+            fs::write(
+                "packages/bb/package.json",
+                json!({
+                    "name": "bb",
+                    "version": "1.0.0",
+                    "peerDependencies": { "versioned": "catalog:" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(".yarnrc.yml", "catalog:\n  versioned: npm:latest\n").unwrap();
+            fs::write(
+                "yarn.lock",
+                "__metadata:\n  version: 8\n\n\"root@workspace:.\":\n  version: 0.0.0-use.local\n  resolution: \"root@workspace:.\"\n\n\"versioned@npm:1.0.0\":\n  version: 1.0.0\n  resolution: \"versioned@npm:1.0.0\"\n\n\"versioned@npm:latest\":\n  version: 2.0.0\n  resolution: \"versioned@npm:2.0.0\"\n",
+            )
+            .unwrap();
+            let lock = migrate_and_verify_frozen_lock();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert_eq!(lock["packages"]["bb/versioned"][0], "versioned@2.0.0");
+            let _ = fs::remove_file(".yarnrc.yml");
+            let _ = fs::remove_file("yarn.lock");
+
             // 1e. `bun update --latest` writes back the version resolved for each catalog entry
             // tracked by the resolver (including override-reached catalogs), and explicit
             // `bun update pkg@ver` preserves root `catalog:` references instead of detaching them.

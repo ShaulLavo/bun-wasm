@@ -291,6 +291,27 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
     assert.equal(installedVersion(peerUpdateRoot, "versioned"), "1.0.0");
     assert.equal(installedVersion(peerUpdateRoot, "@fixture/peer-b/node_modules/versioned"), "2.0.0");
     await install(target, peerUpdateRoot, registry.base, ["--frozen-lockfile"]);
+
+    // `bun update --latest` with a root npm alias providing a catalog tag peer must not 404 on the alias name.
+    const aliasPeerRoot = join(directory, "update-alias-peer");
+    mkdirSync(join(aliasPeerRoot, "packages/a"), { recursive: true });
+    writeFileSync(join(aliasPeerRoot, "package.json"), JSON.stringify({
+      name: "update-alias-peer-root",
+      dependencies: { "logical-alias": "npm:versioned@1.0.0" },
+      workspaces: {
+        packages: ["packages/*"],
+        catalog: { "logical-alias": "latest" },
+      },
+    }, null, 2));
+    writeFileSync(join(aliasPeerRoot, "packages/a/package.json"), JSON.stringify({
+      name: "@fixture/alias-peer-a",
+      version: "1.0.0",
+      peerDependencies: { "logical-alias": "catalog:" },
+    }, null, 2));
+    await install(target, aliasPeerRoot, registry.base);
+    await runGuestUpdate(target, aliasPeerRoot, registry.base, ["--latest"]);
+    assert.equal(installedVersion(aliasPeerRoot, "logical-alias"), "1.0.0");
+    await install(target, aliasPeerRoot, registry.base, ["--frozen-lockfile"]);
   } finally {
     await registry.close();
     rmSync(directory, { recursive: true, force: true });
