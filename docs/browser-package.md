@@ -78,7 +78,10 @@ The installer borrows networking from the caller's Runtime. Bun processes and th
 share its loopback namespace for HTTP and WebSocket previews, with a separate helper for each
 process. Stopping one process releases its helper without closing another process's connections.
 The installer's fetch policy applies to roots and children. Browser host `fetch` remains subject
-to browser restrictions such as CORS. Preview1 programs do not receive Bun networking helpers.
+to browser restrictions such as CORS. Pass `network.rewritePackageUrl` to `installBunAdapters` to
+route CORS-blocked `bun install` metadata or tarball URLs (such as GitHub Release `.tgz` archives)
+through a same-origin proxy without replacing the built-in tarball cache, redirect checks, or
+ordinary user `fetch` calls. Preview1 programs do not receive Bun networking helpers.
 
 To check a selected guest before browser acceptance, supply its absolute artifact path and an
 independently accepted `GuestBuildInputs` JSON file from `scripts/guest-build-receipt.ts inputs`.

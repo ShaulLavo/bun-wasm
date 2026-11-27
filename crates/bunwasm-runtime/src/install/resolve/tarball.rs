@@ -58,7 +58,8 @@ impl Resolver {
         };
         let bytes = self
             .downloads
-            .fetch(&tarball, true, self.refresh, &self.registry)?;
+            .fetch(&tarball, true, self.refresh, &self.registry)
+            .map_err(|error| io::package_fetch_error(name, error))?;
         if let Some(expected) = &expected {
             io::integrity(&bytes, expected)?;
         }
@@ -155,7 +156,39 @@ pub(in super::super) fn locked_sources(locked: &Value, manifest: &Value) -> BTre
     }) {
         insert_source(value.as_str().or_else(|| value["."].as_str()), &mut sources);
     }
+    for meta in [manifest, locked] {
+        insert_catalog_sources(&meta["workspaces"]["catalog"], &mut sources);
+        insert_catalog_sources(&meta["catalog"], &mut sources);
+        insert_named_catalog_sources(&meta["workspaces"]["catalogs"], &mut sources);
+        insert_named_catalog_sources(&meta["catalogs"], &mut sources);
+    }
     sources
+}
+
+pub(super) fn catalog_sources(catalogs: &Catalogs) -> BTreeSet<String> {
+    let mut sources = BTreeSet::new();
+    for range in catalogs.all_values() {
+        insert_source(Some(range), &mut sources);
+    }
+    sources
+}
+
+fn insert_catalog_sources(value: &Value, sources: &mut BTreeSet<String>) {
+    let Some(entries) = value.as_object() else {
+        return;
+    };
+    for range in entries.values() {
+        insert_source(range.as_str(), sources);
+    }
+}
+
+fn insert_named_catalog_sources(value: &Value, sources: &mut BTreeSet<String>) {
+    let Some(catalogs) = value.as_object() else {
+        return;
+    };
+    for entries in catalogs.values() {
+        insert_catalog_sources(entries, sources);
+    }
 }
 
 fn declared_sources(meta: &Value, sources: &mut BTreeSet<String>) {

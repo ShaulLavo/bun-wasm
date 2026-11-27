@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { createRegistry } from "./registry.mjs";
 
 const root = resolve(new URL("../..", import.meta.url).pathname);
@@ -290,6 +291,62 @@ const cases = {
     assert.equal(result.stdout.trim(), "rehoist-child@1.0.0 rehoist-child@1.0.0");
     assert.doesNotMatch(readFileSync(join(directory, "bun.lock"), "utf8"), /rehoist-child@2\.0\.0/);
   },
+  async catalogs() {
+    const directory = project("catalogs", {
+      name: "catalog-root",
+      workspaces: {
+        packages: ["packages/*"],
+        catalog: { "is-number": "7.0.0" },
+        catalogs: { extra: { "is-odd": "3.0.1" } },
+      },
+    });
+    mkdirSync(join(directory, "packages/app"), { recursive: true });
+    writeFileSync(join(directory, "packages/app/package.json"), JSON.stringify({
+      name: "@fixture/app",
+      version: "1.0.0",
+      dependencies: { "is-number": "catalog:", "is-odd": "catalog:extra" },
+    }, null, 2));
+    await bun(directory, ["install"]);
+    assert.equal(installed(directory, "is-number").version, "7.0.0");
+    assert.equal(installed(directory, "is-odd").version, "3.0.1");
+    const run = await bun(directory, ["-e", "console.log(require('is-odd')(3), require('is-number')(7))"]);
+    assert.equal(run.stdout.trim(), "true true");
+    const lock = readFileSync(join(directory, "bun.lock"), "utf8");
+    assert.match(lock, /"catalog":/);
+    assert.match(lock, /"catalogs":/);
+    rmSync(join(directory, "node_modules"), { recursive: true, force: true });
+    registry.setOffline(true);
+    try { await bun(directory, ["install", "--frozen-lockfile"]); } finally { registry.setOffline(false); }
+    assert.equal(readFileSync(join(directory, "bun.lock"), "utf8"), lock);
+
+    const missing = project("catalog-missing", {
+      name: "catalog-missing-root",
+      workspaces: { packages: ["packages/*"], catalog: { "is-number": "7.0.0" } },
+    });
+    mkdirSync(join(missing, "packages/app"), { recursive: true });
+    writeFileSync(join(missing, "packages/app/package.json"), JSON.stringify({
+      name: "@fixture/missing",
+      version: "1.0.0",
+      dependencies: { "is-number": "catalog:nope" },
+    }, null, 2));
+    const failed = await bun(missing, ["install"], false);
+    assert.match(failed.output, /catalog:nope/);
+    assert.match(failed.output, /"nope"/);
+  },
+  async fetchErrorContext() {
+    const closed = createServer();
+    await new Promise(resolve => closed.listen(0, "127.0.0.1", resolve));
+    const deadPort = closed.address().port;
+    await new Promise(resolve => closed.close(resolve));
+    const url = `http://127.0.0.1:${deadPort}/releases/waffle-base-0.0.23.tgz`;
+    const directory = project("fetch-error-context", {
+      name: "fetch-error-fixture",
+      dependencies: { "waffle-base": url },
+    });
+    const result = await bun(directory, ["install"], false);
+    assert.ok(result.output.includes("waffle-base"), `expected package name in error:\n${result.output}`);
+    assert.ok(result.output.includes(url), `expected failing URL in error:\n${result.output}`);
+  },
 };
 
 let passed = 0, failed = 0, skipped = 0;
@@ -297,7 +354,7 @@ try {
   registry = await createRegistry();
   const wanted = process.env.INSTALL_CASES?.split(",") ?? Object.keys(cases);
   for (const name of wanted) {
-    if (process.env.INSTALL_NATIVE_BUN === "1" && ["idleTimeout", "wasmDistributions"].includes(name)) {
+    if (process.env.INSTALL_NATIVE_BUN === "1" && ["idleTimeout", "wasmDistributions", "fetchErrorContext"].includes(name)) {
       console.log(`skip ${name} (bun-wasm platform check)`); skipped++; continue;
     }
     try { assert.ok(cases[name], `unknown install case ${name}`); await cases[name](); console.log(`ok ${name}`); passed++; }

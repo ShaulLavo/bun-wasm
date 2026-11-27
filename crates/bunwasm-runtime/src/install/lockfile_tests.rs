@@ -17,7 +17,7 @@ impl Transpiler for JsonParser {
 }
 
 // These fixtures need JSON and the trailing commas emitted by write_lock, not JS execution.
-fn parse_json(source: &[u8]) -> serde_json::Result<Value> {
+pub(super) fn parse_json(source: &[u8]) -> serde_json::Result<Value> {
     let mut bytes = source.to_vec();
     let mut quoted = false;
     let mut escaped = false;

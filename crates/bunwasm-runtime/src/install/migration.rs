@@ -1,4 +1,5 @@
 use super::{
+    catalog::Catalogs,
     io::{self, Result},
     local, resolve,
 };
@@ -26,6 +27,7 @@ pub fn read(
     let registry = registry.as_str();
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let members = local::workspaces(&cwd, manifest, parser)?;
+    let catalogs = Catalogs::load(&cwd, manifest, &Value::Null, parser)?;
     let mut workspaces = json!({"": workspace_meta(manifest, true)});
     let mut packages = BTreeMap::new();
     let mut roots = vec![(Vec::new(), manifest.clone())];
@@ -40,7 +42,7 @@ pub fn read(
         roots.push((vec![name.clone()], member.meta.clone()));
     }
     for (_, meta) in &roots {
-        validate_ranges(meta, true)?;
+        validate_ranges(meta, true, Some(&catalogs))?;
     }
     let source = if Path::new("package-lock.json").exists() {
         npm(
@@ -51,7 +53,7 @@ pub fn read(
         )?;
         "package-lock.json"
     } else if Path::new("yarn.lock").exists() {
-        yarn(&roots, parser, registry, &mut packages)?;
+        yarn(&roots, parser, registry, &catalogs, &mut packages)?;
         "yarn.lock"
     } else if Path::new("pnpm-lock.yaml").exists() {
         pnpm(
@@ -59,6 +61,7 @@ pub fn read(
             &members,
             &io::read(Path::new("pnpm-lock.yaml"), "YAML", parser)?,
             registry,
+            &catalogs,
             &mut packages,
         )?;
         "pnpm-lock.yaml"
@@ -69,9 +72,14 @@ pub fn read(
         hydrate_metadata(&mut packages, config)?;
     }
     eprintln!("migrated lockfile from {source}");
-    Ok(Some(
-        json!({"lockfileVersion": 2, "configVersion": if source == "pnpm-lock.yaml" { 1 } else { 0 }, "workspaces": workspaces, "packages": packages}),
-    ))
+    let mut lock = json!({"lockfileVersion": 2, "configVersion": if source == "pnpm-lock.yaml" { 1 } else { 0 }, "workspaces": workspaces, "packages": packages});
+    if let Some(catalog) = catalogs.default_value() {
+        lock["catalog"] = catalog;
+    }
+    if let Some(named) = catalogs.named_value() {
+        lock["catalogs"] = named;
+    }
+    Ok(Some(lock))
 }
 
 pub fn workspace_meta(manifest: &Value, root: bool) -> Value {
@@ -112,7 +120,7 @@ pub fn workspace_meta(manifest: &Value, root: bool) -> Value {
 }
 
 fn record(name: &str, meta: &Value, registry: &str) -> Result<Value> {
-    validate_ranges(meta, false)?;
+    validate_ranges(meta, false, None)?;
     let name = meta["name"].as_str().unwrap_or(name);
     resolve::valid_name(name).map_err(|_| "Invalid migrated package name")?;
     let version = meta["version"]
@@ -346,6 +354,7 @@ fn yarn(
     roots: &[(Vec<String>, Value)],
     parser: &dyn Transpiler,
     registry: &str,
+    catalogs: &Catalogs,
     packages: &mut BTreeMap<String, Value>,
 ) -> Result<()> {
     let text = fs::read_to_string("yarn.lock").map_err(|e| e.to_string())?;
@@ -395,13 +404,54 @@ fn yarn(
             records.extend(yarn_record(selector, value, &registry)?);
         }
     }
+    let expanded = expand_root_catalogs(roots, catalogs)?;
     graph(
-        roots,
+        &expanded,
         &records,
         packages,
         registry,
         config["enableTransparentWorkspaces"] != false,
     )
+}
+
+fn expand_root_catalogs(
+    roots: &[(Vec<String>, Value)],
+    catalogs: &Catalogs,
+) -> Result<Vec<(Vec<String>, Value)>> {
+    roots
+        .iter()
+        .map(|(chain, meta)| Ok((chain.clone(), expand_manifest_catalogs(meta, catalogs)?)))
+        .collect()
+}
+
+fn expand_manifest_catalogs(meta: &Value, catalogs: &Catalogs) -> Result<Value> {
+    let mut expanded = meta.clone();
+    for field in [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+    ] {
+        if let Some(deps) = expanded[field].as_object_mut() {
+            expand_dependency_map(deps, catalogs)?;
+        }
+    }
+    Ok(expanded)
+}
+
+fn expand_dependency_map(
+    deps: &mut serde_json::Map<String, Value>,
+    catalogs: &Catalogs,
+) -> Result<()> {
+    for (name, range) in deps {
+        let Some(raw) = range.as_str() else {
+            continue;
+        };
+        if let Some(resolved) = catalogs.resolve(name, raw)? {
+            *range = resolved.into();
+        }
+    }
+    Ok(())
 }
 
 fn normalize_yarn_dependencies(value: &mut Value) {
@@ -513,12 +563,12 @@ fn snapshot_field(meta: &mut Value, field: &str, value: &Value) -> Result<()> {
     Ok(())
 }
 
-fn pnpm_importer(manifest: &Value, importer: &Value) -> Result<Value> {
+fn pnpm_importer(manifest: &Value, importer: &Value, catalogs: &Catalogs) -> Result<Value> {
     let mut normalized = manifest.clone();
     remove_optional_duplicates(&mut normalized);
     let mut meta = normalized.clone();
     for field in ["dependencies", "devDependencies", "optionalDependencies"] {
-        pnpm_importer_field(&mut meta, &normalized, importer, field)?;
+        pnpm_importer_field(&mut meta, &normalized, importer, field, catalogs)?;
     }
     Ok(meta)
 }
@@ -528,6 +578,7 @@ fn pnpm_importer_field(
     manifest: &Value,
     importer: &Value,
     field: &str,
+    catalogs: &Catalogs,
 ) -> Result<()> {
     if importer[field].is_null() && manifest[field].is_null() {
         return Ok(());
@@ -550,7 +601,10 @@ fn pnpm_importer_field(
                 .then(|| manifest["peerDependencies"][name].as_str())
                 .flatten()
         });
-        if specifier != requested {
+        let resolved = requested
+            .map(|range| catalogs.resolve_str(name, range))
+            .transpose()?;
+        if specifier != requested && specifier != resolved {
             return Err("pnpm-lock.yaml importer specifier does not match package.json".into());
         }
         let reference = value["version"]
@@ -559,7 +613,7 @@ fn pnpm_importer_field(
             .ok_or("Invalid pnpm dependency version")?;
         validate_pnpm_selection(
             name,
-            requested.ok_or("Invalid pnpm importer specifier")?,
+            resolved.ok_or("Invalid pnpm importer specifier")?,
             reference,
         )?;
         meta[field][name] = pnpm_reference(name, reference).into();
@@ -572,6 +626,7 @@ fn pnpm(
     members: &BTreeMap<String, local::Local>,
     source: &Value,
     registry: &str,
+    catalogs: &Catalogs,
     packages: &mut BTreeMap<String, Value>,
 ) -> Result<()> {
     let version = source["lockfileVersion"]
@@ -631,8 +686,8 @@ fn pnpm(
         let source_importer = source["importers"]
             .get(&importer)
             .ok_or("Missing pnpm importer")?;
-        let mut meta = pnpm_importer(manifest, source_importer)?;
-        validate_pnpm_links(&mut meta, manifest, &cwd.join(&importer), members)?;
+        let mut meta = pnpm_importer(manifest, source_importer, catalogs)?;
+        validate_pnpm_links(&mut meta, manifest, &cwd.join(&importer), members, catalogs)?;
         selected.push((parent.clone(), meta));
     }
     graph(&selected, &records, packages, registry, true)
@@ -755,7 +810,7 @@ fn normalize_peers(meta: &mut Value) {
     meta["optionalPeers"] = json!(peers);
 }
 
-fn validate_ranges(meta: &Value, include_dev: bool) -> Result<()> {
+fn validate_ranges(meta: &Value, include_dev: bool, catalogs: Option<&Catalogs>) -> Result<()> {
     for field in [
         "dependencies",
         "optionalDependencies",
@@ -765,6 +820,10 @@ fn validate_ranges(meta: &Value, include_dev: bool) -> Result<()> {
         validate_dependency_map(&meta[field], field == "devDependencies" && !include_dev)?;
     }
     for (name, (range, _, _)) in resolve::dependencies(meta, false, include_dev) {
+        let range = match catalogs {
+            Some(catalogs) => catalogs.resolve_str(&name, &range)?.to_owned(),
+            None => range,
+        };
         if let Some(reference) = range
             .strip_prefix("workspace:")
             .or_else(|| range.strip_prefix("link:"))
@@ -1043,13 +1102,21 @@ fn validate_pnpm_links(
     manifest: &Value,
     importer: &Path,
     members: &BTreeMap<String, local::Local>,
+    catalogs: &Catalogs,
 ) -> Result<()> {
     for field in ["dependencies", "devDependencies", "optionalDependencies"] {
         let Some(deps) = meta[field].as_object_mut() else {
             continue;
         };
         for (name, range) in deps {
-            *range = pnpm_link_reference(name, range, &manifest[field][name], importer, members)?;
+            *range = pnpm_link_reference(
+                name,
+                range,
+                &manifest[field][name],
+                importer,
+                members,
+                catalogs,
+            )?;
         }
     }
     Ok(())
@@ -1061,6 +1128,7 @@ fn pnpm_link_reference(
     requested: &Value,
     importer: &Path,
     members: &BTreeMap<String, local::Local>,
+    catalogs: &Catalogs,
 ) -> Result<Value> {
     let Some(link) = range.as_str().and_then(|range| range.strip_prefix("link:")) else {
         return Ok(range.clone());
@@ -1082,7 +1150,7 @@ fn pnpm_link_reference(
         .filter(|member| member.path == target)
         .ok_or_else(missing)?;
     let version = member.meta["version"].as_str().unwrap_or("0.0.0");
-    let requested = requested.as_str().unwrap_or("*");
+    let requested = catalogs.resolve_str(name, requested.as_str().unwrap_or("*"))?;
     let requested = requested.strip_prefix("workspace:").unwrap_or(requested);
     if !["*", "^", "~"].contains(&requested)
         && !requested.starts_with("link:")

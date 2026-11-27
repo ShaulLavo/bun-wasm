@@ -1,4 +1,9 @@
-import { packageFetch } from "./package-fetch.js";
+import { packageFetch, type PackageRequestKind, type PackageRewrite, type PackageUrlRewriter } from "./package-fetch.js";
+
+export interface InstallFetchOptions {
+  readonly fetch?: (url: string, options: RequestInit) => Promise<Response>;
+  readonly rewritePackageUrl?: PackageUrlRewriter;
+}
 
 const METADATA = "application/vnd.npm.install-v1+json";
 const TARBALL = "application/vnd.bun.install-tarball";
@@ -217,16 +222,34 @@ function getOpenedCache(storage: CacheStorage, session: CacheSession, now: numbe
   return opening;
 }
 
+/** Build an installer fetch policy with optional URL rewriting and underlying transport. */
+export function createInstallFetch(config: InstallFetchOptions = {}): (url: string, options: RequestInit) => Promise<Response> {
+  const { fetch: transport, rewritePackageUrl } = config;
+  return (url, options) => runInstallFetch(url, options, transport, rewritePackageUrl);
+}
+
 /** Cache npm downloads across playground runs, without caching ordinary user fetches. */
 export async function installFetch(url: string, options: RequestInit): Promise<Response> {
+  return runInstallFetch(url, options, undefined, undefined);
+}
+
+async function runInstallFetch(
+  url: string,
+  options: RequestInit,
+  transport: ((url: string, options: RequestInit) => Promise<Response>) | undefined,
+  rewritePackageUrl: PackageUrlRewriter | undefined,
+): Promise<Response> {
   const headers = new Headers(options.headers);
   const header = headers.get("accept") ?? "";
   const accept = header.split(";", 1)[0];
+  const fetcher = transport ?? fetch;
   if (options.method !== "GET" || accept !== METADATA && accept !== TARBALL) {
-    return fetch(url, options);
+    return fetcher(url, options);
   }
+  const kind: PackageRequestKind = accept === TARBALL ? "tarball" : "metadata";
+  const rewrite: PackageRewrite | undefined = rewritePackageUrl ? { kind, rewriteUrl: rewritePackageUrl } : undefined;
   if (accept === METADATA || typeof caches === "undefined" || headers.has("authorization")) {
-    return packageFetch(url, options);
+    return packageFetch(url, options, fetcher, rewrite);
   }
   const directives = headers.get("cache-control")?.match(/(?:[^,"]|"(?:[^"\\]|\\.)*")+/g);
   const refresh = header.includes("; no-cache") || (directives?.some(value => value.trim().toLowerCase() === "no-cache") ?? false);
@@ -244,7 +267,7 @@ export async function installFetch(url: string, options: RequestInit): Promise<R
       const cached = await matchKnownEntry(activeOpened, key, url);
       if (cached) return restoreCachedResponse(cached);
     }
-    const response = await packageFetch(url, options);
+    const response = await packageFetch(url, options, fetcher, rewrite);
     if (!response.ok || !activeOpened || activeOpened.generation !== session.generation) return response;
     return prepareCachedResponse(response, session, activeOpened, key, url, options.signal);
   } finally {

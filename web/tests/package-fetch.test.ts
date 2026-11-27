@@ -126,3 +126,55 @@ test("packageFetch enforces the redirect limit after cancelling each redirect bo
   await expect(request).rejects.toThrow("Package response redirected too many times");
   expect(calls).toHaveLength(21);
 });
+
+test("packageFetch rewrites tarball and metadata URLs through a host proxy hook", async () => {
+  const seen: Array<{ url: string; kind: string }> = [];
+  const { calls, fetcher } = createFetcher(() => new Response("proxied-archive"));
+  const original = "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz";
+  const result = await packageFetch(original, {}, fetcher, {
+    kind: "tarball",
+    rewriteUrl(request) {
+      seen.push(request);
+      return `https://sprockt.invalid/api/tarball-proxy?url=${encodeURIComponent(request.url)}`;
+    },
+  });
+
+  expect(await result.text()).toBe("proxied-archive");
+  expect(seen).toEqual([{ url: original, kind: "tarball" }]);
+  expect(calls).toHaveLength(1);
+  expect(required(calls[0]).url).toBe(`https://sprockt.invalid/api/tarball-proxy?url=${encodeURIComponent(original)}`);
+});
+
+test("packageFetch resolves same-origin relative proxy paths and passes through nullish rewrites", async () => {
+  const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  Object.defineProperty(globalThis, "location", { configurable: true, value: { href: "https://sprockt.invalid/workspace/1" } });
+  try {
+    const { calls, fetcher } = createFetcher(() => new Response("ok"));
+    await packageFetch("https://github.com/ShaulLavo/waffle/releases/download/v1/pkg.tgz", {}, fetcher, {
+      kind: "tarball",
+      rewriteUrl: ({ url }) => `/api/proxy?url=${encodeURIComponent(url)}`,
+    });
+    await packageFetch("https://registry.invalid/evlog", {}, fetcher, {
+      kind: "metadata",
+      rewriteUrl: () => undefined,
+    });
+    expect(required(calls[0]).url).toBe(
+      `https://sprockt.invalid/api/proxy?url=${encodeURIComponent("https://github.com/ShaulLavo/waffle/releases/download/v1/pkg.tgz")}`,
+    );
+    expect(required(calls[1]).url).toBe("https://registry.invalid/evlog");
+  } finally {
+    if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation);
+    else Reflect.deleteProperty(globalThis, "location");
+  }
+});
+
+test("packageFetch rejects empty or non-http(s) rewritten package URLs", async () => {
+  const { calls, fetcher } = createFetcher(() => new Response("never"));
+  for (const bad of ["", "   ", "javascript:alert(1)", "file:///etc/passwd"]) {
+    await expect(packageFetch("https://registry.invalid/pkg.tgz", {}, fetcher, {
+      kind: "tarball",
+      rewriteUrl: () => bad,
+    })).rejects.toThrow(TypeError);
+  }
+  expect(calls).toHaveLength(0);
+});

@@ -1,4 +1,5 @@
 //! Hoisted npm installs over the optional fetch ABI. No JS engine or OS processes.
+mod catalog;
 mod early;
 mod io;
 mod local;
@@ -189,11 +190,10 @@ fn execute(
         } else {
             &manifest
         };
-        resolver.workspaces = local::workspaces(
-            &std::env::current_dir().map_err(|e| e.to_string())?,
-            project_manifest,
-            parser,
-        )?;
+        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        resolver.workspaces = local::workspaces(&cwd, project_manifest, parser)?;
+        resolver.catalogs =
+            catalog::Catalogs::load(&cwd, project_manifest, &resolver.locked, parser)?;
         if let Some(member) = &member
             && let Some(local) = resolver
                 .workspaces
@@ -370,7 +370,10 @@ fn finalize_additions(
         let Some(package) = command_package(resolver, &name, member) else {
             continue;
         };
-        let range = if opts.exact && !resolve::tarball::is_specifier(&range) {
+        let range = if opts.exact
+            && !resolve::tarball::is_specifier(&range)
+            && !range.starts_with("catalog:")
+        {
             package.version.clone()
         } else if range == "latest" {
             format!("^{}", package.version)
@@ -931,6 +934,8 @@ fn same_lock(
     });
     Ok(locked["workspaces"] == planned["workspaces"]
         && locked["overrides"] == planned["overrides"]
+        && locked["catalog"] == planned["catalog"]
+        && locked["catalogs"] == planned["catalogs"]
         && packages_match)
 }
 
@@ -996,6 +1001,12 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> Result<String> {
     {
         lock["overrides"] = resolver.overrides.metadata.clone();
     }
+    if let Some(catalog) = resolver.catalogs.default_value() {
+        lock["catalog"] = catalog;
+    }
+    if let Some(catalogs) = resolver.catalogs.named_value() {
+        lock["catalogs"] = catalogs;
+    }
     write_lock(&lock, &resolver.registry)
 }
 
@@ -1018,10 +1029,12 @@ fn write_lock(lock: &Value, registry: &io::Registry) -> Result<String> {
         }
     }
     out.push_str("  },\n");
-    if let Some(overrides) = lock.get("overrides") {
-        out.push_str("  \"overrides\": ");
-        pretty(overrides, 1, &mut out);
-        out.push_str(",\n");
+    for field in ["overrides", "catalog", "catalogs"] {
+        if let Some(section) = lock.get(field) {
+            out.push_str(&format!("  \"{field}\": "));
+            pretty(section, 1, &mut out);
+            out.push_str(",\n");
+        }
     }
     if lock["packages"]
         .as_object()
@@ -1532,6 +1545,8 @@ fn package_binary(
         .filter(|file| file.is_file()))
 }
 
+#[cfg(test)]
+mod catalog_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod early_tests;
 #[cfg(test)]

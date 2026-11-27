@@ -293,3 +293,103 @@ test("closed runtime relay rejects stale connect before token acquisition", asyn
     await runtime.dispose();
   }
 });
+
+test("rewritePackageUrl routes bun install requests through a proxy while preserving cache and ordinary fetches", async () => {
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
+  const ring = createRing();
+  const seen: Array<{ url: string; kind: string }> = [];
+  const fetched: string[] = [];
+  const tarball = "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz";
+  const proxy = `https://sprockt.invalid/api/tarball-proxy?url=${encodeURIComponent(tarball)}`;
+  const helper = createBunNetworkHelper(await runtime.network(), ring, {
+    rewritePackageUrl(request) {
+      seen.push(request);
+      return request.url.startsWith("https://github.com/") ? proxy : undefined;
+    },
+    fetch: async url => {
+      fetched.push(url);
+      if (url === proxy) return new Response("proxied-tarball");
+      if (url === "https://registry.invalid/evlog") return new Response("{\"name\":\"evlog\"}");
+      return new Response("ordinary-fetch");
+    },
+  });
+  const host = new NetHost(ring, req => helper.handle(req), undefined, { shared: true });
+  try {
+    const readAll = async (meta: object) => {
+      const handle = host.fetch(JSON.stringify(meta), null);
+      for (let turn = 0; turn < 100 && host.fetchHead(handle) === AGAIN; turn++) await Bun.sleep(1);
+      const data = host.read(handle, 1024);
+      host.close(handle);
+      return data instanceof Uint8Array ? new TextDecoder().decode(data) : String(data);
+    };
+    expect(await readAll({ url: tarball, method: "GET", headers: [["accept", "application/vnd.bun.install-tarball"]] })).toBe("proxied-tarball");
+    expect(await readAll({ url: "https://registry.invalid/evlog", method: "GET", headers: [["accept", "application/vnd.npm.install-v1+json; q=1.0"]] })).toBe("{\"name\":\"evlog\"}");
+    expect(await readAll({ url: "https://github.com/ordinary-user-fetch", method: "GET", headers: [] })).toBe("ordinary-fetch");
+    expect(seen).toEqual([
+      { url: tarball, kind: "tarball" },
+      { url: "https://registry.invalid/evlog", kind: "metadata" },
+    ]);
+    expect(fetched).toEqual([proxy, "https://registry.invalid/evlog", "https://github.com/ordinary-user-fetch"]);
+  } finally {
+    helper.dispose();
+    await runtime.dispose();
+  }
+});
+
+test("rewritePackageUrl keeps Cache Storage tarball caching keyed by the original package URL", async () => {
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
+  const originalCaches = Object.getOwnPropertyDescriptor(globalThis, "caches");
+  const ring = createRing();
+  const stored = new Map<string, string>();
+  const fetched: string[] = [];
+  const tarball = "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz";
+  const proxy = `https://sprockt.invalid/api/tarball-proxy?url=${encodeURIComponent(tarball)}`;
+  const cache = {
+    async open() {
+      return {
+        async match(url: string) {
+          const hit = stored.get(url);
+          return hit === undefined ? undefined : new Response(hit);
+        },
+        async put(url: string, response: Response) {
+          stored.set(url, await response.text());
+        },
+      };
+    },
+  };
+  const helper = createBunNetworkHelper(await runtime.network(), ring, {
+    rewritePackageUrl: ({ url, kind }) => (kind === "tarball" && url === tarball ? proxy : undefined),
+    fetch: async url => {
+      fetched.push(url);
+      return new Response("cached-via-proxy");
+    },
+  });
+  const host = new NetHost(ring, req => helper.handle(req), undefined, { shared: true });
+  try {
+    Object.defineProperty(globalThis, "caches", { configurable: true, value: cache });
+    const runFetch = async () => {
+      const handle = host.fetch(JSON.stringify({ url: tarball, method: "GET", headers: [["accept", "application/vnd.bun.install-tarball"]] }), null);
+      for (let turn = 0; turn < 100 && host.fetchHead(handle) === AGAIN; turn++) await Bun.sleep(1);
+      const chunks: number[] = [];
+      for (let turn = 0; turn < 100; turn++) {
+        const piece = host.read(handle, 1024);
+        if (piece === 0) break;
+        if (piece === AGAIN) { await Bun.sleep(1); continue; }
+        if (piece instanceof Uint8Array) chunks.push(...piece);
+      }
+      host.close(handle);
+      return new TextDecoder().decode(new Uint8Array(chunks));
+    };
+    expect(await runFetch()).toBe("cached-via-proxy");
+    for (let turn = 0; turn < 50 && !stored.has(tarball); turn++) await Bun.sleep(2);
+    expect(stored.has(tarball)).toBe(true);
+    expect(stored.has(proxy)).toBe(false);
+    expect(await runFetch()).toBe("cached-via-proxy");
+    expect(fetched).toEqual([proxy]);
+  } finally {
+    helper.dispose();
+    await runtime.dispose();
+    if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches);
+    else Reflect.deleteProperty(globalThis, "caches");
+  }
+});

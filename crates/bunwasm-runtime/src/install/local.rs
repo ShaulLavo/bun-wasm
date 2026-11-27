@@ -20,13 +20,9 @@ pub struct Local {
 pub fn root(parser: &dyn Transpiler) -> Result<Option<PathBuf>> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     for ancestor in cwd.ancestors().skip(1) {
-        if !ancestor.join("package.json").exists() {
+        let Some(manifest) = workspace_manifest(ancestor, parser)? else {
             continue;
-        }
-        let manifest = io::read(&ancestor.join("package.json"), "JSON", parser)?;
-        if manifest.get("workspaces").is_none() {
-            continue;
-        }
+        };
         let members = workspaces(ancestor, &manifest, parser)?;
         if members.values().any(|member| member.path == cwd) {
             std::env::set_current_dir(ancestor).map_err(|e| e.to_string())?;
@@ -34,6 +30,20 @@ pub fn root(parser: &dyn Transpiler) -> Result<Option<PathBuf>> {
         }
     }
     Ok(None)
+}
+
+fn workspace_manifest(ancestor: &Path, parser: &dyn Transpiler) -> Result<Option<Value>> {
+    if !ancestor.join("package.json").exists() {
+        return Ok(None);
+    }
+    let mut manifest = io::read(&ancestor.join("package.json"), "JSON", parser)?;
+    if manifest["workspaces"].is_null() && ancestor.join("pnpm-workspace.yaml").exists() {
+        let config = io::read(&ancestor.join("pnpm-workspace.yaml"), "YAML", parser)?;
+        if config["packages"].is_array() {
+            manifest["workspaces"] = config["packages"].clone();
+        }
+    }
+    Ok((!manifest["workspaces"].is_null()).then_some(manifest))
 }
 
 pub fn workspaces(

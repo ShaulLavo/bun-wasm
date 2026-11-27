@@ -769,8 +769,14 @@ impl Download {
                 return head || self.body.len() > start;
             }
             BodyRead::Ended => self.state = Body::Done,
-            BodyRead::TooLarge => self.fail("Download exceeds 256 MiB limit".into()),
-            BodyRead::Stopped(_) => self.fail(network_error(handle, registry)),
+            BodyRead::TooLarge => {
+                self.fail(format_fetch_error(
+                    &self.url,
+                    "Download exceeds 256 MiB limit",
+                    registry,
+                ));
+            }
+            BodyRead::Stopped(_) => self.fail(network_error(handle, &self.url, registry)),
         }
         true
     }
@@ -787,14 +793,14 @@ impl Download {
             Ok(head) => head,
             Err(host::AGAIN) => return false,
             Err(_) => {
-                self.fail(network_error(self.handle, registry));
+                self.fail(network_error(self.handle, &self.url, registry));
                 return true;
             }
         };
         match response_status(&head) {
             Ok(status) if (200..300).contains(&status) => self.state = Body::Reading,
             Ok(status) => self.fail(format!("GET {} - {status}", self.url)),
-            Err(error) => self.fail(error),
+            Err(error) => self.fail(format_fetch_error(&self.url, &error, registry)),
         }
         true
     }
@@ -858,7 +864,7 @@ fn start_request(
     let meta = json!({"method":"GET", "url":url, "headers":headers, "redirect":"follow", "credentialPolicy":"package"});
     let handle = host::fetch(meta.to_string().as_bytes(), &[]);
     if handle < 0 {
-        return Err(network_error(handle, registry));
+        return Err(network_error(handle, url, registry));
     }
     Ok(handle)
 }
@@ -871,11 +877,29 @@ fn wait(pending: &mut Pending, url: &str) -> Result<()> {
     Ok(())
 }
 
-fn network_error(handle: i32, registry: &Registry) -> String {
-    if handle == host::UNSUPPORTED {
-        return "Package installation needs a host with networking support".into();
+pub(super) const NO_NETWORK: &str = "Package installation needs a host with networking support";
+
+pub(super) fn format_fetch_error(url: &str, message: &str, registry: &Registry) -> String {
+    let url = registry.redact(url);
+    let message = registry.redact(message);
+    if message.contains(&url) {
+        return message;
     }
-    host::error(handle)
+    format!("GET {url} - {message}")
+}
+
+pub(super) fn package_fetch_error(name: &str, error: String) -> String {
+    if error == NO_NETWORK {
+        return error;
+    }
+    format!("failed to fetch \"{name}\": {error}")
+}
+
+fn network_error(handle: i32, url: &str, registry: &Registry) -> String {
+    if handle == host::UNSUPPORTED {
+        return NO_NETWORK.into();
+    }
+    let message = host::error(handle)
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         .and_then(|v| {
@@ -883,7 +907,8 @@ fn network_error(handle: i32, registry: &Registry) -> String {
                 .as_str()
                 .map(|message| registry.redact(message))
         })
-        .unwrap_or_else(|| "Registry request failed".into())
+        .unwrap_or_else(|| "Registry request failed".into());
+    format_fetch_error(url, &message, registry)
 }
 
 fn parsed_integrity(sri: &str) -> Option<(&'static str, Vec<u8>)> {

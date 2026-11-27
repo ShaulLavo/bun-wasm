@@ -4,4 +4,11 @@ export { ENGINE_BIN, engineEnvironment } from "./executable-paths.js";
 export { runBun, startBun, type BunProcess, type BunRunResult, type RunBunOptions } from "./run-bun.js";
 export { installBunSharedObjects, type BunSharedObjects } from "./shared-objects.js";
 
-export type { BunNetworkOptions, BunRelayOptions, RuntimeNetworkHelper } from "../web/src/net/helper.js";
+export type {
+  BunNetworkOptions,
+  BunPackageRequest,
+  BunPackageRequestKind,
+  BunPackageUrlRewriter,
+  BunRelayOptions,
+  RuntimeNetworkHelper,
+} from "../web/src/net/helper.js";
