@@ -40,11 +40,11 @@ impl Catalogs {
     ) -> Result<Self> {
         let mut default_source = workspace_field(manifest, "catalog");
         let mut named_source = workspace_field(manifest, "catalogs");
-        let pnpm_config = read_optional_yaml(
-            &root.join("pnpm-workspace.yaml"),
-            default_source.is_none() || named_source.is_none(),
-            parser,
-        )?;
+        let pnpm_config = if default_source.is_none() || named_source.is_none() {
+            read_optional_yaml_lenient(&root.join("pnpm-workspace.yaml"), parser)
+        } else {
+            None
+        };
         if let Some(config) = &pnpm_config {
             fill_catalog_sources(config, &mut default_source, &mut named_source);
         }
@@ -270,13 +270,6 @@ impl Catalogs {
             .chain(self.named.values().flat_map(BTreeMap::values))
             .map(String::as_str)
     }
-}
-
-fn read_optional_yaml(path: &Path, needed: bool, parser: &dyn Transpiler) -> Result<Option<Value>> {
-    if !needed || !path.is_file() {
-        return Ok(None);
-    }
-    Ok(Some(io::read(path, "YAML", parser)?))
 }
 
 fn read_optional_yaml_lenient(path: &Path, parser: &dyn Transpiler) -> Option<Value> {

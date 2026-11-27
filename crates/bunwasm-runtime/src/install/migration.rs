@@ -446,23 +446,17 @@ fn expand_root_catalogs(
 fn expand_manifest_catalogs(meta: &Value, catalogs: &Catalogs) -> Result<Value> {
     let mut expanded = meta.clone();
     remove_optional_duplicates(&mut expanded);
-    let mut skipped_optional = Vec::new();
+    let peer_meta = expanded["peerDependenciesMeta"].clone();
     for field in [
         "dependencies",
         "devDependencies",
         "optionalDependencies",
         "peerDependencies",
     ] {
-        let optional = field == "optionalDependencies";
+        let optional_field = field == "optionalDependencies";
+        let peer_field = field == "peerDependencies";
         if let Some(deps) = expanded[field].as_object_mut() {
-            expand_dependency_map(deps, catalogs, optional, &mut skipped_optional)?;
-        }
-    }
-    for name in &skipped_optional {
-        for field in ["dependencies", "devDependencies"] {
-            if let Some(deps) = expanded[field].as_object_mut() {
-                deps.remove(name);
-            }
+            expand_dependency_map(deps, catalogs, optional_field, peer_field, &peer_meta)?;
         }
     }
     Ok(expanded)
@@ -471,25 +465,27 @@ fn expand_manifest_catalogs(meta: &Value, catalogs: &Catalogs) -> Result<Value> 
 fn expand_dependency_map(
     deps: &mut serde_json::Map<String, Value>,
     catalogs: &Catalogs,
-    optional: bool,
-    skipped_optional: &mut Vec<String>,
+    optional_field: bool,
+    peer_field: bool,
+    peer_meta: &Value,
 ) -> Result<()> {
     let mut skipped = Vec::new();
     for (name, range) in deps.iter_mut() {
         let Some(raw) = range.as_str() else {
             continue;
         };
+        let is_optional =
+            optional_field || (peer_field && peer_meta[name]["optional"].as_bool() == Some(true));
         match catalogs.resolve(name, raw) {
             Ok(Some(resolved)) => *range = resolved.into(),
             Ok(None) => {}
-            Err(_) if optional => skipped.push(name.clone()),
+            Err(_) if is_optional => skipped.push(name.clone()),
             Err(error) => return Err(error),
         }
     }
     for name in &skipped {
         deps.remove(name);
     }
-    skipped_optional.extend(skipped);
     Ok(())
 }
 
@@ -611,6 +607,13 @@ fn pnpm_importer(
     let mut normalized = manifest.clone();
     remove_optional_duplicates(&mut normalized);
     let mut meta = normalized.clone();
+    let peer_meta = normalized["peerDependenciesMeta"].clone();
+    if let Some(peers) = meta["peerDependencies"].as_object_mut() {
+        peers.retain(|name, value| {
+            !(peer_meta[name]["optional"].as_bool() == Some(true)
+                && missing_catalog(name, value, catalogs))
+        });
+    }
     for field in ["dependencies", "devDependencies", "optionalDependencies"] {
         pnpm_importer_field(
             &mut meta,
@@ -633,16 +636,17 @@ fn pnpm_importer_field(
     lock_catalogs: &Catalogs,
 ) -> Result<()> {
     let optional = field == "optionalDependencies";
+    if optional && let Some(entries) = meta[field].as_object_mut() {
+        entries.retain(|name, value| !missing_catalog(name, value, catalogs));
+    }
     if importer[field].is_null() && manifest[field].is_null() {
         return Ok(());
     }
     if importer[field].is_null()
         && optional
-        && manifest[field].as_object().is_some_and(|expected| {
-            expected
-                .iter()
-                .all(|(n, v)| missing_catalog(n, v, catalogs))
-        })
+        && meta[field]
+            .as_object()
+            .is_some_and(|entries| entries.is_empty())
     {
         return Ok(());
     }

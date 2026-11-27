@@ -1253,6 +1253,78 @@ fn pnpm_frozen_migration_preserves_disjoint_catalog_and_catalogs_default_groups(
 }
 
 #[test]
+fn pnpm_and_yarn_migrations_drop_skipped_optional_catalogs_and_ignore_malformed_pnpm_yaml() {
+    isolated(
+        "pnpm_and_yarn_migrations_drop_skipped_optional_catalogs_and_ignore_malformed_pnpm_yaml",
+        || {
+            seed_registry_package("versioned", &["1.0.0"]);
+            // 1. pnpm migration with an optional dependency whose named catalog was removed.
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "dependencies": { "versioned": "^1.0.0" },
+                    "optionalDependencies": { "gone": "catalog:removed" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      versioned:\n        specifier: ^1.0.0\n        version: 1.0.0\n    optionalDependencies:\n      gone:\n        specifier: 'catalog:removed'\n        version: 1.0.0\npackages:\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n  gone@1.0.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+            install("install", &["--lockfile-only"]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert!(lock["packages"].get("gone").is_none());
+
+            // 2. Yarn migration with an optional peer referencing a missing catalog.
+            fs::remove_file("bun.lock").unwrap();
+            fs::remove_file("pnpm-lock.yaml").unwrap();
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "dependencies": { "versioned": "^1.0.0" },
+                    "peerDependencies": { "opt-peer": "catalog:missing" },
+                    "peerDependenciesMeta": { "opt-peer": { "optional": true } }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                "yarn.lock",
+                "__metadata:\n  version: 8\n\n\"root@workspace:.\":\n  version: 0.0.0-use.local\n  resolution: \"root@workspace:.\"\n  dependencies:\n    versioned: \"^1.0.0\"\n\n\"versioned@npm:^1.0.0\":\n  version: 1.0.0\n  resolution: \"versioned@npm:1.0.0\"\n",
+            )
+            .unwrap();
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert!(lock["packages"].get("opt-peer").is_none());
+
+            // 3. Unrelated malformed pnpm-workspace.yaml does not break an explicit workspaces: [] install.
+            fs::remove_file("bun.lock").unwrap();
+            fs::remove_file("yarn.lock").unwrap();
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "workspaces": [],
+                    "dependencies": { "versioned": "^1.0.0" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write("pnpm-workspace.yaml", "packages: [invalid: yaml\n").unwrap();
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+        },
+    );
+}
+
+#[test]
 fn missing_optional_catalog_and_empty_yarn_rc_do_not_break_install() {
     assert_eq!(catalog::yarn_rc_filename_from(None), ".yarnrc.yml");
     assert_eq!(catalog::yarn_rc_filename_from(Some("")), ".yarnrc.yml");
