@@ -12,11 +12,16 @@ function install(target: InstallFixtureTarget, directory: string, registry: stri
   return installFixture(directory, registry, args, expected, true, [], target);
 }
 
-async function runGuestUpdate(target: InstallFixtureTarget, directory: string, registry: string, args: string[]) {
+async function runGuestUpdate(target: InstallFixtureTarget, directory: string, registry: string, args: string[], guestPwd = "/") {
   const [program, argv] = installFixtureCommand(directory, registry, args, true, [], target);
   const cmdIndex = argv.lastIndexOf("install");
   assert.ok(cmdIndex >= 0);
   argv[cmdIndex] = "update";
+  if (guestPwd !== "/") {
+    const pwdIndex = argv.indexOf("PWD=/");
+    assert.ok(pwdIndex >= 0);
+    argv[pwdIndex] = `PWD=${guestPwd}`;
+  }
   const child = spawn(program, argv, { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", bytes => { output += bytes; });
@@ -292,26 +297,34 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
     assert.equal(installedVersion(peerUpdateRoot, "@fixture/peer-b/node_modules/versioned"), "2.0.0");
     await install(target, peerUpdateRoot, registry.base, ["--frozen-lockfile"]);
 
-    // `bun update --latest` with a root npm alias providing a catalog tag peer must not 404 on the alias name.
-    const aliasPeerRoot = join(directory, "update-alias-peer");
-    mkdirSync(join(aliasPeerRoot, "packages/a"), { recursive: true });
-    writeFileSync(join(aliasPeerRoot, "package.json"), JSON.stringify({
-      name: "update-alias-peer-root",
-      dependencies: { "logical-alias": "npm:versioned@1.0.0" },
-      workspaces: {
-        packages: ["packages/*"],
-        catalog: { "logical-alias": "latest" },
-      },
-    }, null, 2));
-    writeFileSync(join(aliasPeerRoot, "packages/a/package.json"), JSON.stringify({
-      name: "@fixture/alias-peer-a",
-      version: "1.0.0",
-      peerDependencies: { "logical-alias": "catalog:" },
-    }, null, 2));
-    await install(target, aliasPeerRoot, registry.base);
-    await runGuestUpdate(target, aliasPeerRoot, registry.base, ["--latest"]);
-    assert.equal(installedVersion(aliasPeerRoot, "logical-alias"), "1.0.0");
-    await install(target, aliasPeerRoot, registry.base, ["--frozen-lockfile"]);
+    // `bun update --latest` with a root npm alias providing a catalog peer must neither 404 on the
+    // alias name (from root or workspace member) nor downgrade a `^2.0.0` catalog entry to `^1.0.0`.
+    for (const [label, catalogSpec] of [["tag", "latest"], ["range", "^2.0.0"]] as const) {
+      const aliasPeerRoot = join(directory, `update-alias-peer-${label}`);
+      mkdirSync(join(aliasPeerRoot, "packages/a"), { recursive: true });
+      writeFileSync(join(aliasPeerRoot, "package.json"), JSON.stringify({
+        name: `update-alias-peer-${label}-root`,
+        dependencies: { "logical-alias": "npm:versioned@1.0.0" },
+        workspaces: {
+          packages: ["packages/*"],
+          catalog: { "logical-alias": catalogSpec },
+        },
+      }, null, 2));
+      writeFileSync(join(aliasPeerRoot, "packages/a/package.json"), JSON.stringify({
+        name: "@fixture/alias-peer-a",
+        version: "1.0.0",
+        peerDependencies: { "logical-alias": "catalog:" },
+      }, null, 2));
+      await install(target, aliasPeerRoot, registry.base);
+      await runGuestUpdate(target, aliasPeerRoot, registry.base, ["--latest"]);
+      await runGuestUpdate(target, aliasPeerRoot, registry.base, ["--latest"], "/packages/a");
+      const aliasManifest = JSON.parse(readFileSync(join(aliasPeerRoot, "package.json"), "utf8")) as {
+        workspaces: { catalog: { "logical-alias": string } };
+      };
+      assert.equal(aliasManifest.workspaces.catalog["logical-alias"], catalogSpec);
+      assert.equal(installedVersion(aliasPeerRoot, "logical-alias"), "1.0.0");
+      await install(target, aliasPeerRoot, registry.base, ["--frozen-lockfile"]);
+    }
   } finally {
     await registry.close();
     rmSync(directory, { recursive: true, force: true });

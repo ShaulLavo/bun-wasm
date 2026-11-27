@@ -440,6 +440,7 @@ impl Resolver {
             if let Some(cat_key) = cat_key
                 && let Some(key) = placed_key
                 && let Some(pkg) = self.packages.get(&key)
+                && (!*peer || pkg.name == *name || range.starts_with("npm:"))
             {
                 self.used_catalogs.insert(cat_key, pkg.version.clone());
             }
@@ -620,7 +621,7 @@ impl Resolver {
         if self.member_update.as_ref().is_some_and(|update| {
             update.member == parent.name && update.dependencies.contains(name)
         }) {
-            return self.resolved_target(name, range, optional, LockLookup::Skip);
+            return self.member_update_target(parent, name, range, optional, peer);
         }
         if let Some(version) = self.locked_child(parent, name, range, peer) {
             return Ok(Some(version));
@@ -637,6 +638,25 @@ impl Resolver {
             LockLookup::Use
         };
         self.resolved_target(name, range, optional, lookup)
+    }
+
+    fn member_update_target(
+        &mut self,
+        parent: &Package,
+        name: &str,
+        range: &str,
+        optional: bool,
+        peer: bool,
+    ) -> Result<Option<String>> {
+        if peer && self.root_deps.contains(name) && self.dependency_key(parent, name).is_some() {
+            if let Some(version) = self.existing_peer_tag_target(parent, name, range) {
+                return Ok(Some(version));
+            }
+            if !is_tag_spec(range) {
+                return Ok(Some(range.into()));
+            }
+        }
+        self.resolved_target(name, range, optional, LockLookup::Skip)
     }
 
     fn resolved_target(
@@ -1168,6 +1188,14 @@ pub(super) fn is_tag(range: &str) -> bool {
         && range
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
+}
+
+fn is_tag_spec(range: &str) -> bool {
+    let target_range = range
+        .strip_prefix("npm:")
+        .and_then(|alias| spec(alias).ok())
+        .map(|(_, range)| range);
+    is_tag(target_range.as_deref().unwrap_or(range))
 }
 
 fn catalog_ref_group(spec: &str) -> Option<Option<String>> {
