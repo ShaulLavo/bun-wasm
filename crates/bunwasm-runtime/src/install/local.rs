@@ -33,15 +33,16 @@ pub fn root(parser: &dyn Transpiler) -> Result<Option<PathBuf>> {
 }
 
 fn workspace_manifest(ancestor: &Path, parser: &dyn Transpiler) -> Result<Option<Value>> {
-    if !ancestor.join("package.json").exists() {
+    if !ancestor.join("package.json").is_file() {
         return Ok(None);
     }
     let mut manifest = io::read(&ancestor.join("package.json"), "JSON", parser)?;
-    if manifest["workspaces"].is_null() && ancestor.join("pnpm-workspace.yaml").exists() {
-        let config = io::read(&ancestor.join("pnpm-workspace.yaml"), "YAML", parser)?;
-        if config["packages"].is_array() {
-            manifest["workspaces"] = config["packages"].clone();
-        }
+    if manifest["workspaces"].is_null()
+        && ancestor.join("pnpm-workspace.yaml").is_file()
+        && let Ok(config) = io::read(&ancestor.join("pnpm-workspace.yaml"), "YAML", parser)
+        && config["packages"].is_array()
+    {
+        manifest["workspaces"] = config["packages"].clone();
     }
     Ok((!manifest["workspaces"].is_null()).then_some(manifest))
 }

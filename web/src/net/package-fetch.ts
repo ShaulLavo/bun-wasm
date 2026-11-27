@@ -54,16 +54,21 @@ function packageRedirect(current: URL, location: string, headers: Headers): URL 
   return next;
 }
 
+export function resolvePackageRewrite(input: string, rewrite?: PackageRewrite): URL {
+  return resolveRewrite(new URL(input), rewrite);
+}
+
 export async function packageFetch(
   input: string,
   options: RequestInit,
   fetcher: FetchLike = fetch,
   rewrite?: PackageRewrite,
+  initialTarget?: URL,
 ): Promise<Response> {
   let url = new URL(input);
   const headers = new Headers(options.headers);
   for (let redirects = 0; redirects <= 20; redirects++) {
-    const target = resolveRewrite(url, rewrite);
+    const target = redirects === 0 && initialTarget ? initialTarget : resolveRewrite(url, rewrite);
     stripCredentialsOnOriginChange(url, target, headers);
     const response = await fetcher(target.href, { ...options, headers, redirect: "manual" });
     if (response.type === "opaqueredirect") throw new Error("Package redirect destination is unavailable to this browser");

@@ -396,14 +396,15 @@ test("rewritePackageUrl only intercepts package-policy requests and ignores ordi
   }
 });
 
-test("rewritePackageUrl keeps Cache Storage tarball caching keyed by the original package URL", async () => {
+test("rewritePackageUrl resolves the route before Cache Storage lookup and isolates distinct proxies", async () => {
   const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
   const originalCaches = Object.getOwnPropertyDescriptor(globalThis, "caches");
-  const ring = createRing();
   const stored = new Map<string, string>();
   const fetched: string[] = [];
+  const rewriteCalls: string[] = [];
   const tarball = "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz";
-  const proxy = `https://sprockt.invalid/api/tarball-proxy?url=${encodeURIComponent(tarball)}`;
+  const proxyA = `https://proxy-a.invalid/api/tarball-proxy?url=${encodeURIComponent(tarball)}`;
+  const proxyB = `https://proxy-b.invalid/api/tarball-proxy?url=${encodeURIComponent(tarball)}`;
   const cache = {
     async open() {
       return {
@@ -417,17 +418,20 @@ test("rewritePackageUrl keeps Cache Storage tarball caching keyed by the origina
       };
     },
   };
-  const helper = createBunNetworkHelper(await runtime.network(), ring, {
-    rewritePackageUrl: ({ url, kind }) => (kind === "tarball" && url === tarball ? proxy : undefined),
-    fetch: async url => {
-      fetched.push(url);
-      return new Response("cached-via-proxy");
-    },
-  });
-  const bunHost = new BunNetHost(ring, req => dispatchBunNetwork(helper, { type: "net", req }), undefined, { shared: true });
-  const runtimeHost = bunHost.runtime;
-  try {
-    Object.defineProperty(globalThis, "caches", { configurable: true, value: cache });
+  const makeClient = async (proxyUrl: string, body: string) => {
+    const ring = createRing();
+    const helper = createBunNetworkHelper(await runtime.network(), ring, {
+      rewritePackageUrl: ({ url, kind }) => {
+        rewriteCalls.push(`${proxyUrl}:${kind}`);
+        return kind === "tarball" && url === tarball ? proxyUrl : undefined;
+      },
+      fetch: async url => {
+        fetched.push(url);
+        return new Response(body);
+      },
+    });
+    const bunHost = new BunNetHost(ring, req => dispatchBunNetwork(helper, { type: "net", req }), undefined, { shared: true });
+    const runtimeHost = bunHost.runtime;
     const runFetch = async () => {
       const handle = fetchThroughSlot(bunHost, {
         url: tarball, method: "GET", credentialPolicy: "package",
@@ -444,14 +448,27 @@ test("rewritePackageUrl keeps Cache Storage tarball caching keyed by the origina
       runtimeHost.close(handle);
       return new TextDecoder().decode(new Uint8Array(chunks));
     };
-    expect(await runFetch()).toBe("cached-via-proxy");
-    for (let turn = 0; turn < 50 && !stored.has(tarball); turn++) await Bun.sleep(2);
-    expect(stored.has(tarball)).toBe(true);
-    expect(stored.has(proxy)).toBe(false);
-    expect(await runFetch()).toBe("cached-via-proxy");
-    expect(fetched).toEqual([proxy]);
+    return { helper, runFetch };
+  };
+  const clientA = await makeClient(proxyA, "cached-via-proxy-a");
+  const clientB = await makeClient(proxyB, "cached-via-proxy-b");
+  try {
+    Object.defineProperty(globalThis, "caches", { configurable: true, value: cache });
+    expect(await clientA.runFetch()).toBe("cached-via-proxy-a");
+    for (let turn = 0; turn < 50 && !stored.has(proxyA); turn++) await Bun.sleep(2);
+    expect(stored.has(proxyA)).toBe(true);
+    expect(stored.has(tarball)).toBe(false);
+    // Same proxy hits warm cache without a second network request.
+    expect(await clientA.runFetch()).toBe("cached-via-proxy-a");
+    // Distinct proxy must invoke its own rewriter and never receive proxy A's cached bytes.
+    expect(await clientB.runFetch()).toBe("cached-via-proxy-b");
+    for (let turn = 0; turn < 50 && !stored.has(proxyB); turn++) await Bun.sleep(2);
+    expect(stored.has(proxyB)).toBe(true);
+    expect(fetched).toEqual([proxyA, proxyB]);
+    expect(rewriteCalls).toEqual([`${proxyA}:tarball`, `${proxyA}:tarball`, `${proxyB}:tarball`]);
   } finally {
-    helper.dispose();
+    clientA.helper.dispose();
+    clientB.helper.dispose();
     await runtime.dispose();
     if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches);
     else Reflect.deleteProperty(globalThis, "caches");

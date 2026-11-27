@@ -1320,6 +1320,15 @@ fn pnpm_and_yarn_migrations_drop_skipped_optional_catalogs_and_ignore_malformed_
             install("install", &[]).unwrap();
             let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
             assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+
+            // 4. Standalone child project ignores a malformed pnpm-workspace.yaml in an ancestor.
+            fs::write("package.json", json!({ "name": "parent" }).to_string()).unwrap();
+            fs::create_dir_all("child").unwrap();
+            fs::write("child/package.json", json!({ "name": "child" }).to_string()).unwrap();
+            let parent = std::env::current_dir().unwrap();
+            std::env::set_current_dir(parent.join("child")).unwrap();
+            install("install", &[]).unwrap();
+            assert_eq!(std::env::current_dir().unwrap(), parent.join("child"));
         },
     );
 }

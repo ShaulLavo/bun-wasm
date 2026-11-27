@@ -1,4 +1,4 @@
-import { packageFetch, type PackageRequestKind, type PackageRewrite, type PackageUrlRewriter } from "./package-fetch.js";
+import { packageFetch, resolvePackageRewrite, type PackageRequestKind, type PackageRewrite, type PackageUrlRewriter } from "./package-fetch.js";
 
 const packagePolicyHeaders = new WeakMap<object, string>();
 
@@ -270,12 +270,14 @@ async function runInstallFetch(
   if (accept === METADATA || typeof caches === "undefined" || headers.has("authorization")) {
     return packageFetch(url, options, fetcher, rewrite);
   }
+  const resolvedTarget = rewrite ? resolvePackageRewrite(url, rewrite) : undefined;
+  const cacheUrl = resolvedTarget ? resolvedTarget.href : url;
   const requestDirectives = cacheControlDirectives(headers);
   const refresh = header.includes("; no-cache") || requestDirectives.includes("no-cache");
   const skipRequestStore = requestDirectives.includes("no-store");
   const storage = caches;
   const session = getSession(storage);
-  const key = cacheKey(url);
+  const key = cacheKey(cacheUrl);
   const now = Date.now();
   const opening = getOpenedCache(storage, session, now);
   session.activeFetches++;
@@ -284,14 +286,14 @@ async function runInstallFetch(
     const opened = await opening;
     const activeOpened = opened && opened.generation === session.generation ? opened : undefined;
     if (activeOpened && !refresh && !skipRequestStore) {
-      const cached = await matchKnownEntry(activeOpened, key, url);
+      const cached = await matchKnownEntry(activeOpened, key, cacheUrl);
       if (cached) return restoreCachedResponse(cached);
     }
-    const response = await packageFetch(url, options, fetcher, rewrite);
+    const response = await packageFetch(url, options, fetcher, rewrite, resolvedTarget);
     if (!response.ok || !activeOpened || activeOpened.generation !== session.generation || skipRequestStore || cacheControlDirectives(response.headers).includes("no-store")) {
       return response;
     }
-    return prepareCachedResponse(response, session, activeOpened, key, url, options.signal);
+    return prepareCachedResponse(response, session, activeOpened, key, cacheUrl, options.signal);
   } finally {
     session.activeFetches--;
     session.lastActivity = Date.now();
