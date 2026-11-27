@@ -612,10 +612,7 @@ fn pnpm_importer(
     let mut meta = normalized.clone();
     let peer_meta = normalized["peerDependenciesMeta"].clone();
     if let Some(peers) = meta["peerDependencies"].as_object_mut() {
-        peers.retain(|name, value| {
-            !(peer_meta[name]["optional"].as_bool() == Some(true)
-                && missing_catalog(name, value, catalogs))
-        });
+        expand_dependency_map(peers, catalogs, false, true, &peer_meta)?;
     }
     for field in ["dependencies", "devDependencies", "optionalDependencies"] {
         pnpm_importer_field(

@@ -405,7 +405,7 @@ impl Resolver {
             if *peer && !workspace && super::catalog::is_protocol(&range) {
                 continue;
             }
-            let Some(target) = self.target(parent, name, &range, is_optional)? else {
+            let Some(target) = self.target(parent, name, &range, is_optional, *peer)? else {
                 continue;
             };
             let chain = self.placement(parent, name, &target, *peer, is_optional);
@@ -450,11 +450,11 @@ impl Resolver {
         parent: Option<&Package>,
     ) -> MetadataLookahead {
         let mut remaining = VecDeque::new();
-        for (index, (name, (range, optional, _))) in current.iter().enumerate() {
+        for (index, (name, (range, optional, peer))) in current.iter().enumerate() {
             let Some(range) = self.edge_range(parent, name, range) else {
                 continue;
             };
-            if let Some(name) = self.prefetch_name(parent, name, &range, *optional) {
+            if let Some(name) = self.prefetch_name(parent, name, &range, *optional, *peer) {
                 remaining.push_back(MetadataCandidate {
                     edge: Some(index),
                     name,
@@ -493,7 +493,8 @@ impl Resolver {
             let Some(range) = self.edge_range(Some(parent), &name, &range) else {
                 continue;
             };
-            let Some(name) = self.prefetch_name(Some(parent), &name, &range, optional) else {
+            let Some(name) = self.prefetch_name(Some(parent), &name, &range, optional, false)
+            else {
                 continue;
             };
             candidates.push_back(MetadataCandidate { edge: None, name });
@@ -506,6 +507,7 @@ impl Resolver {
         name: &str,
         range: &str,
         optional: bool,
+        peer: bool,
     ) -> Option<String> {
         // Existing placements can satisfy or reject peers without fetching anything.
         if self.packages.contains_key(name)
@@ -525,7 +527,7 @@ impl Resolver {
             });
             if updating {
                 lookup = LockLookup::Skip;
-            } else if let Some(locked) = self.locked_child(parent, name, &range) {
+            } else if let Some(locked) = self.locked_child(parent, name, &range, peer) {
                 range = locked;
             }
         }
@@ -581,6 +583,7 @@ impl Resolver {
         name: &str,
         range: &str,
         optional: bool,
+        peer: bool,
     ) -> Result<Option<String>> {
         if tarball::is_specifier(range) || self.local_package(name, range)?.is_some() {
             return Ok(Some(range.into()));
@@ -590,7 +593,7 @@ impl Resolver {
         }) {
             return self.resolved_target(name, range, optional, LockLookup::Skip);
         }
-        if let Some(version) = self.locked_child(parent, name, range) {
+        if let Some(version) = self.locked_child(parent, name, range, peer) {
             return Ok(Some(version));
         }
         if (!is_tag(range) && !range.starts_with("npm:")) || self.workspaces.contains_key(name) {
@@ -641,7 +644,13 @@ impl Resolver {
         Some((parent.chain.clone(), ws_meta, true))
     }
 
-    fn locked_child(&self, parent: &Package, name: &str, range: &str) -> Option<String> {
+    fn locked_child(
+        &self,
+        parent: &Package,
+        name: &str,
+        range: &str,
+        peer: bool,
+    ) -> Option<String> {
         if self.overrides.changed.contains(name) {
             return None;
         }
@@ -676,10 +685,14 @@ impl Resolver {
         for level in (min_level..=source_chain.len()).rev() {
             let mut candidate = source_chain[..level].to_vec();
             candidate.push(name.into());
-            let row = &self.locked["packages"][candidate.join("/")];
+            let key = candidate.join("/");
+            let row = &self.locked["packages"][&key];
             let Some(version) = locked_version(row, target_name) else {
                 continue;
             };
+            if !peer && self.explicit_sources.contains(&key) {
+                return None;
+            }
             if !matches(version, target_range) && !is_tag(target_range) {
                 return None;
             }

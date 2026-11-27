@@ -1853,46 +1853,54 @@ fn workspace_explicit_tarball_is_not_reused_for_root_registry_exact_version() {
     );
 }
 
+fn setup_catalog_tarball_two_member_workspace(
+    versions: &[&str],
+    tarball_version: &str,
+    tarball_url: &str,
+    b_manifest: Value,
+) {
+    seed_registry_package("versioned", versions);
+    let custom_archive = resolve::test_support::archive(&json!({
+        "name": "versioned",
+        "version": tarball_version,
+        "description": "from-catalog-tarball"
+    }));
+    resolve::test_support::cache_archive(tarball_url, &custom_archive);
+    write_workspace(
+        json!({
+            "name": "root",
+            "workspaces": {
+                "packages": ["packages/*"],
+                "catalog": { "versioned": tarball_url }
+            }
+        }),
+        "packages/a",
+        json!({
+            "name": "@fixture/a",
+            "version": "1.0.0",
+            "dependencies": { "versioned": "catalog:" }
+        }),
+    );
+    fs::create_dir_all("packages/b").unwrap();
+    fs::write("packages/b/package.json", b_manifest.to_string()).unwrap();
+}
+
 #[test]
 fn sibling_workspace_registry_dependency_does_not_reuse_hoisted_catalog_tarball() {
     isolated(
         "sibling_workspace_registry_dependency_does_not_reuse_hoisted_catalog_tarball",
         || {
-            seed_registry_package("versioned", &["1.0.1"]);
             let tarball_url = "https://packages.invalid/catalog-versioned-1.0.1.tgz";
-            let custom_archive = resolve::test_support::archive(&json!({
-                "name": "versioned",
-                "version": "1.0.1",
-                "description": "from-catalog-tarball"
-            }));
-            resolve::test_support::cache_archive(tarball_url, &custom_archive);
-
-            write_workspace(
-                json!({
-                    "name": "root",
-                    "workspaces": {
-                        "packages": ["packages/*"],
-                        "catalog": { "versioned": tarball_url }
-                    }
-                }),
-                "packages/a",
-                json!({
-                    "name": "@fixture/a",
-                    "version": "1.0.0",
-                    "dependencies": { "versioned": "catalog:" }
-                }),
-            );
-            fs::create_dir_all("packages/b").unwrap();
-            fs::write(
-                "packages/b/package.json",
+            setup_catalog_tarball_two_member_workspace(
+                &["1.0.1"],
+                "1.0.1",
+                tarball_url,
                 json!({
                     "name": "@fixture/b",
                     "version": "1.0.0",
                     "dependencies": { "versioned": "1.0.1" }
-                })
-                .to_string(),
-            )
-            .unwrap();
+                }),
+            );
 
             install("install", &[]).unwrap();
             let lock_text = fs::read_to_string("bun.lock").unwrap();
@@ -1935,6 +1943,90 @@ fn sibling_workspace_registry_dependency_does_not_reuse_hoisted_catalog_tarball(
             install("install", &[]).unwrap();
             assert_eq!(fs::read_to_string("bun.lock").unwrap(), lock_text);
             assert_installed();
+        },
+    );
+}
+
+#[test]
+fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_not_pin_tag() {
+    isolated(
+        "pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_not_pin_tag",
+        || {
+            // 1. pnpm-lock.yaml with autoInstallPeers=false omits peer from workspace importer when
+            // root already provides it; migration must expand `catalog:` peer range before matching.
+            seed_registry_package("is-number", &["7.0.0"]);
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "dependencies": { "is-number": "catalog:" }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "peerDependencies": { "is-number": "catalog:" }
+                }),
+            );
+            fs::write(
+                "pnpm-workspace.yaml",
+                "packages:\n  - packages/*\ncatalog:\n  is-number: ^7.0.0\n",
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    is-number:\n      specifier: ^7.0.0\n      version: 7.0.0\nimporters:\n  .:\n    dependencies:\n      is-number:\n        specifier: 'catalog:'\n        version: 7.0.0\n  packages/a: {}\npackages:\n  is-number@7.0.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["is-number"][0], "is-number@7.0.0");
+            assert_eq!(
+                lock["workspaces"]["packages/a"]["peerDependencies"]["is-number"],
+                "catalog:"
+            );
+
+            // 2. Moving `versioned: "latest"` from peerDependencies to dependencies must not pin
+            // to a sibling's hoisted explicit catalog tarball version (`1.0.0` vs registry `2.0.0`).
+            fs::remove_file("bun.lock").unwrap();
+            fs::remove_file("pnpm-lock.yaml").unwrap();
+            fs::remove_file("pnpm-workspace.yaml").unwrap();
+            let _ = fs::remove_dir_all("node_modules");
+            let tarball_url = "https://packages.invalid/catalog-versioned-1.0.0.tgz";
+            setup_catalog_tarball_two_member_workspace(
+                &["1.0.0", "2.0.0"],
+                "1.0.0",
+                tarball_url,
+                json!({
+                    "name": "@fixture/b",
+                    "version": "1.0.0",
+                    "peerDependencies": { "versioned": "latest" }
+                }),
+            );
+            install("install", &[]).unwrap();
+
+            fs::write(
+                "packages/b/package.json",
+                json!({
+                    "name": "@fixture/b",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "latest" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][1], tarball_url);
+            assert_eq!(
+                lock["packages"]["@fixture/b/versioned"][0],
+                "versioned@2.0.0"
+            );
+            let nested = parse_json(
+                &fs::read("node_modules/@fixture/b/node_modules/versioned/package.json").unwrap(),
+            )
+            .unwrap();
+            assert_eq!(nested["version"], "2.0.0");
         },
     );
 }
