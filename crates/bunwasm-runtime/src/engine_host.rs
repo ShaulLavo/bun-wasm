@@ -268,9 +268,9 @@ fn alloc_scratch(size: usize) -> *mut u8 {
     INPUT_IN_USE.set(true);
     INPUT.with(|buf| {
         let mut buf = buf.borrow_mut();
-        buf.clear();
         if buf.capacity() < size {
-            buf.reserve_exact(size);
+            let additional = size - buf.len();
+            buf.reserve_exact(additional);
         }
         buf.resize(size, 0);
         buf.as_mut_ptr()
