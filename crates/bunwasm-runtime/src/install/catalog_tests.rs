@@ -2002,6 +2002,47 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
                 "catalog:"
             );
 
+            // 1b. Plain semver peers accept an aliased root provider, and catalog dist-tag peers
+            // accept a visible root provider when pnpm-lock.yaml omits the peer's catalog entry.
+            fs::remove_file("bun.lock").unwrap();
+            let _ = fs::remove_dir_all("node_modules");
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "dependencies": {
+                        "versioned": "2.0.0",
+                        "plain-alias": "npm:is-number@7.0.0",
+                        "tag-alias": "npm:is-number@7.0.0"
+                    }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "peerDependencies": {
+                        "versioned": "catalog:",
+                        "plain-alias": "^7.0.0",
+                        "tag-alias": "catalog:"
+                    }
+                }),
+            );
+            fs::write(
+                "pnpm-workspace.yaml",
+                "packages:\n  - packages/*\ncatalog:\n  versioned: latest\n  tag-alias: npm:is-number@latest\n",
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      versioned:\n        specifier: 2.0.0\n        version: 2.0.0\n      plain-alias:\n        specifier: npm:is-number@7.0.0\n        version: is-number@7.0.0\n      tag-alias:\n        specifier: npm:is-number@7.0.0\n        version: is-number@7.0.0\n  packages/a: {}\npackages:\n  is-number@7.0.0:\n    resolution:\n      integrity: ''\n  versioned@2.0.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@2.0.0");
+            assert_eq!(lock["packages"]["plain-alias"][0], "is-number@7.0.0");
+            assert_eq!(lock["packages"]["tag-alias"][0], "is-number@7.0.0");
+
             // 2. Moving `versioned: "latest"` from peerDependencies to dependencies must not pin
             // to a sibling's hoisted explicit catalog tarball version (`1.0.0` vs registry `2.0.0`).
             fs::remove_file("bun.lock").unwrap();

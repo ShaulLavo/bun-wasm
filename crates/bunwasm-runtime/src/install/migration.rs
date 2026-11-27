@@ -658,7 +658,7 @@ fn pnpm_locked_catalog_peer(
     expanded: &str,
 ) -> Option<String> {
     let catalog_name = raw.trim_start().strip_prefix("catalog:")?.trim();
-    let (target_name, target_range) = peer_target(name, expanded);
+    let (alias_name, target_range) = peer_target(expanded);
     if !resolve::is_tag(&target_range) {
         return None;
     }
@@ -678,6 +678,7 @@ fn pnpm_locked_catalog_peer(
     if reference.starts_with("npm:") || !expanded.starts_with("npm:") {
         return Some(reference);
     }
+    let target_name = alias_name.as_deref().unwrap_or(name);
     Some(format!("npm:{target_name}@{reference}"))
 }
 
@@ -999,26 +1000,29 @@ fn validate_ranges(meta: &Value, include_dev: bool, catalogs: Option<&Catalogs>)
     Ok(())
 }
 
-fn peer_target(name: &str, range: &str) -> (String, String) {
+fn peer_target(range: &str) -> (Option<String>, String) {
     if let Some(alias) = range.strip_prefix("npm:")
         && let Ok((target_name, target_range)) = resolve::spec(alias)
     {
-        return (target_name, target_range);
+        return (Some(target_name), target_range);
     }
-    (name.to_owned(), range.to_owned())
+    (None, range.to_owned())
 }
 
 fn peer_satisfied(packages: &BTreeMap<String, Value>, name: &str, range: Option<&str>) -> bool {
     let Some(range) = range else {
         return false;
     };
-    let (target_name, target_range) = peer_target(name, range);
+    let (alias_name, target_range) = peer_target(range);
     packages
         .get(name)
         .and_then(|row| row[0].as_str())
         .and_then(|id| id.rsplit_once('@'))
         .is_some_and(|(pkg_name, version)| {
-            pkg_name == target_name && resolve::matches(version, &target_range)
+            alias_name
+                .as_deref()
+                .is_none_or(|expected| pkg_name == expected)
+                && (resolve::is_tag(&target_range) || resolve::matches(version, &target_range))
         })
 }
 
@@ -1131,13 +1135,14 @@ fn peer_record<'a>(
     name: &str,
     range: &str,
 ) -> Option<&'a Value> {
-    let (target_name, target_range) = peer_target(name, range);
+    let (alias_name, target_range) = peer_target(range);
+    let expected = alias_name.as_deref().unwrap_or(name);
     records
         .iter()
         .filter_map(|(key, value)| {
             let (logical, _) = key.split('(').next()?.rsplit_once('@')?;
             let version = value["version"].as_str()?;
-            ((logical == target_name || value["name"].as_str() == Some(target_name.as_str()))
+            ((logical == expected || value["name"].as_str() == Some(expected))
                 && resolve::matches(version, &target_range))
             .then_some((version, value))
         })
