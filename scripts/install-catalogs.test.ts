@@ -201,14 +201,17 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
       assert.match(lock, /"versioned":\s*"1\.10"/);
     }
 
-    // `bun update --latest` updates workspace catalog entries and installs the latest major version.
+    // `bun update --latest` updates workspace catalog entries even when root pins another version
+    // via an npm alias, leaves unused catalogs untouched, and passes `--frozen-lockfile`.
     const updateRoot = join(directory, "update-latest");
     mkdirSync(join(updateRoot, "packages/app"), { recursive: true });
     writeFileSync(join(updateRoot, "package.json"), JSON.stringify({
       name: "update-catalog-root",
+      dependencies: { versioned: "npm:versioned@1.0.0" },
       workspaces: {
         packages: ["packages/*"],
-        catalog: { versioned: "^1.0.0" },
+        catalog: { versioned: "^1.1.0" },
+        catalogs: { unused: { versioned: "^1.1.0" } },
       },
     }, null, 2));
     writeFileSync(join(updateRoot, "packages/app/package.json"), JSON.stringify({
@@ -218,13 +221,16 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
     }, null, 2));
     registry.latest.set("versioned", "2.0.0");
     await install(target, updateRoot, registry.base);
-    assert.equal(installedVersion(updateRoot, "versioned"), "1.10.0");
-    await runGuestUpdate(target, updateRoot, registry.base, ["--latest"]);
-    assert.equal(installedVersion(updateRoot, "versioned"), "2.0.0");
+    assert.equal(installedVersion(updateRoot, "versioned"), "1.0.0");
+    assert.equal(installedVersion(updateRoot, "@fixture/update-app/node_modules/versioned"), "1.10.0");
+    await runGuestUpdate(target, updateRoot, registry.base, ["versioned", "--latest"]);
+    assert.equal(installedVersion(updateRoot, "versioned"), "1.0.0");
+    assert.equal(installedVersion(updateRoot, "@fixture/update-app/node_modules/versioned"), "2.0.0");
     const updatedRootManifest = JSON.parse(readFileSync(join(updateRoot, "package.json"), "utf8")) as {
-      workspaces: { catalog: { versioned: string } };
+      workspaces: { catalog: { versioned: string }; catalogs: { unused: { versioned: string } } };
     };
     assert.equal(updatedRootManifest.workspaces.catalog.versioned, "^2.0.0");
+    assert.equal(updatedRootManifest.workspaces.catalogs.unused.versioned, "^1.1.0");
     await install(target, updateRoot, registry.base, ["--frozen-lockfile"]);
   } finally {
     await registry.close();

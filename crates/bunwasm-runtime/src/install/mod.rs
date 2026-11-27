@@ -1424,14 +1424,28 @@ fn finalize_catalog_updates(
         (manifest, old_manifest)
     };
     if let Some(entries) = container.get_mut("catalog").and_then(Value::as_object_mut) {
-        finalize_catalog_entries(entries, &old_container["catalog"], opts, resolver);
+        finalize_catalog_entries(
+            entries,
+            &old_container["catalog"],
+            None,
+            old_manifest,
+            opts,
+            resolver,
+        );
     }
     let Some(catalogs) = container.get_mut("catalogs").and_then(Value::as_object_mut) else {
         return;
     };
     for (group, entries) in catalogs {
         if let Some(entries) = entries.as_object_mut() {
-            finalize_catalog_entries(entries, &old_container["catalogs"][group], opts, resolver);
+            finalize_catalog_entries(
+                entries,
+                &old_container["catalogs"][group],
+                Some(group.as_str()),
+                old_manifest,
+                opts,
+                resolver,
+            );
         }
     }
 }
@@ -1439,6 +1453,8 @@ fn finalize_catalog_updates(
 fn finalize_catalog_entries(
     entries: &mut serde_json::Map<String, Value>,
     old_entries: &Value,
+    group: Option<&str>,
+    old_manifest: &Value,
     opts: &Options,
     resolver: &Resolver,
 ) {
@@ -1452,17 +1468,58 @@ fn finalize_catalog_entries(
         if old.contains(':') {
             continue;
         }
-        let package = resolver.packages.get(name).or_else(|| {
-            resolver
-                .packages
-                .iter()
-                .find(|(key, _)| lock_leaf_name(key) == name)
-                .map(|(_, pkg)| pkg)
-        });
-        match package {
+        match catalog_resolved_package(resolver, old_manifest, group, name, opts.production) {
             Some(package) => *range = updated_range(old, &package.version, opts.exact).into(),
             None => *range = old.into(),
         }
+    }
+}
+
+fn catalog_resolved_package<'a>(
+    resolver: &'a Resolver,
+    old_manifest: &Value,
+    group: Option<&str>,
+    name: &str,
+    production: bool,
+) -> Option<&'a Package> {
+    if manifest_uses_catalog(old_manifest, name, group, production)
+        && let Some(package) = resolver.packages.get(name)
+    {
+        return Some(package);
+    }
+    for (ws_name, local) in &resolver.workspaces {
+        if !manifest_uses_catalog(&local.meta, name, group, production) {
+            continue;
+        }
+        let nested = format!("{ws_name}/{name}");
+        if let Some(package) = resolver
+            .packages
+            .get(&nested)
+            .or_else(|| resolver.packages.get(name))
+        {
+            return Some(package);
+        }
+    }
+    None
+}
+
+fn manifest_uses_catalog(
+    manifest: &Value,
+    name: &str,
+    group: Option<&str>,
+    production: bool,
+) -> bool {
+    let Some((declared, _, _)) = resolve::dependencies(manifest, production, true).remove(name)
+    else {
+        return false;
+    };
+    let Some(raw_group) = declared.trim_start().strip_prefix("catalog:") else {
+        return false;
+    };
+    let ref_group = raw_group.trim();
+    match group {
+        None | Some("default") => ref_group.is_empty() || ref_group == "default",
+        Some(expected) => ref_group == expected,
     }
 }
 

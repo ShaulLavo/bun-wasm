@@ -863,13 +863,20 @@ fn graph(
     transparent_workspaces: bool,
 ) -> Result<()> {
     let mut pending = VecDeque::new();
+    let mut pending_peers = VecDeque::new();
     for (parent, manifest) in roots {
         for (name, (range, _, peer)) in resolve::dependencies(manifest, false, true) {
-            pending.push_back((name, range.clone(), parent.clone(), peer.then_some(range)));
+            if peer {
+                pending_peers.push_back((name, range.clone(), parent.clone(), Some(range)));
+            } else {
+                pending.push_back((name, range, parent.clone(), None));
+            }
         }
     }
     let mut count = 0;
-    while let Some((name, range, parent, peer)) = pending.pop_front() {
+    while let Some((name, range, parent, peer)) =
+        pending.pop_front().or_else(|| pending_peers.pop_front())
+    {
         count += 1;
         if count > 10000 {
             return Err("Migrated dependency graph exceeds install limit".into());
@@ -918,13 +925,15 @@ fn graph(
         packages.insert(key, row);
         let children = graph_children(meta)?;
         for (child, (range, _, peer)) in children {
-            let requirement = peer.then(|| {
-                meta["peerDependencies"][&child]
+            if peer {
+                let requirement = meta["peerDependencies"][&child]
                     .as_str()
                     .unwrap_or(&range)
-                    .to_owned()
-            });
-            pending.push_back((child, range, placed_chain.clone(), requirement));
+                    .to_owned();
+                pending_peers.push_back((child, range, placed_chain.clone(), Some(requirement)));
+            } else {
+                pending.push_back((child, range, placed_chain.clone(), None));
+            }
         }
     }
     Ok(())
