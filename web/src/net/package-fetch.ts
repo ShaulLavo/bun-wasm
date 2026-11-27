@@ -72,18 +72,32 @@ function formatHopFetchError(target: URL, error: unknown, signal: AbortSignal | 
   return new Error(message, { cause: error });
 }
 
+function ensureEffectiveResponseUrl(response: Response, target: URL, redirected: boolean): Response {
+  if (response.url) return response;
+  Object.defineProperty(response, "url", { configurable: true, value: redactPackageUrl(target) });
+  if (redirected && !response.redirected) {
+    Object.defineProperty(response, "redirected", { configurable: true, value: true });
+  }
+  return response;
+}
+
 async function fetchHop(
   fetcher: FetchLike,
   hopUrl: string,
   target: URL,
   options: RequestInit,
   headers: Headers,
-  includeTargetOnError: boolean,
+  rewritten: boolean,
+  redirects: number,
 ): Promise<Response> {
+  const credentials = rewritten ? options.credentials : (options.credentials ?? "omit");
+  const hopOptions: RequestInit = credentials === undefined
+    ? { ...options, headers, redirect: "manual" }
+    : { ...options, headers, redirect: "manual", credentials };
   try {
-    return await fetcher(hopUrl, { ...options, headers, redirect: "manual" });
+    return await fetcher(hopUrl, hopOptions);
   } catch (error) {
-    throw includeTargetOnError ? formatHopFetchError(target, error, options.signal) : error;
+    throw redirects > 0 || rewritten ? formatHopFetchError(target, error, options.signal) : error;
   }
 }
 
@@ -97,12 +111,15 @@ export async function packageFetch(
   const headers = new Headers(options.headers);
   for (let redirects = 0; redirects <= 20; redirects++) {
     const target = resolveRewrite(url, rewrite);
-    const hopUrl = redirects === 0 && target === url ? input : target.href;
+    const rewritten = target !== url;
+    const hopUrl = redirects === 0 && !rewritten ? input : target.href;
     stripCredentialsOnOriginChange(url, target, headers);
-    const response = await fetchHop(fetcher, hopUrl, target, options, headers, redirects > 0 || target !== url);
+    const response = await fetchHop(fetcher, hopUrl, target, options, headers, rewritten, redirects);
     if (response.type === "opaqueredirect") throw new Error("Package redirect destination is unavailable to this browser");
     const location = response.headers.get("location");
-    if (!location || ![301, 302, 303, 307, 308].includes(response.status)) return response;
+    if (!location || ![301, 302, 303, 307, 308].includes(response.status)) {
+      return redirects > 0 || rewritten ? ensureEffectiveResponseUrl(response, target, redirects > 0) : response;
+    }
     await response.body?.cancel();
     if (redirects === 20) throw new Error("Package response redirected too many times");
     url = packageRedirect(target, location, headers);

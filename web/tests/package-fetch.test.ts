@@ -234,3 +234,13 @@ test("packageFetch preserves redacted proxy URL when a first-hop rewritten reque
   ).rejects.toThrow("GET https://proxy.invalid/tarball - fetch failed");
   expect(calls).toHaveLength(1);
 });
+
+test("packageFetch populates redacted response.url for synthetic error responses from a proxy", async () => {
+  const { fetcher } = createFetcher(() => new Response(null, { status: 404 }));
+  const response = await packageFetch("https://github.com/org/repo/releases/download/v1/pkg.tgz", {}, fetcher, {
+    kind: "tarball",
+    rewriteUrl: ({ url }) => `https://proxy.invalid/tarball?url=${encodeURIComponent(url)}`,
+  });
+  expect(response.status).toBe(404);
+  expect(response.url).toBe("https://proxy.invalid/tarball");
+});

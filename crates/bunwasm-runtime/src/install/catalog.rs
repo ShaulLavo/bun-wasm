@@ -38,32 +38,31 @@ impl Catalogs {
         locked: &Value,
         parser: &dyn Transpiler,
     ) -> Result<Self> {
-        let mut default_source = workspace_field(manifest, "catalog");
-        let mut named_source = workspace_field(manifest, "catalogs");
-        let pnpm_config = if default_source.is_none() || named_source.is_none() {
+        let (mut default_source, mut named_source) = manifest_catalog_sources(manifest);
+        let pnpm_config = if default_source.is_none() && named_source.is_none() {
             read_optional_yaml_lenient(&root.join("pnpm-workspace.yaml"), parser)
         } else {
             None
         };
         if let Some(config) = &pnpm_config {
-            fill_catalog_sources(config, &mut default_source, &mut named_source);
+            (default_source, named_source) = object_catalog_sources(config);
         }
-        let default_from_yarn = default_source.is_none();
-        let named_from_yarn = named_source.is_none();
-        let yarn_config = if default_from_yarn || named_from_yarn {
+        let from_yarn = default_source.is_none() && named_source.is_none();
+        let yarn_config = if from_yarn {
             read_optional_yaml_lenient(&root.join(yarn_rc_filename()), parser)
         } else {
             None
         };
         if let Some(config) = &yarn_config {
-            fill_catalog_sources(config, &mut default_source, &mut named_source);
+            (default_source, named_source) = object_catalog_sources(config);
         }
+        let normalize_yarn = from_yarn && yarn_config.is_some();
         let mut catalogs = Self::parse(
             default_source,
             named_source,
             locked,
-            default_from_yarn && yarn_config.is_some(),
-            named_from_yarn && yarn_config.is_some(),
+            normalize_yarn,
+            normalize_yarn,
         )?;
         if default_source.is_none()
             && named_source.is_none()
@@ -78,8 +77,7 @@ impl Catalogs {
     }
 
     pub fn from_manifest(manifest: &Value, locked: &Value) -> Result<Self> {
-        let default_source = workspace_field(manifest, "catalog");
-        let named_source = workspace_field(manifest, "catalogs");
+        let (default_source, named_source) = manifest_catalog_sources(manifest);
         Self::parse(default_source, named_source, locked, false, false)
     }
 
@@ -283,28 +281,24 @@ fn read_optional_yaml_lenient(path: &Path, parser: &dyn Transpiler) -> Option<Va
     io::read(path, "YAML", parser).ok()
 }
 
-fn fill_catalog_sources<'a>(
-    config: &'a Value,
-    default_source: &mut Option<&'a Value>,
-    named_source: &mut Option<&'a Value>,
-) {
-    if default_source.is_none() && !config["catalog"].is_null() {
-        *default_source = Some(&config["catalog"]);
-    }
-    if named_source.is_none() && !config["catalogs"].is_null() {
-        *named_source = Some(&config["catalogs"]);
-    }
+fn object_catalog_sources(source: &Value) -> (Option<&Value>, Option<&Value>) {
+    let Some(object) = source.as_object() else {
+        return (None, None);
+    };
+    let default = object.get("catalog").filter(|value| !value.is_null());
+    let named = object.get("catalogs").filter(|value| !value.is_null());
+    (default, named)
 }
 
-fn workspace_field<'a>(manifest: &'a Value, field: &str) -> Option<&'a Value> {
-    if let Some(value) = manifest["workspaces"]
-        .as_object()
-        .and_then(|workspaces| workspaces.get(field))
-        .filter(|value| !value.is_null())
-    {
-        return Some(value);
+fn manifest_catalog_sources(manifest: &Value) -> (Option<&Value>, Option<&Value>) {
+    let Some(workspaces) = manifest.get("workspaces").filter(|value| !value.is_null()) else {
+        return (None, None);
+    };
+    let nested = object_catalog_sources(workspaces);
+    if nested.0.is_some() || nested.1.is_some() {
+        return nested;
     }
-    manifest.get(field).filter(|value| !value.is_null())
+    object_catalog_sources(manifest)
 }
 
 fn normalize_yarn_range(range: &str) -> &str {

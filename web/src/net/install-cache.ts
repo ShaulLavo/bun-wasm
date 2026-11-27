@@ -296,6 +296,36 @@ async function runInstallFetch(
   }
 }
 
+function isSameOriginUrl(url: string): boolean {
+  if (typeof location !== "object" || typeof location?.href !== "string") return false;
+  try {
+    return new URL(url, location.href).origin === new URL(location.href).origin;
+  } catch {
+    return false;
+  }
+}
+
+function isCredentialedRequest(url: string, options: RequestInit): boolean {
+  const headers = new Headers(options.headers);
+  if (headers.has("authorization") || headers.has("cookie") || headers.has("proxy-authorization")) {
+    return true;
+  }
+  if (options.credentials === "include") return true;
+  if (options.credentials === "omit") return false;
+  return isSameOriginUrl(url);
+}
+
+function isNonShareableResponse(response: Response): boolean {
+  const directives = cacheControlDirectives(response.headers);
+  if (directives.includes("no-store") || directives.includes("private")) return true;
+  const vary = response.headers.get("vary");
+  if (!vary) return false;
+  return vary.split(",").some(field => {
+    const name = field.trim().toLowerCase();
+    return name === "*" || name === "cookie" || name === "authorization";
+  });
+}
+
 async function fetchCachedTarballHop(
   hopUrl: string,
   hopOptions: RequestInit,
@@ -305,6 +335,9 @@ async function fetchCachedTarballHop(
   refresh: boolean,
   skipRequestStore: boolean,
 ): Promise<Response> {
+  if (isCredentialedRequest(hopUrl, hopOptions)) {
+    return fetcher(hopUrl, hopOptions);
+  }
   const opened = await openCache();
   const activeOpened = opened && opened.generation === session.generation ? opened : undefined;
   const key = cacheKey(hopUrl);
@@ -313,7 +346,7 @@ async function fetchCachedTarballHop(
     if (cached) return restoreCachedResponse(cached);
   }
   const response = await fetcher(hopUrl, hopOptions);
-  if (!response.ok || !activeOpened || activeOpened.generation !== session.generation || skipRequestStore || cacheControlDirectives(response.headers).includes("no-store")) {
+  if (!response.ok || !activeOpened || activeOpened.generation !== session.generation || skipRequestStore || isNonShareableResponse(response)) {
     return response;
   }
   return prepareCachedResponse(response, session, activeOpened, key, hopUrl, hopOptions.signal);

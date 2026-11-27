@@ -1067,3 +1067,43 @@ test("warm cache honors distinct proxy rewrites applied after a redirect", async
   ]);
   expect(env.stored.has("https://origin.invalid/start.tgz")).toBe(false);
 });
+
+test("same-origin proxies and Cache-Control: private responses bypass shared Cache Storage", async () => {
+  const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  Object.defineProperty(globalThis, "location", { configurable: true, value: { href: "https://app.invalid/workspace" } });
+  try {
+    const env = indexedCacheStorage();
+    let count = 0;
+    const token = "policy-same-origin";
+    const sameOriginFetcher = createInstallFetch({
+      packagePolicyToken: token,
+      rewritePackageUrl: ({ url }) => `/api/tarball-proxy?url=${encodeURIComponent(url)}`,
+      fetch: async () => new Response(`account-${++count}`, { status: 200 }),
+    });
+    const privateCrossOriginFetcher = createInstallFetch({
+      packagePolicyToken: token,
+      rewritePackageUrl: ({ url }) => `https://proxy.invalid/tarball?url=${encodeURIComponent(url)}`,
+      fetch: async () => new Response(`private-${++count}`, {
+        status: 200,
+        headers: { "cache-control": "private, max-age=60" },
+      }),
+    });
+
+    await withStorage(env.storage, async () => new Response("unexpected"), async () => {
+      const options: RequestInit = {
+        method: "GET",
+        headers: markPackageFetchHeaders({ accept: TARBALL }, token),
+      };
+      expect(await (await sameOriginFetcher("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("account-1");
+      expect(await (await sameOriginFetcher("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("account-2");
+      expect(await (await privateCrossOriginFetcher("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("private-3");
+      expect(await (await privateCrossOriginFetcher("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("private-4");
+    });
+
+    expect(env.putCalls).toEqual([]);
+    expect(env.stored.size).toBe(0);
+  } finally {
+    if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation);
+    else Reflect.deleteProperty(globalThis, "location");
+  }
+});

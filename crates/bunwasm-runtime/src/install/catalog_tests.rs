@@ -646,6 +646,7 @@ fn missing_and_invalid_catalog_entries_return_clear_errors() {
 
     let conflict = catalog::Catalogs::from_manifest(
         &json!({
+            "workspaces": ["packages/*"],
             "catalog": { "evlog": "2.29.0" },
             "catalogs": { "default": { "evlog": "2.28.0" } }
         }),
@@ -655,7 +656,7 @@ fn missing_and_invalid_catalog_entries_return_clear_errors() {
     assert!(conflict.contains("defined in both"), "{conflict}");
 
     let recursive = catalog::Catalogs::from_manifest(
-        &json!({ "catalog": { "evlog": "catalog:other" } }),
+        &json!({ "workspaces": ["packages/*"], "catalog": { "evlog": "catalog:other" } }),
         &Value::Null,
     )
     .unwrap_err();
@@ -664,15 +665,91 @@ fn missing_and_invalid_catalog_entries_return_clear_errors() {
         "{recursive}"
     );
 
-    let empty_entry =
-        catalog::Catalogs::from_manifest(&json!({ "catalog": { "evlog": "" } }), &Value::Null)
-            .unwrap_err();
+    let empty_entry = catalog::Catalogs::from_manifest(
+        &json!({ "workspaces": ["packages/*"], "catalog": { "evlog": "" } }),
+        &Value::Null,
+    )
+    .unwrap_err();
     assert!(empty_entry.contains("non-empty string"), "{empty_entry}");
 
-    let bad_shape =
-        catalog::Catalogs::from_manifest(&json!({ "catalogs": ["not-an-object"] }), &Value::Null)
-            .unwrap_err();
+    let bad_shape = catalog::Catalogs::from_manifest(
+        &json!({ "workspaces": ["packages/*"], "catalogs": ["not-an-object"] }),
+        &Value::Null,
+    )
+    .unwrap_err();
     assert!(bad_shape.contains("must be an object"), "{bad_shape}");
+
+    // Standalone manifests without `workspaces` ignore arbitrary top-level `catalog` fields.
+    let standalone = catalog::Catalogs::from_manifest(
+        &json!({ "name": "standalone", "catalog": "documentation" }),
+        &Value::Null,
+    )
+    .unwrap();
+    assert!(standalone.is_empty());
+
+    // When `workspaces` defines any catalog field, top-level fallback is not mixed in.
+    let workspace_unit = catalog::Catalogs::from_manifest(
+        &json!({
+            "workspaces": {
+                "packages": ["packages/*"],
+                "catalog": { "evlog": "2.29.0" }
+            },
+            "catalogs": { "default": { "evlog": "2.28.0" } }
+        }),
+        &Value::Null,
+    )
+    .unwrap();
+    assert_eq!(
+        workspace_unit.resolve("evlog", "catalog:").unwrap(),
+        Some("2.29.0")
+    );
+}
+
+#[test]
+fn standalone_catalog_field_and_workspace_unit_selection_install_like_native_bun() {
+    isolated(
+        "standalone_catalog_field_and_workspace_unit_selection_install_like_native_bun",
+        || {
+            seed_registry_package("versioned", &["1.0.0", "1.1.0"]);
+            // Standalone project with an unrelated string `"catalog"` field must install cleanly.
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "standalone-doc",
+                    "catalog": "documentation",
+                    "dependencies": { "versioned": "1.0.0" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+
+            // Workspace with `workspaces.catalog` ignores conflicting top-level `catalogs.default`.
+            fs::remove_file("bun.lock").unwrap();
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "workspaces": {
+                        "packages": ["packages/*"],
+                        "catalog": { "versioned": "1.0.0" }
+                    },
+                    "catalogs": { "default": { "versioned": "1.1.0" } }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "catalog:" }
+                }),
+            );
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert!(lock.get("catalogs").is_none());
+        },
+    );
 }
 
 #[test]
@@ -1009,6 +1086,7 @@ fn pnpm_migration_supports_catalogs_default_and_updated_workspace_catalog_range(
                 "package.json",
                 json!({
                     "name": "root",
+                    "workspaces": ["packages/*"],
                     "catalogs": { "default": { "versioned": "^1.1.0" } },
                     "dependencies": { "versioned": "catalog:" }
                 })
@@ -1232,6 +1310,7 @@ fn pnpm_frozen_migration_preserves_disjoint_catalog_and_catalogs_default_groups(
                 "package.json",
                 json!({
                     "name": "root",
+                    "workspaces": ["packages/*"],
                     "catalog": { "is-number": "7.0.0" },
                     "catalogs": { "default": { "versioned": "^1.0.0" } },
                     "dependencies": {
