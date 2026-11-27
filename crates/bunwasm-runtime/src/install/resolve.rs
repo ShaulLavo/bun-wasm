@@ -193,7 +193,7 @@ pub struct Resolver {
     packuments: BTreeMap<String, Value>,
     responses: BTreeMap<String, Vec<u8>>,
     downloads: io::Downloads,
-    explicit_sources: BTreeSet<(String, String)>,
+    explicit_sources: BTreeSet<String>,
     pending: VecDeque<String>,
     pub workspaces: BTreeMap<String, Local>,
     production: bool,
@@ -996,11 +996,7 @@ impl Resolver {
             return None;
         }
         let source = row[1].as_str()?;
-        let dep_name = chain.last().map_or(name, String::as_str);
-        if self
-            .explicit_sources
-            .contains(&(dep_name.to_owned(), source.to_owned()))
-        {
+        if self.explicit_sources.contains(&chain.join("/")) {
             return None;
         }
         let tarball = if source.is_empty() {

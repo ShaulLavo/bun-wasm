@@ -62,6 +62,21 @@ impl Overrides {
         Ok(result)
     }
 
+    pub fn from_lock(locked: &Value) -> Self {
+        let mut result = Self {
+            metadata: json!({}),
+            ..Self::default()
+        };
+        for (key, value) in locked["overrides"].as_object().into_iter().flatten() {
+            let Some(replacement) = value.as_str().or_else(|| value["."].as_str()) else {
+                continue;
+            };
+            let _ = result.insert(key, &Value::String(replacement.into()));
+        }
+        result.rules.sort_by(|a, b| a.selector.cmp(&b.selector));
+        result
+    }
+
     fn insert(&mut self, key: &str, value: &Value) -> Result<()> {
         if key.starts_with("//") {
             return Ok(());

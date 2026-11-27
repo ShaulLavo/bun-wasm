@@ -110,10 +110,9 @@ async function fetchHop(
   options: RequestInit,
   headers: Headers,
   rewritten: boolean,
-  rewriteCredentials: RequestCredentials | undefined,
+  credentials: RequestCredentials | undefined,
   redirects: number,
 ): Promise<Response> {
-  const credentials = rewritten ? (rewriteCredentials ?? options.credentials) : options.credentials;
   const hopOptions: RequestInit = credentials === undefined
     ? { ...options, headers, redirect: "manual" }
     : { ...options, headers, redirect: "manual", credentials };
@@ -132,11 +131,14 @@ export async function packageFetch(
 ): Promise<Response> {
   let url = new URL(input);
   const headers = new Headers(options.headers);
+  let carriedCredentials = options.credentials;
   for (let redirects = 0; redirects <= 20; redirects++) {
     const { target, rewritten, credentials } = resolveRewrite(url, rewrite);
+    const hopCredentials = rewritten && credentials !== undefined ? credentials : carriedCredentials;
+    if (hopCredentials === "omit") carriedCredentials = "omit";
     const hopUrl = redirects === 0 && !rewritten ? input : target.href;
     stripCredentialsOnOriginChange(url, target, headers);
-    const response = await fetchHop(fetcher, hopUrl, target, options, headers, rewritten, credentials, redirects);
+    const response = await fetchHop(fetcher, hopUrl, target, options, headers, rewritten, hopCredentials, redirects);
     if (response.type === "opaqueredirect") {
       const message = "Package redirect destination is unavailable to this browser";
       throw redirects > 0 || rewritten

@@ -269,3 +269,20 @@ test("packageFetch includes redacted proxy URL in opaqueredirect errors", async 
     }),
   ).rejects.toThrow("GET https://proxy.invalid/tarball - Package redirect destination is unavailable to this browser");
 });
+
+test("packageFetch carries explicit credentials omit across redirect hops", async () => {
+  const seenCredentials: Array<RequestCredentials | undefined> = [];
+  const fetcher = Object.assign(async (_input: FetchInput, init?: FetchInit) => {
+    seenCredentials.push(init?.credentials);
+    if (seenCredentials.length === 1) return redirectResponse("https://app.invalid/blob.tgz", () => {});
+    return new Response("blob");
+  }, { preconnect: fetch.preconnect });
+  const response = await packageFetch("https://github.com/org/repo/releases/download/v1/pkg.tgz", {}, fetcher, {
+    kind: "tarball",
+    rewriteUrl: ({ url }) => (url.startsWith("https://github.com/")
+      ? { url: `https://app.invalid/proxy?url=${encodeURIComponent(url)}`, credentials: "omit" }
+      : null),
+  });
+  expect(await response.text()).toBe("blob");
+  expect(seenCredentials).toEqual(["omit", "omit"]);
+});

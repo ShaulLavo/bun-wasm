@@ -131,24 +131,23 @@ fn validate_dependencies(meta: &Value) -> Result<()> {
     Ok(())
 }
 
-pub(in super::super) fn locked_sources(
-    locked: &Value,
-    manifest: &Value,
-) -> BTreeSet<(String, String)> {
-    let mut sources = BTreeSet::new();
+pub(in super::super) fn locked_sources(locked: &Value, manifest: &Value) -> BTreeSet<String> {
+    let mut rows = BTreeSet::new();
     let manifest_overrides = Overrides::new(manifest, locked).unwrap_or_default();
-    let locked_overrides = Overrides::new(locked, &Value::Null).unwrap_or_default();
+    let locked_overrides = Overrides::from_lock(locked);
     let manifest_catalogs = Catalogs::from_manifest(manifest, locked).unwrap_or_default();
     let locked_catalogs = Catalogs::from_lock(locked);
-    collect_declared_sources(
+    mark_declared_rows(
+        locked,
+        &[],
         manifest,
         &manifest_overrides,
         &manifest_catalogs,
         true,
-        &mut sources,
+        &mut rows,
     );
-    collect_locked_sources(locked, &locked_overrides, &locked_catalogs, &mut sources);
-    sources
+    mark_locked_rows(locked, &locked_overrides, &locked_catalogs, &mut rows);
+    rows
 }
 
 pub(super) fn collect_workspace_sources(
@@ -158,69 +157,136 @@ pub(super) fn collect_workspace_sources(
     overrides: &Overrides,
     catalogs: &Catalogs,
     locked_catalogs: &Catalogs,
-    sources: &mut BTreeSet<(String, String)>,
+    rows: &mut BTreeSet<String>,
 ) {
-    let locked_overrides = Overrides::new(locked, &Value::Null).unwrap_or_default();
-    collect_declared_sources(manifest, overrides, catalogs, true, sources);
-    for member in workspaces.values() {
-        collect_declared_sources(&member.meta, overrides, catalogs, true, sources);
+    let locked_overrides = Overrides::from_lock(locked);
+    mark_declared_rows(locked, &[], manifest, overrides, catalogs, true, rows);
+    for (ws_name, member) in workspaces {
+        mark_declared_rows(
+            locked,
+            &[ws_name.as_str()],
+            &member.meta,
+            overrides,
+            catalogs,
+            true,
+            rows,
+        );
     }
-    collect_locked_sources(locked, &locked_overrides, locked_catalogs, sources);
+    mark_locked_rows(locked, &locked_overrides, locked_catalogs, rows);
 }
 
-fn collect_locked_sources(
+fn mark_locked_rows(
     locked: &Value,
     locked_overrides: &Overrides,
     locked_catalogs: &Catalogs,
-    sources: &mut BTreeSet<(String, String)>,
+    rows: &mut BTreeSet<String>,
 ) {
-    for meta in locked["workspaces"]
-        .as_object()
-        .into_iter()
-        .flat_map(|members| members.values())
-    {
-        collect_declared_sources(meta, locked_overrides, locked_catalogs, true, sources);
+    for (rel_path, meta) in locked["workspaces"].as_object().into_iter().flatten() {
+        let mut chain = Vec::new();
+        if !rel_path.is_empty()
+            && let Some(name) = meta["name"].as_str()
+        {
+            chain.push(name);
+        }
+        mark_declared_rows(
+            locked,
+            &chain,
+            meta,
+            locked_overrides,
+            locked_catalogs,
+            true,
+            rows,
+        );
     }
-    for row in locked["packages"]
-        .as_object()
-        .into_iter()
-        .flat_map(|packages| packages.values())
-    {
-        collect_declared_sources(&row[2], locked_overrides, locked_catalogs, false, sources);
+    for (pkg_key, row) in locked["packages"].as_object().into_iter().flatten() {
+        let chain = lock_chain_segments(pkg_key);
+        mark_declared_rows(
+            locked,
+            &chain,
+            &row[2],
+            locked_overrides,
+            locked_catalogs,
+            false,
+            rows,
+        );
     }
 }
 
-fn collect_declared_sources(
+fn mark_declared_rows(
+    locked: &Value,
+    parent_chain: &[&str],
     meta: &Value,
     overrides: &Overrides,
     catalogs: &Catalogs,
     workspace: bool,
-    sources: &mut BTreeSet<(String, String)>,
+    rows: &mut BTreeSet<String>,
 ) {
     for (name, (range, _, _)) in dependencies(meta, false, true) {
         let Ok((resolved, _)) = resolve_declared(&name, &range, overrides, catalogs, workspace)
         else {
             continue;
         };
-        insert_source(&name, Some(resolved), sources);
+        let Some(url) = explicit_tarball_url(resolved) else {
+            continue;
+        };
+        mark_bound_row(locked, parent_chain, &name, &url, rows);
     }
 }
 
-fn insert_source(dep_name: &str, range: Option<&str>, sources: &mut BTreeSet<(String, String)>) {
-    let Some(range) = range else {
+fn explicit_tarball_url(range: &str) -> Option<String> {
+    if let Some(alias) = range.strip_prefix("npm:") {
+        let (_, target_range) = spec(alias).ok()?;
+        return explicit_tarball_url(&target_range);
+    }
+    is_specifier(range).then(|| source(range).ok()).flatten()
+}
+
+fn mark_bound_row(
+    locked: &Value,
+    parent_chain: &[&str],
+    dep_name: &str,
+    url: &str,
+    rows: &mut BTreeSet<String>,
+) {
+    let Some(packages) = locked["packages"].as_object() else {
         return;
     };
-    if let Some(alias) = range.strip_prefix("npm:") {
-        if let Ok((_, range)) = spec(alias) {
-            insert_source(dep_name, Some(&range), sources);
+    for level in (0..=parent_chain.len()).rev() {
+        let mut candidate = Vec::with_capacity(level + 1);
+        candidate.extend_from_slice(&parent_chain[..level]);
+        candidate.push(dep_name);
+        let key = candidate.join("/");
+        let Some(row) = packages.get(&key) else {
+            continue;
+        };
+        if row[1].as_str() == Some(url) {
+            rows.insert(key);
         }
         return;
     }
-    if is_specifier(range)
-        && let Ok(source) = source(range)
-    {
-        sources.insert((dep_name.to_owned(), source));
+}
+
+fn lock_chain_segments(key: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut rest = key;
+    while !rest.is_empty() {
+        let end = segment_end(rest);
+        segments.push(&rest[..end]);
+        rest = rest.get(end + 1..).unwrap_or("");
     }
+    segments
+}
+
+fn segment_end(rest: &str) -> usize {
+    if !rest.starts_with('@') {
+        return rest.find('/').unwrap_or(rest.len());
+    }
+    let Some(first) = rest.find('/') else {
+        return rest.len();
+    };
+    rest[first + 1..]
+        .find('/')
+        .map_or(rest.len(), |second| first + 1 + second)
 }
 
 #[cfg(test)]

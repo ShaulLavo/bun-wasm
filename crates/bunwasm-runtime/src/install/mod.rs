@@ -1288,13 +1288,7 @@ fn unlock(locked: &mut Value, opts: &Options, manifest: &Value, workspace: Optio
     let Some(packages) = locked["packages"].as_object_mut() else {
         return;
     };
-    packages.retain(|key, row| {
-        let dep_name = key.rsplit('/').next().unwrap_or(key);
-        !selected(key, opts)
-            || row[1]
-                .as_str()
-                .is_some_and(|source| sources.contains(&(dep_name.to_owned(), source.to_owned())))
-    });
+    packages.retain(|key, _| !selected(key, opts) || sources.contains(key));
 }
 
 fn finalize_updates(

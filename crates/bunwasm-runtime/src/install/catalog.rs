@@ -288,7 +288,7 @@ fn read_optional_yaml_lenient(path: &Path, parser: &dyn Transpiler) -> Option<Va
     Some(parsed)
 }
 
-fn preserve_numeric_catalog_scalars(value: &mut Value, source: &str) {
+pub(super) fn preserve_numeric_catalog_scalars(value: &mut Value, source: &str) {
     if !has_numeric_catalog_entry(value) {
         return;
     }
@@ -391,6 +391,10 @@ fn enter_top_level_section(
         return YamlSection::Default;
     }
     if key == "catalogs" {
+        if value.starts_with('{') && value.ends_with('}') {
+            extract_named_flow_scalars(value, out);
+            return YamlSection::Other;
+        }
         return YamlSection::Named(None);
     }
     YamlSection::Other
@@ -437,14 +441,28 @@ fn record_named_entry(
     }
 }
 
+fn extract_named_flow_scalars(flow: &str, out: &mut BTreeMap<(Option<String>, String), String>) {
+    let inner = flow.trim_start_matches('{').trim_end_matches('}');
+    for entry in split_flow_entries(inner) {
+        let Some((raw_group, raw_body)) = split_yaml_mapping(entry) else {
+            continue;
+        };
+        let group = unquote_yaml_key(raw_group);
+        let body = raw_body.trim();
+        if body.starts_with('{') && body.ends_with('}') {
+            extract_flow_scalars(body, Some(&group), out);
+        }
+    }
+}
+
 fn extract_flow_scalars(
     flow: &str,
     group: Option<&str>,
     out: &mut BTreeMap<(Option<String>, String), String>,
 ) {
     let inner = flow.trim_start_matches('{').trim_end_matches('}');
-    for entry in inner.split(',') {
-        let Some((raw_key, raw_value)) = split_yaml_mapping(entry.trim()) else {
+    for entry in split_flow_entries(inner) {
+        let Some((raw_key, raw_value)) = split_yaml_mapping(entry) else {
             continue;
         };
         let key = unquote_yaml_key(raw_key);
@@ -453,6 +471,37 @@ fn extract_flow_scalars(
             out.insert((group.map(str::to_owned), key), value.to_owned());
         }
     }
+}
+
+fn split_flow_entries(inner: &str) -> Vec<&str> {
+    let mut entries = Vec::new();
+    let mut quote = None;
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (index, ch) in inner.char_indices() {
+        if quote == Some(ch) {
+            quote = None;
+            continue;
+        }
+        if quote.is_some() {
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                entries.push(inner[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    let tail = inner[start..].trim();
+    if !tail.is_empty() {
+        entries.push(tail);
+    }
+    entries
 }
 
 pub(super) fn split_yaml_mapping(line: &str) -> Option<(&str, &str)> {

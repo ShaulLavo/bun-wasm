@@ -864,6 +864,67 @@ fn standalone_catalog_field_and_workspace_unit_selection_install_like_native_bun
                     needs_tarball.then_some(archive_bytes.as_slice()),
                 );
             }
+
+            // Member explicit catalog tarball sharing root's registry archive URL must not poison root's row.
+            seed_registry_package("is-number", &["7.0.0"]);
+            resolve::test_support::cache_archive(tarball_url, &archive_bytes);
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "workspaces": {
+                        "packages": ["packages/*"],
+                        "catalog": { "is-number": tarball_url }
+                    },
+                    "dependencies": { "is-number": "^7.0.0" }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "dependencies": { "is-number": "catalog:" }
+                }),
+            );
+            let _ = fs::remove_file("bun.lock");
+            install("install", &["--lockfile-only"]).unwrap();
+            let mut lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            lock["packages"]["is-number"][1] = json!(tarball_url);
+            fs::write("bun.lock", serde_json::to_string_pretty(&lock).unwrap()).unwrap();
+            let _ = fs::remove_dir_all(io::cache_dir());
+            resolve::test_support::cache_archive(tarball_url, &archive_bytes);
+            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+
+            // Scoped tarball pins and version-qualified override transitive tarball pins survive `locked_sources`.
+            let scoped_url = "https://packages.invalid/scoped.tgz";
+            let locked = json!({
+                "workspaces": {
+                    "": {
+                        "name": "root",
+                        "dependencies": {
+                            "@fixture/scoped": scoped_url,
+                            "wrapper": "1.0.0"
+                        }
+                    }
+                },
+                "overrides": {
+                    "versioned@^1": { ".": tarball_url }
+                },
+                "packages": {
+                    "@fixture/scoped": ["@fixture/scoped@1.0.0", scoped_url, {}, "sha512-x=="],
+                    "wrapper": ["wrapper@1.0.0", "", { "dependencies": { "versioned": "^1.0.0" } }, ""],
+                    "versioned": ["versioned@1.0.0", tarball_url, {}, "sha512-y=="]
+                }
+            });
+            let retained = resolve::tarball::locked_sources(&locked, &json!({}));
+            assert!(retained.contains("@fixture/scoped"));
+            assert!(retained.contains("versioned"));
+
+            // Inline named YAML flow catalogs preserve trailing zeros such as `2.10`.
+            let mut inline_val = json!({ "catalogs": { "nums": { "minor-pkg": 2.1 } } });
+            catalog::preserve_numeric_catalog_scalars(
+                &mut inline_val,
+                "catalogs: { nums: { minor-pkg: 2.10 } }\n",
+            );
+            assert_eq!(inline_val["catalogs"]["nums"]["minor-pkg"], "2.10");
         },
     );
 }
