@@ -183,6 +183,12 @@ enum LockLookup {
     Skip,
 }
 
+enum Placement {
+    Add(Vec<String>),
+    Satisfied(String),
+    IncompatiblePeer,
+}
+
 pub struct Resolver {
     pub packages: BTreeMap<String, Package>,
     pub skipped: BTreeMap<String, Package>,
@@ -418,29 +424,24 @@ impl Resolver {
             let Some(target) = self.target(parent, name, &range, is_optional, *peer)? else {
                 continue;
             };
-            let chain = self.placement(parent, name, &target, *peer, is_optional);
-            if let Some(chain) = chain {
-                let parent_key = parent.key();
-                self.add(name, &target, chain, is_optional, Some(&parent_key))?;
-            }
+            let placed_key = match self.placement(parent, name, &target, *peer, is_optional) {
+                Placement::Add(chain) => {
+                    let key = chain.join("/");
+                    let parent_key = parent.key();
+                    self.add(name, &target, chain, is_optional, Some(&parent_key))?;
+                    Some(key)
+                }
+                Placement::Satisfied(key) => Some(key),
+                Placement::IncompatiblePeer => None,
+            };
             if let Some(cat_key) = cat_key
-                && let Some(pkg) = self.visible_package(parent, name)
+                && let Some(key) = placed_key
+                && let Some(pkg) = self.packages.get(&key)
             {
                 self.used_catalogs.insert(cat_key, pkg.version.clone());
             }
         }
         Ok(())
-    }
-
-    fn visible_package(&self, parent: &Package, name: &str) -> Option<&Package> {
-        for level in (0..=parent.chain.len()).rev() {
-            let mut candidate = parent.chain[..level].to_vec();
-            candidate.push(name.into());
-            if let Some(found) = self.packages.get(&candidate.join("/")) {
-                return Some(found);
-            }
-        }
-        None
     }
 
     fn resolve_range(&self, parent: Option<&Package>, name: &str, range: &str) -> Result<String> {
@@ -770,7 +771,7 @@ impl Resolver {
         range: &str,
         peer: bool,
         optional: bool,
-    ) -> Option<Vec<String>> {
+    ) -> Placement {
         let target = self.local_package(name, range).ok().flatten();
         let alias = range
             .strip_prefix("npm:")
@@ -798,23 +799,23 @@ impl Resolver {
             };
             if satisfies {
                 self.require(&key, optional);
-                return None;
+                return Placement::Satisfied(key);
             }
             if peer {
                 eprintln!(
                     "warn: incorrect peer dependency \"{}\"",
                     io::redact(&format!("{name}@{range}"))
                 );
-                return None;
+                return Placement::IncompatiblePeer;
             }
             break;
         }
         if !self.packages.contains_key(name) {
-            return Some(vec![name.into()]);
+            return Placement::Add(vec![name.into()]);
         }
         let mut chain = parent.chain.clone();
         chain.push(name.into());
-        Some(chain)
+        Placement::Add(chain)
     }
 
     fn require(&mut self, key: &str, optional: bool) {

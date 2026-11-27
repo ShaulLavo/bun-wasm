@@ -866,10 +866,11 @@ fn graph(
     let mut pending_peers = VecDeque::new();
     for (parent, manifest) in roots {
         for (name, (range, _, peer)) in resolve::dependencies(manifest, false, true) {
+            let entry = (name, range.clone(), parent.clone(), peer.then_some(range));
             if peer && !parent.is_empty() {
-                pending_peers.push_back((name, range.clone(), parent.clone(), Some(range)));
+                pending_peers.push_back(entry);
             } else {
-                pending.push_back((name, range, parent.clone(), None));
+                pending.push_back(entry);
             }
         }
     }

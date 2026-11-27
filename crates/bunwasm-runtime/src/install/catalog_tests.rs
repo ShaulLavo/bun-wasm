@@ -2150,6 +2150,82 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
             assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
             assert_eq!(lock["packages"]["app-a/versioned"][0], "versioned@2.0.0");
 
+            // 1d3. Root peer range with pnpm autoInstallPeers=false matches locked workspace version.
+            fs::remove_file("bun.lock").unwrap();
+            let _ = fs::remove_dir_all("node_modules");
+            let _ = fs::remove_dir_all("packages");
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "peerDependencies": { "versioned": "^1.0.0" }
+                }),
+                "packages/app-a",
+                json!({
+                    "name": "app-a",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "1.0.0" }
+                }),
+            );
+            fs::write("pnpm-workspace.yaml", "packages:\n  - packages/*\n").unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/app-a:\n    dependencies:\n      versioned:\n        specifier: 1.0.0\n        version: 1.0.0\npackages:\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+
+            // 1d4. Incompatible catalog peer does not record the mismatched provider in used_catalogs.
+            fs::remove_file("bun.lock").unwrap();
+            fs::remove_file("pnpm-lock.yaml").unwrap();
+            fs::remove_file("pnpm-workspace.yaml").unwrap();
+            let _ = fs::remove_dir_all("node_modules");
+            let _ = fs::remove_dir_all("packages");
+            let peer_root = json!({
+                "name": "root",
+                "workspaces": {
+                    "packages": ["packages/*"],
+                    "catalog": { "versioned": "^2.0.0" }
+                }
+            });
+            write_workspace(
+                peer_root.clone(),
+                "packages/app-a",
+                json!({
+                    "name": "app-a",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "1.0.0" }
+                }),
+            );
+            fs::create_dir_all("packages/app-b").unwrap();
+            fs::write(
+                "packages/app-b/package.json",
+                json!({
+                    "name": "app-b",
+                    "version": "1.0.0",
+                    "peerDependencies": { "versioned": "catalog:" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let mut peer_resolver = Resolver::new(
+                io::Registry::new("http://registry.invalid").unwrap(),
+                json!({}),
+                false,
+            );
+            let cwd = std::env::current_dir().unwrap();
+            peer_resolver.workspaces = local::workspaces(&cwd, &peer_root, &TestParser).unwrap();
+            peer_resolver.catalogs =
+                catalog::Catalogs::load(&cwd, &peer_root, &Value::Null, &TestParser).unwrap();
+            peer_resolver.resolve(&peer_root, false).unwrap();
+            assert!(
+                !peer_resolver
+                    .used_catalogs
+                    .contains_key(&(None, "versioned".into()))
+            );
+
             // 1e. `bun update --latest` writes back the version resolved for each catalog entry
             // tracked by the resolver (including override-reached catalogs), and explicit
             // `bun update pkg@ver` preserves root `catalog:` references instead of detaching them.
@@ -2220,9 +2296,9 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
 
             // 2. Moving `versioned: "latest"` from peerDependencies to dependencies must not pin
             // to a sibling's hoisted explicit catalog tarball version (`1.0.0` vs registry `2.0.0`).
-            fs::remove_file("bun.lock").unwrap();
-            fs::remove_file("pnpm-lock.yaml").unwrap();
-            fs::remove_file("pnpm-workspace.yaml").unwrap();
+            let _ = fs::remove_file("bun.lock");
+            let _ = fs::remove_file("pnpm-lock.yaml");
+            let _ = fs::remove_file("pnpm-workspace.yaml");
             let _ = fs::remove_dir_all("node_modules");
             let _ = fs::remove_dir_all("packages");
             let tarball_url = "https://packages.invalid/catalog-versioned-1.0.0.tgz";
