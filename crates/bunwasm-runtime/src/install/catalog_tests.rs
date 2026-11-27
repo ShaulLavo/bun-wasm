@@ -96,24 +96,7 @@ fn parse_yaml_map(
 }
 
 fn split_yaml_entry(line: &str) -> std::result::Result<(&str, &str), String> {
-    let mut quote = None;
-    for (index, ch) in line.char_indices() {
-        if quote == Some(ch) {
-            quote = None;
-            continue;
-        }
-        if quote.is_some() {
-            continue;
-        }
-        if ch == '\'' || ch == '"' {
-            quote = Some(ch);
-            continue;
-        }
-        if ch == ':' && line[index + 1..].is_empty() || line[index..].starts_with(": ") {
-            return Ok((line[..index].trim(), line[index + 1..].trim()));
-        }
-    }
-    Err(format!("Invalid YAML line: {line}"))
+    catalog::split_yaml_mapping(line).ok_or_else(|| format!("Invalid YAML line: {line}"))
 }
 
 fn unquote_yaml(raw: &str) -> String {
@@ -140,6 +123,11 @@ fn parse_yaml_scalar(raw: &str) -> Value {
     }
     if let Ok(number) = raw.parse::<i64>() {
         return Value::Number(number.into());
+    }
+    if let Ok(float) = raw.parse::<f64>()
+        && let Some(number) = serde_json::Number::from_f64(float)
+    {
+        return Value::Number(number);
     }
     Value::String(raw.to_owned())
 }
@@ -823,33 +811,83 @@ fn standalone_catalog_field_and_workspace_unit_selection_install_like_native_bun
             );
             assert!(lock["packages"].get("is-number").is_none());
 
-            // An unused catalog tarball entry matching a locked registry tarball URL must not
-            // invalidate the registry lock row during a frozen offline install.
+            // Unused catalog tarballs, overridden catalog tarballs, and separate catalog aliases
+            // sharing a registry dependency's archive URL must not invalidate its registry lock row.
             let _ = fs::remove_dir_all("packages");
             let tarball_url = "https://other-registry.invalid/is-number/-/is-number-7.0.0.tgz";
-            fs::write(
-                "package.json",
-                json!({
-                    "name": "root",
-                    "workspaces": {
-                        "packages": ["packages/*"],
-                        "catalog": { "unused-tarball": tarball_url }
-                    },
-                    "dependencies": { "is-number": "^7.0.0" }
-                })
-                .to_string(),
-            )
-            .unwrap();
-            let _ = fs::remove_file("bun.lock");
-            install("install", &["--lockfile-only"]).unwrap();
-            let mut lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
-            lock["packages"]["is-number"][1] = json!(tarball_url);
-            fs::write("bun.lock", serde_json::to_string_pretty(&lock).unwrap()).unwrap();
-            // Clear the test cache so any fallback registry metadata fetch would fail immediately.
-            let _ = fs::remove_dir_all("cache");
-            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+            let alias_tarball = format!("npm:is-number@{tarball_url}");
+            let archive_bytes =
+                resolve::test_support::archive(&json!({"name": "is-number", "version": "7.0.0"}));
+            let cases = [
+                (
+                    json!({
+                        "name": "root",
+                        "workspaces": {
+                            "packages": ["packages/*"],
+                            "catalog": { "unused-tarball": tarball_url }
+                        },
+                        "dependencies": { "is-number": "^7.0.0" }
+                    }),
+                    false,
+                ),
+                (
+                    json!({
+                        "name": "root",
+                        "workspaces": {
+                            "packages": ["packages/*"],
+                            "catalog": { "is-number": tarball_url }
+                        },
+                        "dependencies": { "is-number": "catalog:" },
+                        "overrides": { "is-number": "^7.0.0" }
+                    }),
+                    false,
+                ),
+                (
+                    json!({
+                        "name": "root",
+                        "workspaces": {
+                            "packages": ["packages/*"],
+                            "catalog": { "other-alias": alias_tarball }
+                        },
+                        "dependencies": {
+                            "is-number": "^7.0.0",
+                            "other-alias": "catalog:"
+                        }
+                    }),
+                    true,
+                ),
+            ];
+            for (manifest, needs_tarball) in cases {
+                assert_frozen_offline_registry_replay(
+                    &manifest,
+                    tarball_url,
+                    needs_tarball.then_some(archive_bytes.as_slice()),
+                );
+            }
         },
     );
+}
+
+fn assert_frozen_offline_registry_replay(
+    manifest: &Value,
+    tarball_url: &str,
+    archive_bytes: Option<&[u8]>,
+) {
+    seed_registry_package("is-number", &["7.0.0"]);
+    if let Some(bytes) = archive_bytes {
+        resolve::test_support::cache_archive(tarball_url, bytes);
+    }
+    fs::write("package.json", manifest.to_string()).unwrap();
+    let _ = fs::remove_file("bun.lock");
+    install("install", &["--lockfile-only"]).unwrap();
+    let mut lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+    lock["packages"]["is-number"][1] = json!(tarball_url);
+    fs::write("bun.lock", serde_json::to_string_pretty(&lock).unwrap()).unwrap();
+    let _ = fs::remove_dir_all(io::cache_dir());
+    if let Some(bytes) = archive_bytes {
+        resolve::test_support::cache_archive(tarball_url, bytes);
+    }
+    install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
 }
 
 #[test]
@@ -1097,7 +1135,7 @@ fn yarn_npm_catalog_ranges_normalize_while_preserving_aliases() {
     isolated(
         "yarn_npm_catalog_ranges_normalize_while_preserving_aliases",
         || {
-            seed_registry_package("versioned", &["1.0.0"]);
+            seed_registry_package("versioned", &["1.0.0", "2.10.0"]);
             seed_registry_package("other", &["1.0.0"]);
             seed_registry_package("is-number", &["7.0.0"]);
             seed_registry_package("is-odd", &["3.0.1"]);
@@ -1109,20 +1147,22 @@ fn yarn_npm_catalog_ranges_normalize_while_preserving_aliases() {
                         "versioned": " catalog:",
                         "is-number": "catalog:",
                         "is-odd": "catalog:",
+                        "minor-pkg": "catalog:nums",
                         "aliased": "catalog:tools"
                     }
                 }),
                 "packages/a",
                 json!({ "name": "@fixture/a", "version": "1.0.0" }),
             );
+            seed_registry_package("minor-pkg", &["2.10.0", "2.1.0"]);
             fs::write(
                 ".yarnrc.yml",
-                "catalog:\n  versioned: \"npm:1\"\n  is-number: \"npm:7.x\"\n  is-odd: \"npm:latest\"\ncatalogs:\n  tools:\n    aliased: \"npm:other@^1.0.0\"\n",
+                "catalog:\n  versioned: \"npm:1\"\n  is-number: 7\n  is-odd: \"npm:latest\"\ncatalogs:\n  nums:\n    minor-pkg: 2.10\n  tools:\n    aliased: \"npm:other@^1.0.0\"\n",
             )
             .unwrap();
             fs::write(
                 "yarn.lock",
-                "__metadata:\n  version: 8\n\n\"root@workspace:.\":\n  version: 0.0.0-use.local\n  resolution: \"root@workspace:.\"\n  dependencies:\n    versioned: \"catalog:\"\n    is-number: \"catalog:\"\n    is-odd: \"catalog:\"\n    aliased: \"catalog:tools\"\n\n\"@fixture/a@workspace:packages/a\":\n  version: 0.0.0-use.local\n  resolution: \"@fixture/a@workspace:packages/a\"\n\n\"versioned@npm:1\":\n  version: 1.0.0\n  resolution: \"versioned@npm:1.0.0\"\n\n\"is-number@npm:7.x\":\n  version: 7.0.0\n  resolution: \"is-number@npm:7.0.0\"\n\n\"is-odd@npm:latest\":\n  version: 3.0.1\n  resolution: \"is-odd@npm:3.0.1\"\n\n\"aliased@npm:other@^1.0.0\":\n  version: 1.0.0\n  resolution: \"other@npm:1.0.0\"\n",
+                "__metadata:\n  version: 8\n\n\"root@workspace:.\":\n  version: 0.0.0-use.local\n  resolution: \"root@workspace:.\"\n  dependencies:\n    versioned: \"catalog:\"\n    is-number: \"catalog:\"\n    is-odd: \"catalog:\"\n    minor-pkg: \"catalog:nums\"\n    aliased: \"catalog:tools\"\n\n\"@fixture/a@workspace:packages/a\":\n  version: 0.0.0-use.local\n  resolution: \"@fixture/a@workspace:packages/a\"\n\n\"versioned@npm:1\":\n  version: 1.0.0\n  resolution: \"versioned@npm:1.0.0\"\n\n\"is-number@npm:7\":\n  version: 7.0.0\n  resolution: \"is-number@npm:7.0.0\"\n\n\"is-odd@npm:latest\":\n  version: 3.0.1\n  resolution: \"is-odd@npm:3.0.1\"\n\n\"minor-pkg@npm:2.10\":\n  version: 2.10.0\n  resolution: \"minor-pkg@npm:2.10.0\"\n\n\"aliased@npm:other@^1.0.0\":\n  version: 1.0.0\n  resolution: \"other@npm:1.0.0\"\n",
             )
             .unwrap();
 
@@ -1130,12 +1170,14 @@ fn yarn_npm_catalog_ranges_normalize_while_preserving_aliases() {
             let lock_text = fs::read_to_string("bun.lock").unwrap();
             let lock = parse_json(lock_text.as_bytes()).unwrap();
             assert_eq!(lock["catalog"]["versioned"], "npm:1");
-            assert_eq!(lock["catalog"]["is-number"], "npm:7.x");
+            assert_eq!(lock["catalog"]["is-number"], "7");
             assert_eq!(lock["catalog"]["is-odd"], "npm:latest");
+            assert_eq!(lock["catalogs"]["nums"]["minor-pkg"], "2.10");
             assert_eq!(lock["catalogs"]["tools"]["aliased"], "npm:other@^1.0.0");
             assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
             assert_eq!(lock["packages"]["is-number"][0], "is-number@7.0.0");
             assert_eq!(lock["packages"]["is-odd"][0], "is-odd@3.0.1");
+            assert_eq!(lock["packages"]["minor-pkg"][0], "minor-pkg@2.10.0");
             assert_eq!(lock["packages"]["aliased"][0], "other@1.0.0");
 
             install("install", &["--frozen-lockfile"]).unwrap();

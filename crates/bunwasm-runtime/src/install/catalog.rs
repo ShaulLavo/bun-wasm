@@ -280,7 +280,217 @@ fn read_optional_yaml_lenient(path: &Path, parser: &dyn Transpiler) -> Option<Va
     if !path.is_file() {
         return None;
     }
-    io::read(path, "YAML", parser).ok()
+    let bytes = std::fs::read(path).ok()?;
+    let mut parsed = io::parsed(&bytes, "YAML", parser).ok()?;
+    if let Ok(source) = std::str::from_utf8(&bytes) {
+        preserve_numeric_catalog_scalars(&mut parsed, source);
+    }
+    Some(parsed)
+}
+
+fn preserve_numeric_catalog_scalars(value: &mut Value, source: &str) {
+    if !has_numeric_catalog_entry(value) {
+        return;
+    }
+    let raw_scalars = extract_yaml_catalog_scalars(source);
+    if let Some(entries) = value["catalog"].as_object_mut() {
+        stringify_numeric_entries(entries, None, &raw_scalars);
+    }
+    let Some(catalogs) = value["catalogs"].as_object_mut() else {
+        return;
+    };
+    for (group, entries) in catalogs {
+        if let Some(entries) = entries.as_object_mut() {
+            stringify_numeric_entries(entries, Some(group.as_str()), &raw_scalars);
+        }
+    }
+}
+
+fn has_numeric_catalog_entry(value: &Value) -> bool {
+    let default_has_num = value["catalog"]
+        .as_object()
+        .is_some_and(|entries| entries.values().any(Value::is_number));
+    if default_has_num {
+        return true;
+    }
+    value["catalogs"].as_object().is_some_and(|catalogs| {
+        catalogs.values().any(|group| {
+            group
+                .as_object()
+                .is_some_and(|entries| entries.values().any(Value::is_number))
+        })
+    })
+}
+
+fn stringify_numeric_entries(
+    entries: &mut Map<String, Value>,
+    group: Option<&str>,
+    raw_scalars: &BTreeMap<(Option<String>, String), String>,
+) {
+    for (pkg, val) in entries.iter_mut() {
+        let Some(number) = val.as_number() else {
+            continue;
+        };
+        let key = (group.map(str::to_owned), pkg.clone());
+        let text = raw_scalars
+            .get(&key)
+            .filter(|raw| numbers_match(raw, number))
+            .cloned()
+            .unwrap_or_else(|| number.to_string());
+        *val = Value::String(text);
+    }
+}
+
+fn numbers_match(raw: &str, number: &serde_json::Number) -> bool {
+    let Ok(parsed_f64) = raw.parse::<f64>() else {
+        return false;
+    };
+    number.as_f64().is_some_and(|n| parsed_f64 == n)
+}
+
+enum YamlSection {
+    Other,
+    Default,
+    Named(Option<(usize, String)>),
+}
+
+fn extract_yaml_catalog_scalars(source: &str) -> BTreeMap<(Option<String>, String), String> {
+    let mut out = BTreeMap::new();
+    let mut section = YamlSection::Other;
+    for raw_line in source.lines() {
+        let line = raw_line.trim_end_matches('\r');
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let trimmed = line[indent..].trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((raw_key, raw_value)) = split_yaml_mapping(trimmed) else {
+            continue;
+        };
+        let key = unquote_yaml_key(raw_key);
+        let value = strip_yaml_comment(raw_value);
+        if indent == 0 {
+            section = enter_top_level_section(&key, value, &mut out);
+            continue;
+        }
+        record_section_entry(&mut section, indent, key, value, &mut out);
+    }
+    out
+}
+
+fn enter_top_level_section(
+    key: &str,
+    value: &str,
+    out: &mut BTreeMap<(Option<String>, String), String>,
+) -> YamlSection {
+    if key == "catalog" {
+        if value.starts_with('{') && value.ends_with('}') {
+            extract_flow_scalars(value, None, out);
+            return YamlSection::Other;
+        }
+        return YamlSection::Default;
+    }
+    if key == "catalogs" {
+        return YamlSection::Named(None);
+    }
+    YamlSection::Other
+}
+
+fn record_section_entry(
+    section: &mut YamlSection,
+    indent: usize,
+    key: String,
+    value: &str,
+    out: &mut BTreeMap<(Option<String>, String), String>,
+) {
+    match section {
+        YamlSection::Other => {}
+        YamlSection::Default if !value.is_empty() => {
+            out.insert((None, key), value.to_owned());
+        }
+        YamlSection::Default => {}
+        YamlSection::Named(group) => record_named_entry(group, indent, key, value, out),
+    }
+}
+
+fn record_named_entry(
+    group: &mut Option<(usize, String)>,
+    indent: usize,
+    key: String,
+    value: &str,
+    out: &mut BTreeMap<(Option<String>, String), String>,
+) {
+    let starts_group = group
+        .as_ref()
+        .is_none_or(|(g_indent, _)| indent <= *g_indent);
+    if starts_group {
+        if value.starts_with('{') && value.ends_with('}') {
+            extract_flow_scalars(value, Some(&key), out);
+        }
+        *group = Some((indent, key));
+        return;
+    }
+    if let Some((_, group_name)) = group
+        && !value.is_empty()
+    {
+        out.insert((Some(group_name.clone()), key), value.to_owned());
+    }
+}
+
+fn extract_flow_scalars(
+    flow: &str,
+    group: Option<&str>,
+    out: &mut BTreeMap<(Option<String>, String), String>,
+) {
+    let inner = flow.trim_start_matches('{').trim_end_matches('}');
+    for entry in inner.split(',') {
+        let Some((raw_key, raw_value)) = split_yaml_mapping(entry.trim()) else {
+            continue;
+        };
+        let key = unquote_yaml_key(raw_key);
+        let value = raw_value.trim();
+        if !value.is_empty() {
+            out.insert((group.map(str::to_owned), key), value.to_owned());
+        }
+    }
+}
+
+pub(super) fn split_yaml_mapping(line: &str) -> Option<(&str, &str)> {
+    let mut quote = None;
+    for (index, ch) in line.char_indices() {
+        if quote == Some(ch) {
+            quote = None;
+            continue;
+        }
+        if quote.is_some() {
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            continue;
+        }
+        if ch == ':' && (line[index + 1..].is_empty() || line[index..].starts_with(": ")) {
+            return Some((line[..index].trim(), line[index + 1..].trim()));
+        }
+    }
+    None
+}
+
+fn unquote_yaml_key(raw: &str) -> String {
+    if raw.len() >= 2
+        && ((raw.starts_with('\'') && raw.ends_with('\''))
+            || (raw.starts_with('"') && raw.ends_with('"')))
+    {
+        return raw[1..raw.len() - 1].to_owned();
+    }
+    raw.to_owned()
+}
+
+fn strip_yaml_comment(raw: &str) -> &str {
+    if raw.starts_with('\'') || raw.starts_with('"') {
+        return raw;
+    }
+    raw.split(" #").next().unwrap_or(raw).trim()
 }
 
 fn object_catalog_sources(source: &Value) -> (Option<&Value>, Option<&Value>) {

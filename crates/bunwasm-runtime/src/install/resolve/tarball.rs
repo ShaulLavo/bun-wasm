@@ -131,136 +131,95 @@ fn validate_dependencies(meta: &Value) -> Result<()> {
     Ok(())
 }
 
-pub(in super::super) fn locked_sources(locked: &Value, manifest: &Value) -> BTreeSet<String> {
+pub(in super::super) fn locked_sources(
+    locked: &Value,
+    manifest: &Value,
+) -> BTreeSet<(String, String)> {
     let mut sources = BTreeSet::new();
-    declared_sources(manifest, &mut sources);
+    let manifest_overrides = Overrides::new(manifest, locked).unwrap_or_default();
+    let locked_overrides = Overrides::new(locked, &Value::Null).unwrap_or_default();
+    let manifest_catalogs = Catalogs::from_manifest(manifest, locked).unwrap_or_default();
+    let locked_catalogs = Catalogs::from_lock(locked);
+    collect_declared_sources(
+        manifest,
+        &manifest_overrides,
+        &manifest_catalogs,
+        true,
+        &mut sources,
+    );
+    collect_locked_sources(locked, &locked_overrides, &locked_catalogs, &mut sources);
+    sources
+}
+
+pub(super) fn collect_workspace_sources(
+    manifest: &Value,
+    locked: &Value,
+    workspaces: &BTreeMap<String, super::super::local::Local>,
+    overrides: &Overrides,
+    catalogs: &Catalogs,
+    locked_catalogs: &Catalogs,
+    sources: &mut BTreeSet<(String, String)>,
+) {
+    let locked_overrides = Overrides::new(locked, &Value::Null).unwrap_or_default();
+    collect_declared_sources(manifest, overrides, catalogs, true, sources);
+    for member in workspaces.values() {
+        collect_declared_sources(&member.meta, overrides, catalogs, true, sources);
+    }
+    collect_locked_sources(locked, &locked_overrides, locked_catalogs, sources);
+}
+
+fn collect_locked_sources(
+    locked: &Value,
+    locked_overrides: &Overrides,
+    locked_catalogs: &Catalogs,
+    sources: &mut BTreeSet<(String, String)>,
+) {
     for meta in locked["workspaces"]
         .as_object()
         .into_iter()
         .flat_map(|members| members.values())
     {
-        declared_sources(meta, &mut sources);
+        collect_declared_sources(meta, locked_overrides, locked_catalogs, true, sources);
     }
     for row in locked["packages"]
         .as_object()
         .into_iter()
         .flat_map(|packages| packages.values())
     {
-        declared_sources(&row[2], &mut sources);
+        collect_declared_sources(&row[2], locked_overrides, locked_catalogs, false, sources);
     }
-    for value in [manifest, locked].into_iter().flat_map(|meta| {
-        meta["overrides"]
-            .as_object()
-            .into_iter()
-            .flat_map(|rules| rules.values())
-    }) {
-        insert_source(value.as_str().or_else(|| value["."].as_str()), &mut sources);
-    }
-    let manifest_catalogs = Catalogs::from_manifest(manifest, locked).unwrap_or_default();
-    let locked_catalogs = Catalogs::from_lock(locked);
-    collect_catalog_sources(
-        manifest,
-        locked,
-        &std::collections::BTreeMap::new(),
-        &manifest_catalogs,
-        &locked_catalogs,
-        &mut sources,
-    );
-    sources
 }
 
-pub(super) fn collect_catalog_sources(
-    manifest: &Value,
-    locked: &Value,
-    workspaces: &std::collections::BTreeMap<String, super::super::local::Local>,
-    catalogs: &Catalogs,
-    locked_catalogs: &Catalogs,
-    sources: &mut BTreeSet<String>,
-) {
-    declared_catalog_sources(manifest, catalogs, locked_catalogs, sources);
-    for member in workspaces.values() {
-        declared_catalog_sources(&member.meta, catalogs, locked_catalogs, sources);
-    }
-    for meta in locked["workspaces"]
-        .as_object()
-        .into_iter()
-        .flat_map(|members| members.values())
-    {
-        declared_catalog_sources(meta, locked_catalogs, catalogs, sources);
-    }
-    override_catalog_sources(&manifest["overrides"], catalogs, sources);
-    override_catalog_sources(&locked["overrides"], locked_catalogs, sources);
-}
-
-fn declared_catalog_sources(
+fn collect_declared_sources(
     meta: &Value,
-    primary: &Catalogs,
-    fallback: &Catalogs,
-    sources: &mut BTreeSet<String>,
+    overrides: &Overrides,
+    catalogs: &Catalogs,
+    workspace: bool,
+    sources: &mut BTreeSet<(String, String)>,
 ) {
     for (name, (range, _, _)) in dependencies(meta, false, true) {
-        insert_catalog_source(&name, &range, primary, fallback, sources);
-    }
-}
-
-fn override_catalog_sources(
-    overrides: &Value,
-    catalogs: &Catalogs,
-    sources: &mut BTreeSet<String>,
-) {
-    for (key, value) in overrides.as_object().into_iter().flatten() {
-        let name = override_package_name(key);
-        let Some(range) = value.as_str().or_else(|| value["."].as_str()) else {
+        let Ok((resolved, _)) = resolve_declared(&name, &range, overrides, catalogs, workspace)
+        else {
             continue;
         };
-        insert_catalog_source(name, range, catalogs, catalogs, sources);
+        insert_source(&name, Some(resolved), sources);
     }
 }
 
-fn override_package_name(key: &str) -> &str {
-    let split = key
-        .char_indices()
-        .find_map(|(i, ch)| (i > 0 && ch == '@').then_some(i));
-    split.map_or(key, |i| &key[..i])
-}
-
-fn insert_catalog_source(
-    name: &str,
-    range: &str,
-    primary: &Catalogs,
-    fallback: &Catalogs,
-    sources: &mut BTreeSet<String>,
-) {
-    if !super::super::catalog::is_protocol(range) {
-        return;
-    }
-    for catalogs in [primary, fallback] {
-        if let Ok(Some(resolved)) = catalogs.resolve(name, range) {
-            insert_source(Some(resolved), sources);
-        }
-    }
-}
-
-fn declared_sources(meta: &Value, sources: &mut BTreeSet<String>) {
-    for (_, (range, _, _)) in dependencies(meta, false, true) {
-        insert_source(Some(&range), sources);
-    }
-}
-
-fn insert_source(range: Option<&str>, sources: &mut BTreeSet<String>) {
+fn insert_source(dep_name: &str, range: Option<&str>, sources: &mut BTreeSet<(String, String)>) {
     let Some(range) = range else {
         return;
     };
     if let Some(alias) = range.strip_prefix("npm:") {
         if let Ok((_, range)) = spec(alias) {
-            insert_source(Some(&range), sources);
+            insert_source(dep_name, Some(&range), sources);
         }
         return;
     }
     if is_specifier(range)
         && let Ok(source) = source(range)
     {
-        sources.insert(source);
+        sources.insert((dep_name.to_owned(), source));
     }
 }
 

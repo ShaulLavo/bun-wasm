@@ -193,7 +193,7 @@ pub struct Resolver {
     packuments: BTreeMap<String, Value>,
     responses: BTreeMap<String, Vec<u8>>,
     downloads: io::Downloads,
-    explicit_sources: BTreeSet<String>,
+    explicit_sources: BTreeSet<(String, String)>,
     pending: VecDeque<String>,
     pub workspaces: BTreeMap<String, Local>,
     production: bool,
@@ -248,10 +248,12 @@ impl Resolver {
         }
         self.locked_catalogs = Catalogs::from_lock(&self.locked);
         self.locked_catalogs.from_yarn = self.catalogs.from_yarn;
-        tarball::collect_catalog_sources(
+        self.explicit_sources.clear();
+        tarball::collect_workspace_sources(
             manifest,
             &self.locked,
             &self.workspaces,
+            &self.overrides,
             &self.catalogs,
             &self.locked_catalogs,
             &mut self.explicit_sources,
@@ -994,7 +996,11 @@ impl Resolver {
             return None;
         }
         let source = row[1].as_str()?;
-        if self.explicit_sources.contains(source) {
+        let dep_name = chain.last().map_or(name, String::as_str);
+        if self
+            .explicit_sources
+            .contains(&(dep_name.to_owned(), source.to_owned()))
+        {
             return None;
         }
         let tarball = if source.is_empty() {
