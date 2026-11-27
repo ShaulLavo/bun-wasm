@@ -99,6 +99,7 @@ impl Overrides {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn target<'a>(&'a self, name: &str, range: &'a str) -> &'a str {
         self.replacement(name, range).unwrap_or(range)
     }

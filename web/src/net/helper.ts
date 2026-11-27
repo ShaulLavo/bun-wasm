@@ -68,22 +68,7 @@ function tagPackageFetch(request: NetRequest, packagePolicyToken: string): NetRe
   return { ...request, headers };
 }
 
-function wrapPackagePolicyHelper(
-  helper: RuntimeNetworkHelper,
-  packagePolicyToken: string,
-): RuntimeNetworkHelper {
-  return Object.freeze({
-    handle(request) {
-      helper.handle(tagPackageFetch(request, packagePolicyToken));
-    },
-    dispose: () => helper.dispose(),
-    listenerFor: port => helper.listenerFor(port),
-    request: (port, request, sink, options) => helper.request(port, request, sink, options),
-    connect: (port, sink) => helper.connect(port, sink),
-    notifyFileChanged: path => helper.notifyFileChanged(path),
-    changeFile: (path, contents) => helper.changeFile(path, contents),
-  } satisfies RuntimeNetworkHelper);
-}
+const packagePolicyTokens = new WeakMap<RuntimeNetworkHelper, string>();
 
 export function createBunNetworkHelper(
   network: RuntimeNetwork,
@@ -96,13 +81,12 @@ export function createBunNetworkHelper(
     : options.fetch!;
   const listening = options.listening;
   const stopped = options.stopped;
-  let exposed!: RuntimeNetworkHelper;
   const helper = network.createHelper({ ring, fetch, connect: options.connect, pathScope: options.pathScope, hooks: {
-    listening: port => listening?.(port, exposed),
-    stopped: port => stopped?.(port, exposed),
+    listening: port => listening?.(port, helper),
+    stopped: port => stopped?.(port, helper),
   } });
-  exposed = packagePolicyToken === undefined ? helper : wrapPackagePolicyHelper(helper, packagePolicyToken);
-  return exposed;
+  if (packagePolicyToken !== undefined) packagePolicyTokens.set(helper, packagePolicyToken);
+  return helper;
 }
 
 function isNetRequest(value: unknown): value is NetRequest {
@@ -151,5 +135,6 @@ function validFetch(value: object): boolean {
 export function dispatchBunNetwork(helper: RuntimeNetworkHelper, message: unknown): void {
   if (!message || typeof message !== "object" || !("type" in message) || message.type !== "net") return;
   if (!("req" in message) || !isNetRequest(message.req)) throw new TypeError("Invalid Bun network request");
-  helper.handle(message.req);
+  const token = packagePolicyTokens.get(helper);
+  helper.handle(token === undefined ? message.req : tagPackageFetch(message.req, token));
 }

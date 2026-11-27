@@ -409,21 +409,14 @@ impl Resolver {
 
     fn resolve_range(&self, parent: Option<&Package>, name: &str, range: &str) -> Result<String> {
         let workspace = parent.is_none_or(|p| p.local.as_ref().is_some_and(|l| l.workspace));
-        let expanded = if workspace {
-            self.catalogs.resolve(name, range)?
-        } else {
-            None
-        };
-        let effective = expanded.unwrap_or(range);
-        if let Some(replacement) = self.overrides.replacement(name, effective) {
-            return Ok(self.catalogs.resolve_str(name, replacement)?.into());
-        }
-        if expanded.is_some() {
-            return Ok(effective.into());
+        let (target, replaced) =
+            resolve_declared(name, range, &self.overrides, &self.catalogs, workspace)?;
+        if replaced {
+            return Ok(target.into());
         }
         Ok(match parent {
-            Some(parent) => declared_local_target(parent, effective.into()),
-            None => effective.into(),
+            Some(parent) => declared_local_target(parent, target.into()),
+            None => target.into(),
         })
     }
 
@@ -1067,6 +1060,29 @@ fn is_tag(range: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
 }
 
+fn resolve_declared<'a>(
+    name: &str,
+    declared: &'a str,
+    overrides: &'a Overrides,
+    catalogs: &'a Catalogs,
+    workspace: bool,
+) -> Result<(&'a str, bool)> {
+    if let Some(replacement) = overrides.replacement(name, declared) {
+        return Ok((catalogs.resolve_str(name, replacement)?, true));
+    }
+    let Some(expanded) = workspace
+        .then(|| catalogs.resolve(name, declared))
+        .transpose()?
+        .flatten()
+    else {
+        return Ok((declared, false));
+    };
+    if let Some(replacement) = overrides.replacement(name, expanded) {
+        return Ok((catalogs.resolve_str(name, replacement)?, true));
+    }
+    Ok((expanded, true))
+}
+
 fn effective_declared<'a>(
     name: &str,
     declared: &'a str,
@@ -1074,13 +1090,9 @@ fn effective_declared<'a>(
     catalogs: &'a Catalogs,
     workspace: bool,
 ) -> Option<&'a str> {
-    let base = if workspace {
-        catalogs.resolve_str(name, declared).ok()?
-    } else {
-        declared
-    };
-    let target = overrides.target(name, base);
-    catalogs.resolve_str(name, target).ok()
+    resolve_declared(name, declared, overrides, catalogs, workspace)
+        .ok()
+        .map(|(target, _)| target)
 }
 
 fn declared_effective(

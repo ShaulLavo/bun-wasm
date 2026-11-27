@@ -46,6 +46,20 @@ fn workspace_manifest(ancestor: &Path, parser: &dyn Transpiler) -> Result<Option
     Ok((!manifest["workspaces"].is_null()).then_some(manifest))
 }
 
+fn workspace_patterns(config: &Value) -> Result<&[Value]> {
+    if let Some(patterns) = config.as_array() {
+        return Ok(patterns.as_slice());
+    }
+    let Some(object) = config.as_object() else {
+        return Err("workspaces must be an array or an object with packages".into());
+    };
+    match object.get("packages") {
+        None | Some(Value::Null) => Ok(&[]),
+        Some(Value::Array(patterns)) => Ok(patterns.as_slice()),
+        Some(_) => Err("workspaces must be an array or an object with packages".into()),
+    }
+}
+
 pub fn workspaces(
     root: &Path,
     manifest: &Value,
@@ -56,10 +70,7 @@ pub fn workspaces(
     if config.is_null() {
         return Ok(members);
     }
-    let patterns = config
-        .as_array()
-        .or_else(|| config["packages"].as_array())
-        .ok_or("workspaces must be an array or an object with packages")?;
+    let patterns = workspace_patterns(config)?;
     let mut paths = Vec::new();
     for pattern in patterns {
         let pattern = pattern

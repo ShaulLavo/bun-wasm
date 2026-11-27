@@ -263,8 +263,9 @@ async function runInstallFetch(
   if (accept === METADATA || typeof caches === "undefined" || headers.has("authorization")) {
     return packageFetch(url, forwardOptions, fetcher, rewrite);
   }
-  const directives = headers.get("cache-control")?.match(/(?:[^,"]|"(?:[^"\\]|\\.)*")+/g);
-  const refresh = header.includes("; no-cache") || (directives?.some(value => value.trim().toLowerCase() === "no-cache") ?? false);
+  const requestDirectives = cacheControlDirectives(headers);
+  const refresh = header.includes("; no-cache") || requestDirectives.includes("no-cache");
+  const skipRequestStore = requestDirectives.includes("no-store");
   const storage = caches;
   const session = getSession(storage);
   const key = cacheKey(url);
@@ -275,18 +276,26 @@ async function runInstallFetch(
   try {
     const opened = await opening;
     const activeOpened = opened && opened.generation === session.generation ? opened : undefined;
-    if (activeOpened && !refresh) {
+    if (activeOpened && !refresh && !skipRequestStore) {
       const cached = await matchKnownEntry(activeOpened, key, url);
       if (cached) return restoreCachedResponse(cached);
     }
     const response = await packageFetch(url, forwardOptions, fetcher, rewrite);
-    if (!response.ok || !activeOpened || activeOpened.generation !== session.generation) return response;
+    if (!response.ok || !activeOpened || activeOpened.generation !== session.generation || skipRequestStore || cacheControlDirectives(response.headers).includes("no-store")) {
+      return response;
+    }
     return prepareCachedResponse(response, session, activeOpened, key, url, forwardOptions.signal);
   } finally {
     session.activeFetches--;
     session.lastActivity = Date.now();
     scheduleIdleRelease(session);
   }
+}
+
+function cacheControlDirectives(headers: Headers): string[] {
+  const value = headers.get("cache-control");
+  if (!value) return [];
+  return value.match(/(?:[^,"]|"(?:[^"\\]|\\.)*")+/g)?.map(token => token.trim().toLowerCase()) ?? [];
 }
 
 function stripPolicyHeader(options: RequestInit, headers: Headers): RequestInit {

@@ -720,3 +720,97 @@ fn fetch_errors_include_package_specifier_and_redacted_url() {
         io::NO_NETWORK
     );
 }
+
+#[test]
+fn overrides_apply_before_catalog_expansion() {
+    isolated("overrides_apply_before_catalog_expansion", || {
+        seed_registry_package("alpha", &["1.0.0", "2.0.0"]);
+        seed_registry_package("beta", &["1.0.0", "2.0.0"]);
+        seed_registry_package("other", &["1.0.0"]);
+        write_workspace(
+            json!({
+                "name": "root",
+                "workspaces": {
+                    "packages": ["packages/*"],
+                    "catalog": {
+                        "beta": "npm:other@1.0.0"
+                    }
+                },
+                "overrides": {
+                    "alpha": "2.0.0",
+                    "beta": "2.0.0"
+                }
+            }),
+            "packages/a",
+            json!({
+                "name": "@fixture/a",
+                "version": "1.0.0",
+                "dependencies": {
+                    "alpha": "catalog:missing",
+                    "beta": "catalog:"
+                }
+            }),
+        );
+
+        install("install", &[]).unwrap();
+        let lock_text = fs::read_to_string("bun.lock").unwrap();
+        let lock = parse_json(lock_text.as_bytes()).unwrap();
+        assert_eq!(lock["packages"]["alpha"][0], "alpha@2.0.0");
+        assert_eq!(lock["packages"]["beta"][0], "beta@2.0.0");
+        assert!(lock["packages"].get("other").is_none());
+
+        install("install", &["--frozen-lockfile"]).unwrap();
+        assert_eq!(fs::read_to_string("bun.lock").unwrap(), lock_text);
+    });
+}
+
+#[test]
+fn workspaces_catalog_without_packages_installs_root_dependencies() {
+    isolated(
+        "workspaces_catalog_without_packages_installs_root_dependencies",
+        || {
+            seed_registry_package("evlog", &["2.29.0"]);
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "workspaces": {
+                        "catalog": { "evlog": "2.29.0" }
+                    },
+                    "dependencies": {
+                        "evlog": "catalog:"
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+            install("install", &[]).unwrap();
+            let lock_text = fs::read_to_string("bun.lock").unwrap();
+            let lock = parse_json(lock_text.as_bytes()).unwrap();
+            assert_eq!(lock["catalog"]["evlog"], "2.29.0");
+            assert_eq!(lock["packages"]["evlog"][0], "evlog@2.29.0");
+
+            install("install", &["--frozen-lockfile"]).unwrap();
+            assert_eq!(fs::read_to_string("bun.lock").unwrap(), lock_text);
+
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "workspaces": {
+                        "packages": "not-an-array",
+                        "catalog": { "evlog": "2.29.0" }
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            assert!(
+                install("install", &[])
+                    .unwrap_err()
+                    .contains("workspaces must be an array or an object with packages")
+            );
+        },
+    );
+}
