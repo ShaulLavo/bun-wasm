@@ -200,6 +200,7 @@ pub struct Resolver {
     pub member_update: Option<MemberUpdate>,
     pub(super) overrides: Overrides,
     pub(super) catalogs: Catalogs,
+    pub(super) used_catalogs: BTreeMap<(Option<String>, String), String>,
     locked_catalogs: Catalogs,
     /// Installs placed packages while metadata loads (cold installs only).
     pub(super) early: Option<super::early::Early>,
@@ -225,6 +226,7 @@ impl Resolver {
             member_update: None,
             overrides: Overrides::default(),
             catalogs: Catalogs::default(),
+            used_catalogs: BTreeMap::new(),
             early: None,
         }
     }
@@ -268,12 +270,18 @@ impl Resolver {
         let mut lookahead = self.metadata_lookahead(&dependencies, None);
         for (index, (name, (range, optional, _))) in dependencies.iter().enumerate() {
             self.prefetch_dependencies(&mut lookahead, index);
+            let cat_key = resolved_catalog_key(name, range, &self.overrides, &self.catalogs, true);
             let range = match self.resolve_range(None, name, range) {
                 Ok(range) => range,
                 Err(_) if *optional => continue,
                 Err(error) => return Err(error),
             };
             self.add(name, &range, vec![name.clone()], *optional, None)?;
+            if let Some(cat_key) = cat_key
+                && let Some(pkg) = self.packages.get(name)
+            {
+                self.used_catalogs.insert(cat_key, pkg.version.clone());
+            }
         }
         self.downloads.clear();
         let mut pending_peers = VecDeque::new();
@@ -397,6 +405,8 @@ impl Resolver {
         for (index, (name, (range, optional, peer))) in dependencies.iter().enumerate() {
             self.prefetch_dependencies(&mut lookahead, index);
             let is_optional = *optional || parent.optional;
+            let cat_key =
+                resolved_catalog_key(name, range, &self.overrides, &self.catalogs, workspace);
             let range = match self.resolve_range(Some(parent), name, range) {
                 Ok(range) => range,
                 Err(_) if is_optional => continue,
@@ -409,13 +419,28 @@ impl Resolver {
                 continue;
             };
             let chain = self.placement(parent, name, &target, *peer, is_optional);
-            let Some(chain) = chain else {
-                continue;
-            };
-            let parent_key = parent.key();
-            self.add(name, &target, chain, is_optional, Some(&parent_key))?;
+            if let Some(chain) = chain {
+                let parent_key = parent.key();
+                self.add(name, &target, chain, is_optional, Some(&parent_key))?;
+            }
+            if let Some(cat_key) = cat_key
+                && let Some(pkg) = self.visible_package(parent, name)
+            {
+                self.used_catalogs.insert(cat_key, pkg.version.clone());
+            }
         }
         Ok(())
+    }
+
+    fn visible_package(&self, parent: &Package, name: &str) -> Option<&Package> {
+        for level in (0..=parent.chain.len()).rev() {
+            let mut candidate = parent.chain[..level].to_vec();
+            candidate.push(name.into());
+            if let Some(found) = self.packages.get(&candidate.join("/")) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     fn resolve_range(&self, parent: Option<&Package>, name: &str, range: &str) -> Result<String> {
@@ -1128,6 +1153,30 @@ pub(super) fn is_tag(range: &str) -> bool {
         && range
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
+}
+
+fn catalog_ref_group(spec: &str) -> Option<Option<String>> {
+    let group = spec.trim_start().strip_prefix("catalog:")?.trim();
+    Some((!group.is_empty() && group != "default").then(|| group.to_owned()))
+}
+
+fn resolved_catalog_key(
+    name: &str,
+    declared: &str,
+    overrides: &Overrides,
+    catalogs: &Catalogs,
+    workspace: bool,
+) -> Option<(Option<String>, String)> {
+    if let Some(replacement) = overrides.replacement(name, declared) {
+        return catalog_ref_group(replacement).map(|group| (group, name.to_owned()));
+    }
+    let expanded = workspace
+        .then(|| catalogs.resolve(name, declared).ok().flatten())
+        .flatten()?;
+    if let Some(replacement) = overrides.replacement(name, expanded) {
+        return catalog_ref_group(replacement).map(|group| (group, name.to_owned()));
+    }
+    catalog_ref_group(declared).map(|group| (group, name.to_owned()))
 }
 
 fn resolve_declared<'a>(

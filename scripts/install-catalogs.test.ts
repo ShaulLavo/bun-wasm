@@ -232,6 +232,33 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
     assert.equal(updatedRootManifest.workspaces.catalog.versioned, "^2.0.0");
     assert.equal(updatedRootManifest.workspaces.catalogs.unused.versioned, "^1.1.0");
     await install(target, updateRoot, registry.base, ["--frozen-lockfile"]);
+
+    // `bun update --latest` also updates catalog entries reached via `overrides` and keeps
+    // root `catalog:` references attached on explicit `bun update pkg@ver`.
+    const overrideUpdateRoot = join(directory, "update-override-catalog");
+    mkdirSync(join(overrideUpdateRoot, "packages/app"), { recursive: true });
+    writeFileSync(join(overrideUpdateRoot, "package.json"), JSON.stringify({
+      name: "update-override-root",
+      overrides: { versioned: "catalog:" },
+      workspaces: {
+        packages: ["packages/*"],
+        catalog: { versioned: "^1.0.0" },
+      },
+    }, null, 2));
+    writeFileSync(join(overrideUpdateRoot, "packages/app/package.json"), JSON.stringify({
+      name: "@fixture/override-app",
+      version: "1.0.0",
+      dependencies: { versioned: "^1.0.0" },
+    }, null, 2));
+    await install(target, overrideUpdateRoot, registry.base);
+    assert.equal(installedVersion(overrideUpdateRoot, "versioned"), "1.10.0");
+    await runGuestUpdate(target, overrideUpdateRoot, registry.base, ["versioned", "--latest"]);
+    assert.equal(installedVersion(overrideUpdateRoot, "versioned"), "2.0.0");
+    const overrideManifest = JSON.parse(readFileSync(join(overrideUpdateRoot, "package.json"), "utf8")) as {
+      workspaces: { catalog: { versioned: string } };
+    };
+    assert.equal(overrideManifest.workspaces.catalog.versioned, "^2.0.0");
+    await install(target, overrideUpdateRoot, registry.base, ["--frozen-lockfile"]);
   } finally {
     await registry.close();
     rmSync(directory, { recursive: true, force: true });

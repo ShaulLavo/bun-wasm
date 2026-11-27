@@ -2117,11 +2117,45 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
             assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
             assert!(lock["packages"].get("app-a/versioned").is_none());
 
-            // 1e. `bun update --latest` writes back the version resolved for each catalog entry's
-            // own consumer (not an unrelated root alias or another catalog).
+            // 1d2. Root peer dependency resolves before workspace dependencies, matching live install.
+            fs::remove_file("bun.lock").unwrap();
+            let _ = fs::remove_dir_all("node_modules");
+            let _ = fs::remove_dir_all("packages");
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "peerDependencies": { "versioned": "catalog:" }
+                }),
+                "packages/app-a",
+                json!({
+                    "name": "app-a",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "2.0.0" }
+                }),
+            );
+            fs::write(
+                "pnpm-workspace.yaml",
+                "packages:\n  - packages/*\ncatalog:\n  versioned: 1.0.0\n",
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    versioned:\n      specifier: 1.0.0\n      version: 1.0.0\nimporters:\n  .:\n    dependencies:\n      versioned:\n        specifier: 'catalog:'\n        version: 1.0.0\n  packages/app-a:\n    dependencies:\n      versioned:\n        specifier: 2.0.0\n        version: 2.0.0\npackages:\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n  versioned@2.0.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+            install("install", &[]).unwrap();
+            install("install", &["--frozen-lockfile"]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert_eq!(lock["packages"]["app-a/versioned"][0], "versioned@2.0.0");
+
+            // 1e. `bun update --latest` writes back the version resolved for each catalog entry
+            // tracked by the resolver (including override-reached catalogs), and explicit
+            // `bun update pkg@ver` preserves root `catalog:` references instead of detaching them.
             let mut root_manifest = json!({
                 "name": "root",
-                "dependencies": { "versioned": "npm:versioned@1.0.0" },
+                "dependencies": { "versioned": "catalog:" },
                 "workspaces": {
                     "packages": ["packages/*"],
                     "catalog": { "versioned": "^1.0.0" },
@@ -2129,89 +2163,58 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
                 }
             });
             let old_manifest = root_manifest.clone();
-            let opts = Options {
-                latest: true,
-                names: vec!["versioned".into()],
+            let explicit_opts = Options {
+                names: vec!["versioned@2.0.0".into()],
                 ..Options::default()
             };
-            update_manifest(&mut root_manifest, &opts).unwrap();
-            assert_eq!(
-                root_manifest["workspaces"]["catalog"]["versioned"],
-                "latest"
-            );
-            assert_eq!(
-                root_manifest["workspaces"]["catalogs"]["unused"]["versioned"],
-                "latest"
-            );
-
-            let mut lock_for_unlock = json!({
-                "packages": {
-                    "@fixture/a/versioned": ["versioned@1.1.0", "", {}, ""],
-                    "other": ["other@1.0.0", "", {}, ""]
-                }
-            });
-            unlock(&mut lock_for_unlock, &opts, &root_manifest, None);
-            assert!(
-                lock_for_unlock["packages"]
-                    .get("@fixture/a/versioned")
-                    .is_none()
-            );
-            assert!(lock_for_unlock["packages"].get("other").is_some());
+            update_manifest(&mut root_manifest, &explicit_opts).unwrap();
+            assert_eq!(root_manifest["dependencies"]["versioned"], "catalog:");
+            assert_eq!(root_manifest["workspaces"]["catalog"]["versioned"], "2.0.0");
 
             let mut resolver = Resolver::new(
                 io::Registry::new("http://registry.invalid").unwrap(),
                 json!({}),
                 false,
             );
-            resolver.workspaces.insert(
-                "@fixture/a".into(),
-                local::Local {
-                    path: Path::new("packages/a").to_owned(),
-                    meta: json!({
-                        "name": "@fixture/a",
-                        "version": "1.0.0",
-                        "dependencies": { "versioned": "catalog:" }
-                    }),
-                    workspace: true,
-                },
-            );
-            resolver.packages.insert(
-                "versioned".into(),
-                Package {
-                    name: "versioned".into(),
-                    version: "1.0.0".into(),
-                    chain: vec!["versioned".into()],
-                    source_chain: None,
-                    meta: json!({}),
-                    integrity: String::new(),
-                    tarball: String::new(),
-                    local: None,
-                    optional: false,
-                    explicit_tarball: false,
-                },
-            );
-            resolver.packages.insert(
-                "@fixture/a/versioned".into(),
-                Package {
-                    name: "versioned".into(),
-                    version: "2.0.0".into(),
-                    chain: vec!["@fixture/a".into(), "versioned".into()],
-                    source_chain: None,
-                    meta: json!({}),
-                    integrity: String::new(),
-                    tarball: String::new(),
-                    local: None,
-                    optional: false,
-                    explicit_tarball: false,
-                },
-            );
-            finalize_updates(&mut root_manifest, &old_manifest, &opts, &resolver, None).unwrap();
+            resolver
+                .used_catalogs
+                .insert((None, "versioned".into()), "2.0.0".into());
+            finalize_updates(
+                &mut root_manifest,
+                &old_manifest,
+                &explicit_opts,
+                &resolver,
+                None,
+            )
+            .unwrap();
+            assert_eq!(root_manifest["dependencies"]["versioned"], "catalog:");
+            assert_eq!(root_manifest["workspaces"]["catalog"]["versioned"], "2.0.0");
             assert_eq!(
-                root_manifest["workspaces"]["catalog"]["versioned"],
+                root_manifest["workspaces"]["catalogs"]["unused"]["versioned"],
+                "^1.0.0"
+            );
+
+            let mut latest_manifest = old_manifest.clone();
+            let latest_opts = Options {
+                latest: true,
+                names: vec!["versioned".into()],
+                ..Options::default()
+            };
+            update_manifest(&mut latest_manifest, &latest_opts).unwrap();
+            finalize_updates(
+                &mut latest_manifest,
+                &old_manifest,
+                &latest_opts,
+                &resolver,
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                latest_manifest["workspaces"]["catalog"]["versioned"],
                 "^2.0.0"
             );
             assert_eq!(
-                root_manifest["workspaces"]["catalogs"]["unused"]["versioned"],
+                latest_manifest["workspaces"]["catalogs"]["unused"]["versioned"],
                 "^1.0.0"
             );
 
