@@ -717,6 +717,8 @@ impl Resolver {
                     .is_some_and(|local| local.path == target.path)
             } else if tarball::is_specifier(range) {
                 tarball::matches(found, name, range)
+            } else if found.explicit_tarball && !peer {
+                false
             } else if let Some((name, range)) = &alias {
                 found.name == *name && matches(&found.version, range)
             } else {

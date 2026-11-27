@@ -1852,3 +1852,89 @@ fn workspace_explicit_tarball_is_not_reused_for_root_registry_exact_version() {
         },
     );
 }
+
+#[test]
+fn sibling_workspace_registry_dependency_does_not_reuse_hoisted_catalog_tarball() {
+    isolated(
+        "sibling_workspace_registry_dependency_does_not_reuse_hoisted_catalog_tarball",
+        || {
+            seed_registry_package("versioned", &["1.0.1"]);
+            let tarball_url = "https://packages.invalid/catalog-versioned-1.0.1.tgz";
+            let custom_archive = resolve::test_support::archive(&json!({
+                "name": "versioned",
+                "version": "1.0.1",
+                "description": "from-catalog-tarball"
+            }));
+            resolve::test_support::cache_archive(tarball_url, &custom_archive);
+
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "workspaces": {
+                        "packages": ["packages/*"],
+                        "catalog": { "versioned": tarball_url }
+                    }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "catalog:" }
+                }),
+            );
+            fs::create_dir_all("packages/b").unwrap();
+            fs::write(
+                "packages/b/package.json",
+                json!({
+                    "name": "@fixture/b",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "1.0.1" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+            install("install", &[]).unwrap();
+            let lock_text = fs::read_to_string("bun.lock").unwrap();
+            let lock = parse_json(lock_text.as_bytes()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][1], tarball_url);
+            assert_eq!(
+                lock["packages"]["@fixture/b/versioned"][1],
+                "http://registry.invalid/versioned/-/versioned-1.0.1.tgz"
+            );
+
+            let assert_installed = || {
+                let hoisted =
+                    parse_json(&fs::read("node_modules/versioned/package.json").unwrap()).unwrap();
+                assert_eq!(hoisted["description"], "from-catalog-tarball");
+                let nested = parse_json(
+                    &fs::read("node_modules/@fixture/b/node_modules/versioned/package.json")
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(nested["version"], "1.0.1");
+                assert!(
+                    nested.get("description").is_none(),
+                    "workspace B reused workspace A's catalog tarball: {nested}"
+                );
+            };
+            assert_installed();
+
+            // Offline lockfile replay (both frozen and regular) must keep both archives distinct.
+            let metadata_url = "http://registry.invalid/versioned";
+            fs::remove_file(
+                io::cache_dir().join(format!("{:x}", Sha256::digest(metadata_url.as_bytes()))),
+            )
+            .unwrap();
+            fs::remove_dir_all("node_modules").unwrap();
+            install("install", &["--frozen-lockfile"]).unwrap();
+            assert_eq!(fs::read_to_string("bun.lock").unwrap(), lock_text);
+            assert_installed();
+
+            fs::remove_dir_all("node_modules").unwrap();
+            install("install", &[]).unwrap();
+            assert_eq!(fs::read_to_string("bun.lock").unwrap(), lock_text);
+            assert_installed();
+        },
+    );
+}
