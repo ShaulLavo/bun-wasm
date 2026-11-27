@@ -202,6 +202,7 @@ pub struct Resolver {
     explicit_sources: BTreeSet<String>,
     pending: VecDeque<String>,
     pub workspaces: BTreeMap<String, Local>,
+    root_deps: BTreeSet<String>,
     production: bool,
     pub member_update: Option<MemberUpdate>,
     pub(super) overrides: Overrides,
@@ -228,6 +229,7 @@ impl Resolver {
             downloads: io::Downloads::new(io::METADATA_PREFETCHES),
             pending: VecDeque::new(),
             workspaces: BTreeMap::new(),
+            root_deps: BTreeSet::new(),
             production: false,
             member_update: None,
             overrides: Overrides::default(),
@@ -273,6 +275,7 @@ impl Resolver {
         let dependencies: Vec<_> = dependencies(manifest, production, true)
             .into_iter()
             .collect();
+        self.root_deps = dependencies.iter().map(|(name, _)| name.clone()).collect();
         let mut lookahead = self.metadata_lookahead(&dependencies, None);
         for (index, (name, (range, optional, _))) in dependencies.iter().enumerate() {
             self.prefetch_dependencies(&mut lookahead, index);
@@ -660,6 +663,13 @@ impl Resolver {
         name: &str,
         range: &str,
     ) -> Option<String> {
+        if self.refresh {
+            return None;
+        }
+        let workspace = parent.local.as_ref().is_some_and(|local| local.workspace);
+        if workspace && !self.root_deps.contains(name) {
+            return None;
+        }
         let alias = range.strip_prefix("npm:").map(spec).transpose().ok()?;
         let target_range = alias.as_ref().map_or(range, |(_, range)| range.as_str());
         if !is_tag(target_range) {
@@ -802,6 +812,10 @@ impl Resolver {
                 return Placement::Satisfied(key);
             }
             if peer {
+                let workspace = parent.local.as_ref().is_some_and(|local| local.workspace);
+                if workspace && !self.root_deps.contains(name) {
+                    break;
+                }
                 eprintln!(
                     "warn: incorrect peer dependency \"{}\"",
                     io::redact(&format!("{name}@{range}"))

@@ -259,6 +259,38 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
     };
     assert.equal(overrideManifest.workspaces.catalog.versioned, "^2.0.0");
     await install(target, overrideUpdateRoot, registry.base, ["--frozen-lockfile"]);
+
+    // `bun update --latest` with a catalog peer `^2.0.0` and a sibling pinned to `1.0.0` must
+    // keep the catalog at `^2.0.0` instead of downgrading it to the sibling's `1.0.0`.
+    const peerUpdateRoot = join(directory, "update-peer-catalog");
+    mkdirSync(join(peerUpdateRoot, "packages/a"), { recursive: true });
+    mkdirSync(join(peerUpdateRoot, "packages/b"), { recursive: true });
+    writeFileSync(join(peerUpdateRoot, "package.json"), JSON.stringify({
+      name: "update-peer-root",
+      workspaces: {
+        packages: ["packages/*"],
+        catalog: { versioned: "^2.0.0" },
+      },
+    }, null, 2));
+    writeFileSync(join(peerUpdateRoot, "packages/a/package.json"), JSON.stringify({
+      name: "@fixture/peer-a",
+      version: "1.0.0",
+      dependencies: { versioned: "1.0.0" },
+    }, null, 2));
+    writeFileSync(join(peerUpdateRoot, "packages/b/package.json"), JSON.stringify({
+      name: "@fixture/peer-b",
+      version: "1.0.0",
+      peerDependencies: { versioned: "catalog:" },
+    }, null, 2));
+    await install(target, peerUpdateRoot, registry.base);
+    await runGuestUpdate(target, peerUpdateRoot, registry.base, ["--latest"]);
+    const peerManifest = JSON.parse(readFileSync(join(peerUpdateRoot, "package.json"), "utf8")) as {
+      workspaces: { catalog: { versioned: string } };
+    };
+    assert.equal(peerManifest.workspaces.catalog.versioned, "^2.0.0");
+    assert.equal(installedVersion(peerUpdateRoot, "versioned"), "1.0.0");
+    assert.equal(installedVersion(peerUpdateRoot, "@fixture/peer-b/node_modules/versioned"), "2.0.0");
+    await install(target, peerUpdateRoot, registry.base, ["--frozen-lockfile"]);
   } finally {
     await registry.close();
     rmSync(directory, { recursive: true, force: true });

@@ -862,6 +862,20 @@ fn graph(
     registry: &str,
     transparent_workspaces: bool,
 ) -> Result<()> {
+    let root_deps: std::collections::BTreeSet<String> = roots
+        .first()
+        .filter(|(parent, _)| parent.is_empty())
+        .map(|(_, manifest)| {
+            resolve::dependencies(manifest, false, true)
+                .into_keys()
+                .collect()
+        })
+        .unwrap_or_default();
+    let workspace_chains: std::collections::BTreeSet<&[String]> = roots
+        .iter()
+        .filter(|(parent, _)| !parent.is_empty())
+        .map(|(parent, _)| parent.as_slice())
+        .collect();
     let mut pending = VecDeque::new();
     let mut pending_peers = VecDeque::new();
     for (parent, manifest) in roots {
@@ -888,10 +902,15 @@ fn graph(
         if let Some(peer_range) = peer.as_deref()
             && let Some(row) = visible_row(packages, &parent, &name)
         {
-            if !peer_row_satisfied(row, peer_range) {
-                eprintln!("warn: incorrect peer dependency \"{name}@{peer_range}\"");
+            if peer_row_satisfied(row, peer_range) {
+                continue;
             }
-            continue;
+            let workspace_peer =
+                workspace_chains.contains(parent.as_slice()) && !root_deps.contains(&name);
+            if !workspace_peer {
+                eprintln!("warn: incorrect peer dependency \"{name}@{peer_range}\"");
+                continue;
+            }
         }
         let meta = peer
             .as_ref()

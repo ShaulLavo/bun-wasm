@@ -1947,6 +1947,13 @@ fn sibling_workspace_registry_dependency_does_not_reuse_hoisted_catalog_tarball(
     );
 }
 
+fn migrate_and_verify_frozen_lock() -> Value {
+    install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+    install("install", &[]).unwrap();
+    install("install", &["--frozen-lockfile"]).unwrap();
+    parse_json(&fs::read("bun.lock").unwrap()).unwrap()
+}
+
 #[test]
 fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_not_pin_tag() {
     isolated(
@@ -2075,8 +2082,9 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
             let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
             assert_eq!(lock["packages"]["fixture-alias"][0], "is-number@7.0.0");
 
-            // 1d. pnpm auto-installed conflicting catalog peer stays a peer regardless of workspace
-            // name order (app-a has the peer, app-b has the regular dependency).
+            // 1d. pnpm auto-installed conflicting workspace peer is preserved nested under the
+            // workspace when a sibling (not the root) hoists a different version, regardless of
+            // workspace name order.
             fs::remove_file("bun.lock").unwrap();
             let _ = fs::remove_dir_all("node_modules");
             let _ = fs::remove_dir_all("packages");
@@ -2102,18 +2110,36 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
             .unwrap();
             fs::write(
                 "pnpm-workspace.yaml",
-                "packages:\n  - packages/*\ncatalog:\n  versioned: 2.0.0\n",
+                "packages:\n  - packages/*\ncatalog:\n  versioned: ^2.0.0\n",
             )
             .unwrap();
             fs::write(
                 "pnpm-lock.yaml",
-                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    versioned:\n      specifier: 2.0.0\n      version: 2.0.0\nimporters:\n  .:\n    dependencies: {}\n  packages/app-a:\n    dependencies:\n      versioned:\n        specifier: 'catalog:'\n        version: 2.0.0\n  packages/app-b:\n    dependencies:\n      versioned:\n        specifier: 1.0.0\n        version: 1.0.0\npackages:\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n  versioned@2.0.0:\n    resolution:\n      integrity: ''\n",
+                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    versioned:\n      specifier: ^2.0.0\n      version: 2.0.0\nimporters:\n  .:\n    dependencies: {}\n  packages/app-a:\n    dependencies:\n      versioned:\n        specifier: 'catalog:'\n        version: 2.0.0\n  packages/app-b:\n    dependencies:\n      versioned:\n        specifier: 1.0.0\n        version: 1.0.0\npackages:\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n  versioned@2.0.0:\n    resolution:\n      integrity: ''\n",
             )
             .unwrap();
-            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
-            install("install", &[]).unwrap();
-            install("install", &["--frozen-lockfile"]).unwrap();
-            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            let lock = migrate_and_verify_frozen_lock();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert_eq!(lock["packages"]["app-a/versioned"][0], "versioned@2.0.0");
+
+            // When the root itself owns `versioned@1.0.0`, conflicting workspace peer does not nest.
+            fs::remove_file("bun.lock").unwrap();
+            let _ = fs::remove_dir_all("node_modules");
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "dependencies": { "versioned": "1.0.0" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    versioned:\n      specifier: ^2.0.0\n      version: 2.0.0\nimporters:\n  .:\n    dependencies:\n      versioned:\n        specifier: 1.0.0\n        version: 1.0.0\n  packages/app-a:\n    dependencies:\n      versioned:\n        specifier: 'catalog:'\n        version: 2.0.0\n  packages/app-b:\n    dependencies:\n      versioned:\n        specifier: 1.0.0\n        version: 1.0.0\npackages:\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n  versioned@2.0.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+            let lock = migrate_and_verify_frozen_lock();
             assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
             assert!(lock["packages"].get("app-a/versioned").is_none());
 
@@ -2177,7 +2203,8 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
             let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
             assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
 
-            // 1d4. Incompatible catalog peer does not record the mismatched provider in used_catalogs.
+            // 1d4. Incompatible root-owned catalog peer does not record the mismatched provider in
+            // used_catalogs, whereas a sibling-only hoist lets the workspace peer install nested.
             fs::remove_file("bun.lock").unwrap();
             fs::remove_file("pnpm-lock.yaml").unwrap();
             fs::remove_file("pnpm-workspace.yaml").unwrap();
@@ -2185,6 +2212,7 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
             let _ = fs::remove_dir_all("packages");
             let peer_root = json!({
                 "name": "root",
+                "dependencies": { "versioned": "1.0.0" },
                 "workspaces": {
                     "packages": ["packages/*"],
                     "catalog": { "versioned": "^2.0.0" }
@@ -2192,24 +2220,13 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
             });
             write_workspace(
                 peer_root.clone(),
-                "packages/app-a",
-                json!({
-                    "name": "app-a",
-                    "version": "1.0.0",
-                    "dependencies": { "versioned": "1.0.0" }
-                }),
-            );
-            fs::create_dir_all("packages/app-b").unwrap();
-            fs::write(
-                "packages/app-b/package.json",
+                "packages/app-b",
                 json!({
                     "name": "app-b",
                     "version": "1.0.0",
                     "peerDependencies": { "versioned": "catalog:" }
-                })
-                .to_string(),
-            )
-            .unwrap();
+                }),
+            );
             let mut peer_resolver = Resolver::new(
                 io::Registry::new("http://registry.invalid").unwrap(),
                 json!({}),
