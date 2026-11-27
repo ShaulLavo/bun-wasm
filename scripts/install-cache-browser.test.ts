@@ -40,7 +40,10 @@ for (const engine of [chromium, webkit]) {
         const url = new URL(request.url);
         if (url.pathname === "/") {
           return new Response("<!doctype html><title>install-cache test</title>", {
-            headers: { "content-type": "text/html; charset=utf-8" },
+            headers: {
+              "content-type": "text/html; charset=utf-8",
+              "set-cookie": "session=fixture-cookie; Path=/",
+            },
           });
         }
         if (url.pathname === "/install-cache.js") {
@@ -48,17 +51,43 @@ for (const engine of [chromium, webkit]) {
             headers: { "content-type": "text/javascript; charset=utf-8" },
           });
         }
+        if (url.pathname === "/cookie-tarball.tgz") {
+          const cookie = request.headers.get("cookie") ?? "";
+          if (!cookie.includes("session=fixture-cookie")) {
+            return new Response("unauthorized", { status: 401 });
+          }
+          return new Response("cookie-protected-tarball", {
+            headers: { "content-type": "application/octet-stream" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const tarballServer = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const corsHeaders = {
+          "access-control-allow-origin": "*",
+          "access-control-allow-headers": "accept, cache-control",
+          "access-control-allow-methods": "GET, OPTIONS",
+        };
+        if (request.method === "OPTIONS") {
+          return new Response(null, { status: 204, headers: corsHeaders });
+        }
+        const url = new URL(request.url);
         if (url.pathname.startsWith("/tarballs/")) {
           tarballRequests++;
-          if (offline) return new Response("offline", { status: 503 });
+          if (offline) return new Response("offline", { status: 503, headers: corsHeaders });
           return new Response(`tarball-payload:${url.pathname}`, {
             headers: {
+              ...corsHeaders,
               "content-type": "application/octet-stream",
               "cache-control": "no-cache",
             },
           });
         }
-        return new Response("not found", { status: 404 });
+        return new Response("not found", { status: 404, headers: corsHeaders });
       },
     });
     const profile = mkdtempSync(join(tmpdir(), `bun-wasm-install-cache-${engine.name()}-`));
@@ -68,9 +97,20 @@ for (const engine of [chromium, webkit]) {
       const errors: string[] = [];
       page.on("pageerror", error => errors.push(error.message));
       const base = `http://127.0.0.1:${server.port}`;
+      const tarballBase = `http://127.0.0.1:${tarballServer.port}`;
 
       await page.goto(`${base}/`);
-      const cold = await page.evaluate(async ({ baseUrl, accept }) => {
+      // Same-origin cookie-authenticated direct download keeps cookies and bypasses shared Cache Storage.
+      const cookieResult = await page.evaluate(async ({ baseUrl, accept }) => {
+        const mod = await import(`${baseUrl}/install-cache.js`) as InstallCacheModule;
+        const response = await mod.installFetch(`${baseUrl}/cookie-tarball.tgz`, { method: "GET", headers: { accept } });
+        const text = await response.text();
+        const cached = await caches.has("bun-wasm-install-v2");
+        return { status: response.status, text, cached };
+      }, { baseUrl: base, accept: TARBALL });
+      expect(cookieResult).toEqual({ status: 200, text: "cookie-protected-tarball", cached: false });
+
+      const cold = await page.evaluate(async ({ baseUrl, tarballUrl, accept }) => {
         const stats = { opens: 0, keys: 0, matches: 0, puts: 0, activePuts: 0, peakPuts: 0 };
         const originalOpen = CacheStorage.prototype.open;
         const originalKeys = Cache.prototype.keys;
@@ -100,7 +140,7 @@ for (const engine of [chromium, webkit]) {
         const moduleUrl = `${baseUrl}/install-cache.js`;
         const mod = await import(moduleUrl) as InstallCacheModule;
         const count = 20;
-        const urls = Array.from({ length: count }, (_, index) => `${baseUrl}/tarballs/pkg-${index}.tgz`);
+        const urls = Array.from({ length: count }, (_, index) => `${tarballUrl}/tarballs/pkg-${index}.tgz`);
         const bodies = await Promise.all(urls.map(async url => {
           const response = await mod.installFetch(url, { method: "GET", headers: { accept } });
           return response.text();
@@ -127,7 +167,7 @@ for (const engine of [chromium, webkit]) {
           peakPuts: stats.peakPuts,
           finalCount,
         };
-      }, { baseUrl: base, accept: TARBALL });
+      }, { baseUrl: base, tarballUrl: tarballBase, accept: TARBALL });
 
       expect(cold.bodies).toEqual(Array.from({ length: 20 }, (_, index) => `tarball-payload:/tarballs/pkg-${index}.tgz`));
       expect(cold.coldOpens).toBe(1);
@@ -140,21 +180,21 @@ for (const engine of [chromium, webkit]) {
 
       // Warm hits in the same session with the origin returning 503.
       offline = true;
-      const sameSessionWarm = await page.evaluate(async ({ baseUrl, accept }) => {
+      const sameSessionWarm = await page.evaluate(async ({ baseUrl, tarballUrl, accept }) => {
         const moduleUrl = `${baseUrl}/install-cache.js`;
         const mod = await import(moduleUrl) as InstallCacheModule;
-        const urls = Array.from({ length: 20 }, (_, index) => `${baseUrl}/tarballs/pkg-${index}.tgz`);
+        const urls = Array.from({ length: 20 }, (_, index) => `${tarballUrl}/tarballs/pkg-${index}.tgz`);
         return Promise.all(urls.map(async url => {
           const response = await mod.installFetch(url, { method: "GET", headers: { accept } });
           return response.text();
         }));
-      }, { baseUrl: base, accept: TARBALL });
+      }, { baseUrl: base, tarballUrl: tarballBase, accept: TARBALL });
       expect(sameSessionWarm).toEqual(cold.bodies);
       expect(tarballRequests).toBe(20);
 
       // Warm hits after a full page reload (fresh JS heap, warm native CacheStorage).
       await page.reload();
-      const reloadedWarm = await page.evaluate(async ({ baseUrl, accept }) => {
+      const reloadedWarm = await page.evaluate(async ({ baseUrl, tarballUrl, accept }) => {
         let keys = 0;
         let matches = 0;
         const originalKeys = Cache.prototype.keys;
@@ -171,8 +211,8 @@ for (const engine of [chromium, webkit]) {
         const mod = await import(moduleUrl) as InstallCacheModule;
         const urls = Array.from({ length: 20 }, (_, index) => (
           index === 0
-            ? `${baseUrl}/tarballs/nested/../pkg-0.tgz`
-            : `${baseUrl}/tarballs/pkg-${index}.tgz`
+            ? `${tarballUrl}/tarballs/nested/../pkg-0.tgz`
+            : `${tarballUrl}/tarballs/pkg-${index}.tgz`
         ));
         const bodies = await Promise.all(urls.map(async url => {
           const response = await mod.installFetch(url, { method: "GET", headers: { accept } });
@@ -181,7 +221,7 @@ for (const engine of [chromium, webkit]) {
         const cleared = await mod.clearInstallCache();
         const existsAfterClear = await caches.has("bun-wasm-install-v2");
         return { bodies, keys, matches, cleared, existsAfterClear };
-      }, { baseUrl: base, accept: TARBALL });
+      }, { baseUrl: base, tarballUrl: tarballBase, accept: TARBALL });
 
       expect(reloadedWarm.bodies).toEqual(cold.bodies);
       expect(reloadedWarm.keys).toBe(1);
@@ -192,7 +232,7 @@ for (const engine of [chromium, webkit]) {
 
       // After clearInstallCache, a fresh cold miss skips cache.match again.
       offline = false;
-      const postClear = await page.evaluate(async ({ baseUrl, accept }) => {
+      const postClear = await page.evaluate(async ({ baseUrl, tarballUrl, accept }) => {
         let matches = 0;
         const originalMatch = Cache.prototype.match;
         Cache.prototype.match = function (...args) {
@@ -201,9 +241,9 @@ for (const engine of [chromium, webkit]) {
         };
         const moduleUrl = `${baseUrl}/install-cache.js`;
         const mod = await import(moduleUrl) as InstallCacheModule;
-        const text = await (await mod.installFetch(`${baseUrl}/tarballs/pkg-0.tgz`, { method: "GET", headers: { accept } })).text();
+        const text = await (await mod.installFetch(`${tarballUrl}/tarballs/pkg-0.tgz`, { method: "GET", headers: { accept } })).text();
         return { text, matches };
-      }, { baseUrl: base, accept: TARBALL });
+      }, { baseUrl: base, tarballUrl: tarballBase, accept: TARBALL });
       expect(postClear).toEqual({ text: "tarball-payload:/tarballs/pkg-0.tgz", matches: 0 });
       expect(tarballRequests).toBe(21);
 
@@ -221,11 +261,11 @@ for (const engine of [chromium, webkit]) {
       const page2 = await context.newPage();
       page2.on("pageerror", error => errors.push(error.message));
       await page2.goto(`${base}/`);
-      const tab2Warm = await page2.evaluate(async ({ baseUrl, accept }) => {
+      const tab2Warm = await page2.evaluate(async ({ baseUrl, tarballUrl, accept }) => {
         const mod = await import(`${baseUrl}/install-cache.js`) as InstallCacheModule;
-        const response = await mod.installFetch(`${baseUrl}/tarballs/pkg-0.tgz`, { method: "GET", headers: { accept } });
+        const response = await mod.installFetch(`${tarballUrl}/tarballs/pkg-0.tgz`, { method: "GET", headers: { accept } });
         return response.text();
-      }, { baseUrl: base, accept: TARBALL });
+      }, { baseUrl: base, tarballUrl: tarballBase, accept: TARBALL });
       expect(tab2Warm).toBe("tarball-payload:/tarballs/pkg-0.tgz");
       expect(tarballRequests).toBe(21);
 
@@ -235,13 +275,13 @@ for (const engine of [chromium, webkit]) {
         return mod.clearInstallCache();
       }, { baseUrl: base })).toBe(true);
       offline = true;
-      const tab2AfterClear = await page2.evaluate(async ({ baseUrl, accept }) => {
+      const tab2AfterClear = await page2.evaluate(async ({ baseUrl, tarballUrl, accept }) => {
         // Yield a turn so BroadcastChannel invalidation delivers before the next fetch.
         await new Promise(resolveDelay => setTimeout(resolveDelay, 50));
         const mod = await import(`${baseUrl}/install-cache.js`) as InstallCacheModule;
-        const response = await mod.installFetch(`${baseUrl}/tarballs/pkg-0.tgz`, { method: "GET", headers: { accept } });
+        const response = await mod.installFetch(`${tarballUrl}/tarballs/pkg-0.tgz`, { method: "GET", headers: { accept } });
         return response.status;
-      }, { baseUrl: base, accept: TARBALL });
+      }, { baseUrl: base, tarballUrl: tarballBase, accept: TARBALL });
       expect(tab2AfterClear).toBe(503);
       expect(tarballRequests).toBe(22);
       await page2.close();
@@ -250,6 +290,7 @@ for (const engine of [chromium, webkit]) {
       await context.close().catch(() => {});
       rmSync(profile, { recursive: true, force: true });
       server.stop(true);
+      tarballServer.stop(true);
     }
   }, 60_000);
 }

@@ -205,16 +205,21 @@ impl Catalogs {
         };
         let catalog_name = raw_name.trim();
         if catalog_name.is_empty() || catalog_name == "default" {
-            return self.resolve_default(name, catalog_name).map(Some);
+            return self
+                .resolve_default(name, catalog_name)
+                .map(|entry| Some(without_npm_protocol(entry)));
         }
         let Some(entries) = self.named.get(catalog_name) else {
             return Err(format!(
                 "{name}@catalog:{catalog_name}: there is no catalog named \"{catalog_name}\""
             ));
         };
-        entries.get(name).map(|v| Some(v.as_str())).ok_or_else(|| {
-            format!("{name}@catalog:{catalog_name} not in catalog \"{catalog_name}\"")
-        })
+        entries
+            .get(name)
+            .map(|v| Some(without_npm_protocol(v.as_str())))
+            .ok_or_else(|| {
+                format!("{name}@catalog:{catalog_name} not in catalog \"{catalog_name}\"")
+            })
     }
 
     fn resolve_default<'a>(&'a self, name: &str, catalog_name: &str) -> Result<&'a str> {
@@ -292,26 +297,28 @@ fn manifest_catalog_sources(manifest: &Value) -> (Option<&Value>, Option<&Value>
     object_catalog_sources(manifest)
 }
 
-fn looks_like_semver_range(value: &str) -> bool {
-    let Some(first) = value.as_bytes().first().copied() else {
+fn is_range_after_npm_protocol(target: &str) -> bool {
+    if target.is_empty()
+        || target.starts_with('@')
+        || target.contains('@')
+        || target.contains("://")
+        || target.starts_with("file:")
+        || target.starts_with("link:")
+        || target.starts_with("workspace:")
+        || is_protocol(target)
+    {
         return false;
-    };
-    first.is_ascii_digit()
-        || matches!(first, b'^' | b'~' | b'>' | b'<' | b'=' | b'*')
-        || (matches!(first, b'v' | b'V') && value.as_bytes().get(1).is_some_and(u8::is_ascii_digit))
+    }
+    let bytes = target.as_bytes();
+    bytes.iter().any(|b| b"^~><=*| ".contains(b))
+        || bun_semver::Version::parse_exact(bun_semver::SlicedString::init(bytes, bytes)).is_some()
 }
 
-fn normalize_npm_range(range: &str) -> &str {
-    let Some(rest) = range.strip_prefix("npm:") else {
-        return range;
-    };
-    if rest.is_empty() || rest.starts_with('@') || rest.contains('@') {
-        return range;
+pub(super) fn without_npm_protocol(range: &str) -> &str {
+    match range.strip_prefix("npm:") {
+        Some(target) if is_range_after_npm_protocol(target) => target,
+        _ => range,
     }
-    if super::resolve::valid_name(rest).is_ok() && !looks_like_semver_range(rest) {
-        return range;
-    }
-    rest
 }
 
 fn parse_entries(value: &Value, catalog_name: Option<&str>) -> Result<BTreeMap<String, String>> {
@@ -336,7 +343,7 @@ fn parse_entries(value: &Value, catalog_name: Option<&str>) -> Result<BTreeMap<S
                 "Catalog entry for \"{name}\" cannot reference another catalog"
             ));
         }
-        parsed.insert(name.clone(), normalize_npm_range(range).to_owned());
+        parsed.insert(name.clone(), range.to_owned());
     }
     Ok(parsed)
 }
@@ -359,7 +366,7 @@ fn parse_pnpm_lock_entries(value: &Value, catalog_name: &str) -> Result<BTreeMap
                 "Catalog entry for \"{name}\" cannot reference another catalog"
             ));
         }
-        parsed.insert(name.clone(), normalize_npm_range(specifier).to_owned());
+        parsed.insert(name.clone(), specifier.to_owned());
     }
     Ok(parsed)
 }

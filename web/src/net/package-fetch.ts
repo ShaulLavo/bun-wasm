@@ -113,7 +113,7 @@ async function fetchHop(
   rewriteCredentials: RequestCredentials | undefined,
   redirects: number,
 ): Promise<Response> {
-  const credentials = rewritten ? (rewriteCredentials ?? options.credentials) : (options.credentials ?? "omit");
+  const credentials = rewritten ? (rewriteCredentials ?? options.credentials) : options.credentials;
   const hopOptions: RequestInit = credentials === undefined
     ? { ...options, headers, redirect: "manual" }
     : { ...options, headers, redirect: "manual", credentials };
@@ -137,7 +137,12 @@ export async function packageFetch(
     const hopUrl = redirects === 0 && !rewritten ? input : target.href;
     stripCredentialsOnOriginChange(url, target, headers);
     const response = await fetchHop(fetcher, hopUrl, target, options, headers, rewritten, credentials, redirects);
-    if (response.type === "opaqueredirect") throw new Error("Package redirect destination is unavailable to this browser");
+    if (response.type === "opaqueredirect") {
+      const message = "Package redirect destination is unavailable to this browser";
+      throw redirects > 0 || rewritten
+        ? new Error(`GET ${redactPackageUrl(target)} - ${message}`)
+        : new Error(message);
+    }
     const location = response.headers.get("location");
     if (!location || ![301, 302, 303, 307, 308].includes(response.status)) {
       return redirects > 0 || rewritten ? ensureEffectiveResponseUrl(response, target, redirects > 0) : response;

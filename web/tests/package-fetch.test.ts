@@ -251,9 +251,21 @@ test("packageFetch forwards explicit credentials from a structured rewrite resul
     seenCredentials.push(init?.credentials);
     return new Response("ok");
   }, { preconnect: fetch.preconnect });
+  await packageFetch("https://registry.invalid/direct.tgz", {}, fetcher);
   await packageFetch("https://github.com/org/repo/releases/download/v1/pkg.tgz", {}, fetcher, {
     kind: "tarball",
     rewriteUrl: ({ url }) => ({ url: `https://proxy.invalid/tarball?url=${encodeURIComponent(url)}`, credentials: "omit" }),
   });
-  expect(seenCredentials).toEqual(["omit"]);
+  expect(seenCredentials).toEqual([undefined, "omit"]);
+});
+
+test("packageFetch includes redacted proxy URL in opaqueredirect errors", async () => {
+  const opaque = Object.defineProperty(new Response(null, { status: 200 }), "type", { value: "opaqueredirect" });
+  const { fetcher } = createFetcher(() => opaque);
+  await expect(
+    packageFetch("https://github.com/org/repo/releases/download/v1/pkg.tgz", {}, fetcher, {
+      kind: "tarball",
+      rewriteUrl: ({ url }) => `https://proxy.invalid/tarball?url=${encodeURIComponent(url)}`,
+    }),
+  ).rejects.toThrow("GET https://proxy.invalid/tarball - Package redirect destination is unavailable to this browser");
 });

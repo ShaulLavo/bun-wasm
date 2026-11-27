@@ -749,8 +749,11 @@ fn standalone_catalog_field_and_workspace_unit_selection_install_like_native_bun
             assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
             assert!(lock.get("catalogs").is_none());
 
-            // Bun catalog supports `npm:<semver-range>` (e.g. `npm:^1.0.0`) while preserving real `npm:` aliases.
+            // Bun catalog supports `npm:<semver-range>` (preserving literals for frozen lockfiles)
+            // while preserving valid `npm:` aliases including digit/v-prefixed package names.
             seed_registry_package("is-number", &["7.0.0"]);
+            seed_registry_package("7zip-bin", &["5.2.0"]);
+            seed_registry_package("v8-to-istanbul", &["9.3.0"]);
             fs::remove_file("bun.lock").unwrap();
             write_workspace(
                 json!({
@@ -759,7 +762,10 @@ fn standalone_catalog_field_and_workspace_unit_selection_install_like_native_bun
                         "packages": ["packages/*"],
                         "catalog": {
                             "versioned": "npm:^1.0.0",
-                            "num-alias": "npm:is-number@7.0.0"
+                            "exact-num": "npm:1.0.0",
+                            "num-alias": "npm:is-number@7.0.0",
+                            "seven-alias": "npm:7zip-bin",
+                            "v8-alias": "npm:v8-to-istanbul"
                         }
                     }
                 }),
@@ -769,14 +775,23 @@ fn standalone_catalog_field_and_workspace_unit_selection_install_like_native_bun
                     "version": "1.0.0",
                     "dependencies": {
                         "versioned": "catalog:",
-                        "num-alias": "catalog:"
+                        "num-alias": "catalog:",
+                        "seven-alias": "catalog:",
+                        "v8-alias": "catalog:"
                     }
                 }),
             );
             install("install", &[]).unwrap();
-            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            let lock_text = fs::read_to_string("bun.lock").unwrap();
+            let lock = parse_json(lock_text.as_bytes()).unwrap();
+            assert_eq!(lock["catalog"]["versioned"], "npm:^1.0.0");
+            assert_eq!(lock["catalog"]["exact-num"], "npm:1.0.0");
             assert_eq!(lock["packages"]["versioned"][0], "versioned@1.1.0");
             assert_eq!(lock["packages"]["num-alias"][0], "is-number@7.0.0");
+            assert_eq!(lock["packages"]["seven-alias"][0], "7zip-bin@5.2.0");
+            assert_eq!(lock["packages"]["v8-alias"][0], "v8-to-istanbul@9.3.0");
+            install("install", &["--frozen-lockfile"]).unwrap();
+            assert_eq!(fs::read_to_string("bun.lock").unwrap(), lock_text);
 
             // External `file:` dependency with a `catalog:` peer installs cleanly without a provider.
             fs::remove_file("bun.lock").unwrap();
@@ -1084,7 +1099,7 @@ fn yarn_npm_catalog_ranges_normalize_while_preserving_aliases() {
             install("install", &[]).unwrap();
             let lock_text = fs::read_to_string("bun.lock").unwrap();
             let lock = parse_json(lock_text.as_bytes()).unwrap();
-            assert_eq!(lock["catalog"]["versioned"], "^1.0.0");
+            assert_eq!(lock["catalog"]["versioned"], "npm:^1.0.0");
             assert_eq!(lock["catalogs"]["tools"]["aliased"], "npm:other@^1.0.0");
             assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
             assert_eq!(lock["packages"]["aliased"][0], "other@1.0.0");
