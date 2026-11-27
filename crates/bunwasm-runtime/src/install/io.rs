@@ -501,7 +501,7 @@ impl Downloads {
             });
         }
         let cache = cache_path(url);
-        !refresh && fresh_cache(&cache, tarball) && cache.is_file()
+        !refresh && self.cache.enabled() && fresh_cache(&cache, tarball) && cache.is_file()
     }
 
     /// `fetch`, running `idle` while the response has not arrived yet. `idle` gets the
@@ -650,6 +650,7 @@ struct Download {
     handle: i32,
     url: String,
     current_url: url::Url,
+    authorization: Option<String>,
     tarball: bool,
     refresh: bool,
     redirects: u8,
@@ -659,10 +660,12 @@ struct Download {
 
 impl Download {
     fn start(url: &url::Url, tarball: bool, refresh: bool, registry: &Registry) -> Result<Self> {
+        let authorization = registry.authorization_for(url).map(str::to_owned);
         Ok(Self {
-            handle: start_request(url, tarball, refresh, registry)?,
+            handle: start_request(url, tarball, refresh, authorization.as_deref(), registry)?,
             url: url.as_str().into(),
             current_url: url.clone(),
+            authorization,
             tarball,
             refresh,
             redirects: 0,
@@ -825,10 +828,15 @@ impl Download {
                 return;
             }
         };
-        match start_request(&next, self.tarball, self.refresh, registry) {
+        let next_auth =
+            redirect_authorization(&self.current_url, &next, self.authorization.as_deref());
+        match start_request(&next, self.tarball, self.refresh, next_auth, registry) {
             Ok(handle) => {
                 host::close(self.handle);
                 self.handle = handle;
+                if self.current_url.origin() != next.origin() {
+                    self.authorization = None;
+                }
                 self.current_url = next;
                 self.redirects += 1;
                 self.state = Body::Head;
@@ -905,10 +913,21 @@ fn cacheable(bytes: &[u8], tarball: bool, registry: &Registry) -> bool {
     registry.safe_metadata(&metadata)
 }
 
+fn redirect_authorization<'a>(
+    current: &url::Url,
+    next: &url::Url,
+    authorization: Option<&'a str>,
+) -> Option<&'a str> {
+    (current.origin() == next.origin())
+        .then_some(authorization)
+        .flatten()
+}
+
 fn start_request(
     url_value: &url::Url,
     tarball: bool,
     refresh: bool,
+    authorization: Option<&str>,
     registry: &Registry,
 ) -> Result<i32> {
     let url = url_value.as_str();
@@ -918,7 +937,7 @@ fn start_request(
         "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*"
     };
     let mut headers = json!([["accept", accept], ["accept-encoding", "gzip"]]);
-    if let Some(authorization) = registry.authorization_for(url_value) {
+    if let Some(authorization) = authorization {
         headers
             .as_array_mut()
             .unwrap()
@@ -1488,6 +1507,7 @@ mod tests {
             handle: 1,
             url: url.as_str().into(),
             current_url: url,
+            authorization: None,
             tarball: true,
             refresh: false,
             redirects: 0,
@@ -1524,6 +1544,18 @@ mod tests {
         assert!(resolve_redirect(&loopback, "/final.tgz?variant=default", 0).is_err());
         assert!(resolve_redirect(&loopback, "https://example.com/:_authtoken=secret", 0).is_err());
         assert!(resolve_redirect(&loopback, "https://example.com/p.tgz", 20).is_err());
+
+        let same_origin = url::Url::parse("http://127.0.0.1:4873/v2/pkg.tgz").unwrap();
+        let registry = url::Url::parse("https://registry.invalid/pkg.tgz").unwrap();
+        assert_eq!(redirect_authorization(&loopback, &registry, None), None);
+        assert_eq!(
+            redirect_authorization(&loopback, &same_origin, Some("Bearer tok")),
+            Some("Bearer tok")
+        );
+        assert_eq!(
+            redirect_authorization(&loopback, &registry, Some("Bearer tok")),
+            None
+        );
     }
 }
 

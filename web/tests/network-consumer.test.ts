@@ -474,3 +474,42 @@ test("rewritePackageUrl resolves the route before Cache Storage lookup and isola
     else Reflect.deleteProperty(globalThis, "caches");
   }
 });
+
+test("bunLauncher disables the guest disk cache when rewritePackageUrl is configured", async () => {
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
+  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  const launchWith = async (rewritePackageUrl?: BunNetworkOptions["rewritePackageUrl"]) => {
+    const context = {
+      identity: { pid: 1, parentPid: 0, host: null },
+      outcome: outcomeWord(),
+      registerRevocation: () => () => {},
+      module,
+      interruptible: false,
+      request: { executable: "/bin/bun", argv: ["bun", "install"], env: { BUN_WASM_INSTALL_CACHE: "on" }, cwd: "/" },
+    } as unknown as RuntimeProcessContext;
+    let launch: Parameters<ProcessService["launchWorker"]>[1] | undefined;
+    const service = {
+      networkPathScope: networkPathScopeFixture,
+      launchWorker(_context: unknown, value: typeof launch) {
+        launch = value;
+        return { terminate() {} };
+      },
+    } as unknown as ProcessService;
+    await bunLauncher("browser", {
+      workerUrl: "https://example.test/worker.js",
+      notificationWorkerUrl: "https://example.test/notification-worker.js",
+      runtime,
+      network: rewritePackageUrl ? { rewritePackageUrl } : undefined,
+    })(context, service);
+    if (!launch) throw new Error("missing launch");
+    const env = (launch.request as RunRequest).env;
+    launch.cleanup?.();
+    return env;
+  };
+  try {
+    expect((await launchWith()).BUN_WASM_INSTALL_CACHE).toBe("on");
+    expect((await launchWith(({ url }) => url)).BUN_WASM_INSTALL_CACHE).toBe("off");
+  } finally {
+    await runtime.dispose();
+  }
+});

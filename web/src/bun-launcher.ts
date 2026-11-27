@@ -18,6 +18,7 @@ import { isToolCommand } from "./tool-command.js";
 import { installLookupServer } from "./net/lookup.js";
 import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objects/runtime.js";
 import { entryAssetName } from "./entry-assets.js";
+import { PAGE_INSTALL_ENV } from "./install-cache.js";
 
 export interface Preview1LauncherOptions {
   readonly sockets?: readonly Preview1SocketBinding[];
@@ -148,7 +149,13 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
       memoryGroup: memoryGroup = sharedGroupLaunch(module, context.request.worker),
       request: {
         engine, memoryTelemetry, adapter: "bun", module, ...programMetadata(module), interruptible: context.interruptible,
-        args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
+        args: context.request.argv,
+        env: {
+          ...bunEnvironment(context.request.env),
+          ...(options.network?.rewritePackageUrl ? PAGE_INSTALL_ENV : undefined),
+          PWD: context.request.cwd,
+          BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd),
+        },
         stackHost: pageFacts(),
         trace: false, net: ring, lookupChannel: lookupChannel?.name,
         sharedObjects: sharedRoute ? { owner: sharedRoute.owner } : undefined,
