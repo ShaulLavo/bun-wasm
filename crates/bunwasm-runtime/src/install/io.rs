@@ -870,8 +870,12 @@ fn resolve_redirect(current: &url::Url, location: &str, redirects: u8) -> Result
     if !matches!(next.scheme(), "http" | "https") {
         return Err("UnsupportedRedirectProtocol".into());
     }
-    if !next.username().is_empty() || next.password().is_some() {
-        return Err("Fetch redirect contains credentials".into());
+    if !next.username().is_empty()
+        || next.password().is_some()
+        || next.query().is_some()
+        || has_embedded_auth(next.as_str())
+    {
+        return Err("Package redirect cannot include credentials or query parameters".into());
     }
     Ok(next)
 }
@@ -1517,6 +1521,8 @@ mod tests {
         );
         assert!(resolve_redirect(&loopback, "file:///etc/passwd", 0).is_err());
         assert!(resolve_redirect(&loopback, "https://user:pass@example.com/p.tgz", 0).is_err());
+        assert!(resolve_redirect(&loopback, "/final.tgz?variant=default", 0).is_err());
+        assert!(resolve_redirect(&loopback, "https://example.com/:_authtoken=secret", 0).is_err());
         assert!(resolve_redirect(&loopback, "https://example.com/p.tgz", 20).is_err());
     }
 }

@@ -97,20 +97,18 @@ impl Catalogs {
     }
 
     pub fn merge_declared(&mut self, declared: &Self) {
-        let use_named_default = declared.named.contains_key("default");
-        if use_named_default && !self.default.is_empty() {
-            let entries = std::mem::take(&mut self.default);
+        if let Some(named_default) = declared.named.get("default") {
             let target = self.named.entry("default".into()).or_default();
-            for (pkg, specifier) in entries {
-                target.entry(pkg).or_insert(specifier);
+            for pkg in named_default.keys() {
+                if let Some(specifier) = self.default.remove(pkg) {
+                    target.entry(pkg.clone()).or_insert(specifier);
+                }
             }
         }
-        if !use_named_default {
-            for (pkg, specifier) in &declared.default {
-                self.default
-                    .entry(pkg.clone())
-                    .or_insert_with(|| specifier.clone());
-            }
+        for (pkg, specifier) in &declared.default {
+            self.default
+                .entry(pkg.clone())
+                .or_insert_with(|| specifier.clone());
         }
         for (catalog_name, entries) in &declared.named {
             let target = self.named.entry(catalog_name.clone()).or_default();

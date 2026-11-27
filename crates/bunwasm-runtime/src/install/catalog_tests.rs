@@ -1221,6 +1221,38 @@ fn yarn_migration_ignores_catalog_ref_shadowed_by_optional_and_malformed_yarnrc_
 }
 
 #[test]
+fn pnpm_frozen_migration_preserves_disjoint_catalog_and_catalogs_default_groups() {
+    isolated(
+        "pnpm_frozen_migration_preserves_disjoint_catalog_and_catalogs_default_groups",
+        || {
+            seed_registry_package("is-number", &["7.0.0"]);
+            seed_registry_package("versioned", &["1.0.0"]);
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "catalog": { "is-number": "7.0.0" },
+                    "catalogs": { "default": { "versioned": "^1.0.0" } },
+                    "dependencies": {
+                        "is-number": "catalog:",
+                        "versioned": "catalog:"
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    is-number:\n      specifier: 7.0.0\n      version: 7.0.0\n    versioned:\n      specifier: ^1.0.0\n      version: 1.0.0\nimporters:\n  .:\n    dependencies:\n      is-number:\n        specifier: 'catalog:'\n        version: 7.0.0\n      versioned:\n        specifier: 'catalog:'\n        version: 1.0.0\npackages:\n  is-number@7.0.0:\n    resolution:\n      integrity: ''\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+
+            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+        },
+    );
+}
+
+#[test]
 fn missing_optional_catalog_and_empty_yarn_rc_do_not_break_install() {
     assert_eq!(catalog::yarn_rc_filename_from(None), ".yarnrc.yml");
     assert_eq!(catalog::yarn_rc_filename_from(Some("")), ".yarnrc.yml");
