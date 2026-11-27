@@ -16,6 +16,21 @@ pub(super) struct Catalogs {
     pub loaded: bool,
 }
 
+pub(super) fn is_protocol(range: &str) -> bool {
+    range.trim_start().starts_with("catalog:")
+}
+
+pub(super) fn yarn_rc_filename() -> String {
+    yarn_rc_filename_from(std::env::var("YARN_RC_FILENAME").ok().as_deref())
+}
+
+pub(super) fn yarn_rc_filename_from(value: Option<&str>) -> String {
+    value
+        .filter(|value| !value.is_empty())
+        .unwrap_or(".yarnrc.yml")
+        .into()
+}
+
 impl Catalogs {
     pub fn load(
         root: &Path,
@@ -33,22 +48,61 @@ impl Catalogs {
         if let Some(config) = &pnpm_config {
             fill_catalog_sources(config, &mut default_source, &mut named_source);
         }
-        let yarn_name = std::env::var("YARN_RC_FILENAME").unwrap_or_else(|_| ".yarnrc.yml".into());
+        let default_from_yarn = default_source.is_none();
+        let named_from_yarn = named_source.is_none();
         let yarn_config = read_optional_yaml(
-            &root.join(yarn_name),
-            default_source.is_none() || named_source.is_none(),
+            &root.join(yarn_rc_filename()),
+            default_from_yarn || named_from_yarn,
             parser,
         )?;
         if let Some(config) = &yarn_config {
             fill_catalog_sources(config, &mut default_source, &mut named_source);
         }
-        Self::parse(default_source, named_source, locked)
+        Self::parse(
+            default_source,
+            named_source,
+            locked,
+            default_from_yarn && yarn_config.is_some(),
+            named_from_yarn && yarn_config.is_some(),
+        )
     }
 
     pub fn from_manifest(manifest: &Value, locked: &Value) -> Result<Self> {
         let default_source = workspace_field(manifest, "catalog");
         let named_source = workspace_field(manifest, "catalogs");
-        Self::parse(default_source, named_source, locked)
+        Self::parse(default_source, named_source, locked, false, false)
+    }
+
+    pub fn merge_pnpm_lock(&mut self, pnpm_lock: &Value) -> Result<()> {
+        let Some(catalogs) = pnpm_lock["catalogs"].as_object() else {
+            return Ok(());
+        };
+        for (catalog_name, entries) in catalogs {
+            let parsed = parse_pnpm_lock_entries(entries, catalog_name)?;
+            let target = if catalog_name == "default" {
+                &mut self.default
+            } else {
+                self.named.entry(catalog_name.clone()).or_default()
+            };
+            for (pkg, specifier) in parsed {
+                target.entry(pkg).or_insert(specifier);
+            }
+        }
+        check_default_conflicts(&self.default, &self.named)
+    }
+
+    pub fn merge_migrated(&mut self, locked: &Value) -> Result<()> {
+        let migrated = Self::from_lock(locked);
+        for (pkg, specifier) in migrated.default {
+            self.default.entry(pkg).or_insert(specifier);
+        }
+        for (catalog_name, entries) in migrated.named {
+            let target = self.named.entry(catalog_name).or_default();
+            for (pkg, specifier) in entries {
+                target.entry(pkg).or_insert(specifier);
+            }
+        }
+        check_default_conflicts(&self.default, &self.named)
     }
 
     pub fn from_lock(locked: &Value) -> Self {
@@ -79,13 +133,15 @@ impl Catalogs {
         default_source: Option<&Value>,
         named_source: Option<&Value>,
         locked: &Value,
+        normalize_default_yarn: bool,
+        normalize_named_yarn: bool,
     ) -> Result<Self> {
         let default = match default_source {
-            Some(value) => parse_entries(value, None)?,
+            Some(value) => parse_entries(value, None, normalize_default_yarn)?,
             None => BTreeMap::new(),
         };
         let named = match named_source {
-            Some(value) => parse_named(value)?,
+            Some(value) => parse_named(value, normalize_named_yarn)?,
             None => BTreeMap::new(),
         };
         check_default_conflicts(&default, &named)?;
@@ -100,7 +156,7 @@ impl Catalogs {
     }
 
     pub fn resolve<'a>(&'a self, name: &str, range: &str) -> Result<Option<&'a str>> {
-        let Some(raw_name) = range.strip_prefix("catalog:") else {
+        let Some(raw_name) = range.trim_start().strip_prefix("catalog:") else {
             return Ok(None);
         };
         let catalog_name = raw_name.trim();
@@ -166,7 +222,7 @@ impl Catalogs {
 }
 
 fn read_optional_yaml(path: &Path, needed: bool, parser: &dyn Transpiler) -> Result<Option<Value>> {
-    if !needed || !path.exists() {
+    if !needed || !path.is_file() {
         return Ok(None);
     }
     Ok(Some(io::read(path, "YAML", parser)?))
@@ -196,7 +252,21 @@ fn workspace_field<'a>(manifest: &'a Value, field: &str) -> Option<&'a Value> {
     manifest.get(field).filter(|value| !value.is_null())
 }
 
-fn parse_entries(value: &Value, catalog_name: Option<&str>) -> Result<BTreeMap<String, String>> {
+fn normalize_yarn_range(range: &str) -> &str {
+    let Some(rest) = range.strip_prefix("npm:") else {
+        return range;
+    };
+    if rest.is_empty() || rest.starts_with('@') || rest.contains('@') {
+        return range;
+    }
+    rest
+}
+
+fn parse_entries(
+    value: &Value,
+    catalog_name: Option<&str>,
+    normalize_yarn: bool,
+) -> Result<BTreeMap<String, String>> {
     let Some(entries) = value.as_object() else {
         return Err(match catalog_name {
             Some(name) => format!("Catalog \"{name}\" must be an object"),
@@ -213,23 +283,57 @@ fn parse_entries(value: &Value, catalog_name: Option<&str>) -> Result<BTreeMap<S
                 None => format!("Catalog entry for \"{name}\" must be a non-empty string"),
             });
         };
-        if range.starts_with("catalog:") {
+        if is_protocol(range) {
             return Err(format!(
                 "Catalog entry for \"{name}\" cannot reference another catalog"
             ));
         }
+        let range = if normalize_yarn {
+            normalize_yarn_range(range)
+        } else {
+            range
+        };
         parsed.insert(name.clone(), range.to_owned());
     }
     Ok(parsed)
 }
 
-fn parse_named(value: &Value) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
+fn parse_pnpm_lock_entries(value: &Value, catalog_name: &str) -> Result<BTreeMap<String, String>> {
+    let Some(entries) = value.as_object() else {
+        return Err(format!("Catalog \"{catalog_name}\" must be an object"));
+    };
+    let mut parsed = BTreeMap::new();
+    for (name, entry) in entries {
+        let Some(specifier) = entry["specifier"]
+            .as_str()
+            .or_else(|| entry.as_str())
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if is_protocol(specifier) {
+            return Err(format!(
+                "Catalog entry for \"{name}\" cannot reference another catalog"
+            ));
+        }
+        parsed.insert(name.clone(), specifier.to_owned());
+    }
+    Ok(parsed)
+}
+
+fn parse_named(
+    value: &Value,
+    normalize_yarn: bool,
+) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
     let Some(catalogs) = value.as_object() else {
         return Err("catalogs must be an object".into());
     };
     let mut parsed = BTreeMap::new();
     for (name, entries) in catalogs {
-        parsed.insert(name.clone(), parse_entries(entries, Some(name))?);
+        parsed.insert(
+            name.clone(),
+            parse_entries(entries, Some(name), normalize_yarn)?,
+        );
     }
     Ok(parsed)
 }

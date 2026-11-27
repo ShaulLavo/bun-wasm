@@ -139,10 +139,10 @@ fn execute(
     };
     let redactor = registry.clone();
     let result: Result<()> = (|| {
-        let locked = if Path::new("bun.lock").exists() {
-            io::read(Path::new("bun.lock"), "JSONC", parser)?
+        let (locked, migrated) = if Path::new("bun.lock").exists() {
+            (io::read(Path::new("bun.lock"), "JSONC", parser)?, false)
         } else {
-            migration::read(
+            match migration::read(
                 if member.is_some() {
                     &root_manifest
                 } else {
@@ -150,8 +150,10 @@ fn execute(
                 },
                 parser,
                 &registry,
-            )?
-            .unwrap_or_else(|| json!({}))
+            )? {
+                Some(lock) => (lock, true),
+                None => (json!({}), false),
+            }
         };
         let mut resolution_lock = locked.clone();
         if command == "update" {
@@ -194,6 +196,9 @@ fn execute(
         resolver.workspaces = local::workspaces(&cwd, project_manifest, parser)?;
         resolver.catalogs =
             catalog::Catalogs::load(&cwd, project_manifest, &resolver.locked, parser)?;
+        if migrated {
+            resolver.catalogs.merge_migrated(&resolver.locked)?;
+        }
         if let Some(member) = &member
             && let Some(local) = resolver
                 .workspaces
@@ -372,7 +377,7 @@ fn finalize_additions(
         };
         let range = if opts.exact
             && !resolve::tarball::is_specifier(&range)
-            && !range.starts_with("catalog:")
+            && !catalog::is_protocol(&range)
         {
             package.version.clone()
         } else if range == "latest" {

@@ -27,7 +27,17 @@ pub fn read(
     let registry = registry.as_str();
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let members = local::workspaces(&cwd, manifest, parser)?;
-    let catalogs = Catalogs::load(&cwd, manifest, &Value::Null, parser)?;
+    let mut catalogs = Catalogs::load(&cwd, manifest, &Value::Null, parser)?;
+    let pnpm_lock = if !Path::new("package-lock.json").exists()
+        && !Path::new("yarn.lock").exists()
+        && Path::new("pnpm-lock.yaml").exists()
+    {
+        let lock = io::read(Path::new("pnpm-lock.yaml"), "YAML", parser)?;
+        catalogs.merge_pnpm_lock(&lock)?;
+        Some(lock)
+    } else {
+        None
+    };
     let mut workspaces = json!({"": workspace_meta(manifest, true)});
     let mut packages = BTreeMap::new();
     let mut roots = vec![(Vec::new(), manifest.clone())];
@@ -55,11 +65,11 @@ pub fn read(
     } else if Path::new("yarn.lock").exists() {
         yarn(&roots, parser, registry, &catalogs, &mut packages)?;
         "yarn.lock"
-    } else if Path::new("pnpm-lock.yaml").exists() {
+    } else if let Some(pnpm_lock) = &pnpm_lock {
         pnpm(
             &roots,
             &members,
-            &io::read(Path::new("pnpm-lock.yaml"), "YAML", parser)?,
+            pnpm_lock,
             registry,
             &catalogs,
             &mut packages,
@@ -1174,7 +1184,7 @@ fn yarn_config(parser: &dyn Transpiler) -> Result<Value> {
         config["enableTransparentWorkspaces"] = (!["false", "0"].contains(&value.as_str())).into();
     }
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    let filename = std::env::var("YARN_RC_FILENAME").unwrap_or_else(|_| ".yarnrc.yml".into());
+    let filename = super::catalog::yarn_rc_filename();
     for directory in cwd.ancestors() {
         merge_yarn_config(&mut config, &directory.join(&filename), parser)?;
     }
@@ -1185,7 +1195,7 @@ fn yarn_config(parser: &dyn Transpiler) -> Result<Value> {
 }
 
 fn merge_yarn_config(config: &mut Value, path: &Path, parser: &dyn Transpiler) -> Result<()> {
-    if !path.exists() {
+    if !path.is_file() {
         return Ok(());
     }
     let source = io::read(path, "YAML", parser).map_err(|_| "Invalid .yarnrc.yml")?;

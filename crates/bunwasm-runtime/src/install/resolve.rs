@@ -259,7 +259,11 @@ impl Resolver {
         let mut lookahead = self.metadata_lookahead(&dependencies, None);
         for (index, (name, (range, optional, _))) in dependencies.iter().enumerate() {
             self.prefetch_dependencies(&mut lookahead, index);
-            let range = self.resolve_range(None, name, range)?;
+            let range = match self.resolve_range(None, name, range) {
+                Ok(range) => range,
+                Err(_) if *optional => continue,
+                Err(error) => return Err(error),
+            };
             self.add(name, &range, vec![name.clone()], *optional, None)?;
         }
         self.downloads.clear();
@@ -386,23 +390,21 @@ impl Resolver {
         let mut lookahead = self.metadata_lookahead(&dependencies, Some(parent));
         for (index, (name, (range, optional, peer))) in dependencies.iter().enumerate() {
             self.prefetch_dependencies(&mut lookahead, index);
-            let range = self.resolve_range(Some(parent), name, range)?;
-            let Some(target) = self.target(parent, name, &range, *optional || parent.optional)?
-            else {
+            let is_optional = *optional || parent.optional;
+            let range = match self.resolve_range(Some(parent), name, range) {
+                Ok(range) => range,
+                Err(_) if is_optional => continue,
+                Err(error) => return Err(error),
+            };
+            let Some(target) = self.target(parent, name, &range, is_optional)? else {
                 continue;
             };
-            let chain = self.placement(parent, name, &target, *peer, *optional || parent.optional);
+            let chain = self.placement(parent, name, &target, *peer, is_optional);
             let Some(chain) = chain else {
                 continue;
             };
             let parent_key = parent.key();
-            self.add(
-                name,
-                &target,
-                chain,
-                *optional || parent.optional,
-                Some(&parent_key),
-            )?;
+            self.add(name, &target, chain, is_optional, Some(&parent_key))?;
         }
         Ok(())
     }
@@ -537,7 +539,7 @@ impl Resolver {
         if range.starts_with("file:")
             || range.starts_with("link:")
             || range.starts_with("workspace:")
-            || range.starts_with("catalog:")
+            || super::catalog::is_protocol(range)
             || tarball::is_specifier(range)
             || self.responses.contains_key(name)
         {

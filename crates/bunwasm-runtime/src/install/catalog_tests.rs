@@ -913,3 +913,117 @@ fn yarn_berry_migration_reads_catalogs_from_yarnrc_and_keeps_them_on_reinstall()
         },
     );
 }
+
+#[test]
+fn yarn_npm_catalog_ranges_normalize_while_preserving_aliases() {
+    isolated(
+        "yarn_npm_catalog_ranges_normalize_while_preserving_aliases",
+        || {
+            seed_registry_package("versioned", &["1.0.0"]);
+            seed_registry_package("other", &["1.0.0"]);
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "workspaces": ["packages/*"],
+                    "dependencies": {
+                        "versioned": " catalog:",
+                        "aliased": "catalog:tools"
+                    }
+                }),
+                "packages/a",
+                json!({ "name": "@fixture/a", "version": "1.0.0" }),
+            );
+            fs::write(
+                ".yarnrc.yml",
+                "catalog:\n  versioned: \"npm:^1.0.0\"\ncatalogs:\n  tools:\n    aliased: \"npm:other@^1.0.0\"\n",
+            )
+            .unwrap();
+            fs::write(
+                "yarn.lock",
+                "__metadata:\n  version: 8\n\n\"root@workspace:.\":\n  version: 0.0.0-use.local\n  resolution: \"root@workspace:.\"\n  dependencies:\n    versioned: \"catalog:\"\n    aliased: \"catalog:tools\"\n\n\"@fixture/a@workspace:packages/a\":\n  version: 0.0.0-use.local\n  resolution: \"@fixture/a@workspace:packages/a\"\n\n\"versioned@npm:^1.0.0\":\n  version: 1.0.0\n  resolution: \"versioned@npm:1.0.0\"\n\n\"aliased@npm:other@^1.0.0\":\n  version: 1.0.0\n  resolution: \"other@npm:1.0.0\"\n",
+            )
+            .unwrap();
+
+            install("install", &[]).unwrap();
+            let lock_text = fs::read_to_string("bun.lock").unwrap();
+            let lock = parse_json(lock_text.as_bytes()).unwrap();
+            assert_eq!(lock["catalog"]["versioned"], "^1.0.0");
+            assert_eq!(lock["catalogs"]["tools"]["aliased"], "npm:other@^1.0.0");
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert_eq!(lock["packages"]["aliased"][0], "other@1.0.0");
+
+            install("install", &["--frozen-lockfile"]).unwrap();
+            assert_eq!(fs::read_to_string("bun.lock").unwrap(), lock_text);
+        },
+    );
+}
+
+#[test]
+fn pnpm_migration_loads_catalogs_from_pnpm_lock_without_workspace_yaml() {
+    isolated(
+        "pnpm_migration_loads_catalogs_from_pnpm_lock_without_workspace_yaml",
+        || {
+            seed_registry_package("versioned", &["1.0.0"]);
+            seed_registry_package("is-odd", &["3.0.1"]);
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "dependencies": {
+                        "versioned": "catalog:",
+                        "is-odd": "catalog:tools"
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    versioned:\n      specifier: ^1.0.0\n      version: 1.0.0\n  tools:\n    is-odd:\n      specifier: 3.0.1\n      version: 3.0.1\nimporters:\n  .:\n    dependencies:\n      versioned:\n        specifier: 'catalog:'\n        version: 1.0.0\n      is-odd:\n        specifier: 'catalog:tools'\n        version: 3.0.1\npackages:\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n  is-odd@3.0.1:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+
+            install("install", &["--lockfile-only"]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["catalog"]["versioned"], "^1.0.0");
+            assert_eq!(lock["catalogs"]["tools"]["is-odd"], "3.0.1");
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert_eq!(lock["packages"]["is-odd"][0], "is-odd@3.0.1");
+        },
+    );
+}
+
+#[test]
+fn missing_optional_catalog_and_empty_yarn_rc_do_not_break_install() {
+    assert_eq!(catalog::yarn_rc_filename_from(None), ".yarnrc.yml");
+    assert_eq!(catalog::yarn_rc_filename_from(Some("")), ".yarnrc.yml");
+    assert_eq!(
+        catalog::yarn_rc_filename_from(Some(".custom.yml")),
+        ".custom.yml"
+    );
+
+    isolated(
+        "missing_optional_catalog_and_empty_yarn_rc_do_not_break_install",
+        || {
+            fs::create_dir(".yarnrc.yml").unwrap();
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "workspaces": ["packages/*"],
+                    "optionalDependencies": { "missing-root": "catalog:" }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "optionalDependencies": { "missing-ws": "catalog:absent" }
+                }),
+            );
+
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert!(lock["packages"].get("missing-root").is_none());
+            assert!(lock["packages"].get("missing-ws").is_none());
+        },
+    );
+}
