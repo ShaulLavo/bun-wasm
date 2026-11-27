@@ -115,6 +115,18 @@ async function missingCatalogAndFetchErrorContext(target: InstallFixtureTarget) 
       }));
       await install(target, redirectDir, registry.base);
       assert.equal(installedVersion(redirectDir, "is-number"), "7.0.0");
+
+      // A failing redirect hop must report the destination URL that returned 404, not the initial URL.
+      const missingRedirectDir = join(directory, "loopback-redirect-404");
+      mkdirSync(missingRedirectDir, { recursive: true });
+      const missingRedirectUrl = `http://127.0.0.1:${redirectAddress.port}/tarballs/missing.tgz`;
+      writeFileSync(join(missingRedirectDir, "package.json"), JSON.stringify({
+        name: "redirect-404-root",
+        dependencies: { "missing-pkg": missingRedirectUrl },
+      }));
+      const redirect404Output = await install(target, missingRedirectDir, registry.base, [], 1);
+      assert.ok(redirect404Output.includes(`${registry.base}/tarballs/missing.tgz`), `expected redirected failing URL in output:\n${redirect404Output}`);
+      assert.ok(!redirect404Output.includes(`${missingRedirectUrl} - 404`), `expected failing hop URL instead of original URL:\n${redirect404Output}`);
     } finally {
       await new Promise<void>(resolve => redirector.close(() => resolve()));
       await registry.close();

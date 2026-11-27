@@ -722,14 +722,18 @@ impl Download {
             // Checked only after the read above, so a response that arrived during idle work
             // is taken, and idle work never extends a stalled response's deadline.
             if pending.expired(Instant::now()) {
-                return Err(format!("Timeout downloading {}", self.url));
+                return Err(format!(
+                    "Timeout downloading {}",
+                    registry.redact(self.current_url.as_str())
+                ));
             }
             let (worked, moved) = self.idle(others, registry, idle);
             if moved {
                 pending.progressed(Instant::now());
             }
             if !worked {
-                wait(&mut pending, &self.url)?;
+                let url = registry.redact(self.current_url.as_str());
+                wait(&mut pending, &url)?;
             }
         }
     }
@@ -780,12 +784,14 @@ impl Download {
             BodyRead::Ended => self.state = Body::Done,
             BodyRead::TooLarge => {
                 self.fail(format_fetch_error(
-                    &self.url,
+                    self.current_url.as_str(),
                     "Download exceeds 256 MiB limit",
                     registry,
                 ));
             }
-            BodyRead::Stopped(_) => self.fail(network_error(handle, &self.url, registry)),
+            BodyRead::Stopped(_) => {
+                self.fail(network_error(handle, self.current_url.as_str(), registry))
+            }
         }
         true
     }
@@ -802,20 +808,40 @@ impl Download {
             Ok(head) => head,
             Err(host::AGAIN) => return false,
             Err(_) => {
-                self.fail(network_error(self.handle, &self.url, registry));
+                self.fail(network_error(
+                    self.handle,
+                    self.current_url.as_str(),
+                    registry,
+                ));
                 return true;
             }
         };
         match response_head(&head) {
-            Ok((status, _)) if (200..300).contains(&status) => self.state = Body::Reading,
-            Ok((status, Some(location)))
+            Ok((status, _, final_url)) if (200..300).contains(&status) => {
+                if let Some(url) = final_url.as_deref().and_then(|u| url::Url::parse(u).ok()) {
+                    self.current_url = url;
+                }
+                self.state = Body::Reading;
+            }
+            Ok((status, Some(location), _))
                 if matches!(status, 301 | 302 | 303 | 307 | 308)
                     && is_loopback_url(&self.current_url) =>
             {
                 self.follow_redirect(&location, registry);
             }
-            Ok((status, _)) => self.fail(format!("GET {} - {status}", self.url)),
-            Err(error) => self.fail(format_fetch_error(&self.url, &error, registry)),
+            Ok((status, _, final_url)) => {
+                let failing_url = final_url.as_deref().unwrap_or(self.current_url.as_str());
+                self.fail(format_fetch_error(
+                    failing_url,
+                    &status.to_string(),
+                    registry,
+                ));
+            }
+            Err(error) => self.fail(format_fetch_error(
+                self.current_url.as_str(),
+                &error,
+                registry,
+            )),
         }
         true
     }
@@ -824,7 +850,11 @@ impl Download {
         let next = match resolve_redirect(&self.current_url, location, self.redirects) {
             Ok(url) => url,
             Err(error) => {
-                self.fail(format_fetch_error(&self.url, &error, registry));
+                self.fail(format_fetch_error(
+                    self.current_url.as_str(),
+                    &error,
+                    registry,
+                ));
                 return;
             }
         };
@@ -846,7 +876,7 @@ impl Download {
     }
 }
 
-fn response_head(head: &[u8]) -> Result<(u64, Option<String>)> {
+fn response_head(head: &[u8]) -> Result<(u64, Option<String>, Option<String>)> {
     let head: Value = serde_json::from_slice(head).map_err(|e| e.to_string())?;
     let status = head["status"].as_u64().unwrap_or(0);
     let location = head["headers"].as_array().and_then(|headers| {
@@ -857,7 +887,11 @@ fn response_head(head: &[u8]) -> Result<(u64, Option<String>)> {
                 .flatten()
         })
     });
-    Ok((status, location))
+    let url = head["url"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    Ok((status, location, url))
 }
 
 fn is_loopback_url(url: &url::Url) -> bool {
@@ -1555,6 +1589,22 @@ mod tests {
         assert_eq!(
             redirect_authorization(&loopback, &registry, Some("Bearer tok")),
             None
+        );
+
+        let parsed = response_head(
+            br#"{"status":404,"url":"https://user:pass@cdn.example/missing.tgz?sig=secret","headers":[["Location","/other"]]}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.0, 404);
+        assert_eq!(parsed.1.as_deref(), Some("/other"));
+        assert_eq!(
+            parsed.2.as_deref(),
+            Some("https://user:pass@cdn.example/missing.tgz?sig=secret")
+        );
+        let reg = Registry::new("https://registry.invalid").unwrap();
+        assert_eq!(
+            format_fetch_error(parsed.2.as_deref().unwrap(), "404", &reg),
+            "GET https://cdn.example/missing.tgz - 404"
         );
     }
 }

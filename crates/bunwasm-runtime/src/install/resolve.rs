@@ -641,9 +641,6 @@ impl Resolver {
         let (target_name, target_range) = alias.as_ref().map_or((name, range), |(name, range)| {
             (name.as_str(), range.as_str())
         });
-        if workspace && !is_tag(target_range) {
-            return None;
-        }
         let declared = if workspace {
             declared_root(
                 declared_meta,
@@ -666,7 +663,8 @@ impl Resolver {
         if !declared {
             return None;
         }
-        for level in (0..=source_chain.len()).rev() {
+        let min_level = usize::from(workspace && !is_tag(target_range));
+        for level in (min_level..=source_chain.len()).rev() {
             let mut candidate = source_chain[..level].to_vec();
             candidate.push(name.into());
             let row = &self.locked["packages"][candidate.join("/")];

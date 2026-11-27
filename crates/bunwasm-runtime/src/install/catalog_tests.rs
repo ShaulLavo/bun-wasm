@@ -1367,3 +1367,59 @@ fn missing_optional_catalog_and_empty_yarn_rc_do_not_break_install() {
         },
     );
 }
+
+#[test]
+fn pnpm_migration_preserves_workspace_member_nested_catalog_version() {
+    isolated(
+        "pnpm_migration_preserves_workspace_member_nested_catalog_version",
+        || {
+            seed_registry_package("versioned", &["1.0.0", "1.1.0"]);
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "workspaces": ["packages/*"],
+                    "dependencies": { "versioned": "1.1.0" }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "catalog:" }
+                }),
+            );
+            fs::write(
+                "pnpm-workspace.yaml",
+                "packages:\n  - packages/*\ncatalog:\n  versioned: ^1.0.0\n",
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    versioned:\n      specifier: ^1.0.0\n      version: 1.0.0\nimporters:\n  .:\n    dependencies:\n      versioned:\n        specifier: 1.1.0\n        version: 1.1.0\n  packages/a:\n    dependencies:\n      versioned:\n        specifier: 'catalog:'\n        version: 1.0.0\npackages:\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n  versioned@1.1.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+
+            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+            assert!(!Path::new("bun.lock").exists());
+
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.1.0");
+            assert_eq!(
+                lock["packages"]["@fixture/a/versioned"][0],
+                "versioned@1.0.0"
+            );
+            assert_eq!(
+                parse_json(&fs::read("node_modules/versioned/package.json").unwrap()).unwrap()["version"],
+                "1.1.0"
+            );
+            assert_eq!(
+                parse_json(
+                    &fs::read("node_modules/@fixture/a/node_modules/versioned/package.json")
+                        .unwrap()
+                )
+                .unwrap()["version"],
+                "1.0.0"
+            );
+        },
+    );
+}
