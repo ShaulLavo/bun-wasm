@@ -984,11 +984,80 @@ fn pnpm_migration_loads_catalogs_from_pnpm_lock_without_workspace_yaml() {
             .unwrap();
 
             install("install", &["--lockfile-only"]).unwrap();
-            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            let lock_text = fs::read_to_string("bun.lock").unwrap();
+            let lock = parse_json(lock_text.as_bytes()).unwrap();
             assert_eq!(lock["catalog"]["versioned"], "^1.0.0");
             assert_eq!(lock["catalogs"]["tools"]["is-odd"], "3.0.1");
             assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
             assert_eq!(lock["packages"]["is-odd"][0], "is-odd@3.0.1");
+
+            install("install", &[]).unwrap();
+            install("install", &["--frozen-lockfile"]).unwrap();
+            assert_eq!(fs::read_to_string("bun.lock").unwrap(), lock_text);
+        },
+    );
+}
+
+#[test]
+fn pnpm_migration_supports_catalogs_default_and_updated_workspace_catalog_range() {
+    isolated(
+        "pnpm_migration_supports_catalogs_default_and_updated_workspace_catalog_range",
+        || {
+            seed_registry_package("versioned", &["1.0.0", "1.1.0"]);
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "catalogs": { "default": { "versioned": "^1.1.0" } },
+                    "dependencies": { "versioned": "catalog:" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    versioned:\n      specifier: ^1.0.0\n      version: 1.0.0\nimporters:\n  .:\n    dependencies:\n      versioned:\n        specifier: 'catalog:'\n        version: 1.0.0\npackages:\n  versioned@1.0.0:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+
+            install("install", &[]).unwrap();
+            let lock_text = fs::read_to_string("bun.lock").unwrap();
+            let lock = parse_json(lock_text.as_bytes()).unwrap();
+            assert_eq!(lock["catalogs"]["default"]["versioned"], "^1.1.0");
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.1.0");
+
+            install("install", &["--frozen-lockfile"]).unwrap();
+            assert_eq!(fs::read_to_string("bun.lock").unwrap(), lock_text);
+        },
+    );
+}
+
+#[test]
+fn yarn_migration_skips_missing_optional_catalog_dependency() {
+    isolated(
+        "yarn_migration_skips_missing_optional_catalog_dependency",
+        || {
+            seed_registry_package("versioned", &["1.0.0"]);
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "dependencies": { "versioned": "^1.0.0" },
+                    "optionalDependencies": { "missing-opt": "catalog:" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                "yarn.lock",
+                "__metadata:\n  version: 8\n\n\"root@workspace:.\":\n  version: 0.0.0-use.local\n  resolution: \"root@workspace:.\"\n  dependencies:\n    versioned: \"^1.0.0\"\n\n\"versioned@npm:^1.0.0\":\n  version: 1.0.0\n  resolution: \"versioned@npm:1.0.0\"\n",
+            )
+            .unwrap();
+
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert!(lock["packages"].get("missing-opt").is_none());
         },
     );
 }

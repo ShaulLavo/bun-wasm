@@ -139,10 +139,10 @@ fn execute(
     };
     let redactor = registry.clone();
     let result: Result<()> = (|| {
-        let (locked, migrated) = if Path::new("bun.lock").exists() {
-            (io::read(Path::new("bun.lock"), "JSONC", parser)?, false)
+        let locked = if Path::new("bun.lock").exists() {
+            io::read(Path::new("bun.lock"), "JSONC", parser)?
         } else {
-            match migration::read(
+            migration::read(
                 if member.is_some() {
                     &root_manifest
                 } else {
@@ -150,10 +150,8 @@ fn execute(
                 },
                 parser,
                 &registry,
-            )? {
-                Some(lock) => (lock, true),
-                None => (json!({}), false),
-            }
+            )?
+            .unwrap_or_else(|| json!({}))
         };
         let mut resolution_lock = locked.clone();
         if command == "update" {
@@ -196,9 +194,6 @@ fn execute(
         resolver.workspaces = local::workspaces(&cwd, project_manifest, parser)?;
         resolver.catalogs =
             catalog::Catalogs::load(&cwd, project_manifest, &resolver.locked, parser)?;
-        if migrated {
-            resolver.catalogs.merge_migrated(&resolver.locked)?;
-        }
         if let Some(member) = &member
             && let Some(local) = resolver
                 .workspaces

@@ -27,16 +27,18 @@ pub fn read(
     let registry = registry.as_str();
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let members = local::workspaces(&cwd, manifest, parser)?;
-    let mut catalogs = Catalogs::load(&cwd, manifest, &Value::Null, parser)?;
+    let catalogs = Catalogs::load(&cwd, manifest, &Value::Null, parser)?;
     let pnpm_lock = if !Path::new("package-lock.json").exists()
         && !Path::new("yarn.lock").exists()
         && Path::new("pnpm-lock.yaml").exists()
     {
-        let lock = io::read(Path::new("pnpm-lock.yaml"), "YAML", parser)?;
-        catalogs.merge_pnpm_lock(&lock)?;
-        Some(lock)
+        Some(io::read(Path::new("pnpm-lock.yaml"), "YAML", parser)?)
     } else {
         None
+    };
+    let pnpm_lock_catalogs = match &pnpm_lock {
+        Some(lock) => Catalogs::from_pnpm_lock(lock)?,
+        None => Catalogs::default(),
     };
     let mut workspaces = json!({"": workspace_meta(manifest, true)});
     let mut packages = BTreeMap::new();
@@ -72,6 +74,7 @@ pub fn read(
             pnpm_lock,
             registry,
             &catalogs,
+            &pnpm_lock_catalogs,
             &mut packages,
         )?;
         "pnpm-lock.yaml"
@@ -83,10 +86,15 @@ pub fn read(
     }
     eprintln!("migrated lockfile from {source}");
     let mut lock = json!({"lockfileVersion": 2, "configVersion": if source == "pnpm-lock.yaml" { 1 } else { 0 }, "workspaces": workspaces, "packages": packages});
-    if let Some(catalog) = catalogs.default_value() {
+    let lock_catalogs = if source == "pnpm-lock.yaml" && !pnpm_lock_catalogs.is_empty() {
+        &pnpm_lock_catalogs
+    } else {
+        &catalogs
+    };
+    if let Some(catalog) = lock_catalogs.default_value() {
         lock["catalog"] = catalog;
     }
-    if let Some(named) = catalogs.named_value() {
+    if let Some(named) = lock_catalogs.named_value() {
         lock["catalogs"] = named;
     }
     Ok(Some(lock))
@@ -442,8 +450,9 @@ fn expand_manifest_catalogs(meta: &Value, catalogs: &Catalogs) -> Result<Value> 
         "optionalDependencies",
         "peerDependencies",
     ] {
+        let optional = field == "optionalDependencies";
         if let Some(deps) = expanded[field].as_object_mut() {
-            expand_dependency_map(deps, catalogs)?;
+            expand_dependency_map(deps, catalogs, optional)?;
         }
     }
     Ok(expanded)
@@ -452,14 +461,22 @@ fn expand_manifest_catalogs(meta: &Value, catalogs: &Catalogs) -> Result<Value> 
 fn expand_dependency_map(
     deps: &mut serde_json::Map<String, Value>,
     catalogs: &Catalogs,
+    optional: bool,
 ) -> Result<()> {
-    for (name, range) in deps {
+    let mut skipped = Vec::new();
+    for (name, range) in deps.iter_mut() {
         let Some(raw) = range.as_str() else {
             continue;
         };
-        if let Some(resolved) = catalogs.resolve(name, raw)? {
-            *range = resolved.into();
+        match catalogs.resolve(name, raw) {
+            Ok(Some(resolved)) => *range = resolved.into(),
+            Ok(None) => {}
+            Err(_) if optional => skipped.push(name.clone()),
+            Err(error) => return Err(error),
         }
+    }
+    for name in skipped {
+        deps.remove(&name);
     }
     Ok(())
 }
@@ -573,12 +590,24 @@ fn snapshot_field(meta: &mut Value, field: &str, value: &Value) -> Result<()> {
     Ok(())
 }
 
-fn pnpm_importer(manifest: &Value, importer: &Value, catalogs: &Catalogs) -> Result<Value> {
+fn pnpm_importer(
+    manifest: &Value,
+    importer: &Value,
+    catalogs: &Catalogs,
+    lock_catalogs: &Catalogs,
+) -> Result<Value> {
     let mut normalized = manifest.clone();
     remove_optional_duplicates(&mut normalized);
     let mut meta = normalized.clone();
     for field in ["dependencies", "devDependencies", "optionalDependencies"] {
-        pnpm_importer_field(&mut meta, &normalized, importer, field, catalogs)?;
+        pnpm_importer_field(
+            &mut meta,
+            &normalized,
+            importer,
+            field,
+            catalogs,
+            lock_catalogs,
+        )?;
     }
     Ok(meta)
 }
@@ -589,17 +618,30 @@ fn pnpm_importer_field(
     importer: &Value,
     field: &str,
     catalogs: &Catalogs,
+    lock_catalogs: &Catalogs,
 ) -> Result<()> {
+    let optional = field == "optionalDependencies";
     if importer[field].is_null() && manifest[field].is_null() {
+        return Ok(());
+    }
+    if importer[field].is_null()
+        && optional
+        && manifest[field].as_object().is_some_and(|expected| {
+            expected
+                .iter()
+                .all(|(n, v)| missing_catalog(n, v, catalogs))
+        })
+    {
         return Ok(());
     }
     let deps = importer[field]
         .as_object()
         .ok_or("Invalid pnpm importer dependency mapping")?;
-    if manifest[field]
-        .as_object()
-        .is_some_and(|expected| expected.keys().any(|name| !deps.contains_key(name)))
-    {
+    if manifest[field].as_object().is_some_and(|expected| {
+        expected.iter().any(|(name, value)| {
+            !deps.contains_key(name) && !(optional && missing_catalog(name, value, catalogs))
+        })
+    }) {
         return Err("pnpm-lock.yaml importer specifier does not match package.json".into());
     }
     for (name, value) in deps {
@@ -611,24 +653,37 @@ fn pnpm_importer_field(
                 .then(|| manifest["peerDependencies"][name].as_str())
                 .flatten()
         });
-        let resolved = requested
-            .map(|range| catalogs.resolve_str(name, range))
-            .transpose()?;
-        if specifier != requested && specifier != resolved {
+        let resolved = match requested.map(|range| catalogs.resolve_str(name, range)) {
+            Some(Ok(resolved)) => Some(resolved),
+            Some(Err(_)) if optional => continue,
+            Some(Err(error)) => return Err(error),
+            None => None,
+        };
+        let locked_specifier = requested
+            .filter(|range| super::catalog::is_protocol(range))
+            .and_then(|range| lock_catalogs.resolve(name, range).ok().flatten());
+        if specifier != requested && specifier != resolved && specifier != locked_specifier {
             return Err("pnpm-lock.yaml importer specifier does not match package.json".into());
         }
         let reference = value["version"]
             .as_str()
             .or_else(|| value.as_str())
             .ok_or("Invalid pnpm dependency version")?;
-        validate_pnpm_selection(
-            name,
-            resolved.ok_or("Invalid pnpm importer specifier")?,
-            reference,
-        )?;
+        let validation_range = if requested.is_some_and(super::catalog::is_protocol) {
+            locked_specifier.unwrap_or("*")
+        } else {
+            resolved.ok_or("Invalid pnpm importer specifier")?
+        };
+        validate_pnpm_selection(name, validation_range, reference)?;
         meta[field][name] = pnpm_reference(name, reference).into();
     }
     Ok(())
+}
+
+fn missing_catalog(name: &str, value: &Value, catalogs: &Catalogs) -> bool {
+    value.as_str().is_some_and(|range| {
+        super::catalog::is_protocol(range) && catalogs.resolve(name, range).is_err()
+    })
 }
 
 fn pnpm(
@@ -637,6 +692,7 @@ fn pnpm(
     source: &Value,
     registry: &str,
     catalogs: &Catalogs,
+    lock_catalogs: &Catalogs,
     packages: &mut BTreeMap<String, Value>,
 ) -> Result<()> {
     let version = source["lockfileVersion"]
@@ -696,7 +752,7 @@ fn pnpm(
         let source_importer = source["importers"]
             .get(&importer)
             .ok_or("Missing pnpm importer")?;
-        let mut meta = pnpm_importer(manifest, source_importer, catalogs)?;
+        let mut meta = pnpm_importer(manifest, source_importer, catalogs, lock_catalogs)?;
         validate_pnpm_links(&mut meta, manifest, &cwd.join(&importer), members, catalogs)?;
         selected.push((parent.clone(), meta));
     }
@@ -829,9 +885,13 @@ fn validate_ranges(meta: &Value, include_dev: bool, catalogs: Option<&Catalogs>)
     ] {
         validate_dependency_map(&meta[field], field == "devDependencies" && !include_dev)?;
     }
-    for (name, (range, _, _)) in resolve::dependencies(meta, false, include_dev) {
+    for (name, (range, optional, _)) in resolve::dependencies(meta, false, include_dev) {
         let range = match catalogs {
-            Some(catalogs) => catalogs.resolve_str(&name, &range)?.to_owned(),
+            Some(catalogs) => match catalogs.resolve_str(&name, &range) {
+                Ok(resolved) => resolved.to_owned(),
+                Err(_) if optional => continue,
+                Err(error) => return Err(error),
+            },
             None => range,
         };
         if let Some(reference) = range

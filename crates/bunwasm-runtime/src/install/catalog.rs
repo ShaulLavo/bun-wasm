@@ -58,13 +58,23 @@ impl Catalogs {
         if let Some(config) = &yarn_config {
             fill_catalog_sources(config, &mut default_source, &mut named_source);
         }
-        Self::parse(
+        let mut catalogs = Self::parse(
             default_source,
             named_source,
             locked,
             default_from_yarn && yarn_config.is_some(),
             named_from_yarn && yarn_config.is_some(),
-        )
+        )?;
+        let need_default = default_source.is_none() && !catalogs.named.contains_key("default");
+        let need_named = named_source.is_none();
+        if (need_default || need_named)
+            && let Some(pnpm_lock) =
+                read_optional_yaml_lenient(&root.join("pnpm-lock.yaml"), parser)
+        {
+            catalogs.merge_pnpm_lock(&pnpm_lock, need_default, need_named)?;
+            catalogs.recompute_changed(locked);
+        }
+        Ok(catalogs)
     }
 
     pub fn from_manifest(manifest: &Value, locked: &Value) -> Result<Self> {
@@ -73,17 +83,43 @@ impl Catalogs {
         Self::parse(default_source, named_source, locked, false, false)
     }
 
-    pub fn merge_pnpm_lock(&mut self, pnpm_lock: &Value) -> Result<()> {
+    pub fn from_pnpm_lock(pnpm_lock: &Value) -> Result<Self> {
+        let mut catalogs = Self {
+            loaded: true,
+            ..Self::default()
+        };
+        catalogs.merge_pnpm_lock(pnpm_lock, true, true)?;
+        Ok(catalogs)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.default.is_empty() && self.named.is_empty()
+    }
+
+    fn merge_pnpm_lock(
+        &mut self,
+        pnpm_lock: &Value,
+        fill_default: bool,
+        fill_named: bool,
+    ) -> Result<()> {
         let Some(catalogs) = pnpm_lock["catalogs"].as_object() else {
             return Ok(());
         };
         for (catalog_name, entries) in catalogs {
             let parsed = parse_pnpm_lock_entries(entries, catalog_name)?;
-            let target = if catalog_name == "default" {
-                &mut self.default
-            } else {
-                self.named.entry(catalog_name.clone()).or_default()
-            };
+            if catalog_name == "default" {
+                if !fill_default || self.named.contains_key("default") {
+                    continue;
+                }
+                for (pkg, specifier) in parsed {
+                    self.default.entry(pkg).or_insert(specifier);
+                }
+                continue;
+            }
+            if !fill_named {
+                continue;
+            }
+            let target = self.named.entry(catalog_name.clone()).or_default();
             for (pkg, specifier) in parsed {
                 target.entry(pkg).or_insert(specifier);
             }
@@ -91,18 +127,9 @@ impl Catalogs {
         check_default_conflicts(&self.default, &self.named)
     }
 
-    pub fn merge_migrated(&mut self, locked: &Value) -> Result<()> {
-        let migrated = Self::from_lock(locked);
-        for (pkg, specifier) in migrated.default {
-            self.default.entry(pkg).or_insert(specifier);
-        }
-        for (catalog_name, entries) in migrated.named {
-            let target = self.named.entry(catalog_name).or_default();
-            for (pkg, specifier) in entries {
-                target.entry(pkg).or_insert(specifier);
-            }
-        }
-        check_default_conflicts(&self.default, &self.named)
+    fn recompute_changed(&mut self, locked: &Value) {
+        let previous = Self::from_lock(locked);
+        self.changed = changed_names(&previous, &self.default, &self.named);
     }
 
     pub fn from_lock(locked: &Value) -> Self {
@@ -226,6 +253,13 @@ fn read_optional_yaml(path: &Path, needed: bool, parser: &dyn Transpiler) -> Res
         return Ok(None);
     }
     Ok(Some(io::read(path, "YAML", parser)?))
+}
+
+fn read_optional_yaml_lenient(path: &Path, parser: &dyn Transpiler) -> Option<Value> {
+    if !path.is_file() {
+        return None;
+    }
+    io::read(path, "YAML", parser).ok()
 }
 
 fn fill_catalog_sources<'a>(
