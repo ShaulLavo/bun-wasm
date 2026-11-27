@@ -216,7 +216,7 @@ test("Bun helper keeps installer cache policy outside the generic runtime", asyn
     await until(() => { body = host.read(handle, 65536); return body instanceof Uint8Array; });
     if (typeof body === "number") throw new Error("Expected cached body");
     expect(decode(body)).toBe("cached tarball");
-    expect(opened).toEqual(["bun-wasm-install-v1"]);
+    expect(opened).toEqual(["bun-wasm-install-v2"]);
   } finally {
     try { helper.dispose(); }
     finally { namespace.dispose(); }

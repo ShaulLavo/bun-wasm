@@ -17,13 +17,13 @@ export interface InstallFetchOptions {
 
 const METADATA = "application/vnd.npm.install-v1+json";
 const TARBALL = "application/vnd.bun.install-tarball";
-const CACHE = "bun-wasm-install-v1";
+const CACHE = "bun-wasm-install-v2";
 const CACHE_METADATA_HEADER = "x-bun-wasm-cache-metadata";
 const CACHE_CAPTURE_LIMIT = 4 * 1024 * 1024;
 const PUT_QUEUE_BYTE_LIMIT = 8 * 1024 * 1024;
 const PUT_QUEUE_ENTRY_LIMIT = 512;
 const SESSION_IDLE_REFRESH_MS = 2_000;
-const INVALIDATION_CHANNEL = "bun-wasm-install-cache-v1";
+const INVALIDATION_CHANNEL = "bun-wasm-install-cache-v2";
 const BODY_FORBIDDEN_STATUS = new Set([204, 205, 304]);
 
 type CaptureState =

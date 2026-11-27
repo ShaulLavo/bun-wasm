@@ -632,7 +632,7 @@ test("cold misses skip cache.match once cache.keys loads and reuse the opened ca
     const urls = Array.from({ length: 12 }, (_, index) => `https://registry.invalid/pkg-${index}.tgz`);
     const bodies = await Promise.all(urls.map(async url => (await installFetch(url, requestOptions())).text()));
     expect(bodies).toEqual(urls.map(url => `body:${url}`));
-    expect(env.opens).toEqual(["bun-wasm-install-v1"]);
+    expect(env.opens).toEqual(["bun-wasm-install-v2"]);
     expect(env.keysCalls).toBe(1);
     expect(env.matchCalls).toEqual([]);
     expect(networkCalls).toBe(urls.length);
@@ -839,7 +839,7 @@ test("clearInstallCache drops queued puts, resets the key index, and deletes the
     expect(await (await installFetch(secondUrl, requestOptions())).text()).toBe(`fresh:${secondUrl}`);
 
     expect(await clearInstallCache()).toBe(true);
-    expect(env.deletes).toEqual(["bun-wasm-install-v1"]);
+    expect(env.deletes).toEqual(["bun-wasm-install-v2"]);
 
     releaseFirst.resolve();
     await Bun.sleep(15);
@@ -847,7 +847,7 @@ test("clearInstallCache drops queued puts, resets the key index, and deletes the
     expect(putUrls).toEqual([firstUrl]);
 
     expect(await (await installFetch(firstUrl, requestOptions())).text()).toBe(`fresh:${firstUrl}`);
-    expect(env.opens).toEqual(["bun-wasm-install-v1", "bun-wasm-install-v1"]);
+    expect(env.opens).toEqual(["bun-wasm-install-v2", "bun-wasm-install-v2"]);
     expect(env.matchCalls).toEqual([]);
     expect(networkCalls).toBe(3);
   });

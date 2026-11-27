@@ -77,7 +77,7 @@ for (const engine of [chromium, webkit]) {
         const originalMatch = Cache.prototype.match;
         const originalPut = Cache.prototype.put;
         CacheStorage.prototype.open = function (name) {
-          if (name === "bun-wasm-install-v1") stats.opens++;
+          if (name === "bun-wasm-install-v2") stats.opens++;
           return originalOpen.call(this, name);
         };
         Cache.prototype.keys = function (...args) {
@@ -112,12 +112,12 @@ for (const engine of [chromium, webkit]) {
         // Wait for the serialized background put queue to persist every tarball.
         const deadline = Date.now() + 15_000;
         while (Date.now() < deadline) {
-          const cache = await originalOpen.call(caches, "bun-wasm-install-v1");
+          const cache = await originalOpen.call(caches, "bun-wasm-install-v2");
           const stored = await originalKeys.call(cache);
           if (stored.length === count) break;
           await new Promise(resolveDelay => setTimeout(resolveDelay, 20));
         }
-        const finalCount = (await originalKeys.call(await originalOpen.call(caches, "bun-wasm-install-v1"))).length;
+        const finalCount = (await originalKeys.call(await originalOpen.call(caches, "bun-wasm-install-v2"))).length;
         return {
           bodies,
           coldMatches,
@@ -179,7 +179,7 @@ for (const engine of [chromium, webkit]) {
           return response.text();
         }));
         const cleared = await mod.clearInstallCache();
-        const existsAfterClear = await caches.has("bun-wasm-install-v1");
+        const existsAfterClear = await caches.has("bun-wasm-install-v2");
         return { bodies, keys, matches, cleared, existsAfterClear };
       }, { baseUrl: base, accept: TARBALL });
 
@@ -213,7 +213,7 @@ for (const engine of [chromium, webkit]) {
       await page.evaluate(async () => {
         const deadline = Date.now() + 10_000;
         while (Date.now() < deadline) {
-          const cache = await caches.open("bun-wasm-install-v1");
+          const cache = await caches.open("bun-wasm-install-v2");
           if ((await cache.keys()).length > 0) return;
           await new Promise(resolveDelay => setTimeout(resolveDelay, 20));
         }

@@ -227,7 +227,7 @@ test("Runtime-borrowed helpers retain the default installer tarball cache policy
     const handle = host.fetch(JSON.stringify({ url: "https://network.invalid/pkg.tgz", headers: [["accept", "application/vnd.bun.install-tarball"]] }));
     for (let turn = 0; turn < 100 && host.fetchHead(handle) === AGAIN; turn++) await Bun.sleep(1);
     expect(host.read(handle, 100)).toEqual(new TextEncoder().encode("cached runtime tarball"));
-    expect(opened).toEqual(["bun-wasm-install-v1"]);
+    expect(opened).toEqual(["bun-wasm-install-v2"]);
   } finally {
     helper.dispose(); await runtime.dispose(); globalThis.fetch = originalFetch;
     if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches); else Reflect.deleteProperty(globalThis, "caches");

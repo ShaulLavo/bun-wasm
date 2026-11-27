@@ -69,7 +69,7 @@ its isolated installations under the cache directory's `bunx` folder, as native
 Bun keeps its own; they are installed tools, not downloads.
 Packuments expire after five minutes; integrity-checked tarballs do not expire.
 The browser persists successful unauthenticated tarballs up to its 4 MiB
-cache-only capture budget in Cache Storage under `bun-wasm-install-v1`, after
+cache-only capture budget in Cache Storage under `bun-wasm-install-v2`, after
 the response has been consumed. Larger downloads still stream to the guest and
 remain eligible for its integrity-checked cache. Metadata uses the guest cache,
 where configured credentials can be checked before persistence. These caches can

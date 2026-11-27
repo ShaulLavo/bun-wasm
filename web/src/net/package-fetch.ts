@@ -78,12 +78,12 @@ async function fetchHop(
   target: URL,
   options: RequestInit,
   headers: Headers,
-  redirects: number,
+  includeTargetOnError: boolean,
 ): Promise<Response> {
   try {
     return await fetcher(hopUrl, { ...options, headers, redirect: "manual" });
   } catch (error) {
-    throw redirects > 0 ? formatHopFetchError(target, error, options.signal) : error;
+    throw includeTargetOnError ? formatHopFetchError(target, error, options.signal) : error;
   }
 }
 
@@ -99,7 +99,7 @@ export async function packageFetch(
     const target = resolveRewrite(url, rewrite);
     const hopUrl = redirects === 0 && target === url ? input : target.href;
     stripCredentialsOnOriginChange(url, target, headers);
-    const response = await fetchHop(fetcher, hopUrl, target, options, headers, redirects);
+    const response = await fetchHop(fetcher, hopUrl, target, options, headers, redirects > 0 || target !== url);
     if (response.type === "opaqueredirect") throw new Error("Package redirect destination is unavailable to this browser");
     const location = response.headers.get("location");
     if (!location || ![301, 302, 303, 307, 308].includes(response.status)) return response;
