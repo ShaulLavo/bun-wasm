@@ -209,6 +209,7 @@ pub struct Resolver {
     pub(super) overrides: Overrides,
     pub(super) catalogs: Catalogs,
     pub(super) used_catalogs: BTreeMap<(Option<String>, String), String>,
+    pub(super) peer_catalogs: BTreeSet<(Option<String>, String)>,
     locked_catalogs: Catalogs,
     /// Installs placed packages while metadata loads (cold installs only).
     pub(super) early: Option<super::early::Early>,
@@ -236,6 +237,7 @@ impl Resolver {
             overrides: Overrides::default(),
             catalogs: Catalogs::default(),
             used_catalogs: BTreeMap::new(),
+            peer_catalogs: BTreeSet::new(),
             early: None,
         }
     }
@@ -278,9 +280,12 @@ impl Resolver {
             .collect();
         self.root_deps = dependencies.iter().map(|(name, _)| name.clone()).collect();
         let mut lookahead = self.metadata_lookahead(&dependencies, None);
-        for (index, (name, (range, optional, _))) in dependencies.iter().enumerate() {
+        for (index, (name, (range, optional, peer))) in dependencies.iter().enumerate() {
             self.prefetch_dependencies(&mut lookahead, index);
             let cat_key = resolved_catalog_key(name, range, &self.overrides, &self.catalogs, true);
+            if *peer && let Some(cat_key) = &cat_key {
+                self.peer_catalogs.insert(cat_key.clone());
+            }
             let range = match self.resolve_range(None, name, range) {
                 Ok(range) => range,
                 Err(_) if *optional => continue,
@@ -426,6 +431,9 @@ impl Resolver {
             let is_optional = *optional || parent.optional;
             let cat_key =
                 resolved_catalog_key(name, range, &self.overrides, &self.catalogs, workspace);
+            if *peer && let Some(cat_key) = &cat_key {
+                self.peer_catalogs.insert(cat_key.clone());
+            }
             let range = match self.resolve_range(Some(parent), name, range) {
                 Ok(range) => range,
                 Err(_) if is_optional => continue,

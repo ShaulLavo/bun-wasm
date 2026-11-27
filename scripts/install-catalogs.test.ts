@@ -445,10 +445,48 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
       (JSON.parse(readFileSync(join(exactPeerRoot, "package.json"), "utf8")) as {
         workspaces: { catalog: { versioned: string } };
       }).workspaces.catalog.versioned,
-      "1.10.0",
+      "^1.10.0",
     );
     assert.equal(installedVersion(exactPeerRoot, "@fixture/exact-a/node_modules/versioned"), "1.10.0");
     await install(target, exactPeerRoot, registry.base, ["--frozen-lockfile"]);
+    await runGuestUpdate(target, exactPeerRoot, registry.base, ["--latest", "--exact"], "/packages/a");
+    assert.equal(
+      (JSON.parse(readFileSync(join(exactPeerRoot, "package.json"), "utf8")) as {
+        workspaces: { catalog: { versioned: string } };
+      }).workspaces.catalog.versioned,
+      "^2.0.0",
+    );
+    await install(target, exactPeerRoot, registry.base, ["--frozen-lockfile"]);
+
+    // Explicit `bun update pkg@ver` leaves unused alias catalogs intact, and plain `bun update`
+    // preserves comparator catalog ranges (`>=1.0.0 <2.0.0`) instead of narrowing them.
+    const rangeAndUnusedRoot = join(directory, "update-range-and-unused");
+    mkdirSync(join(rangeAndUnusedRoot, "packages/a"), { recursive: true });
+    writeFileSync(join(rangeAndUnusedRoot, "package.json"), JSON.stringify({
+      name: "update-range-unused-root",
+      dependencies: { versioned: "^1.0.0" },
+      workspaces: {
+        packages: ["packages/*"],
+        catalog: { versioned: ">=1.0.0 <2.0.0" },
+        catalogs: { tools: { versioned: "npm:is-number@^7.0.0" } },
+      },
+    }, null, 2));
+    writeFileSync(join(rangeAndUnusedRoot, "packages/a/package.json"), JSON.stringify({
+      name: "@fixture/range-a",
+      version: "1.0.0",
+      dependencies: { versioned: "catalog:" },
+    }, null, 2));
+    await install(target, rangeAndUnusedRoot, registry.base);
+    await runGuestUpdate(target, rangeAndUnusedRoot, registry.base, []);
+    let rangeManifest = JSON.parse(readFileSync(join(rangeAndUnusedRoot, "package.json"), "utf8")) as {
+      dependencies: { versioned: string };
+      workspaces: { catalog: { versioned: string }; catalogs: { tools: { versioned: string } } };
+    };
+    assert.equal(rangeManifest.workspaces.catalog.versioned, ">=1.0.0 <2.0.0");
+    await runGuestUpdate(target, rangeAndUnusedRoot, registry.base, ["versioned@1.10.0"]);
+    rangeManifest = JSON.parse(readFileSync(join(rangeAndUnusedRoot, "package.json"), "utf8")) as typeof rangeManifest;
+    assert.equal(rangeManifest.workspaces.catalogs.tools.versioned, "npm:is-number@^7.0.0");
+    await install(target, rangeAndUnusedRoot, registry.base, ["--frozen-lockfile"]);
 
     // Member's first `bun update --latest` with a `yarn.lock` migrates against the original catalog.
     const yarnMemberUpdateRoot = join(directory, "update-yarn-member");

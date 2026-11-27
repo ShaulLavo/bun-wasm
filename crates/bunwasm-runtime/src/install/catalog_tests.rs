@@ -2300,7 +2300,9 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
                 names: vec!["versioned@2.0.0".into()],
                 ..Options::default()
             };
-            update_manifest(&mut root_manifest, &explicit_opts).unwrap();
+            let explicit_scope =
+                referenced_catalog_keys(&old_manifest, &old_manifest, &explicit_opts).unwrap();
+            update_manifest(&mut root_manifest, &explicit_opts, Some(&explicit_scope)).unwrap();
             assert_eq!(root_manifest["dependencies"]["versioned"], "catalog:");
             assert_eq!(root_manifest["workspaces"]["catalog"]["versioned"], "2.0.0");
 
@@ -2318,6 +2320,7 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
                 &explicit_opts,
                 &resolver,
                 None,
+                Some(&explicit_scope),
             )
             .unwrap();
             assert_eq!(root_manifest["dependencies"]["versioned"], "catalog:");
@@ -2333,13 +2336,16 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
                 names: vec!["versioned".into()],
                 ..Options::default()
             };
-            update_manifest(&mut latest_manifest, &latest_opts).unwrap();
+            let latest_scope =
+                referenced_catalog_keys(&old_manifest, &old_manifest, &latest_opts).unwrap();
+            update_manifest(&mut latest_manifest, &latest_opts, Some(&latest_scope)).unwrap();
             finalize_updates(
                 &mut latest_manifest,
                 &old_manifest,
                 &latest_opts,
                 &resolver,
                 None,
+                Some(&latest_scope),
             )
             .unwrap();
             assert_eq!(
