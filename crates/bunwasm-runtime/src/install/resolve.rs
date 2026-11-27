@@ -618,28 +618,56 @@ impl Resolver {
         }
     }
 
+    fn locked_parent_declaration(&self, parent: &Package) -> Option<(Vec<String>, &Value, bool)> {
+        if let Some(source_chain) = parent.source_chain.as_deref() {
+            let row = &self.locked["packages"][source_chain.join("/")];
+            if row[0] != format!("{}@{}", parent.name, parent.version) {
+                return None;
+            }
+            return Some((source_chain.to_vec(), &row[2], false));
+        }
+        if !parent.local.as_ref().is_some_and(|local| local.workspace) {
+            return None;
+        }
+        let prefix = format!("{}@workspace:", parent.name);
+        let rel_path = self.locked["packages"][&parent.name][0]
+            .as_str()?
+            .strip_prefix(&prefix)?;
+        let ws_meta = self.locked["workspaces"].get(rel_path)?;
+        Some((parent.chain.clone(), ws_meta, true))
+    }
+
     fn locked_child(&self, parent: &Package, name: &str, range: &str) -> Option<String> {
         if self.overrides.changed.contains(name) {
             return None;
         }
-        let source_chain = parent.source_chain.as_deref()?;
-        let row = &self.locked["packages"][source_chain.join("/")];
-        if row[0] != format!("{}@{}", parent.name, parent.version)
-            || !declared_effective(
-                &row[2],
+        let (source_chain, declared_meta, workspace) = self.locked_parent_declaration(parent)?;
+        let alias = range.strip_prefix("npm:").map(spec).transpose().ok()?;
+        let (target_name, target_range) = alias.as_ref().map_or((name, range), |(name, range)| {
+            (name.as_str(), range.as_str())
+        });
+        let declared = if workspace {
+            declared_root(
+                declared_meta,
+                name,
+                target_name,
+                target_range,
+                &self.overrides,
+                &self.locked_catalogs,
+            )
+        } else {
+            declared_effective(
+                declared_meta,
                 name,
                 range,
                 &self.overrides,
                 &self.locked_catalogs,
                 false,
             )
-        {
+        };
+        if !declared {
             return None;
         }
-        let alias = range.strip_prefix("npm:").map(spec).transpose().ok()?;
-        let (target_name, target_range) = alias.as_ref().map_or((name, range), |(name, range)| {
-            (name.as_str(), range.as_str())
-        });
         for level in (0..=source_chain.len()).rev() {
             let mut candidate = source_chain[..level].to_vec();
             candidate.push(name.into());
@@ -951,8 +979,8 @@ impl Resolver {
         let resolved_name = platform_package(name, version);
         let root_tag = chain.len() == 1
             && is_tag(range)
-            && declared_workspace(
-                &self.locked["workspaces"],
+            && declared_root(
+                &self.locked["workspaces"][""],
                 &chain[0],
                 name,
                 range,
@@ -1073,29 +1101,6 @@ fn declared_effective(
     .filter_map(|field| meta[*field][name].as_str())
     .filter_map(|declared| effective_declared(name, declared, overrides, catalogs, workspace))
     .any(|effective| effective == range)
-}
-
-fn declared_workspace(
-    workspaces: &Value,
-    logical_name: &str,
-    resolved_name: &str,
-    range: &str,
-    overrides: &Overrides,
-    catalogs: &Catalogs,
-) -> bool {
-    let Some(entries) = workspaces.as_object() else {
-        return false;
-    };
-    entries.values().any(|meta| {
-        declared_root(
-            meta,
-            logical_name,
-            resolved_name,
-            range,
-            overrides,
-            catalogs,
-        )
-    })
 }
 
 fn declared_root(

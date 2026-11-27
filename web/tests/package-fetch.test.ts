@@ -170,11 +170,38 @@ test("packageFetch resolves same-origin relative proxy paths and passes through 
 
 test("packageFetch rejects empty or non-http(s) rewritten package URLs", async () => {
   const { calls, fetcher } = createFetcher(() => new Response("never"));
-  for (const bad of ["", "   ", "javascript:alert(1)", "file:///etc/passwd"]) {
+  for (const bad of ["", "   ", "javascript:alert(1)", "file:///etc/passwd", "https://user:pass@proxy.invalid/pkg.tgz"]) {
     await expect(packageFetch("https://registry.invalid/pkg.tgz", {}, fetcher, {
       kind: "tarball",
       rewriteUrl: () => bad,
     })).rejects.toThrow(TypeError);
   }
   expect(calls).toHaveLength(0);
+});
+
+test("packageFetch preserves credential headers on same-origin rewrites", async () => {
+  const { calls, fetcher } = createFetcher(() => new Response("same-origin-rewrite"));
+  const result = await packageFetch("https://registry.invalid:444/pkg.tgz", { headers: credentialValues }, fetcher, {
+    kind: "tarball",
+    rewriteUrl: ({ url }) => `https://registry.invalid:444/proxy?url=${encodeURIComponent(url)}`,
+  });
+
+  expect(await result.text()).toBe("same-origin-rewrite");
+  expect(calls).toHaveLength(1);
+  for (const name of credentialHeaders) expect(required(calls[0]).headers.get(name)).toBe(credentialValues[name]);
+});
+
+test("packageFetch strips all credential headers before the first request on cross-origin rewrites", async () => {
+  const { calls, fetcher } = createFetcher(() => new Response("cross-origin-rewrite"));
+  const result = await packageFetch("https://private.registry.invalid/pkg.tgz", { headers: credentialValues }, fetcher, {
+    kind: "tarball",
+    rewriteUrl: ({ url }) => `https://sprockt.invalid/api/tarball-proxy?url=${encodeURIComponent(url)}`,
+  });
+
+  expect(await result.text()).toBe("cross-origin-rewrite");
+  expect(calls).toHaveLength(1);
+  expect(required(calls[0]).url).toBe(
+    `https://sprockt.invalid/api/tarball-proxy?url=${encodeURIComponent("https://private.registry.invalid/pkg.tgz")}`,
+  );
+  expectCredentialHeaders(required(calls[0]).headers, null);
 });

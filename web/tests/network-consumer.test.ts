@@ -294,11 +294,24 @@ test("closed runtime relay rejects stale connect before token acquisition", asyn
   }
 });
 
-test("rewritePackageUrl routes bun install requests through a proxy while preserving cache and ordinary fetches", async () => {
+import { NetHost as BunNetHost } from "../src/net/host";
+import { PACKAGE_POLICY_HEADER } from "../src/net/install-cache";
+
+function fetchThroughSlot(host: BunNetHost, meta: object): number {
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  host.attach(memory);
+  const bytes = new TextEncoder().encode(JSON.stringify(meta));
+  new Uint8Array(memory.buffer).set(bytes, 16);
+  const fetchSlot = host.slots().fetch;
+  if (!fetchSlot) throw new Error("missing fetch slot");
+  return fetchSlot(16, bytes.length, 0, 0);
+}
+
+test("rewritePackageUrl only intercepts package-policy requests and ignores ordinary npm-accept fetches", async () => {
   const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
   const ring = createRing();
   const seen: Array<{ url: string; kind: string }> = [];
-  const fetched: string[] = [];
+  const fetched: Array<{ url: string; headers: Headers }> = [];
   const tarball = "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz";
   const proxy = `https://sprockt.invalid/api/tarball-proxy?url=${encodeURIComponent(tarball)}`;
   const helper = createBunNetworkHelper(await runtime.network(), ring, {
@@ -306,30 +319,55 @@ test("rewritePackageUrl routes bun install requests through a proxy while preser
       seen.push(request);
       return request.url.startsWith("https://github.com/") ? proxy : undefined;
     },
-    fetch: async url => {
-      fetched.push(url);
+    fetch: async (url, init) => {
+      fetched.push({ url, headers: new Headers(init.headers) });
       if (url === proxy) return new Response("proxied-tarball");
       if (url === "https://registry.invalid/evlog") return new Response("{\"name\":\"evlog\"}");
       return new Response("ordinary-fetch");
     },
   });
-  const host = new NetHost(ring, req => helper.handle(req), undefined, { shared: true });
+  const bunHost = new BunNetHost(ring, req => dispatchBunNetwork(helper, { type: "net", req }), undefined, { shared: true });
+  const runtimeHost = bunHost.runtime;
   try {
-    const readAll = async (meta: object) => {
-      const handle = host.fetch(JSON.stringify(meta), null);
-      for (let turn = 0; turn < 100 && host.fetchHead(handle) === AGAIN; turn++) await Bun.sleep(1);
-      const data = host.read(handle, 1024);
-      host.close(handle);
+    const readHandle = async (handle: number) => {
+      for (let turn = 0; turn < 100 && runtimeHost.fetchHead(handle) === AGAIN; turn++) await Bun.sleep(1);
+      const data = runtimeHost.read(handle, 1024);
+      runtimeHost.close(handle);
       return data instanceof Uint8Array ? new TextDecoder().decode(data) : String(data);
     };
-    expect(await readAll({ url: tarball, method: "GET", headers: [["accept", "application/vnd.bun.install-tarball"]] })).toBe("proxied-tarball");
-    expect(await readAll({ url: "https://registry.invalid/evlog", method: "GET", headers: [["accept", "application/vnd.npm.install-v1+json; q=1.0"]] })).toBe("{\"name\":\"evlog\"}");
-    expect(await readAll({ url: "https://github.com/ordinary-user-fetch", method: "GET", headers: [] })).toBe("ordinary-fetch");
+    const pkgTarball = fetchThroughSlot(bunHost, {
+      url: tarball, method: "GET", credentialPolicy: "package",
+      headers: [["accept", "application/vnd.bun.install-tarball"]],
+    });
+    expect(await readHandle(pkgTarball)).toBe("proxied-tarball");
+    const pkgMeta = fetchThroughSlot(bunHost, {
+      url: "https://registry.invalid/evlog", method: "GET", credentialPolicy: "package",
+      headers: [["accept", "application/vnd.npm.install-v1+json; q=1.0"]],
+    });
+    expect(await readHandle(pkgMeta)).toBe("{\"name\":\"evlog\"}");
+    // Ordinary user fetch requesting npm abbreviated metadata (even with a spoofed policy header)
+    // must bypass rewritePackageUrl and never leak the internal header.
+    const userMeta = runtimeHost.fetch(JSON.stringify({
+      url: "https://github.com/user-npm-meta", method: "GET",
+      headers: [["accept", "application/vnd.npm.install-v1+json"], [PACKAGE_POLICY_HEADER, "spoofed"]],
+    }), null);
+    expect(await readHandle(userMeta)).toBe("ordinary-fetch");
+    const userTarball = runtimeHost.fetch(JSON.stringify({
+      url: "https://github.com/user-tarball", method: "GET",
+      headers: [["accept", "application/vnd.bun.install-tarball"]],
+    }), null);
+    expect(await readHandle(userTarball)).toBe("ordinary-fetch");
     expect(seen).toEqual([
       { url: tarball, kind: "tarball" },
       { url: "https://registry.invalid/evlog", kind: "metadata" },
     ]);
-    expect(fetched).toEqual([proxy, "https://registry.invalid/evlog", "https://github.com/ordinary-user-fetch"]);
+    expect(fetched.map(call => call.url)).toEqual([
+      proxy,
+      "https://registry.invalid/evlog",
+      "https://github.com/user-npm-meta",
+      "https://github.com/user-tarball",
+    ]);
+    for (const call of fetched) expect(call.headers.has(PACKAGE_POLICY_HEADER)).toBe(false);
   } finally {
     helper.dispose();
     await runtime.dispose();
@@ -364,20 +402,24 @@ test("rewritePackageUrl keeps Cache Storage tarball caching keyed by the origina
       return new Response("cached-via-proxy");
     },
   });
-  const host = new NetHost(ring, req => helper.handle(req), undefined, { shared: true });
+  const bunHost = new BunNetHost(ring, req => dispatchBunNetwork(helper, { type: "net", req }), undefined, { shared: true });
+  const runtimeHost = bunHost.runtime;
   try {
     Object.defineProperty(globalThis, "caches", { configurable: true, value: cache });
     const runFetch = async () => {
-      const handle = host.fetch(JSON.stringify({ url: tarball, method: "GET", headers: [["accept", "application/vnd.bun.install-tarball"]] }), null);
-      for (let turn = 0; turn < 100 && host.fetchHead(handle) === AGAIN; turn++) await Bun.sleep(1);
+      const handle = fetchThroughSlot(bunHost, {
+        url: tarball, method: "GET", credentialPolicy: "package",
+        headers: [["accept", "application/vnd.bun.install-tarball"]],
+      });
+      for (let turn = 0; turn < 100 && runtimeHost.fetchHead(handle) === AGAIN; turn++) await Bun.sleep(1);
       const chunks: number[] = [];
       for (let turn = 0; turn < 100; turn++) {
-        const piece = host.read(handle, 1024);
+        const piece = runtimeHost.read(handle, 1024);
         if (piece === 0) break;
         if (piece === AGAIN) { await Bun.sleep(1); continue; }
         if (piece instanceof Uint8Array) chunks.push(...piece);
       }
-      host.close(handle);
+      runtimeHost.close(handle);
       return new TextDecoder().decode(new Uint8Array(chunks));
     };
     expect(await runFetch()).toBe("cached-via-proxy");

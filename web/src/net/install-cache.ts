@@ -1,8 +1,13 @@
 import { packageFetch, type PackageRequestKind, type PackageRewrite, type PackageUrlRewriter } from "./package-fetch.js";
 
+/** Internal per-helper marker header carrying Rust's `credentialPolicy: "package"` through Waffle. Always stripped before outbound fetch. */
+export const PACKAGE_POLICY_HEADER = "x-bun-wasm-package-policy";
+
 export interface InstallFetchOptions {
   readonly fetch?: (url: string, options: RequestInit) => Promise<Response>;
   readonly rewritePackageUrl?: PackageUrlRewriter;
+  /** Per-helper token required before treating a request as an installer package request. */
+  readonly packagePolicyToken?: string;
 }
 
 const METADATA = "application/vnd.npm.install-v1+json";
@@ -224,13 +229,13 @@ function getOpenedCache(storage: CacheStorage, session: CacheSession, now: numbe
 
 /** Build an installer fetch policy with optional URL rewriting and underlying transport. */
 export function createInstallFetch(config: InstallFetchOptions = {}): (url: string, options: RequestInit) => Promise<Response> {
-  const { fetch: transport, rewritePackageUrl } = config;
-  return (url, options) => runInstallFetch(url, options, transport, rewritePackageUrl);
+  const { fetch: transport, rewritePackageUrl, packagePolicyToken } = config;
+  return (url, options) => runInstallFetch(url, options, transport, rewritePackageUrl, packagePolicyToken);
 }
 
 /** Cache npm downloads across playground runs, without caching ordinary user fetches. */
 export async function installFetch(url: string, options: RequestInit): Promise<Response> {
-  return runInstallFetch(url, options, undefined, undefined);
+  return runInstallFetch(url, options, undefined, undefined, undefined);
 }
 
 async function runInstallFetch(
@@ -238,18 +243,25 @@ async function runInstallFetch(
   options: RequestInit,
   transport: ((url: string, options: RequestInit) => Promise<Response>) | undefined,
   rewritePackageUrl: PackageUrlRewriter | undefined,
+  packagePolicyToken: string | undefined,
 ): Promise<Response> {
   const headers = new Headers(options.headers);
+  const marked = packagePolicyToken !== undefined && headers.get(PACKAGE_POLICY_HEADER) === packagePolicyToken;
+  const forwardOptions = headers.has(PACKAGE_POLICY_HEADER) ? stripPolicyHeader(options, headers) : options;
   const header = headers.get("accept") ?? "";
   const accept = header.split(";", 1)[0];
   const fetcher = transport ?? fetch;
-  if (options.method !== "GET" || accept !== METADATA && accept !== TARBALL) {
-    return fetcher(url, options);
+  if (forwardOptions.method !== "GET" || accept !== METADATA && accept !== TARBALL) {
+    return fetcher(url, forwardOptions);
+  }
+  const verifiedPackage = packagePolicyToken === undefined || marked;
+  if (!verifiedPackage && (accept === METADATA || rewritePackageUrl !== undefined)) {
+    return fetcher(url, forwardOptions);
   }
   const kind: PackageRequestKind = accept === TARBALL ? "tarball" : "metadata";
-  const rewrite: PackageRewrite | undefined = rewritePackageUrl ? { kind, rewriteUrl: rewritePackageUrl } : undefined;
+  const rewrite: PackageRewrite | undefined = verifiedPackage && rewritePackageUrl ? { kind, rewriteUrl: rewritePackageUrl } : undefined;
   if (accept === METADATA || typeof caches === "undefined" || headers.has("authorization")) {
-    return packageFetch(url, options, fetcher, rewrite);
+    return packageFetch(url, forwardOptions, fetcher, rewrite);
   }
   const directives = headers.get("cache-control")?.match(/(?:[^,"]|"(?:[^"\\]|\\.)*")+/g);
   const refresh = header.includes("; no-cache") || (directives?.some(value => value.trim().toLowerCase() === "no-cache") ?? false);
@@ -267,14 +279,19 @@ async function runInstallFetch(
       const cached = await matchKnownEntry(activeOpened, key, url);
       if (cached) return restoreCachedResponse(cached);
     }
-    const response = await packageFetch(url, options, fetcher, rewrite);
+    const response = await packageFetch(url, forwardOptions, fetcher, rewrite);
     if (!response.ok || !activeOpened || activeOpened.generation !== session.generation) return response;
-    return prepareCachedResponse(response, session, activeOpened, key, url, options.signal);
+    return prepareCachedResponse(response, session, activeOpened, key, url, forwardOptions.signal);
   } finally {
     session.activeFetches--;
     session.lastActivity = Date.now();
     scheduleIdleRelease(session);
   }
+}
+
+function stripPolicyHeader(options: RequestInit, headers: Headers): RequestInit {
+  headers.delete(PACKAGE_POLICY_HEADER);
+  return { ...options, headers };
 }
 
 async function matchKnownEntry(opened: OpenedCache, key: string, url: string): Promise<Response | undefined> {

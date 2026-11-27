@@ -98,9 +98,10 @@ impl Catalogs {
     }
 
     pub fn resolve<'a>(&'a self, name: &str, range: &str) -> Result<Option<&'a str>> {
-        let Some(catalog_name) = range.strip_prefix("catalog:") else {
+        let Some(raw_name) = range.strip_prefix("catalog:") else {
             return Ok(None);
         };
+        let catalog_name = raw_name.trim();
         if catalog_name.is_empty() || catalog_name == "default" {
             return self.resolve_default(name, catalog_name).map(Some);
         }

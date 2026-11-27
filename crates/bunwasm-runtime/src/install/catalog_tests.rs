@@ -549,6 +549,58 @@ fn catalog_dist_tag_reuses_lock_and_invalidates_on_tag_change() {
 }
 
 #[test]
+fn workspace_catalog_dist_tag_keeps_nested_version_when_root_pins_another() {
+    isolated(
+        "workspace_catalog_dist_tag_keeps_nested_version_when_root_pins_another",
+        || {
+            seed_registry_package("versioned", &["1.0.0", "2.0.0"]);
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "dependencies": { "versioned": "1.0.0" },
+                    "workspaces": {
+                        "packages": ["packages/*"],
+                        "catalog": { "versioned": "latest" }
+                    }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "catalog:" }
+                }),
+            );
+
+            install("install", &[]).unwrap();
+            let lock_text = fs::read_to_string("bun.lock").unwrap();
+            let lock = parse_json(lock_text.as_bytes()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert_eq!(
+                lock["packages"]["@fixture/a/versioned"][0],
+                "versioned@2.0.0"
+            );
+
+            // Reinstall and frozen install must both preserve the workspace's nested 2.0.0 pin.
+            let metadata_url = "http://registry.invalid/versioned";
+            fs::remove_file(
+                io::cache_dir().join(format!("{:x}", Sha256::digest(metadata_url.as_bytes()))),
+            )
+            .unwrap();
+            install("install", &["--frozen-lockfile"]).unwrap();
+            assert_eq!(fs::read_to_string("bun.lock").unwrap(), lock_text);
+
+            install("install", &[]).unwrap();
+            assert_eq!(fs::read_to_string("bun.lock").unwrap(), lock_text);
+            let nested = parse_json(
+                &fs::read("node_modules/@fixture/a/node_modules/versioned/package.json").unwrap(),
+            )
+            .unwrap();
+            assert_eq!(nested["version"], "2.0.0");
+        },
+    );
+}
+
+#[test]
 fn missing_and_invalid_catalog_entries_return_clear_errors() {
     let manifest = json!({
         "workspaces": {
@@ -563,7 +615,15 @@ fn missing_and_invalid_catalog_entries_return_clear_errors() {
         Some("2.29.0")
     );
     assert_eq!(
+        catalogs.resolve("evlog", "catalog: ").unwrap(),
+        Some("2.29.0")
+    );
+    assert_eq!(
         catalogs.resolve("is-odd", "catalog:extra").unwrap(),
+        Some("3.0.1")
+    );
+    assert_eq!(
+        catalogs.resolve("is-odd", "catalog: extra ").unwrap(),
         Some("3.0.1")
     );
     assert_eq!(catalogs.resolve("evlog", "^2.0.0").unwrap(), None);

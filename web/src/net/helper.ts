@@ -2,7 +2,7 @@
 // only Bun's installer download cache is selected here.
 import { NetHelper as RuntimeNetHelper, type NetNamespace, type NetHelperHooks } from "waffle/browser/net/helper";
 import type { NetConnect } from "waffle/browser/net/outbound";
-import { createInstallFetch, installFetch } from "./install-cache.js";
+import { createInstallFetch, installFetch, PACKAGE_POLICY_HEADER } from "./install-cache.js";
 import type { PackageRequest, PackageRequestKind, PackageUrlRewriter } from "./package-fetch.js";
 
 export type { ConnectionSink, NetFetch, NetHelperHooks, PreviewConnection, PreviewSink } from "waffle/browser/net/helper";
@@ -59,21 +59,50 @@ export interface BunProcessStart {
   readonly job: number;
 }
 
+function tagPackageFetch(request: NetRequest, packagePolicyToken: string): NetRequest {
+  if (request.type !== "fetch") return request;
+  const headers = request.headers.filter(([name]) => name.toLowerCase() !== PACKAGE_POLICY_HEADER);
+  if ("credentialPolicy" in request && request.credentialPolicy === "package") {
+    headers.push([PACKAGE_POLICY_HEADER, packagePolicyToken]);
+  }
+  return { ...request, headers };
+}
+
+function wrapPackagePolicyHelper(
+  helper: RuntimeNetworkHelper,
+  packagePolicyToken: string,
+): RuntimeNetworkHelper {
+  return Object.freeze({
+    handle(request) {
+      helper.handle(tagPackageFetch(request, packagePolicyToken));
+    },
+    dispose: () => helper.dispose(),
+    listenerFor: port => helper.listenerFor(port),
+    request: (port, request, sink, options) => helper.request(port, request, sink, options),
+    connect: (port, sink) => helper.connect(port, sink),
+    notifyFileChanged: path => helper.notifyFileChanged(path),
+    changeFile: (path, contents) => helper.changeFile(path, contents),
+  } satisfies RuntimeNetworkHelper);
+}
+
 export function createBunNetworkHelper(
   network: RuntimeNetwork,
   ring: SharedArrayBuffer,
   options: BunNetworkOptions = {},
 ): RuntimeNetworkHelper {
-  const fetch = options.rewritePackageUrl
-    ? createInstallFetch({ fetch: options.fetch, rewritePackageUrl: options.rewritePackageUrl })
-    : (options.fetch ?? installFetch);
+  const packagePolicyToken = options.rewritePackageUrl || !options.fetch ? crypto.randomUUID() : undefined;
+  const fetch = packagePolicyToken !== undefined
+    ? createInstallFetch({ fetch: options.fetch, rewritePackageUrl: options.rewritePackageUrl, packagePolicyToken })
+    : options.fetch!;
   const listening = options.listening;
   const stopped = options.stopped;
+  let exposed!: RuntimeNetworkHelper;
   const helper = network.createHelper({ ring, fetch, connect: options.connect, pathScope: options.pathScope, hooks: {
-    listening: port => listening?.(port, helper),
-    stopped: port => stopped?.(port, helper),
+    listening: port => listening?.(port, exposed),
+    stopped: port => stopped?.(port, exposed),
   } });
-  return helper;
+  exposed = packagePolicyToken === undefined ? helper : wrapPackagePolicyHelper(helper, packagePolicyToken);
+  return exposed;
 }
 
 function isNetRequest(value: unknown): value is NetRequest {
@@ -115,6 +144,7 @@ function validFetch(value: object): boolean {
   if (!("method" in value) || typeof value.method !== "string" || !("url" in value) || typeof value.url !== "string") return false;
   if (!("body" in value) || value.body !== null && !(value.body instanceof Uint8Array)) return false;
   if (!("redirect" in value) || typeof value.redirect !== "string" || !["error", "follow", "manual"].includes(value.redirect)) return false;
+  if ("credentialPolicy" in value && value.credentialPolicy !== undefined && value.credentialPolicy !== "package") return false;
   return "headers" in value && Array.isArray(value.headers) && value.headers.every(header => Array.isArray(header) && header.length === 2 && header.every(part => typeof part === "string"));
 }
 

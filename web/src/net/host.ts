@@ -14,17 +14,36 @@ export interface EngineNet {
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+type OutgoingNetRequest = NetRequest | (Extract<NetRequest, { type: "fetch" }> & { credentialPolicy: "package" });
+
+function hasPackageCredentialPolicy(metaText: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(metaText);
+    return typeof parsed === "object" && parsed !== null && "credentialPolicy" in parsed && parsed.credentialPolicy === "package";
+  } catch {
+    return false;
+  }
+}
+
 export class NetHost {
   private memory!: MemoryViews;
   private host: RuntimeNetHost;
+  private pendingPackagePolicy = false;
 
   constructor(
     sab: SharedArrayBuffer,
-    send: (msg: NetRequest, transfer?: Transferable[]) => void,
+    send: (msg: OutgoingNetRequest, transfer?: Transferable[]) => void,
     writeFile?: (path: string, bytes: Uint8Array) => void,
     options?: { shared?: boolean },
   ) {
-    this.host = new RuntimeNetHost(sab, send, writeFile, options);
+    this.host = new RuntimeNetHost(sab, (msg, transfer) => {
+      if (this.pendingPackagePolicy && msg.type === "fetch") {
+        send({ ...msg, credentialPolicy: "package" }, transfer);
+        return;
+      }
+      send(msg, transfer);
+    }, writeFile, options);
   }
 
   /** Waffle's host, for notification arming; Bun's ABI stays in this adapter. */
@@ -40,7 +59,7 @@ export class NetHost {
   slots(): SlotImpls {
     const slots: SlotImpls = {
       poll: (timeout) => this.host.poll(timeout),
-      fetch: (metaPtr, metaLen, bodyPtr, bodyLen) => this.host.fetch(
+      fetch: (metaPtr, metaLen, bodyPtr, bodyLen) => this.fetchSlot(
         this.text(metaPtr, metaLen),
         bodyLen > 0 ? this.bytes(bodyPtr, bodyLen) : null,
       ),
@@ -116,6 +135,15 @@ export class NetHost {
   }
 
   private pathError: string | null = null;
+
+  private fetchSlot(metaText: string, body: Uint8Array | null): number {
+    this.pendingPackagePolicy = hasPackageCredentialPolicy(metaText);
+    try {
+      return this.host.fetch(metaText, body);
+    } finally {
+      this.pendingPackagePolicy = false;
+    }
+  }
 
   private error(handle: number): string | number {
     return handle === 0 && this.pathError !== null ? this.pathError : this.host.error(handle);

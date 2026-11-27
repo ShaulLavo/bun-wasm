@@ -26,6 +26,11 @@ function baseHref(): string | undefined {
   return typeof location === "object" && typeof location?.href === "string" ? location.href : undefined;
 }
 
+function stripCredentialsOnOriginChange(from: URL, to: URL, headers: Headers): void {
+  if (to.origin === from.origin) return;
+  for (const name of CREDENTIAL_HEADERS) headers.delete(name);
+}
+
 function resolveRewrite(current: URL, rewrite?: PackageRewrite): URL {
   if (!rewrite) return current;
   const rewritten = rewrite.rewriteUrl({ url: current.href, kind: rewrite.kind });
@@ -34,8 +39,8 @@ function resolveRewrite(current: URL, rewrite?: PackageRewrite): URL {
     throw new TypeError("Rewritten package URL must not be empty");
   }
   const next = rewritten instanceof URL ? new URL(rewritten.href) : new URL(rewritten, baseHref());
-  if (!["https:", "http:"].includes(next.protocol)) {
-    throw new TypeError(`Rewritten package URL must use http or https: ${next.href}`);
+  if (!["https:", "http:"].includes(next.protocol) || next.username || next.password || AUTH_OPTION.test(next.href)) {
+    throw new TypeError(`Rewritten package URL must use http or https without credentials: ${next.href}`);
   }
   return next;
 }
@@ -45,7 +50,7 @@ function packageRedirect(current: URL, location: string, headers: Headers): URL 
   if (!["https:", "http:"].includes(next.protocol) || next.username || next.password || next.search || AUTH_OPTION.test(next.href)) {
     throw new Error("Credential-bearing or unsupported package redirect URL");
   }
-  if (next.origin !== current.origin) for (const name of CREDENTIAL_HEADERS) headers.delete(name);
+  stripCredentialsOnOriginChange(current, next, headers);
   return next;
 }
 
@@ -59,6 +64,7 @@ export async function packageFetch(
   const headers = new Headers(options.headers);
   for (let redirects = 0; redirects <= 20; redirects++) {
     const target = resolveRewrite(url, rewrite);
+    stripCredentialsOnOriginChange(url, target, headers);
     const response = await fetcher(target.href, { ...options, headers, redirect: "manual" });
     if (response.type === "opaqueredirect") throw new Error("Package redirect destination is unavailable to this browser");
     const location = response.headers.get("location");
