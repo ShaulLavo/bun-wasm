@@ -639,6 +639,9 @@ impl Resolver {
         let (target_name, target_range) = alias.as_ref().map_or((name, range), |(name, range)| {
             (name.as_str(), range.as_str())
         });
+        if workspace && !is_tag(target_range) {
+            return None;
+        }
         let declared = if workspace {
             declared_root(
                 declared_meta,

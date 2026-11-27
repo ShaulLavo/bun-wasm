@@ -814,3 +814,102 @@ fn workspaces_catalog_without_packages_installs_root_dependencies() {
         },
     );
 }
+
+#[test]
+fn workspace_wildcard_dependency_shares_updated_root_version_without_nesting() {
+    isolated(
+        "workspace_wildcard_dependency_shares_updated_root_version_without_nesting",
+        || {
+            seed_registry_package("versioned", &["1.0.0", "2.0.0"]);
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "workspaces": ["packages/*"],
+                    "dependencies": { "versioned": "1.0.0" }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "*" }
+                }),
+            );
+            fs::create_dir_all("packages/b").unwrap();
+            fs::write(
+                "packages/b/package.json",
+                json!({
+                    "name": "@fixture/b",
+                    "version": "1.0.0",
+                    "peerDependencies": { "versioned": "*" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+            install("install", &[]).unwrap();
+            let first = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(first["packages"]["versioned"][0], "versioned@1.0.0");
+
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "workspaces": ["packages/*"],
+                    "dependencies": { "versioned": "2.0.0" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            install("install", &[]).unwrap();
+            let updated = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(updated["packages"]["versioned"][0], "versioned@2.0.0");
+            assert!(updated["packages"].get("@fixture/a/versioned").is_none());
+            assert!(!Path::new("node_modules/@fixture/a/node_modules/versioned").exists());
+        },
+    );
+}
+
+#[test]
+fn yarn_berry_migration_reads_catalogs_from_yarnrc_and_keeps_them_on_reinstall() {
+    isolated(
+        "yarn_berry_migration_reads_catalogs_from_yarnrc_and_keeps_them_on_reinstall",
+        || {
+            seed_registry_package("versioned", &["1.0.0"]);
+            seed_registry_package("is-odd", &["3.0.1"]);
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "workspaces": ["packages/*"],
+                    "dependencies": { "versioned": "catalog:" }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "dependencies": { "is-odd": "catalog:tools" }
+                }),
+            );
+            fs::write(
+                ".yarnrc.yml",
+                "catalog:\n  versioned: \"^1.0.0\"\ncatalogs:\n  tools:\n    is-odd: \"3.0.1\"\n",
+            )
+            .unwrap();
+            fs::write(
+                "yarn.lock",
+                "__metadata:\n  version: 8\n\n\"root@workspace:.\":\n  version: 0.0.0-use.local\n  resolution: \"root@workspace:.\"\n  dependencies:\n    versioned: \"catalog:\"\n\n\"@fixture/a@workspace:packages/a\":\n  version: 0.0.0-use.local\n  resolution: \"@fixture/a@workspace:packages/a\"\n  dependencies:\n    is-odd: \"catalog:tools\"\n\n\"versioned@npm:^1.0.0\":\n  version: 1.0.0\n  resolution: \"versioned@npm:1.0.0\"\n\n\"is-odd@npm:3.0.1\":\n  version: 3.0.1\n  resolution: \"is-odd@npm:3.0.1\"\n",
+            )
+            .unwrap();
+
+            install("install", &[]).unwrap();
+            let lock_text = fs::read_to_string("bun.lock").unwrap();
+            let lock = parse_json(lock_text.as_bytes()).unwrap();
+            assert_eq!(lock["catalog"]["versioned"], "^1.0.0");
+            assert_eq!(lock["catalogs"]["tools"]["is-odd"], "3.0.1");
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert_eq!(lock["packages"]["is-odd"][0], "is-odd@3.0.1");
+
+            install("install", &["--frozen-lockfile"]).unwrap();
+            assert_eq!(fs::read_to_string("bun.lock").unwrap(), lock_text);
+        },
+    );
+}
