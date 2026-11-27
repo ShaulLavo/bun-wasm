@@ -156,38 +156,88 @@ pub(in super::super) fn locked_sources(locked: &Value, manifest: &Value) -> BTre
     }) {
         insert_source(value.as_str().or_else(|| value["."].as_str()), &mut sources);
     }
-    for meta in [manifest, locked] {
-        insert_catalog_sources(&meta["workspaces"]["catalog"], &mut sources);
-        insert_catalog_sources(&meta["catalog"], &mut sources);
-        insert_named_catalog_sources(&meta["workspaces"]["catalogs"], &mut sources);
-        insert_named_catalog_sources(&meta["catalogs"], &mut sources);
-    }
+    let manifest_catalogs = Catalogs::from_manifest(manifest, locked).unwrap_or_default();
+    let locked_catalogs = Catalogs::from_lock(locked);
+    collect_catalog_sources(
+        manifest,
+        locked,
+        &std::collections::BTreeMap::new(),
+        &manifest_catalogs,
+        &locked_catalogs,
+        &mut sources,
+    );
     sources
 }
 
-pub(super) fn catalog_sources(catalogs: &Catalogs) -> BTreeSet<String> {
-    let mut sources = BTreeSet::new();
-    for range in catalogs.all_values() {
-        insert_source(Some(range), &mut sources);
+pub(super) fn collect_catalog_sources(
+    manifest: &Value,
+    locked: &Value,
+    workspaces: &std::collections::BTreeMap<String, super::super::local::Local>,
+    catalogs: &Catalogs,
+    locked_catalogs: &Catalogs,
+    sources: &mut BTreeSet<String>,
+) {
+    declared_catalog_sources(manifest, catalogs, locked_catalogs, sources);
+    for member in workspaces.values() {
+        declared_catalog_sources(&member.meta, catalogs, locked_catalogs, sources);
     }
-    sources
+    for meta in locked["workspaces"]
+        .as_object()
+        .into_iter()
+        .flat_map(|members| members.values())
+    {
+        declared_catalog_sources(meta, locked_catalogs, catalogs, sources);
+    }
+    override_catalog_sources(&manifest["overrides"], catalogs, sources);
+    override_catalog_sources(&locked["overrides"], locked_catalogs, sources);
 }
 
-fn insert_catalog_sources(value: &Value, sources: &mut BTreeSet<String>) {
-    let Some(entries) = value.as_object() else {
-        return;
-    };
-    for range in entries.values() {
-        insert_source(range.as_str(), sources);
+fn declared_catalog_sources(
+    meta: &Value,
+    primary: &Catalogs,
+    fallback: &Catalogs,
+    sources: &mut BTreeSet<String>,
+) {
+    for (name, (range, _, _)) in dependencies(meta, false, true) {
+        insert_catalog_source(&name, &range, primary, fallback, sources);
     }
 }
 
-fn insert_named_catalog_sources(value: &Value, sources: &mut BTreeSet<String>) {
-    let Some(catalogs) = value.as_object() else {
+fn override_catalog_sources(
+    overrides: &Value,
+    catalogs: &Catalogs,
+    sources: &mut BTreeSet<String>,
+) {
+    for (key, value) in overrides.as_object().into_iter().flatten() {
+        let name = override_package_name(key);
+        let Some(range) = value.as_str().or_else(|| value["."].as_str()) else {
+            continue;
+        };
+        insert_catalog_source(name, range, catalogs, catalogs, sources);
+    }
+}
+
+fn override_package_name(key: &str) -> &str {
+    let split = key
+        .char_indices()
+        .find_map(|(i, ch)| (i > 0 && ch == '@').then_some(i));
+    split.map_or(key, |i| &key[..i])
+}
+
+fn insert_catalog_source(
+    name: &str,
+    range: &str,
+    primary: &Catalogs,
+    fallback: &Catalogs,
+    sources: &mut BTreeSet<String>,
+) {
+    if !super::super::catalog::is_protocol(range) {
         return;
-    };
-    for entries in catalogs.values() {
-        insert_catalog_sources(entries, sources);
+    }
+    for catalogs in [primary, fallback] {
+        if let Ok(Some(resolved)) = catalogs.resolve(name, range) {
+            insert_source(Some(resolved), sources);
+        }
     }
 }
 

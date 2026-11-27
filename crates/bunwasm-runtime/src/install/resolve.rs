@@ -247,8 +247,15 @@ impl Resolver {
             self.catalogs = Catalogs::from_manifest(manifest, &self.locked)?;
         }
         self.locked_catalogs = Catalogs::from_lock(&self.locked);
-        self.explicit_sources
-            .extend(tarball::catalog_sources(&self.catalogs));
+        self.locked_catalogs.from_yarn = self.catalogs.from_yarn;
+        tarball::collect_catalog_sources(
+            manifest,
+            &self.locked,
+            &self.workspaces,
+            &self.catalogs,
+            &self.locked_catalogs,
+            &mut self.explicit_sources,
+        );
         let members: Vec<_> = self.workspaces.keys().cloned().collect();
         for name in members {
             self.add(&name, "workspace:*", vec![name.clone()], false, None)?;

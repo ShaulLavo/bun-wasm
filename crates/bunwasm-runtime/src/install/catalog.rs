@@ -14,6 +14,7 @@ pub(super) struct Catalogs {
     pub named: BTreeMap<String, BTreeMap<String, String>>,
     pub changed: BTreeSet<String>,
     pub loaded: bool,
+    pub from_yarn: bool,
 }
 
 pub(super) fn is_protocol(range: &str) -> bool {
@@ -57,6 +58,9 @@ impl Catalogs {
             (default_source, named_source) = object_catalog_sources(config);
         }
         let mut catalogs = Self::parse(default_source, named_source, locked)?;
+        catalogs.from_yarn = from_yarn
+            && yarn_config.is_some()
+            && (default_source.is_some() || named_source.is_some());
         if default_source.is_none()
             && named_source.is_none()
             && !root.join("pnpm-workspace.yaml").is_file()
@@ -172,6 +176,7 @@ impl Catalogs {
             named,
             changed: BTreeSet::new(),
             loaded: true,
+            from_yarn: false,
         }
     }
 
@@ -196,7 +201,15 @@ impl Catalogs {
             named,
             changed,
             loaded: true,
+            from_yarn: false,
         })
+    }
+
+    fn normalize_resolved<'a>(&self, entry: &'a str) -> &'a str {
+        if self.from_yarn {
+            return without_yarn_npm_protocol(entry);
+        }
+        without_npm_protocol(entry)
     }
 
     pub fn resolve<'a>(&'a self, name: &str, range: &str) -> Result<Option<&'a str>> {
@@ -207,7 +220,7 @@ impl Catalogs {
         if catalog_name.is_empty() || catalog_name == "default" {
             return self
                 .resolve_default(name, catalog_name)
-                .map(|entry| Some(without_npm_protocol(entry)));
+                .map(|entry| Some(self.normalize_resolved(entry)));
         }
         let Some(entries) = self.named.get(catalog_name) else {
             return Err(format!(
@@ -216,7 +229,7 @@ impl Catalogs {
         };
         entries
             .get(name)
-            .map(|v| Some(without_npm_protocol(v.as_str())))
+            .map(|v| Some(self.normalize_resolved(v.as_str())))
             .ok_or_else(|| {
                 format!("{name}@catalog:{catalog_name} not in catalog \"{catalog_name}\"")
             })
@@ -260,13 +273,6 @@ impl Catalogs {
             out.insert(name.clone(), entries_value(entries));
         }
         Some(Value::Object(out))
-    }
-
-    pub fn all_values(&self) -> impl Iterator<Item = &str> {
-        self.default
-            .values()
-            .chain(self.named.values().flat_map(BTreeMap::values))
-            .map(String::as_str)
     }
 }
 
@@ -317,6 +323,13 @@ fn is_range_after_npm_protocol(target: &str) -> bool {
 pub(super) fn without_npm_protocol(range: &str) -> &str {
     match range.strip_prefix("npm:") {
         Some(target) if is_range_after_npm_protocol(target) => target,
+        _ => range,
+    }
+}
+
+fn without_yarn_npm_protocol(range: &str) -> &str {
+    match range.strip_prefix("npm:") {
+        Some(rest) if !rest.is_empty() && !rest.starts_with('@') && !rest.contains('@') => rest,
         _ => range,
     }
 }

@@ -822,6 +822,32 @@ fn standalone_catalog_field_and_workspace_unit_selection_install_like_native_bun
                 "ext-peer@link:./vendor/ext-peer"
             );
             assert!(lock["packages"].get("is-number").is_none());
+
+            // An unused catalog tarball entry matching a locked registry tarball URL must not
+            // invalidate the registry lock row during a frozen offline install.
+            let _ = fs::remove_dir_all("packages");
+            let tarball_url = "https://other-registry.invalid/is-number/-/is-number-7.0.0.tgz";
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "workspaces": {
+                        "packages": ["packages/*"],
+                        "catalog": { "unused-tarball": tarball_url }
+                    },
+                    "dependencies": { "is-number": "^7.0.0" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let _ = fs::remove_file("bun.lock");
+            install("install", &["--lockfile-only"]).unwrap();
+            let mut lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            lock["packages"]["is-number"][1] = json!(tarball_url);
+            fs::write("bun.lock", serde_json::to_string_pretty(&lock).unwrap()).unwrap();
+            // Clear the test cache so any fallback registry metadata fetch would fail immediately.
+            let _ = fs::remove_dir_all("cache");
+            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
         },
     );
 }
@@ -1073,12 +1099,16 @@ fn yarn_npm_catalog_ranges_normalize_while_preserving_aliases() {
         || {
             seed_registry_package("versioned", &["1.0.0"]);
             seed_registry_package("other", &["1.0.0"]);
+            seed_registry_package("is-number", &["7.0.0"]);
+            seed_registry_package("is-odd", &["3.0.1"]);
             write_workspace(
                 json!({
                     "name": "root",
                     "workspaces": ["packages/*"],
                     "dependencies": {
                         "versioned": " catalog:",
+                        "is-number": "catalog:",
+                        "is-odd": "catalog:",
                         "aliased": "catalog:tools"
                     }
                 }),
@@ -1087,21 +1117,25 @@ fn yarn_npm_catalog_ranges_normalize_while_preserving_aliases() {
             );
             fs::write(
                 ".yarnrc.yml",
-                "catalog:\n  versioned: \"npm:^1.0.0\"\ncatalogs:\n  tools:\n    aliased: \"npm:other@^1.0.0\"\n",
+                "catalog:\n  versioned: \"npm:1\"\n  is-number: \"npm:7.x\"\n  is-odd: \"npm:latest\"\ncatalogs:\n  tools:\n    aliased: \"npm:other@^1.0.0\"\n",
             )
             .unwrap();
             fs::write(
                 "yarn.lock",
-                "__metadata:\n  version: 8\n\n\"root@workspace:.\":\n  version: 0.0.0-use.local\n  resolution: \"root@workspace:.\"\n  dependencies:\n    versioned: \"catalog:\"\n    aliased: \"catalog:tools\"\n\n\"@fixture/a@workspace:packages/a\":\n  version: 0.0.0-use.local\n  resolution: \"@fixture/a@workspace:packages/a\"\n\n\"versioned@npm:^1.0.0\":\n  version: 1.0.0\n  resolution: \"versioned@npm:1.0.0\"\n\n\"aliased@npm:other@^1.0.0\":\n  version: 1.0.0\n  resolution: \"other@npm:1.0.0\"\n",
+                "__metadata:\n  version: 8\n\n\"root@workspace:.\":\n  version: 0.0.0-use.local\n  resolution: \"root@workspace:.\"\n  dependencies:\n    versioned: \"catalog:\"\n    is-number: \"catalog:\"\n    is-odd: \"catalog:\"\n    aliased: \"catalog:tools\"\n\n\"@fixture/a@workspace:packages/a\":\n  version: 0.0.0-use.local\n  resolution: \"@fixture/a@workspace:packages/a\"\n\n\"versioned@npm:1\":\n  version: 1.0.0\n  resolution: \"versioned@npm:1.0.0\"\n\n\"is-number@npm:7.x\":\n  version: 7.0.0\n  resolution: \"is-number@npm:7.0.0\"\n\n\"is-odd@npm:latest\":\n  version: 3.0.1\n  resolution: \"is-odd@npm:3.0.1\"\n\n\"aliased@npm:other@^1.0.0\":\n  version: 1.0.0\n  resolution: \"other@npm:1.0.0\"\n",
             )
             .unwrap();
 
             install("install", &[]).unwrap();
             let lock_text = fs::read_to_string("bun.lock").unwrap();
             let lock = parse_json(lock_text.as_bytes()).unwrap();
-            assert_eq!(lock["catalog"]["versioned"], "npm:^1.0.0");
+            assert_eq!(lock["catalog"]["versioned"], "npm:1");
+            assert_eq!(lock["catalog"]["is-number"], "npm:7.x");
+            assert_eq!(lock["catalog"]["is-odd"], "npm:latest");
             assert_eq!(lock["catalogs"]["tools"]["aliased"], "npm:other@^1.0.0");
             assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert_eq!(lock["packages"]["is-number"][0], "is-number@7.0.0");
+            assert_eq!(lock["packages"]["is-odd"][0], "is-odd@3.0.1");
             assert_eq!(lock["packages"]["aliased"][0], "other@1.0.0");
 
             install("install", &["--frozen-lockfile"]).unwrap();
