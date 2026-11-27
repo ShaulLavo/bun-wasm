@@ -1063,6 +1063,70 @@ fn yarn_migration_skips_missing_optional_catalog_dependency() {
 }
 
 #[test]
+fn deleting_catalog_from_pnpm_workspace_yaml_is_not_masked_by_stale_pnpm_lock() {
+    isolated(
+        "deleting_catalog_from_pnpm_workspace_yaml_is_not_masked_by_stale_pnpm_lock",
+        || {
+            write_pnpm_catalog_workspace();
+            fs::write(
+                "pnpm-lock.yaml",
+                "lockfileVersion: '9.0'\ncatalogs:\n  default:\n    evlog:\n      specifier: 2.29.0\n      version: 2.29.0\n  extra:\n    is-odd:\n      specifier: 3.0.1\n      version: 3.0.1\nimporters:\n  .:\n    dependencies: {}\n  packages/a:\n    dependencies:\n      evlog:\n        specifier: 'catalog:'\n        version: 2.29.0\n      is-odd:\n        specifier: 'catalog:extra'\n        version: 3.0.1\npackages:\n  evlog@2.29.0:\n    resolution:\n      integrity: ''\n  is-odd@3.0.1:\n    resolution:\n      integrity: ''\n",
+            )
+            .unwrap();
+            install("install", &["--lockfile-only"]).unwrap();
+
+            // Delete catalog definitions from pnpm-workspace.yaml while leaving stale pnpm-lock.yaml.
+            fs::write("pnpm-workspace.yaml", "packages:\n  - packages/*\n").unwrap();
+            assert!(
+                install("install", &["--frozen-lockfile"])
+                    .unwrap_err()
+                    .contains("not in catalog")
+            );
+            assert!(
+                install("install", &[])
+                    .unwrap_err()
+                    .contains("not in catalog")
+            );
+        },
+    );
+}
+
+#[test]
+fn yarn_migration_keeps_missing_optional_catalog_shadowing_regular_dependency() {
+    isolated(
+        "yarn_migration_keeps_missing_optional_catalog_shadowing_regular_dependency",
+        || {
+            seed_registry_package("versioned", &["1.0.0"]);
+            fs::write(
+                "package.json",
+                json!({
+                    "name": "root",
+                    "dependencies": {
+                        "versioned": "^1.0.0",
+                        "shadowed": "^1.0.0"
+                    },
+                    "optionalDependencies": {
+                        "shadowed": "catalog:"
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            fs::write(
+                "yarn.lock",
+                "__metadata:\n  version: 8\n\n\"root@workspace:.\":\n  version: 0.0.0-use.local\n  resolution: \"root@workspace:.\"\n  dependencies:\n    versioned: \"^1.0.0\"\n\n\"versioned@npm:^1.0.0\":\n  version: 1.0.0\n  resolution: \"versioned@npm:1.0.0\"\n",
+            )
+            .unwrap();
+
+            install("install", &[]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.0.0");
+            assert!(lock["packages"].get("shadowed").is_none());
+        },
+    );
+}
+
+#[test]
 fn missing_optional_catalog_and_empty_yarn_rc_do_not_break_install() {
     assert_eq!(catalog::yarn_rc_filename_from(None), ".yarnrc.yml");
     assert_eq!(catalog::yarn_rc_filename_from(Some("")), ".yarnrc.yml");

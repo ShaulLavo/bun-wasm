@@ -444,6 +444,7 @@ fn expand_root_catalogs(
 
 fn expand_manifest_catalogs(meta: &Value, catalogs: &Catalogs) -> Result<Value> {
     let mut expanded = meta.clone();
+    let mut skipped_optional = Vec::new();
     for field in [
         "dependencies",
         "devDependencies",
@@ -452,7 +453,14 @@ fn expand_manifest_catalogs(meta: &Value, catalogs: &Catalogs) -> Result<Value> 
     ] {
         let optional = field == "optionalDependencies";
         if let Some(deps) = expanded[field].as_object_mut() {
-            expand_dependency_map(deps, catalogs, optional)?;
+            expand_dependency_map(deps, catalogs, optional, &mut skipped_optional)?;
+        }
+    }
+    for name in &skipped_optional {
+        for field in ["dependencies", "devDependencies"] {
+            if let Some(deps) = expanded[field].as_object_mut() {
+                deps.remove(name);
+            }
         }
     }
     Ok(expanded)
@@ -462,6 +470,7 @@ fn expand_dependency_map(
     deps: &mut serde_json::Map<String, Value>,
     catalogs: &Catalogs,
     optional: bool,
+    skipped_optional: &mut Vec<String>,
 ) -> Result<()> {
     let mut skipped = Vec::new();
     for (name, range) in deps.iter_mut() {
@@ -475,9 +484,10 @@ fn expand_dependency_map(
             Err(error) => return Err(error),
         }
     }
-    for name in skipped {
-        deps.remove(&name);
+    for name in &skipped {
+        deps.remove(name);
     }
+    skipped_optional.extend(skipped);
     Ok(())
 }
 

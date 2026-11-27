@@ -2,7 +2,7 @@
 // only Bun's installer download cache is selected here.
 import { NetHelper as RuntimeNetHelper, type NetNamespace, type NetHelperHooks } from "waffle/browser/net/helper";
 import type { NetConnect } from "waffle/browser/net/outbound";
-import { createInstallFetch, installFetch, PACKAGE_POLICY_HEADER } from "./install-cache.js";
+import { createInstallFetch, installFetch, markPackageFetchHeaders } from "./install-cache.js";
 import type { PackageRequest, PackageRequestKind, PackageUrlRewriter } from "./package-fetch.js";
 
 export type { ConnectionSink, NetFetch, NetHelperHooks, PreviewConnection, PreviewSink } from "waffle/browser/net/helper";
@@ -61,11 +61,8 @@ export interface BunProcessStart {
 
 function tagPackageFetch(request: NetRequest, packagePolicyToken: string): NetRequest {
   if (request.type !== "fetch") return request;
-  const headers = request.headers.filter(([name]) => name.toLowerCase() !== PACKAGE_POLICY_HEADER);
-  if ("credentialPolicy" in request && request.credentialPolicy === "package") {
-    headers.push([PACKAGE_POLICY_HEADER, packagePolicyToken]);
-  }
-  return { ...request, headers };
+  if (!("credentialPolicy" in request) || request.credentialPolicy !== "package") return request;
+  return { ...request, headers: markPackageFetchHeaders(request.headers.slice(), packagePolicyToken) };
 }
 
 const packagePolicyTokens = new WeakMap<RuntimeNetworkHelper, string>();

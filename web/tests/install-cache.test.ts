@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { clearInstallCache, createInstallFetch, installFetch, PACKAGE_POLICY_HEADER } from "../src/net/install-cache.js";
+import { clearInstallCache, createInstallFetch, installFetch, markPackageFetchHeaders } from "../src/net/install-cache.js";
 
 const TARBALL = "application/vnd.bun.install-tarball";
 const CACHE_LIMIT = 4 * 1024 * 1024;
@@ -1006,7 +1006,7 @@ test("responses with Cache-Control: no-store are not persisted in Cache Storage"
   await withStorage(env.storage, async () => new Response("unexpected"), async () => {
     const options: RequestInit = {
       method: "GET",
-      headers: { accept: TARBALL, [PACKAGE_POLICY_HEADER]: token },
+      headers: markPackageFetchHeaders({ accept: TARBALL }, token),
     };
     expect(await (await fetcher("https://github.com/org/repo/releases/download/v1/pkg.tgz", options)).text()).toBe("proxy-bytes-1");
     expect(await (await fetcher("https://github.com/org/repo/releases/download/v1/pkg.tgz", options)).text()).toBe("proxy-bytes-2");

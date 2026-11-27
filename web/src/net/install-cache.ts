@@ -1,7 +1,12 @@
 import { packageFetch, type PackageRequestKind, type PackageRewrite, type PackageUrlRewriter } from "./package-fetch.js";
 
-/** Internal per-helper marker header carrying Rust's `credentialPolicy: "package"` through Waffle. Always stripped before outbound fetch. */
-export const PACKAGE_POLICY_HEADER = "x-bun-wasm-package-policy";
+const packagePolicyHeaders = new WeakMap<object, string>();
+
+/** Mark an in-memory `headers` object with a per-helper package-policy token without adding any HTTP header. */
+export function markPackageFetchHeaders<T extends HeadersInit>(headers: T, token: string): T {
+  packagePolicyHeaders.set(headers, token);
+  return headers;
+}
 
 export interface InstallFetchOptions {
   readonly fetch?: (url: string, options: RequestInit) => Promise<Response>;
@@ -246,22 +251,24 @@ async function runInstallFetch(
   packagePolicyToken: string | undefined,
 ): Promise<Response> {
   const headers = new Headers(options.headers);
-  const marked = packagePolicyToken !== undefined && headers.get(PACKAGE_POLICY_HEADER) === packagePolicyToken;
-  const forwardOptions = headers.has(PACKAGE_POLICY_HEADER) ? stripPolicyHeader(options, headers) : options;
+  const marked = packagePolicyToken !== undefined
+    && typeof options.headers === "object"
+    && options.headers !== null
+    && packagePolicyHeaders.get(options.headers) === packagePolicyToken;
   const header = headers.get("accept") ?? "";
   const accept = header.split(";", 1)[0];
   const fetcher = transport ?? fetch;
-  if (forwardOptions.method !== "GET" || accept !== METADATA && accept !== TARBALL) {
-    return fetcher(url, forwardOptions);
+  if (options.method !== "GET" || accept !== METADATA && accept !== TARBALL) {
+    return fetcher(url, options);
   }
   const verifiedPackage = packagePolicyToken === undefined || marked;
   if (!verifiedPackage && (accept === METADATA || rewritePackageUrl !== undefined)) {
-    return fetcher(url, forwardOptions);
+    return fetcher(url, options);
   }
   const kind: PackageRequestKind = accept === TARBALL ? "tarball" : "metadata";
   const rewrite: PackageRewrite | undefined = verifiedPackage && rewritePackageUrl ? { kind, rewriteUrl: rewritePackageUrl } : undefined;
   if (accept === METADATA || typeof caches === "undefined" || headers.has("authorization")) {
-    return packageFetch(url, forwardOptions, fetcher, rewrite);
+    return packageFetch(url, options, fetcher, rewrite);
   }
   const requestDirectives = cacheControlDirectives(headers);
   const refresh = header.includes("; no-cache") || requestDirectives.includes("no-cache");
@@ -280,11 +287,11 @@ async function runInstallFetch(
       const cached = await matchKnownEntry(activeOpened, key, url);
       if (cached) return restoreCachedResponse(cached);
     }
-    const response = await packageFetch(url, forwardOptions, fetcher, rewrite);
+    const response = await packageFetch(url, options, fetcher, rewrite);
     if (!response.ok || !activeOpened || activeOpened.generation !== session.generation || skipRequestStore || cacheControlDirectives(response.headers).includes("no-store")) {
       return response;
     }
-    return prepareCachedResponse(response, session, activeOpened, key, url, forwardOptions.signal);
+    return prepareCachedResponse(response, session, activeOpened, key, url, options.signal);
   } finally {
     session.activeFetches--;
     session.lastActivity = Date.now();
@@ -296,11 +303,6 @@ function cacheControlDirectives(headers: Headers): string[] {
   const value = headers.get("cache-control");
   if (!value) return [];
   return value.match(/(?:[^,"]|"(?:[^"\\]|\\.)*")+/g)?.map(token => token.trim().toLowerCase()) ?? [];
-}
-
-function stripPolicyHeader(options: RequestInit, headers: Headers): RequestInit {
-  headers.delete(PACKAGE_POLICY_HEADER);
-  return { ...options, headers };
 }
 
 async function matchKnownEntry(opened: OpenedCache, key: string, url: string): Promise<Response | undefined> {

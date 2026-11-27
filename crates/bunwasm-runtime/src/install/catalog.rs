@@ -65,13 +65,13 @@ impl Catalogs {
             default_from_yarn && yarn_config.is_some(),
             named_from_yarn && yarn_config.is_some(),
         )?;
-        let need_default = default_source.is_none() && !catalogs.named.contains_key("default");
-        let need_named = named_source.is_none();
-        if (need_default || need_named)
+        if default_source.is_none()
+            && named_source.is_none()
+            && !root.join("pnpm-workspace.yaml").is_file()
             && let Some(pnpm_lock) =
                 read_optional_yaml_lenient(&root.join("pnpm-lock.yaml"), parser)
         {
-            catalogs.merge_pnpm_lock(&pnpm_lock, need_default, need_named)?;
+            catalogs.merge_pnpm_lock(&pnpm_lock, true, true)?;
             catalogs.recompute_changed(locked);
         }
         Ok(catalogs)

@@ -54,7 +54,7 @@ for (const engine of [chromium, webkit]) {
           return new Response(`tarball-payload:${url.pathname}`, {
             headers: {
               "content-type": "application/octet-stream",
-              "cache-control": "no-store",
+              "cache-control": "no-cache",
             },
           });
         }

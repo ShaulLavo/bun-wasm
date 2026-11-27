@@ -295,7 +295,6 @@ test("closed runtime relay rejects stale connect before token acquisition", asyn
 });
 
 import { NetHost as BunNetHost } from "../src/net/host";
-import { PACKAGE_POLICY_HEADER } from "../src/net/install-cache";
 
 function fetchThroughSlot(host: BunNetHost, meta: object): number {
   const memory = new WebAssembly.Memory({ initial: 1 });
@@ -345,11 +344,10 @@ test("rewritePackageUrl only intercepts package-policy requests and ignores ordi
       headers: [["accept", "application/vnd.npm.install-v1+json; q=1.0"]],
     });
     expect(await readHandle(pkgMeta)).toBe("{\"name\":\"evlog\"}");
-    // Ordinary user fetch requesting npm abbreviated metadata (even with a spoofed policy header)
-    // must bypass rewritePackageUrl and never leak the internal header.
+    // Ordinary user fetch requesting npm abbreviated metadata must bypass rewritePackageUrl.
     const userMeta = runtimeHost.fetch(JSON.stringify({
       url: "https://github.com/user-npm-meta", method: "GET",
-      headers: [["accept", "application/vnd.npm.install-v1+json"], [PACKAGE_POLICY_HEADER, "spoofed"]],
+      headers: [["accept", "application/vnd.npm.install-v1+json"]],
     }), null);
     expect(await readHandle(userMeta)).toBe("ordinary-fetch");
     const userTarball = runtimeHost.fetch(JSON.stringify({
@@ -357,6 +355,30 @@ test("rewritePackageUrl only intercepts package-policy requests and ignores ordi
       headers: [["accept", "application/vnd.bun.install-tarball"]],
     }), null);
     expect(await readHandle(userTarball)).toBe("ordinary-fetch");
+    // Package-policy fetches to a guest loopback registry must carry no internal headers.
+    const listener = runtimeHost.listen("127.0.0.1", 0);
+    const loopbackPort = runtimeHost.localPort(listener);
+    const loopbackFetch = fetchThroughSlot(bunHost, {
+      url: `http://127.0.0.1:${loopbackPort}/evlog`, method: "GET", credentialPolicy: "package",
+      headers: [["accept", "application/vnd.npm.install-v1+json"]],
+    });
+    let accepted = AGAIN;
+    for (let turn = 0; turn < 100 && accepted === AGAIN; turn++) {
+      await Bun.sleep(1);
+      accepted = runtimeHost.accept(listener);
+    }
+    expect(accepted).toBeGreaterThan(0);
+    let requestText = "";
+    for (let turn = 0; turn < 100 && !requestText.includes("\r\n\r\n"); turn++) {
+      const chunk = runtimeHost.read(accepted, 2048);
+      if (chunk instanceof Uint8Array) requestText += new TextDecoder().decode(chunk);
+      else await Bun.sleep(1);
+    }
+    expect(requestText.toLowerCase()).not.toContain("x-bun-wasm-package-policy");
+    runtimeHost.write(accepted, new TextEncoder().encode("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"));
+    runtimeHost.close(accepted);
+    runtimeHost.close(listener);
+    expect(await readHandle(loopbackFetch)).toBe("ok");
     expect(seen).toEqual([
       { url: tarball, kind: "tarball" },
       { url: "https://registry.invalid/evlog", kind: "metadata" },
@@ -367,7 +389,7 @@ test("rewritePackageUrl only intercepts package-policy requests and ignores ordi
       "https://github.com/user-npm-meta",
       "https://github.com/user-tarball",
     ]);
-    for (const call of fetched) expect(call.headers.has(PACKAGE_POLICY_HEADER)).toBe(false);
+    for (const call of fetched) expect(call.headers.has("x-bun-wasm-package-policy")).toBe(false);
   } finally {
     helper.dispose();
     await runtime.dispose();
