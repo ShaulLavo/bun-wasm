@@ -8,7 +8,15 @@ description = "Bun-compatible JS runtime for wasm32-wasip1 with a linked engine 
 [features]
 default = ["engine-split"]
 # The linked engine program supplies the VM; the core owns process and data services.
-engine-split = ["dep:bunwasm-nested", "dep:wasmi", "dep:wasmparser"]
+engine-split = [
+    "dep:bunwasm-nested",
+    "dep:wasmi",
+    "dep:wasmparser",
+    "dep:icu_collator",
+    "dep:icu_locale_core",
+    "dep:icu_locale_fallback",
+    "dep:icu_provider",
+]
 # The host's own JS engine (browser/Node): see docs/engine-browser.md.
 engine-host = []
 
@@ -43,10 +51,10 @@ blake2 = "0.10"
 ripemd = "0.1"
 hmac = "0.12"
 getrandom = "0.3"
-icu_collator = "2.4.0"
-icu_locale_core = "2.4.0"
-icu_locale_fallback = "2.4.0"
-icu_provider = "2.4.0"
+icu_collator = { version = "2.4.0", optional = true }
+icu_locale_core = { version = "2.4.0", optional = true }
+icu_locale_fallback = { version = "2.4.0", optional = true }
+icu_provider = { version = "2.4.0", optional = true }
 encoding_rs = "0.8"
 bun_brotli_sys = { path = "../../vendor/bun/src/brotli_sys" }
 libsqlite3-sys = { version = "0.38", features = ["bundled"] }

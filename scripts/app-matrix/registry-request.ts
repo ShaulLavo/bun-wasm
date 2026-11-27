@@ -18,7 +18,15 @@ type BrowserRegistryRoute = Pick<Route, "fetch" | "fulfill" | "continue" | "abor
 
 export async function browserRegistryRoute(route: BrowserRegistryRoute, registry: string, external: string[]): Promise<void> {
   const url = new URL(route.request().url());
-  if ((["localhost", "[::1]"].includes(url.hostname) || /^127\.(?:[0-9]+\.){2}[0-9]+$/.test(url.hostname) || /^bw-[a-f0-9-]+\.localhost$/.test(url.hostname)) || ["data:", "blob:"].includes(url.protocol)) return route.continue();
+  if ((["localhost", "[::1]"].includes(url.hostname) || /^127\.(?:[0-9]+\.){2}[0-9]+$/.test(url.hostname) || /^bw-[a-f0-9-]+\.localhost$/.test(url.hostname)) || ["data:", "blob:"].includes(url.protocol)) {
+    try {
+      await route.continue();
+    } catch (error) {
+      // WebKit + Playwright 1.64.1 can race navigateTestPage()'s page.unroute() against this context handler.
+      if (!/Route is already handled/.test(String(error))) throw error;
+    }
+    return;
+  }
   const replay = registryReplayUrl(url.href, registry);
   const method = route.request().method();
   const advisory = url.pathname === advisoryPath;

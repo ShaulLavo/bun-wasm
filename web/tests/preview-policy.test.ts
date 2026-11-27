@@ -130,3 +130,101 @@ test("module scope drops the native encoding headers of an upstream body fetch a
   expect(response?.headers.get("cross-origin-embedder-policy")).toBe("require-corp");
   expect(await response?.text()).toBe("app chunk");
 });
+
+test("mounted preview WebSocket closes when its peer MessagePort closes after upgrade", async () => {
+  const { previewWebsocketScript } = await import("../preview-build.ts");
+  const bundle = await previewWebsocketScript();
+  const { runInNewContext } = await import("node:vm");
+  const serverPorts: MessagePort[] = [];
+  const fakeScript = {
+    getAttribute(name: string) {
+      if (name === "data-bun-port") return "8123";
+      if (name === "data-bun-prefix") return "/__preview/";
+      return null;
+    },
+  };
+  const sandbox: Record<string, unknown> = {
+    location: new URL("https://example.test/__preview/8123/"),
+    document: { currentScript: fakeScript },
+    navigator: {
+      serviceWorker: {
+        controller: {
+          postMessage(_msg: unknown, transfer?: Transferable[]) {
+            if (transfer?.[0]) serverPorts.push(transfer[0] as MessagePort);
+          },
+        },
+      },
+    },
+    WebSocket: class NativeWs {},
+    MessageChannel,
+    TextEncoder,
+    TextDecoder,
+    URL,
+    Uint8Array,
+    ArrayBuffer,
+    DataView,
+    Headers,
+    Blob,
+    CloseEvent,
+    MessageEvent,
+    ErrorEvent,
+    Event,
+    EventTarget,
+    DOMException,
+    crypto,
+    btoa,
+    atob,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    queueMicrotask,
+    addEventListener() {},
+    removeEventListener() {},
+    console,
+  };
+  sandbox.globalThis = sandbox;
+  sandbox.self = sandbox;
+  runInNewContext(bundle, sandbox);
+  const PreviewWs = sandbox.WebSocket as new (url: string) => EventTarget & {
+    readonly readyState: number;
+    close(): void;
+  };
+  const ws = new PreviewWs("ws://example.test/__preview/8123/ws");
+  const serverPort = serverPorts[0];
+  expect(serverPort).toBeDefined();
+
+  const upgradeKey = Promise.withResolvers<string>();
+  const onRouterMessage = (event: MessageEvent<unknown>) => {
+    if (typeof event.data !== "object" || event.data === null) return;
+    if (Reflect.get(event.data, "type") !== "data") return;
+    const chunk = Reflect.get(event.data, "chunk");
+    if (!(chunk instanceof Uint8Array)) return;
+    const match = /^sec-websocket-key:\s*(\S+)\r?$/im.exec(new TextDecoder().decode(chunk));
+    if (match?.[1]) upgradeKey.resolve(match[1]);
+  };
+  serverPort!.onmessage = onRouterMessage;
+  try {
+    const opened = Promise.withResolvers<void>();
+    ws.addEventListener("open", () => opened.resolve(), { once: true });
+    serverPort!.postMessage({ type: "accepted" });
+    const key = await upgradeKey.promise;
+    const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`));
+    const accept = btoa(String.fromCharCode(...new Uint8Array(digest)));
+    const response = new TextEncoder().encode(
+      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+    );
+    serverPort!.postMessage({ type: "data", chunk: response }, [response.buffer]);
+    await opened.promise;
+    expect(ws.readyState).toBe(1);
+
+    const closed = Promise.withResolvers<void>();
+    ws.addEventListener("close", () => closed.resolve(), { once: true });
+    serverPort!.close();
+    await closed.promise;
+    expect(ws.readyState).toBe(3);
+  } finally {
+    ws.close();
+    serverPort!.close();
+  }
+});

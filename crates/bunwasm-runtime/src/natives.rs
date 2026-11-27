@@ -805,6 +805,7 @@ pub fn table(state: &Rc<State>) -> Table {
         ))
     });
     crate::parse_env::install(&mut t);
+    #[cfg(feature = "engine-split")]
     crate::time_zone::install(&mut t);
     crate::node_path::install(&mut t);
     install_encoding(&mut t);
@@ -814,6 +815,7 @@ pub fn table(state: &Rc<State>) -> Table {
     crate::node_cipher::install(&mut t);
     crate::tls::install(&mut t, state.tls.clone());
     install_url(&mut t);
+    #[cfg(feature = "engine-split")]
     crate::intl::install(&mut t);
     install_host(&mut t, state);
     crate::sqlite::install(&mut t);

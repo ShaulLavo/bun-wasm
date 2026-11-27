@@ -64,7 +64,7 @@ class Connection {
     this.timer = setTimeout(() => this.fail("Preview WebSocket connection timed out"), 10000);
     port.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data);
     // Chromium reports a port whose other end's tab is gone. watchPeer() covers the other browsers.
-    if (rootOrigin) port.addEventListener("close", this.peerGone);
+    port.addEventListener("close", this.peerGone);
   }
 
   private receive(message: unknown): void {

@@ -207,4 +207,49 @@ pub(crate) fn reentry() {
     assert_eq!(decode(&bytes), Val::from("outer\0é"));
     assert_eq!(call(index, &[Val::from("missing")]), (0, vec![T_UNDEFINED]));
     assert_eq!(decode(&bytes), Val::from("outer\0é"));
+
+    // Verify bunwasm_alloc reuses the scratch input buffer across consecutive calls,
+    // bounds retained capacity at KEPT_INPUT_BYTES, and falls back to heap Box for
+    // concurrent or oversized allocations.
+    let first = bunwasm_alloc(16);
+    assert!(INPUT_IN_USE.get());
+    let second = bunwasm_alloc(16);
+    assert_ne!(first, second);
+    unsafe {
+        std::ptr::write(first, T_UNDEFINED);
+        std::ptr::write(second, T_UNDEFINED);
+        assert_eq!(bunwasm_call(index, second, 16), 1);
+        assert!(INPUT_IN_USE.get());
+        assert_eq!(bunwasm_call(index, first, 16), 1);
+        assert!(!INPUT_IN_USE.get());
+    }
+    let reused = bunwasm_alloc(16);
+    assert_eq!(reused, first);
+    unsafe {
+        std::ptr::write(reused, T_UNDEFINED);
+        assert_eq!(bunwasm_call(index, reused, 16), 1);
+    }
+    assert!(!INPUT_IN_USE.get());
+
+    // Sequential growth (600 KiB -> 700 KiB) must not geometrically overshoot KEPT_INPUT_BYTES.
+    for size in [600 * 1024, 700 * 1024] {
+        let ptr = bunwasm_alloc(size as u32);
+        assert!(INPUT_IN_USE.get());
+        unsafe {
+            std::ptr::write(ptr, T_UNDEFINED);
+            assert_eq!(bunwasm_call(index, ptr, size as u32), 1);
+        }
+        assert!(!INPUT_IN_USE.get());
+        INPUT.with(|buf| assert!(buf.borrow().capacity() <= KEPT_INPUT_BYTES));
+    }
+
+    // Oversized allocation (> KEPT_INPUT_BYTES) bypasses the scratch buffer completely.
+    let oversized = KEPT_INPUT_BYTES + 1;
+    let big = bunwasm_alloc(oversized as u32);
+    assert!(!INPUT_IN_USE.get());
+    unsafe {
+        std::ptr::write(big, T_UNDEFINED);
+        assert_eq!(bunwasm_call(index, big, oversized as u32), 1);
+    }
+    INPUT.with(|buf| assert!(buf.borrow().capacity() <= KEPT_INPUT_BYTES));
 }

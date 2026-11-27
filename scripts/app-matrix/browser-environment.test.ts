@@ -159,6 +159,20 @@ test("unsuccessful replays and all other external requests remain invalid", asyn
   expect((await replayControl("http://127.0.0.1:12345/local")).continued).toBe(true);
 });
 
+test("browserRegistryRoute tolerates WebKit already-handled race on local continue only", async () => {
+  const external: string[] = [];
+  const makeRoute = (error: Error) => ({
+    request: () => ({ url: () => "http://127.0.0.1:12345/local", method: () => "GET", postDataBuffer: () => null, headers: () => ({}) }),
+    fetch: async () => { throw new Error("unexpected fetch"); },
+    fulfill: async () => {},
+    abort: async () => {},
+    continue: async () => { throw error; },
+  });
+  await expect(browserRegistryRoute(makeRoute(new Error("Route is already handled!")), "http://127.0.0.1:1", external)).resolves.toBeUndefined();
+  expect(external).toEqual([]);
+  await expect(browserRegistryRoute(makeRoute(new Error("Target closed")), "http://127.0.0.1:1", external)).rejects.toThrow("Target closed");
+});
+
 test("the isolate broker rejects query variants instead of silently recording exact dist-tags", async () => {
   const upstream: string[] = [];
   const fixture = Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) => {

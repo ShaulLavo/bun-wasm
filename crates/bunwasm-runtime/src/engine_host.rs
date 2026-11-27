@@ -20,7 +20,7 @@
 //! Values are encoded with [`encode`]/[`decode`] (the host has the mirror
 //! image): one tag byte, then the payload, little-endian.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::data::{Args, DataFn, NativeError, Record, Val};
@@ -159,9 +159,14 @@ struct Host {
     entry: Val,
 }
 
+/// Keep at most 1 MiB of reusable argument scratch buffer between native calls.
+const KEPT_INPUT_BYTES: usize = 1 << 20;
+
 thread_local! {
     static HOST: RefCell<Option<Rc<Host>>> = const { RefCell::new(None) };
     static RESULT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static INPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static INPUT_IN_USE: Cell<bool> = const { Cell::new(false) };
 }
 
 /// A number or boolean argument as a word; a word native takes nothing else.
@@ -259,9 +264,26 @@ pub extern "C" fn bunwasm_ready() -> i32 {
     HOST.with(|h| i32::from(h.borrow().is_some()))
 }
 
+fn alloc_scratch(size: usize) -> *mut u8 {
+    INPUT_IN_USE.set(true);
+    INPUT.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        if buf.capacity() < size {
+            let additional = size - buf.len();
+            buf.reserve_exact(additional);
+        }
+        buf.resize(size, 0);
+        buf.as_mut_ptr()
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn bunwasm_alloc(len: u32) -> *mut u8 {
-    let mut buf = vec![0u8; len as usize].into_boxed_slice();
+    let size = len as usize;
+    if size > 0 && size <= KEPT_INPUT_BYTES && !INPUT_IN_USE.get() {
+        return alloc_scratch(size);
+    }
+    let mut buf = vec![0u8; size].into_boxed_slice();
     let ptr = buf.as_mut_ptr();
     std::mem::forget(buf);
     ptr
@@ -297,17 +319,40 @@ pub extern "C" fn bunwasm_describe() -> i32 {
     0
 }
 
+fn take_scratch_input(ptr: *mut u8, size: usize) -> Option<Val> {
+    if size == 0 || !INPUT_IN_USE.get() {
+        return None;
+    }
+    let value = INPUT.with(|buf| {
+        let buf = buf.borrow();
+        (std::ptr::eq(buf.as_ptr(), ptr) && buf.len() == size).then(|| decode(&buf))
+    })?;
+    INPUT_IN_USE.set(false);
+    Some(value)
+}
+
 /// # Safety
-/// `ptr`/`len` must come from `bunwasm_alloc(len)`; the buffer is freed here.
+/// `ptr`/`size` must come from `bunwasm_alloc(size)` on the same thread and not have been consumed yet.
+unsafe fn decode_input(ptr: *mut u8, size: usize) -> Val {
+    if let Some(value) = take_scratch_input(ptr, size) {
+        return value;
+    }
+    // SAFETY: caller guarantees `ptr`/`size` came from `bunwasm_alloc(size)` on this thread
+    // and did not match the thread-local scratch buffer, so it was heap-allocated via `Box`.
+    let input = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, size)) };
+    decode(&input)
+}
+
+/// # Safety
+/// `ptr`/`len` must come from `bunwasm_alloc(len)` on the same thread; the buffer is consumed here.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bunwasm_call(index: u32, ptr: *mut u8, len: u32) -> i32 {
-    // SAFETY: allocated by bunwasm_alloc with exactly this length.
-    let input = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len as usize)) };
-    let args = match decode(&input) {
+    // SAFETY: forwarded from `bunwasm_call`'s safety contract.
+    let value = unsafe { decode_input(ptr, len as usize) };
+    let args = match value {
         Val::Array(items) => items,
         other => vec![other],
     };
-    drop(input);
     let (is_polyfill_source, f) = {
         let h = host();
         (

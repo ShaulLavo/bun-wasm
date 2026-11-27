@@ -84,6 +84,31 @@ test("embeds minified TypeScript and JavaScript factories and excludes declarati
   rmSync(join(source, "intl.js"));
 });
 
+test("excludes split-only polyfills when building engine-host without engine-split", async () => {
+  for (const name of ["intl.js", "tz_data.js", "streams_polyfill.js", "webassembly.ts", "zone_names.js", "worker_lane.ts", "time_zone.ts", "zone_ids.js"]) {
+    writeFileSync(join(source, name), "(function () { return 1; })\n");
+  }
+  try {
+    const hostOut = join(scratch, "out-host-only");
+    mkdirSync(hostOut, { recursive: true });
+    const env: NodeJS.ProcessEnv = { ...process.env, CARGO_MANIFEST_DIR: manifest, OUT_DIR: hostOut, BUNWASM_JS_OVERRIDE_DIR: "", BUNWASM_JS_PRESERVE_POSITIONS: "", CARGO_FEATURE_ENGINE_HOST: "1" };
+    delete env.CARGO_FEATURE_ENGINE_SPLIT;
+    const hostResult = await commands.run(builder, [], { phase: "embed-host-only-unset", timeout: 4_000, env });
+    expect(hostResult.exitCode, hostResult.diagnostic).toBe(0);
+    expect(hostResult.stdout.toString()).toContain("cargo:rerun-if-env-changed=CARGO_FEATURE_ENGINE_HOST");
+    expect(hostResult.stdout.toString()).toContain("cargo:rerun-if-env-changed=CARGO_FEATURE_ENGINE_SPLIT");
+    const table = readFileSync(join(hostOut, "polyfills.rs"), "utf8");
+    expect(table).toContain('("leaf", include_str!(');
+    for (const stem of ["intl", "tz_data", "streams_polyfill", "webassembly", "zone_names", "worker_lane", "time_zone", "zone_ids"]) {
+      expect(table).not.toContain(`("${stem}",`);
+    }
+  } finally {
+    for (const name of ["intl.js", "tz_data.js", "streams_polyfill.js", "webassembly.ts", "zone_names.js", "worker_lane.ts", "time_zone.ts", "zone_ids.js"]) {
+      rmSync(join(source, name), { force: true });
+    }
+  }
+});
+
 test("keeps token positions when BUNWASM_JS_PRESERVE_POSITIONS is set", async () => {
   writeFileSync(join(source, "leaf.ts"), "(function (value: number) {\n  return value + 1;\n})\n");
   const result = await commands.run(builder, [], {
