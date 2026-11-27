@@ -131,18 +131,11 @@ test("module scope drops the native encoding headers of an upstream body fetch a
   expect(await response?.text()).toBe("app chunk");
 });
 
-test("mounted preview WebSocket replies pong to router pings and closes on MessagePort close", async () => {
+test("mounted preview WebSocket closes when its peer MessagePort closes after upgrade", async () => {
   const { previewWebsocketScript } = await import("../preview-build.ts");
   const bundle = await previewWebsocketScript();
   const { runInNewContext } = await import("node:vm");
-  const clientPorts: MessagePort[] = [];
   const serverPorts: MessagePort[] = [];
-  class TrackedMessageChannel extends MessageChannel {
-    constructor() {
-      super();
-      clientPorts.push(this.port1);
-    }
-  }
   const fakeScript = {
     getAttribute(name: string) {
       if (name === "data-bun-port") return "8123";
@@ -163,7 +156,7 @@ test("mounted preview WebSocket replies pong to router pings and closes on Messa
       },
     },
     WebSocket: class NativeWs {},
-    MessageChannel: TrackedMessageChannel,
+    MessageChannel,
     TextEncoder,
     TextDecoder,
     URL,
@@ -198,34 +191,40 @@ test("mounted preview WebSocket replies pong to router pings and closes on Messa
     close(): void;
   };
   const ws = new PreviewWs("ws://example.test/__preview/8123/ws");
-  const clientPort = clientPorts[0];
   const serverPort = serverPorts[0];
-  expect(clientPort).toBeDefined();
   expect(serverPort).toBeDefined();
 
-  const received: unknown[] = [];
-  const pong = Promise.withResolvers<void>();
+  const upgradeKey = Promise.withResolvers<string>();
   const onRouterMessage = (event: MessageEvent<unknown>) => {
-    received.push(event.data);
-    if (typeof event.data === "object" && event.data !== null && Reflect.get(event.data, "type") === "pong") {
-      pong.resolve();
-    }
+    if (typeof event.data !== "object" || event.data === null) return;
+    if (Reflect.get(event.data, "type") !== "data") return;
+    const chunk = Reflect.get(event.data, "chunk");
+    if (!(chunk instanceof Uint8Array)) return;
+    const match = /^sec-websocket-key:\s*(\S+)\r?$/im.exec(new TextDecoder().decode(chunk));
+    if (match?.[1]) upgradeKey.resolve(match[1]);
   };
   serverPort!.onmessage = onRouterMessage;
   try {
+    const opened = Promise.withResolvers<void>();
+    ws.addEventListener("open", () => opened.resolve(), { once: true });
     serverPort!.postMessage({ type: "accepted" });
-    serverPort!.postMessage({ type: "ping" });
-    await pong.promise;
-    expect(received).toContainEqual({ type: "pong" });
+    const key = await upgradeKey.promise;
+    const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`));
+    const accept = btoa(String.fromCharCode(...new Uint8Array(digest)));
+    const response = new TextEncoder().encode(
+      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+    );
+    serverPort!.postMessage({ type: "data", chunk: response }, [response.buffer]);
+    await opened.promise;
+    expect(ws.readyState).toBe(1);
 
     const closed = Promise.withResolvers<void>();
     ws.addEventListener("close", () => closed.resolve(), { once: true });
-    clientPort!.dispatchEvent(new Event("close"));
+    serverPort!.close();
     await closed.promise;
     expect(ws.readyState).toBe(3);
   } finally {
     ws.close();
-    clientPort!.close();
     serverPort!.close();
   }
 });

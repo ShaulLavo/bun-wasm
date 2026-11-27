@@ -208,8 +208,9 @@ pub(crate) fn reentry() {
     assert_eq!(call(index, &[Val::from("missing")]), (0, vec![T_UNDEFINED]));
     assert_eq!(decode(&bytes), Val::from("outer\0é"));
 
-    // Verify bunwasm_alloc reuses the scratch input buffer across consecutive calls
-    // and falls back cleanly when another allocation is already in use or exceeds the cap.
+    // Verify bunwasm_alloc reuses the scratch input buffer across consecutive calls,
+    // bounds retained capacity at KEPT_INPUT_BYTES, and falls back to heap Box for
+    // concurrent or oversized allocations.
     let first = bunwasm_alloc(16);
     assert!(INPUT_IN_USE.get());
     let second = bunwasm_alloc(16);
@@ -229,4 +230,26 @@ pub(crate) fn reentry() {
         assert_eq!(bunwasm_call(index, reused, 16), 1);
     }
     assert!(!INPUT_IN_USE.get());
+
+    // Sequential growth (600 KiB -> 700 KiB) must not geometrically overshoot KEPT_INPUT_BYTES.
+    for size in [600 * 1024, 700 * 1024] {
+        let ptr = bunwasm_alloc(size as u32);
+        assert!(INPUT_IN_USE.get());
+        unsafe {
+            std::ptr::write(ptr, T_UNDEFINED);
+            assert_eq!(bunwasm_call(index, ptr, size as u32), 1);
+        }
+        assert!(!INPUT_IN_USE.get());
+        INPUT.with(|buf| assert!(buf.borrow().capacity() <= KEPT_INPUT_BYTES));
+    }
+
+    // Oversized allocation (> KEPT_INPUT_BYTES) bypasses the scratch buffer completely.
+    let oversized = KEPT_INPUT_BYTES + 1;
+    let big = bunwasm_alloc(oversized as u32);
+    assert!(!INPUT_IN_USE.get());
+    unsafe {
+        std::ptr::write(big, T_UNDEFINED);
+        assert_eq!(bunwasm_call(index, big, oversized as u32), 1);
+    }
+    INPUT.with(|buf| assert!(buf.borrow().capacity() <= KEPT_INPUT_BYTES));
 }

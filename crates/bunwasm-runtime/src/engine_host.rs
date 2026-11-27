@@ -264,16 +264,24 @@ pub extern "C" fn bunwasm_ready() -> i32 {
     HOST.with(|h| i32::from(h.borrow().is_some()))
 }
 
+fn alloc_scratch(size: usize) -> *mut u8 {
+    INPUT_IN_USE.set(true);
+    INPUT.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        buf.clear();
+        if buf.capacity() < size {
+            buf.reserve_exact(size);
+        }
+        buf.resize(size, 0);
+        buf.as_mut_ptr()
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn bunwasm_alloc(len: u32) -> *mut u8 {
     let size = len as usize;
     if size > 0 && size <= KEPT_INPUT_BYTES && !INPUT_IN_USE.get() {
-        INPUT_IN_USE.set(true);
-        return INPUT.with(|buf| {
-            let mut buf = buf.borrow_mut();
-            buf.resize(size, 0);
-            buf.as_mut_ptr()
-        });
+        return alloc_scratch(size);
     }
     let mut buf = vec![0u8; size].into_boxed_slice();
     let ptr = buf.as_mut_ptr();
@@ -311,31 +319,36 @@ pub extern "C" fn bunwasm_describe() -> i32 {
     0
 }
 
-fn decode_input(ptr: *mut u8, size: usize) -> Val {
-    if size > 0 && INPUT_IN_USE.get() {
-        let matched = INPUT.with(|buf| {
-            let buf = buf.borrow();
-            if std::ptr::eq(buf.as_ptr(), ptr) && buf.len() == size {
-                Some(decode(&buf))
-            } else {
-                None
-            }
-        });
-        if let Some(value) = matched {
-            INPUT_IN_USE.set(false);
-            return value;
-        }
+fn take_scratch_input(ptr: *mut u8, size: usize) -> Option<Val> {
+    if size == 0 || !INPUT_IN_USE.get() {
+        return None;
     }
-    // SAFETY: allocated by bunwasm_alloc with exactly this length.
+    let value = INPUT.with(|buf| {
+        let buf = buf.borrow();
+        (std::ptr::eq(buf.as_ptr(), ptr) && buf.len() == size).then(|| decode(&buf))
+    })?;
+    INPUT_IN_USE.set(false);
+    Some(value)
+}
+
+/// # Safety
+/// `ptr`/`size` must come from `bunwasm_alloc(size)` on the same thread and not have been consumed yet.
+unsafe fn decode_input(ptr: *mut u8, size: usize) -> Val {
+    if let Some(value) = take_scratch_input(ptr, size) {
+        return value;
+    }
+    // SAFETY: caller guarantees `ptr`/`size` came from `bunwasm_alloc(size)` on this thread
+    // and did not match the thread-local scratch buffer, so it was heap-allocated via `Box`.
     let input = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, size)) };
     decode(&input)
 }
 
 /// # Safety
-/// `ptr`/`len` must come from `bunwasm_alloc(len)`; the buffer is freed here.
+/// `ptr`/`len` must come from `bunwasm_alloc(len)` on the same thread; the buffer is consumed here.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bunwasm_call(index: u32, ptr: *mut u8, len: u32) -> i32 {
-    let value = decode_input(ptr, len as usize);
+    // SAFETY: forwarded from `bunwasm_call`'s safety contract.
+    let value = unsafe { decode_input(ptr, len as usize) };
     let args = match value {
         Val::Array(items) => items,
         other => vec![other],
