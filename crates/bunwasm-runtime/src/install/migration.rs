@@ -1345,7 +1345,12 @@ fn validate_pnpm_links(
     members: &BTreeMap<String, local::Local>,
     catalogs: &Catalogs,
 ) -> Result<()> {
-    for field in ["dependencies", "devDependencies", "optionalDependencies"] {
+    for field in [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+    ] {
         let Some(deps) = meta[field].as_object_mut() else {
             continue;
         };

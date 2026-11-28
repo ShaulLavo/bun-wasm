@@ -517,6 +517,72 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
     );
     assert.equal(installedVersion(yarnMemberUpdateRoot, "versioned"), "2.0.0");
     await install(target, yarnMemberUpdateRoot, registry.base, ["--frozen-lockfile"]);
+
+    // Auto-installed pnpm workspace peer links normalize into workspace peer requirements.
+    const pnpmPeerLinkRoot = join(directory, "pnpm-peer-workspace-link");
+    mkdirSync(join(pnpmPeerLinkRoot, "packages/app"), { recursive: true });
+    mkdirSync(join(pnpmPeerLinkRoot, "packages/lib"), { recursive: true });
+    writeFileSync(join(pnpmPeerLinkRoot, "package.json"), JSON.stringify({
+      name: "fixture-root",
+      workspaces: ["packages/*"],
+    }, null, 2));
+    writeFileSync(join(pnpmPeerLinkRoot, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n");
+    writeFileSync(join(pnpmPeerLinkRoot, "packages/app/package.json"), JSON.stringify({
+      name: "fixture-app",
+      version: "1.0.0",
+      peerDependencies: { "fixture-lib": "workspace:*" },
+    }, null, 2));
+    writeFileSync(join(pnpmPeerLinkRoot, "packages/lib/package.json"), JSON.stringify({
+      name: "fixture-lib",
+      version: "1.0.0",
+    }, null, 2));
+    writeFileSync(join(pnpmPeerLinkRoot, "pnpm-lock.yaml"), [
+      "lockfileVersion: '9.0'",
+      "settings:",
+      "  autoInstallPeers: true",
+      "  excludeLinksFromLockfile: false",
+      "importers:",
+      "  .: {}",
+      "  packages/app:",
+      "    dependencies:",
+      "      fixture-lib:",
+      "        specifier: workspace:*",
+      "        version: link:../lib",
+      "  packages/lib: {}",
+      "",
+    ].join("\n"));
+    await install(target, pnpmPeerLinkRoot, registry.base, ["--lockfile-only"]);
+    await install(target, pnpmPeerLinkRoot, registry.base, ["--frozen-lockfile", "--lockfile-only"]);
+
+    // `bun update --latest --lockfile-only` updates npm-prefixed catalog ranges and aliases.
+    for (const [label, initialSpec, expectedSpec] of [
+      ["npm-range", "npm:^1.0.0", "^2.0.0"],
+      ["npm-alias", "npm:versioned@^1.0.0", "npm:versioned@^2.0.0"],
+    ] as const) {
+      const npmCatRoot = join(directory, `update-${label}`);
+      mkdirSync(join(npmCatRoot, "packages/a"), { recursive: true });
+      writeFileSync(join(npmCatRoot, "package.json"), JSON.stringify({
+        name: "root",
+        workspaces: {
+          packages: ["packages/*"],
+          catalog: { versioned: initialSpec },
+        },
+      }, null, 2));
+      writeFileSync(join(npmCatRoot, "packages/a/package.json"), JSON.stringify({
+        name: "@fixture/npm-cat-a",
+        version: "1.0.0",
+        dependencies: { versioned: "catalog:" },
+      }, null, 2));
+      await install(target, npmCatRoot, registry.base, ["--lockfile-only"]);
+      assert.match(readFileSync(join(npmCatRoot, "bun.lock"), "utf8"), /"versioned@1\.10\.0"/);
+      await runGuestUpdate(target, npmCatRoot, registry.base, ["--latest", "--lockfile-only"]);
+      const updatedManifest = JSON.parse(readFileSync(join(npmCatRoot, "package.json"), "utf8")) as {
+        workspaces: { catalog: { versioned: string } };
+      };
+      assert.equal(updatedManifest.workspaces.catalog.versioned, expectedSpec);
+      assert.match(readFileSync(join(npmCatRoot, "bun.lock"), "utf8"), /"versioned@2\.0\.0"/);
+      await install(target, npmCatRoot, registry.base, ["--frozen-lockfile", "--lockfile-only"]);
+    }
   } finally {
     await registry.close();
     rmSync(directory, { recursive: true, force: true });

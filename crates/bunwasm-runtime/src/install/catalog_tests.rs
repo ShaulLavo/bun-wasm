@@ -2402,3 +2402,290 @@ fn pnpm_migration_expands_catalog_peer_dependencies_and_explicit_tarball_does_no
         },
     );
 }
+
+#[test]
+fn pnpm_auto_installed_workspace_peer_link_migration() {
+    isolated("pnpm_auto_installed_workspace_peer_link_migration", || {
+        write_workspace(
+            json!({
+                "name": "fixture-root",
+                "workspaces": ["packages/*"]
+            }),
+            "packages/app",
+            json!({
+                "name": "fixture-app",
+                "version": "1.0.0",
+                "peerDependencies": { "fixture-lib": "workspace:*" }
+            }),
+        );
+        fs::create_dir_all("packages/lib").unwrap();
+        fs::write(
+            "packages/lib/package.json",
+            json!({
+                "name": "fixture-lib",
+                "version": "1.0.0"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write("pnpm-workspace.yaml", "packages:\n  - packages/*\n").unwrap();
+        fs::write(
+            "pnpm-lock.yaml",
+            "lockfileVersion: '9.0'\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\nimporters:\n  .: {}\n  packages/app:\n    dependencies:\n      fixture-lib:\n        specifier: workspace:*\n        version: link:../lib\n  packages/lib: {}\n",
+        )
+        .unwrap();
+
+        install("install", &["--lockfile-only"]).unwrap();
+        let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+        assert_eq!(
+            lock["workspaces"]["packages/app"]["peerDependencies"]["fixture-lib"],
+            "workspace:*"
+        );
+        assert_eq!(
+            lock["packages"]["fixture-lib"][0],
+            "fixture-lib@workspace:packages/lib"
+        );
+        install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+        install("install", &[]).unwrap();
+
+        // Incompatible peer requirement against the linked workspace member must still fail.
+        fs::remove_file("bun.lock").unwrap();
+        let _ = fs::remove_dir_all("node_modules");
+        fs::write(
+            "packages/app/package.json",
+            json!({
+                "name": "fixture-app",
+                "version": "1.0.0",
+                "peerDependencies": { "fixture-lib": "workspace:^2.0.0" }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            "pnpm-lock.yaml",
+            "lockfileVersion: '9.0'\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\nimporters:\n  .: {}\n  packages/app:\n    dependencies:\n      fixture-lib:\n        specifier: workspace:^2.0.0\n        version: link:../lib\n  packages/lib: {}\n",
+        )
+        .unwrap();
+        let error = install("install", &["--lockfile-only"]).unwrap_err();
+        assert!(
+            error.contains("does not satisfy package.json specifier"),
+            "unexpected error: {error}"
+        );
+    });
+}
+
+fn run_cached_catalog_update(opts: Options) {
+    let cwd = std::env::current_dir().unwrap();
+    let mut manifest = io::read(Path::new("package.json"), "JSON", &TestParser).unwrap();
+    let old_manifest = manifest.clone();
+    let scope = all_referenced_catalog_keys(&cwd, &manifest, &opts, &TestParser).unwrap();
+    update_manifest(&mut manifest, &opts, Some(&scope)).unwrap();
+    let mut locked = io::read(Path::new("bun.lock"), "JSONC", &TestParser).unwrap();
+    unlock(&mut locked, &opts, &manifest, None);
+    let mut resolver = Resolver::new(
+        io::Registry::new("http://registry.invalid").unwrap(),
+        locked,
+        false,
+    );
+    resolver.workspaces = local::workspaces(&cwd, &manifest, &TestParser).unwrap();
+    resolver.catalogs =
+        catalog::Catalogs::load(&cwd, &manifest, &resolver.locked, &TestParser).unwrap();
+    resolver.resolve(&manifest, opts.production).unwrap();
+    finalize_updates(
+        &mut manifest,
+        &old_manifest,
+        &opts,
+        &resolver,
+        None,
+        Some(&scope),
+    )
+    .unwrap();
+    resolver.catalogs =
+        catalog::Catalogs::load(&cwd, &manifest, &resolver.locked, &TestParser).unwrap();
+    let lock = lockfile(&manifest, &resolver).unwrap();
+    fs::write("package.json", format!("{manifest}\n")).unwrap();
+    fs::write("bun.lock", lock).unwrap();
+}
+
+#[test]
+fn update_npm_prefixed_catalog_ranges_and_aliases() {
+    isolated("update_npm_prefixed_catalog_ranges_and_aliases", || {
+        seed_registry_package("versioned", &["1.0.0", "1.1.0", "1.10.0", "2.0.0"]);
+        seed_registry_package("@scope/pkg", &["1.0.0", "1.10.0", "2.0.0"]);
+
+        // 1. `npm:^1.0.0` and `npm:versioned@^1.0.0` update to `^2.0.0` and `npm:versioned@^2.0.0`.
+        for (initial, expected) in [
+            ("npm:^1.0.0", "^2.0.0"),
+            ("npm:versioned@^1.0.0", "npm:versioned@^2.0.0"),
+        ] {
+            let _ = fs::remove_file("bun.lock");
+            write_workspace(
+                json!({
+                    "name": "root",
+                    "workspaces": {
+                        "packages": ["packages/*"],
+                        "catalog": { "versioned": initial }
+                    }
+                }),
+                "packages/a",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "catalog:" }
+                }),
+            );
+            install("install", &["--lockfile-only"]).unwrap();
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@1.10.0");
+
+            run_cached_catalog_update(Options {
+                latest: true,
+                lockfile_only: true,
+                ..Options::default()
+            });
+            let root = parse_json(&fs::read("package.json").unwrap()).unwrap();
+            assert_eq!(root["workspaces"]["catalog"]["versioned"], expected);
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["versioned"][0], "versioned@2.0.0");
+            install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+        }
+
+        // 3. Plain update vs `--latest` across renamed aliases, scoped aliases, tags, bare aliases,
+        // comparator ranges, and non-registry protocols.
+        fs::remove_file("bun.lock").unwrap();
+        fs::create_dir_all("packages/lib").unwrap();
+        fs::write(
+            "packages/lib/package.json",
+            json!({ "name": "local-lib", "version": "1.0.0" }).to_string(),
+        )
+        .unwrap();
+        write_workspace(
+            json!({
+                "name": "root",
+                "workspaces": {
+                    "packages": ["packages/*"],
+                    "catalog": {
+                        "versioned": "npm:>=1.0.0 <2.0.0",
+                        "my-alias": "npm:versioned@^1.0.0",
+                        "my-scoped": "npm:@scope/pkg@^1.0.0",
+                        "tag-alias": "npm:versioned@next",
+                        "bare-alias": "npm:versioned",
+                        "local-lib": "workspace:*"
+                    }
+                }
+            }),
+            "packages/a",
+            json!({
+                "name": "@fixture/a",
+                "version": "1.0.0",
+                "dependencies": {
+                    "versioned": "catalog:",
+                    "my-alias": "catalog:",
+                    "my-scoped": "catalog:",
+                    "tag-alias": "catalog:",
+                    "bare-alias": "catalog:",
+                    "local-lib": "catalog:"
+                }
+            }),
+        );
+        install("install", &["--lockfile-only"]).unwrap();
+        run_cached_catalog_update(Options {
+            lockfile_only: true,
+            ..Options::default()
+        });
+        let root = parse_json(&fs::read("package.json").unwrap()).unwrap();
+        assert_eq!(
+            root["workspaces"]["catalog"]["versioned"],
+            "npm:>=1.0.0 <2.0.0"
+        );
+        assert_eq!(
+            root["workspaces"]["catalog"]["my-alias"],
+            "npm:versioned@^1.10.0"
+        );
+        assert_eq!(
+            root["workspaces"]["catalog"]["my-scoped"],
+            "npm:@scope/pkg@^1.10.0"
+        );
+        assert_eq!(
+            root["workspaces"]["catalog"]["tag-alias"],
+            "npm:versioned@next"
+        );
+        assert_eq!(root["workspaces"]["catalog"]["bare-alias"], "npm:versioned");
+        assert_eq!(root["workspaces"]["catalog"]["local-lib"], "workspace:*");
+
+        run_cached_catalog_update(Options {
+            latest: true,
+            lockfile_only: true,
+            ..Options::default()
+        });
+        let root = parse_json(&fs::read("package.json").unwrap()).unwrap();
+        assert_eq!(root["workspaces"]["catalog"]["versioned"], "^2.0.0");
+        assert_eq!(
+            root["workspaces"]["catalog"]["my-alias"],
+            "npm:versioned@^2.0.0"
+        );
+        assert_eq!(
+            root["workspaces"]["catalog"]["my-scoped"],
+            "npm:@scope/pkg@^2.0.0"
+        );
+        assert_eq!(
+            root["workspaces"]["catalog"]["tag-alias"],
+            "npm:versioned@^2.0.0"
+        );
+        assert_eq!(
+            root["workspaces"]["catalog"]["bare-alias"],
+            "npm:versioned@^2.0.0"
+        );
+        assert_eq!(root["workspaces"]["catalog"]["local-lib"], "workspace:*");
+        let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+        assert_eq!(lock["packages"]["versioned"][0], "versioned@2.0.0");
+        assert_eq!(lock["packages"]["my-alias"][0], "versioned@2.0.0");
+        assert_eq!(lock["packages"]["my-scoped"][0], "@scope/pkg@2.0.0");
+        install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+
+        // 4. `--latest --exact` strips the caret on both `npm:` range and alias entries.
+        fs::remove_file("bun.lock").unwrap();
+        fs::write(
+            "package.json",
+            json!({
+                "name": "root",
+                "workspaces": {
+                    "packages": ["packages/*"],
+                    "catalog": {
+                        "versioned": "npm:^1.0.0",
+                        "my-alias": "npm:versioned@^1.0.0"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            "packages/a/package.json",
+            json!({
+                "name": "@fixture/a",
+                "version": "1.0.0",
+                "dependencies": {
+                    "versioned": "catalog:",
+                    "my-alias": "catalog:"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        install("install", &["--lockfile-only"]).unwrap();
+        run_cached_catalog_update(Options {
+            latest: true,
+            exact: true,
+            lockfile_only: true,
+            ..Options::default()
+        });
+        let root = parse_json(&fs::read("package.json").unwrap()).unwrap();
+        assert_eq!(root["workspaces"]["catalog"]["versioned"], "2.0.0");
+        assert_eq!(
+            root["workspaces"]["catalog"]["my-alias"],
+            "npm:versioned@2.0.0"
+        );
+        install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
+    });
+}

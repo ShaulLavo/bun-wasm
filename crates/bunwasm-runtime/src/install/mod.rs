@@ -1417,6 +1417,56 @@ fn catalog_in_scope(
     scope.contains(&(group_key, name.to_owned()))
 }
 
+enum CatalogRegistrySpec<'a> {
+    Range(&'a str),
+    Alias { target: &'a str, range: &'a str },
+}
+
+impl<'a> CatalogRegistrySpec<'a> {
+    fn target(&self) -> Option<&'a str> {
+        match self {
+            Self::Range(_) => None,
+            Self::Alias { target, .. } => Some(target),
+        }
+    }
+
+    fn range(&self) -> &'a str {
+        match self {
+            Self::Range(range) | Self::Alias { range, .. } => range,
+        }
+    }
+
+    fn format_with(&self, range: &str) -> String {
+        match self.target() {
+            Some(target) => format!("npm:{target}@{range}"),
+            None => range.to_owned(),
+        }
+    }
+}
+
+fn parse_catalog_registry_spec(spec: &str) -> Option<CatalogRegistrySpec<'_>> {
+    let trimmed = spec.trim();
+    if !trimmed.contains(':') {
+        return Some(CatalogRegistrySpec::Range(trimmed));
+    }
+    let without_npm = catalog::without_npm_protocol(trimmed);
+    if without_npm != trimmed {
+        return (!without_npm.contains(':')).then_some(CatalogRegistrySpec::Range(without_npm));
+    }
+    let alias = trimmed.strip_prefix("npm:")?;
+    let split = alias
+        .char_indices()
+        .find_map(|(i, ch)| (i > 0 && ch == '@').then_some(i));
+    let (target, range) = match split {
+        Some(index) => (&alias[..index], &alias[index + 1..]),
+        None => (alias, "latest"),
+    };
+    if resolve::valid_name(target).is_err() || range.is_empty() || range.contains(':') {
+        return None;
+    }
+    Some(CatalogRegistrySpec::Alias { target, range })
+}
+
 fn update_manifest_catalogs(
     manifest: &mut Value,
     opts: &Options,
@@ -1424,33 +1474,62 @@ fn update_manifest_catalogs(
 ) -> Result<()> {
     for input in &opts.names {
         let (name, range) = resolve::spec(input)?;
-        if input.rfind('@').is_some_and(|at| at > 0) {
-            for_each_manifest_catalog_mut(manifest, |group, entries| {
-                if catalog_in_scope(group, &name, scope)
-                    && entries
-                        .get(&name)
-                        .and_then(Value::as_str)
-                        .is_some_and(|r| !r.contains(':'))
-                {
-                    entries.insert(name.clone(), range.clone().into());
-                }
-            });
+        if !input.rfind('@').is_some_and(|at| at > 0) {
+            continue;
         }
+        stage_explicit_catalog_update(manifest, &name, &range, scope);
     }
     if !opts.latest {
         return Ok(());
     }
     for_each_manifest_catalog_mut(manifest, |group, entries| {
-        for (name, range) in entries {
-            if selected(name, opts)
-                && catalog_in_scope(group, name, scope)
-                && range.as_str().is_some_and(|r| !r.contains(':'))
-            {
-                *range = "latest".into();
-            }
-        }
+        stage_latest_catalog_entries(group, entries, opts, scope);
     });
     Ok(())
+}
+
+fn stage_explicit_catalog_update(
+    manifest: &mut Value,
+    name: &str,
+    range: &str,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
+) {
+    for_each_manifest_catalog_mut(manifest, |group, entries| {
+        if !catalog_in_scope(group, name, scope) {
+            return;
+        }
+        let Some(existing) = entries.get(name).and_then(Value::as_str) else {
+            return;
+        };
+        let Some(parsed) = parse_catalog_registry_spec(existing) else {
+            return;
+        };
+        let staged = if !range.contains(':') {
+            parsed.format_with(range)
+        } else if parse_catalog_registry_spec(range).is_some() {
+            range.to_owned()
+        } else {
+            return;
+        };
+        entries.insert(name.to_owned(), staged.into());
+    });
+}
+
+fn stage_latest_catalog_entries(
+    group: Option<&str>,
+    entries: &mut serde_json::Map<String, Value>,
+    opts: &Options,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
+) {
+    for (name, range) in entries {
+        if !selected(name, opts) || !catalog_in_scope(group, name, scope) {
+            continue;
+        }
+        let Some(parsed) = range.as_str().and_then(parse_catalog_registry_spec) else {
+            continue;
+        };
+        *range = parsed.format_with("latest").into();
+    }
 }
 
 fn has_explicit_version(name: &str, opts: &Options) -> bool {
@@ -1705,28 +1784,44 @@ fn finalize_catalog_entries(
         let old = old_entries[name.as_str()]
             .as_str()
             .unwrap_or_else(|| range.as_str().unwrap_or(""));
-        if old.contains(':') {
+        let Some(old_spec) = parse_catalog_registry_spec(old) else {
             *range = old.into();
             continue;
-        }
-        if !opts.latest && !has_explicit_version(name, opts) && keeps_declared_range(old) {
+        };
+        if !opts.latest
+            && !has_explicit_version(name, opts)
+            && keeps_declared_range(old_spec.range())
+        {
             *range = old.into();
             continue;
         }
         let key = (group_key.clone(), name.clone());
-        match resolver.used_catalogs.get(&key) {
-            Some(version) => {
-                let template = if range.as_str() == Some("latest") {
-                    old
-                } else {
-                    range.as_str().unwrap_or(old)
-                };
-                let exact = opts.exact && !resolver.peer_catalogs.contains(&key);
-                *range = updated_catalog_range(template, version, exact).into();
-            }
-            None => *range = old.into(),
-        }
+        let Some(version) = resolver.used_catalogs.get(&key) else {
+            *range = old.into();
+            continue;
+        };
+        let exact = opts.exact && !resolver.peer_catalogs.contains(&key);
+        *range =
+            finalized_catalog_value(&old_spec, range.as_str(), version, opts.latest, exact).into();
     }
+}
+
+fn finalized_catalog_value(
+    old_spec: &CatalogRegistrySpec<'_>,
+    staged: Option<&str>,
+    version: &str,
+    latest: bool,
+    exact: bool,
+) -> String {
+    let staged_spec = staged.and_then(parse_catalog_registry_spec);
+    let target_spec = staged_spec.as_ref().unwrap_or(old_spec);
+    let template = if latest {
+        old_spec.range()
+    } else {
+        target_spec.range()
+    };
+    let updated = updated_catalog_range(template, version, exact);
+    target_spec.format_with(&updated)
 }
 
 fn link_package_bins(package: &Package, manifest: Option<&Value>) -> Result<()> {
