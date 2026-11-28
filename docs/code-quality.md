@@ -185,9 +185,12 @@ private executor is configured.
   tests. Correctness and unused-variable rules are errors, control-flow depth is limited
   to 3, `else` / `else if` after `return` (`no-else-return` with `allowElseIf: false`)
   and nested ternaries (`no-nested-ternary`) are errors, and complexity is limited to 40.
-  Pre-existing nested ternaries are pinned by exact diagnostic span SHA-256 hashes in
-  `.oxlint-nested-ternary-baseline.json`, so adding a new nested ternary fails CI even
-  inside a listed file.
+  Pre-existing nested ternaries are pinned by context-bound SHA-256 hashes (filename,
+  enclosing declaration, surrounding lines, and diagnostic span) in
+  `.oxlint-nested-ternary-baseline.json`, and `quality:lint` rejects any baseline growth
+  against the comparison commit. Adding a new nested ternary, relocating an identical
+  expression to another function, or running `--write-baseline` to expand allowances all
+  fail CI.
   Unqualified browser-global `name` is forbidden, so a renamed local cannot
   silently capture `window.name` inside a callback.
   Guest fixtures deliberately testing invalid input under `tests/fixtures`,

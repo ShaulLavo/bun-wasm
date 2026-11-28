@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/process-fork-parallel-test",
+  "engines": ["quickjs", "jsc", "browser"]
+}

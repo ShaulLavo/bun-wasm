@@ -36,15 +36,31 @@ test("lint rejects an unused authored variable", () => {
 test("lint rejects accidental ambient browser name capture", () => {
   withProbe("web/src/quality-global-probe.ts", "export const qualityAmbientName = () => name;\n", () => rejectsGate("lint", "no-restricted-globals"));
 });
-test("lint rejects new nested ternaries (even in baseline files) and else/else-if after return", () => {
+test("lint rejects new nested ternaries (including moved copies and baseline growth) and else/else-if after return", () => {
   withProbe("src/quality-ternary-probe.ts", "export const pick = (a: number) => a === 1 ? 1 : a === 2 ? 2 : 3;\n", () => rejectsGate("lint", "no-nested-ternary"));
   const baselineFile = resolve(root, "src/engine-kind.ts");
   const original = readFileSync(baselineFile, "utf8");
+  const grandfatheredLine = "const limits = id === 2 ? memoryImport(section) : id === 5 && readUnsigned(section) > 0 ? readLimits(section) : undefined;";
+  expect(original).toContain(grandfatheredLine);
   try {
     writeFileSync(baselineFile, `${original}\nexport const qualityAddedTernary = (n: number) => n === 1 ? "a" : n === 2 ? "b" : "c";\n`);
     rejectsGate("lint", "no-nested-ternary");
+    const relocated = original.replace(grandfatheredLine, "const limits = id === 2 ? memoryImport(section) : undefined;")
+      + `\nexport function qualityMovedTernary(id: number, section: { bytes: Uint8Array; at: number }) { ${grandfatheredLine} return limits; }\n`;
+    writeFileSync(baselineFile, relocated);
+    rejectsGate("lint", "no-nested-ternary");
   } finally {
     writeFileSync(baselineFile, original);
+  }
+  const baselineJsonPath = resolve(root, ".oxlint-nested-ternary-baseline.json");
+  const originalBaseline = readFileSync(baselineJsonPath, "utf8");
+  try {
+    const mutated = JSON.parse(originalBaseline) as { reason: string; files: Record<string, string[]> };
+    mutated.files["src/engine-kind.ts"] = mutated.files["src/engine-kind.ts"]!.concat(["0123456789abcdef"]);
+    writeFileSync(baselineJsonPath, `${JSON.stringify(mutated, null, 2)}\n`);
+    rejectsGate("lint", "nested-ternary baseline adds allowance");
+  } finally {
+    writeFileSync(baselineJsonPath, originalBaseline);
   }
   withProbe("src/quality-else-probe.ts", "export function sign(a: number) { if (a > 0) return 1; else if (a < 0) return -1; return 0; }\n", () => rejectsGate("lint", "no-else-return"));
 });

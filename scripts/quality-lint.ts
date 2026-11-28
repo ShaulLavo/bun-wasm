@@ -1,24 +1,68 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { resolveBaseRef } from "./quality-duplicates";
 
 type Span = { offset: number; length: number; line: number; column: number };
 type Diagnostic = { code?: string; message: string; severity?: string; filename: string; labels?: { span?: Span }[] };
-type Baseline = { reason: string; files: Record<string, string[]> };
+type CachedFile = { readonly bytes: Buffer; readonly lines: readonly string[] };
+type NestedTernaryBaseline = {
+  readonly reason: string;
+  readonly files: Readonly<Record<string, readonly string[]>>;
+};
 
 const root = resolve(import.meta.dir, "..");
-const baselinePath = resolve(root, ".oxlint-nested-ternary-baseline.json");
+const baselineFilename = ".oxlint-nested-ternary-baseline.json";
+const baselinePath = resolve(root, baselineFilename);
 const nestedTernaryCode = "eslint(no-nested-ternary)";
+const fingerprintPattern = /^[0-9a-f]{16}$/;
+const enclosingHeaderPattern = /^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\b|class\b|(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=)|^\s+(?:(?:public|private|protected|static|readonly|async|get|set)\s+)*[A-Za-z_$][\w$]*\s*\([^)]*\)\s*(?::\s*[^=>{]+)?\{/;
 
-function spanHash(fileCache: Map<string, Buffer>, filename: string, span: Span | undefined): string {
-  if (!span || span.offset < 0 || span.length <= 0) return "missing-span";
-  let bytes = fileCache.get(filename);
-  if (!bytes) {
-    bytes = readFileSync(resolve(root, filename));
-    fileCache.set(filename, bytes);
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function loadCachedFile(fileCache: Map<string, CachedFile>, filename: string): CachedFile {
+  const cached = fileCache.get(filename);
+  if (cached) return cached;
+  const bytes = readFileSync(resolve(root, filename));
+  const entry: CachedFile = { bytes, lines: bytes.toString("utf8").split(/\r?\n/) };
+  fileCache.set(filename, entry);
+  return entry;
+}
+
+function nearestNonEmptyLine(lines: readonly string[], startIndex: number, step: -1 | 1): string {
+  for (let offset = 1; offset <= 5; offset++) {
+    const index = startIndex + offset * step;
+    if (index < 0 || index >= lines.length) return "";
+    const trimmed = lines[index]!.trim();
+    if (trimmed.length > 0) return trimmed;
   }
-  return createHash("sha256").update(bytes.subarray(span.offset, span.offset + span.length)).digest("hex").slice(0, 16);
+  return "";
+}
+
+function enclosingHeader(lines: readonly string[], lineIndex: number): string {
+  for (let index = Math.min(lineIndex, lines.length - 1); index >= 0; index--) {
+    const line = lines[index]!;
+    if (enclosingHeaderPattern.test(line)) return line.trim();
+  }
+  return "<top-level>";
+}
+
+function spanHash(fileCache: Map<string, CachedFile>, filename: string, span: Span | undefined): string {
+  if (!span || span.offset < 0 || span.length <= 0) return "missing-span";
+  const { bytes, lines } = loadCachedFile(fileCache, filename);
+  const lineIndex = Math.max(0, span.line - 1);
+  const header = enclosingHeader(lines, lineIndex);
+  const prevLine = nearestNonEmptyLine(lines, lineIndex, -1);
+  const currentLine = lines[lineIndex]?.trim() ?? "";
+  const nextLine = nearestNonEmptyLine(lines, lineIndex, 1);
+  return createHash("sha256")
+    .update(`${filename}\0${header}\0${prevLine}\0${currentLine}\0${nextLine}\0`)
+    .update(bytes.subarray(span.offset, span.offset + span.length))
+    .digest("hex")
+    .slice(0, 16);
 }
 
 function formatDiagnostic(diagnostic: Diagnostic): string {
@@ -47,12 +91,30 @@ function runOxlint(): Diagnostic[] {
   return parsed.diagnostics;
 }
 
-function loadBaseline(): Baseline {
-  const raw = JSON.parse(readFileSync(baselinePath, "utf8")) as unknown;
-  if (!raw || typeof raw !== "object" || !("files" in raw) || typeof raw.files !== "object" || !raw.files) {
-    throw new Error(`Invalid nested-ternary baseline: ${baselinePath}`);
+function parseBaseline(value: unknown, label = "nested-ternary baseline"): NestedTernaryBaseline {
+  if (!isObject(value)) throw new Error(`${label} must be an object`);
+  if (typeof value.reason !== "string" || value.reason.length === 0 || value.reason !== value.reason.trim()) {
+    throw new Error(`${label}.reason must be a trimmed, nonempty string`);
   }
-  return raw as Baseline;
+  if (/[\r\n\u2028\u2029]/.test(value.reason)) throw new Error(`${label}.reason must be single-line`);
+  if (!isObject(value.files)) throw new Error(`${label}.files must be an object`);
+  const files: Record<string, string[]> = {};
+  for (const [filename, hashes] of Object.entries(value.files)) {
+    if (!Array.isArray(hashes) || hashes.length === 0) {
+      throw new Error(`${label}.files[${filename}] must be a nonempty array`);
+    }
+    for (const hash of hashes) {
+      if (typeof hash !== "string" || !fingerprintPattern.test(hash)) {
+        throw new Error(`${label}.files[${filename}] has malformed fingerprint: ${String(hash)}`);
+      }
+    }
+    files[filename] = hashes.slice();
+  }
+  return { reason: value.reason, files };
+}
+
+function loadBaseline(): NestedTernaryBaseline {
+  return parseBaseline(JSON.parse(readFileSync(baselinePath, "utf8")));
 }
 
 function countMap(values: readonly string[]): Map<string, number> {
@@ -61,8 +123,62 @@ function countMap(values: readonly string[]): Map<string, number> {
   return counts;
 }
 
+function compareAllowances(
+  current: Readonly<Record<string, readonly string[]>>,
+  base: Readonly<Record<string, readonly string[]>>,
+): void {
+  for (const [filename, hashes] of Object.entries(current)) {
+    const baseHashes = base[filename];
+    if (!baseHashes) {
+      throw new Error(`nested-ternary baseline adds allowance for file ${filename}`);
+    }
+    const baseCounts = countMap(baseHashes);
+    for (const [hash, count] of countMap(hashes).entries()) {
+      const baseCount = baseCounts.get(hash);
+      if (baseCount === undefined) {
+        throw new Error(`nested-ternary baseline adds allowance ${filename}:${hash}`);
+      }
+      if (count > baseCount) {
+        throw new Error(`nested-ternary baseline increases allowance ${filename}:${hash}: ${baseCount} -> ${count}`);
+      }
+    }
+  }
+}
+
+function readGitShow(ref: string, path: string): string | undefined {
+  try {
+    return execFileSync("git", ["show", `${ref}:${path}`], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function verifyBaselineMonotonic(current: NestedTernaryBaseline): void {
+  const explicitRef = process.env.LINT_BASE_REF;
+  const env = explicitRef === undefined ? process.env : { ...process.env, JSCPD_BASE_REF: explicitRef };
+  const baseRef = resolveBaseRef(root, env);
+  const baseSource = readGitShow(baseRef, baselineFilename);
+  if (baseSource !== undefined) {
+    const base = parseBaseline(JSON.parse(baseSource), `comparison nested-ternary baseline at ${baseRef}`);
+    compareAllowances(current.files, base.files);
+    return;
+  }
+  if (explicitRef !== undefined) {
+    throw new Error(`Unable to read ${baselineFilename} from comparison commit ${baseRef}`);
+  }
+  const headSource = readGitShow("HEAD", baselineFilename);
+  if (headSource !== undefined) {
+    const head = parseBaseline(JSON.parse(headSource), "comparison nested-ternary baseline at HEAD");
+    compareAllowances(current.files, head.files);
+  }
+}
+
 function writeBaseline(diagnostics: readonly Diagnostic[]): void {
-  const fileCache = new Map<string, Buffer>();
+  const fileCache = new Map<string, CachedFile>();
   const grouped = new Map<string, string[]>();
   for (const diagnostic of diagnostics) {
     if (diagnostic.code !== nestedTernaryCode) {
@@ -78,17 +194,18 @@ function writeBaseline(diagnostics: readonly Diagnostic[]): void {
   for (const name of Array.from(grouped.keys()).sort()) {
     files[name] = grouped.get(name)!.toSorted();
   }
-  const baseline: Baseline = {
-    reason: "Pre-existing nested ternaries grandfathered when enabling no-nested-ternary (tracked for removal under B9). Each hash identifies one exact diagnostic span; adding any new nested ternary fails CI even inside listed files.",
+  const baseline: NestedTernaryBaseline = {
+    reason: "Pre-existing nested ternaries grandfathered when enabling no-nested-ternary (tracked for removal under B9). Each hash binds one diagnostic span to its enclosing declaration and neighboring context, and CI rejects any baseline growth against the comparison commit.",
     files,
   };
   writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
-  console.log(`Wrote ${diagnostics.length} nested-ternary span hashes across ${Object.keys(files).length} files`);
+  console.log(`Wrote ${diagnostics.length} nested-ternary context hashes across ${Object.keys(files).length} files`);
 }
 
 function checkDiagnostics(diagnostics: readonly Diagnostic[]): void {
   const baseline = loadBaseline();
-  const fileCache = new Map<string, Buffer>();
+  verifyBaselineMonotonic(baseline);
+  const fileCache = new Map<string, CachedFile>();
   const failures: string[] = [];
   const remaining = new Map<string, Map<string, number>>();
   for (const [file, hashes] of Object.entries(baseline.files)) {
@@ -113,12 +230,19 @@ function checkDiagnostics(diagnostics: readonly Diagnostic[]): void {
   process.exit(1);
 }
 
-const args = process.argv.slice(2);
-const diagnostics = runOxlint();
-if (args.length === 1 && args[0] === "--write-baseline") {
-  writeBaseline(diagnostics);
-} else if (args.length === 0) {
-  checkDiagnostics(diagnostics);
-} else {
-  throw new Error("Usage: quality-lint [--write-baseline]");
+if (import.meta.main) {
+  try {
+    const args = process.argv.slice(2);
+    const diagnostics = runOxlint();
+    if (args.length === 1 && args[0] === "--write-baseline") {
+      writeBaseline(diagnostics);
+    } else if (args.length === 0) {
+      checkDiagnostics(diagnostics);
+    } else {
+      throw new Error("Usage: quality-lint [--write-baseline]");
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }

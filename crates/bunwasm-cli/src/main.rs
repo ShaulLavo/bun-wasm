@@ -870,6 +870,10 @@ fn parse_command_with_flags(
         {
             return usage_error("--hot supports only file-based ESM server entries");
         }
+        if flags.parallel && !arg.starts_with('-') && !matches!(arg.as_str(), "test" | "help") {
+            eprintln!("error: --parallel is not supported in bun-wasm yet");
+            return Command::Exit(1);
+        }
         match arg.as_str() {
             "--hot" => {
                 flags.mode = RunMode::Hot;
@@ -952,13 +956,7 @@ fn parse_command_with_flags(
                     flags,
                 );
             }
-            "build" | "bun" => {
-                if flags.parallel {
-                    eprintln!("error: --parallel is not supported in bun-wasm yet");
-                    return Command::Exit(1);
-                }
-                return Command::Build(rest.collect());
-            }
+            "build" | "bun" => return Command::Build(rest.collect()),
             "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm"
             | "update" | "up" => return Command::Install(arg, rest.collect()),
             "x" | "bunx" => return Command::X(rest.collect()),
@@ -992,10 +990,6 @@ fn parse_command_with_flags(
                 return Command::Exit(1);
             }
             "run" => {
-                if flags.parallel {
-                    eprintln!("error: --parallel is not supported in bun-wasm yet");
-                    return Command::Exit(1);
-                }
                 return parse_command_with_flags(
                     rest.collect(),
                     true,
@@ -1032,13 +1026,14 @@ fn parse_command_with_flags(
                 return Command::Exit(1);
             }
             // `--parallel` is valid before `bun test` (`bun --parallel=2 test`), but not for `run`.
+            // Keep it out of `exec_argv` so `child_process.fork()` children do not inherit a
+            // test-runner flag into a direct script invocation.
             flag if (!run_file || after_run) && is_parallel_flag(flag) => {
                 if after_run {
                     eprintln!("error: --parallel is not supported in bun-wasm yet");
                     return Command::Exit(1);
                 }
                 flags.parallel = true;
-                exec_argv.push(arg);
                 continue;
             }
             // Like native Bun, other runtime flags (Node's --enable-source-maps, --no-warnings, ...)
@@ -1060,6 +1055,10 @@ fn parse_command_with_flags(
                 );
             }
         }
+    }
+    if flags.parallel {
+        eprintln!("error: --parallel is not supported in bun-wasm yet");
+        return Command::Exit(1);
     }
     if run_file {
         return usage_error("bun run needs a file to run");
@@ -1394,6 +1393,13 @@ mod tests {
             vec!["run", "--parallel", "build", "lint"],
             vec!["--parallel", "run", "build"],
             vec!["--parallel=2", "build"],
+            vec!["--parallel", "lint"],
+            vec!["--parallel=2", "check"],
+            vec!["--parallel", "fmt"],
+            vec!["--parallel"],
+            vec!["--parallel=2"],
+            vec!["--parallel", "install"],
+            vec!["--parallel", "-e", "1"],
             vec!["run", "--sequential", "build", "lint"],
         ] {
             let args = argv.into_iter().map(String::from).collect();
@@ -1408,7 +1414,7 @@ mod tests {
         else {
             panic!("expected --parallel=2 test to remain a test invocation");
         };
-        assert_eq!(exec_argv, ["--parallel=2"]);
+        assert!(exec_argv.is_empty());
 
         let Command::Run(Entry::File(entry), args, _, _, _) = parse_command(
             vec![

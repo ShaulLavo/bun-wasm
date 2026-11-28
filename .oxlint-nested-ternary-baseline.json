@@ -1,777 +1,777 @@
 {
-  "reason": "Pre-existing nested ternaries grandfathered when enabling no-nested-ternary (tracked for removal under B9). Each hash identifies one exact diagnostic span; adding any new nested ternary fails CI even inside listed files.",
+  "reason": "Pre-existing nested ternaries grandfathered when enabling no-nested-ternary (tracked for removal under B9). Each hash binds one diagnostic span to its enclosing declaration and neighboring context, and CI rejects any baseline growth against the comparison commit.",
   "files": {
     "crates/bunwasm-runtime/src/js/assert.ts": [
-      "eba8dd0b976c3593"
+      "37837ffec38137ff"
     ],
     "crates/bunwasm-runtime/src/js/buffer.js": [
-      "21858cd108664a8f",
-      "23e136ee903102c5"
+      "6cf34d8101948494",
+      "a68346127b54c8a4"
     ],
     "crates/bunwasm-runtime/src/js/buffer_encoding_bindings.ts": [
-      "defb48b1f8490a8c"
+      "cfabfdb295c2928b"
     ],
     "crates/bunwasm-runtime/src/js/bun.js": [
-      "2ae6c2ffddd1aca7"
+      "529f34a131b4926a"
     ],
     "crates/bunwasm-runtime/src/js/bun_color.ts": [
-      "922cbdd138184bd7",
-      "a4cbd041e601f2cb"
+      "7afcf8c3b6f67578",
+      "93e637ec8d917d89"
     ],
     "crates/bunwasm-runtime/src/js/bun_file.ts": [
-      "c19f850d497c6f49"
+      "eef2cdcc06c8de39"
     ],
     "crates/bunwasm-runtime/src/js/bun_provided_internals.ts": [
-      "769c2b4ea98d6c04"
+      "213474904ccae840"
     ],
     "crates/bunwasm-runtime/src/js/bun_tcp.ts": [
-      "191a342b62ffb76c",
-      "c89fcc9eb86b793d"
+      "30a274eddf4a1ca8",
+      "95e0fa9513d920a7"
     ],
     "crates/bunwasm-runtime/src/js/bun_test.js": [
-      "20de266a5dd5f334",
-      "6cc4253ef959e056",
-      "721802ae36335885",
-      "902fd277261dab61",
-      "b4baf5b4c5f321b1",
-      "d96a7304c65e86db"
+      "30f65ba5f6a24ea0",
+      "41d079b994f0115f",
+      "97345ca38dea6b70",
+      "9ed082321ed21493",
+      "d408c81952ec711c",
+      "fac92ab9626d69e0"
     ],
     "crates/bunwasm-runtime/src/js/caller_origin.ts": [
-      "0dadf5fb40431b4e"
+      "8d6ef1149ed86b62"
     ],
     "crates/bunwasm-runtime/src/js/child_ipc.ts": [
-      "11e705aa4e769fee"
+      "519b8757e1b2dbbb"
     ],
     "crates/bunwasm-runtime/src/js/compression_streams.ts": [
-      "318c4c0b70ed6b4f"
+      "65b40059b0a16dc4"
     ],
     "crates/bunwasm-runtime/src/js/cookie.ts": [
-      "298d9931bf50072f",
-      "ff8b281656da4f93"
+      "a4fd3164dfa562af",
+      "b0c46fb54e8d00e1"
     ],
     "crates/bunwasm-runtime/src/js/crypto.js": [
-      "6983492c740da176",
-      "dd0099e1558b72f3"
+      "0738870330f7d5f5",
+      "8ab179d1deb2e1da"
     ],
     "crates/bunwasm-runtime/src/js/crypto_keys.ts": [
-      "1687718e2d945682",
-      "49a5ac5668777a36",
-      "5af081b456b31680",
-      "6bdab6129504c54c",
-      "ade49bda268ee200",
-      "c98169ca59cece0a",
-      "caa33075be59f68e",
-      "f8971bcd5af673e9"
+      "03768a9257a0265c",
+      "3b1a8c137da10bdd",
+      "591943b82aaffcee",
+      "84f8d52ec91d6961",
+      "8893d4fc3020cbad",
+      "b1ec93ced5e567ab",
+      "fc09a113fc446ba6",
+      "fd6edb5ccfc144cc"
     ],
     "crates/bunwasm-runtime/src/js/esm_loader.ts": [
-      "b01d60c1e2bb0894"
+      "fd226a795af7787a"
     ],
     "crates/bunwasm-runtime/src/js/form_data_body.ts": [
-      "6411d156c31d333d"
+      "0382101b97fc8db6"
     ],
     "crates/bunwasm-runtime/src/js/formats.ts": [
-      "3c4d8ba787865bc9",
-      "8107b2f3b4a5bc2e",
-      "9f9318c9bf727a99",
-      "e963ec84b03752a6"
+      "09049d65c7dff673",
+      "43c8ff1e4424d995",
+      "a792a00477ec05af",
+      "ae75b0047715e73c"
     ],
     "crates/bunwasm-runtime/src/js/fs_options.ts": [
-      "694f7756e930b847"
+      "7e301a88e0c7c671"
     ],
     "crates/bunwasm-runtime/src/js/html_server.js": [
-      "68c175ae817cdb9c"
+      "2b478c58b000e737"
     ],
     "crates/bunwasm-runtime/src/js/http2_response.ts": [
-      "cf2ff5d97cc44c71"
+      "0528a21b9bd482c4"
     ],
     "crates/bunwasm-runtime/src/js/inspect.js": [
-      "0b05396299bd841d",
-      "1b5061a894467d1f",
-      "1d78032dcf3c3c91",
-      "5bc8dc48a3da1b6e",
-      "638c8a8c84a4aa6a",
-      "67f004d799ef5f3e",
-      "cc6b279bab850b27",
-      "ebca97ea876958f8",
-      "ebdfbe5de036ddb0"
+      "12c376ab2a9e6485",
+      "3ba945e096b73c75",
+      "75e6780e9be6b272",
+      "83777c7825e3fc0e",
+      "8e6f67bd07c2be47",
+      "905cb0e208c5725d",
+      "9ff03d981d402380",
+      "d2ee1bbf226eddad",
+      "fb5edb9a9bfefb90"
     ],
     "crates/bunwasm-runtime/src/js/jsonl.ts": [
-      "5f4441c76393593b",
-      "e32935bbe275b70e"
+      "42ef82fc1e99e86e",
+      "6e0030783b527b43"
     ],
     "crates/bunwasm-runtime/src/js/net.js": [
-      "342cb0cfe35dab85"
+      "6e8c4c81485ec133"
     ],
     "crates/bunwasm-runtime/src/js/net_address.ts": [
-      "2f13153079ab64ce"
+      "ce4f7179054dba25"
     ],
     "crates/bunwasm-runtime/src/js/node_fs.js": [
-      "3b22c80940531be2",
-      "84ddf47ff95fc3af",
-      "a671fa8dff4ddb96",
-      "d3752de17ee2e918",
-      "dc9ecd097e6b4ab4"
+      "4aa13ffcb7c47828",
+      "5ce129b9e64124ab",
+      "99ceb9d73954360a",
+      "a15fd5de9716d7b2",
+      "c9a326b400080d9d"
     ],
     "crates/bunwasm-runtime/src/js/node_net.js": [
-      "86848c3c55f60571"
+      "9858451aeaf139d7"
     ],
     "crates/bunwasm-runtime/src/js/node_pbkdf2.ts": [
-      "ac0853fe8c2e63c5"
+      "1b6422344a2a395e"
     ],
     "crates/bunwasm-runtime/src/js/node_test.ts": [
-      "cdc37449e0b490d6"
+      "80a7dcc36e450297"
     ],
     "crates/bunwasm-runtime/src/js/node_tls.ts": [
-      "3f4f69203b840fb8",
-      "69be1d510fad7d13"
+      "087adecff69b2a5c",
+      "539afc8eb729d73b"
     ],
     "crates/bunwasm-runtime/src/js/node_url.ts": [
-      "462cdce7d7a5e585",
-      "f2d31ed5cea33a62"
+      "5f0a67f3194337b7",
+      "7443cb8d0e8a2dcf"
     ],
     "crates/bunwasm-runtime/src/js/path.ts": [
-      "8b2dbf0d682c8cd4"
+      "d527bf81a9cd9c2f"
     ],
     "crates/bunwasm-runtime/src/js/process.ts": [
-      "51648b8fe1d00e7c",
-      "df385d368bd660c9"
+      "30c47dd00b35f7e2",
+      "82c4fc13cd415096"
     ],
     "crates/bunwasm-runtime/src/js/source_prepare.ts": [
-      "24055e8637078798"
+      "9ec7b4880473cf2c"
     ],
     "crates/bunwasm-runtime/src/js/spawn.ts": [
-      "0611e539f97da1e2",
-      "46c45399bbbf26f3",
-      "ff56bc3642dc9181"
+      "40b72994b75d8439",
+      "5f81a88f2a22ab74",
+      "ccabe69924d85715"
     ],
     "crates/bunwasm-runtime/src/js/test_lifecycle.ts": [
-      "ef79bd6dd2f3c48e"
+      "dbf06b2c65a63785"
     ],
     "crates/bunwasm-runtime/src/js/util.ts": [
-      "1c8ebdfdb21a6acd",
-      "2220d2a3ae773b0e",
-      "65a0200a620fef21",
-      "710135f7a255c4c3",
-      "8cc14ee84cd8d426"
+      "017a776c12e0d302",
+      "49b8c2e95a8bac3b",
+      "7695c67769116000",
+      "835783ba51fd5b8f",
+      "fb18a197bce38969"
     ],
     "crates/bunwasm-runtime/src/js/web.js": [
-      "a677a879661bfe89",
-      "cf482506e6c2e375"
+      "8ac286f9da096d47",
+      "fd2c3bfc4bb319b8"
     ],
     "crates/bunwasm-runtime/src/js/web_worker.ts": [
-      "48af122f33cd3a5f",
-      "d293add099f4cfd0"
+      "1092a2d5ed57df98",
+      "575b9aa1b2d42a26"
     ],
     "crates/bunwasm-runtime/src/js/webassembly.ts": [
-      "506a7bea11f5e00b"
+      "0885a4bf422a8553"
     ],
     "crates/bunwasm-runtime/src/js/websocket.ts": [
-      "00261f640899c488",
-      "5765c3ee02776a14",
-      "661796ab47cf2bc7",
-      "dfe8e7cfd11cbee1"
+      "2d4a4d7895936136",
+      "aad4c3dea8c1da52",
+      "ab20550fef27670f",
+      "fb5fca2f0bd64e44"
     ],
     "crates/bunwasm-runtime/src/js/worker_codec.ts": [
-      "6f81203ce1f611b4"
+      "312910cbf77160b7"
     ],
     "crates/bunwasm-runtime/src/js/worker_threads.ts": [
-      "08dc5910af7733b5"
+      "cfe5675c19f3ad94"
     ],
     "crates/bunwasm-runtime/src/js/x509.ts": [
-      "b33cb32a1198be3f"
+      "0d185d68f8747104"
     ],
     "crates/bunwasm-runtime/src/js/zlib.ts": [
-      "d28097a2a0c55261",
-      "eacb1efd10d16298",
-      "eef5e28b3ee93fec"
+      "251d5569751dedb6",
+      "3581b7cfe6d8dd00",
+      "513942b4aee856d6"
     ],
     "sandbox/src/sandbox.ts": [
-      "35d92680912b08cc"
+      "2216269990299970"
     ],
     "scripts/app-matrix/browser-error-phase-correction.test.ts": [
-      "6e1a94597bcf9de2",
-      "a719f4524c69f5ed"
+      "c1d6f335b641b19d",
+      "d97ba6e40af35243"
     ],
     "scripts/app-matrix/next-acceptance-assets.ts": [
-      "2b1d565817363f25"
+      "6afa01bcfc532f13"
     ],
     "scripts/app-matrix/next-acceptance.test.ts": [
-      "1a9f292ed9b3f31a"
+      "f6060b7e30e5cd55"
     ],
     "scripts/app-matrix/next-acceptance.ts": [
-      "5d2d1f6c86bb684c"
+      "86b8c07cf53335d6"
     ],
     "scripts/app-matrix/product-browser.ts": [
-      "18dbce63876834d9"
+      "6e8d4058b0c4a652"
     ],
     "scripts/app-matrix/product-report.ts": [
-      "20f0f01600624f95"
+      "188613f35b3c0ef0"
     ],
     "scripts/app-matrix/run.mjs": [
-      "9f44b9cf25117e50",
-      "e7c46cee79127d98"
+      "79ec3915af9a994c",
+      "e1cdaa3df6368f60"
     ],
     "scripts/app-matrix/vinext-probe.ts": [
-      "17d51dda0d30edd8"
+      "1e0cbcf94bdd2ca3"
     ],
     "scripts/browser-call-trap-memory.test.ts": [
-      "46f8910304e7f1b9"
+      "116c0f3d37a6e46c"
     ],
     "scripts/browser-guest-coverage.ts": [
-      "2396afff557f2f20",
-      "54d239bdb5e89b77",
-      "a57b6b3686d0e31e"
+      "06d7349b3be61415",
+      "3a9f944b7ab99641",
+      "c5619c8894eb303f"
     ],
     "scripts/browser-guest-regression.test.ts": [
-      "7ffadfd913483c2c"
+      "c9e1b35a1680c8a2"
     ],
     "scripts/bun-api-probe.ts": [
-      "11ae9e47dcba037a",
-      "26ae115863ece90b",
-      "cc7579763b4bba2e"
+      "0809c9a3b1d1fe36",
+      "337b782958034be6",
+      "ce5104428d5b57e1"
     ],
     "scripts/c1/claim.test.ts": [
-      "49256f9c3d391742"
+      "83e495b9c0b833fe"
     ],
     "scripts/c1/inputs.ts": [
-      "dbda7fa43f611ff9"
+      "9ae94deeafdcaf3f"
     ],
     "scripts/c1/loaded.ts": [
-      "3da61524d04b66ab"
+      "0a1e829a0bd202d6"
     ],
     "scripts/c1/publication.ts": [
-      "90c1e5de7e1c0886"
+      "01f971d6caf22147"
     ],
     "scripts/ci-cache-inputs.test.ts": [
-      "b2a7596a0251e3e1",
-      "e876292ecaa2fe27"
+      "7cdef891e6354244",
+      "88793beffc96d3d8"
     ],
     "scripts/ci-cache-policy.test.ts": [
-      "84565560d4a4d30b"
+      "e016d187228f4899"
     ],
     "scripts/ci-jsc-artifact.ts": [
-      "224e8d2562b99e88",
-      "974eeb060b6ca330"
+      "4fe7e33d1e0349da",
+      "8cc59eec6b8f06f4"
     ],
     "scripts/ci-jsc-cache.test.ts": [
-      "cc6ad03f8018e434"
+      "3ab55b7861da9c1a"
     ],
     "scripts/ci-jsc-prebuild.test.ts": [
-      "facaf88b2e00b133"
+      "bf863db48954db6e"
     ],
     "scripts/ci-ordinary-jsc-program.test.ts": [
-      "b2c830e4ba5718ed"
+      "09e11095372c92ef"
     ],
     "scripts/ci-ordinary-web-workflow.test.ts": [
-      "118dbba1fddfb5bb",
-      "272ececdd7508b0d",
-      "d0c7efe2299b4b7f"
+      "4b6ad34cb673a89d",
+      "c99a500acd92a05e",
+      "df2ff721d2c6f92f"
     ],
     "scripts/ci-production-separation.test.ts": [
-      "524cc2a98efef0bc",
-      "71334af07f949a9e",
-      "8516f807316cfec2"
+      "1595dae26703e8d5",
+      "d87511083b7faa6e",
+      "fda28b8aabdc3afa"
     ],
     "scripts/ci-quality.test.ts": [
-      "8fc4a01b8629adb1"
+      "fa48df4f27fa30fd"
     ],
     "scripts/ci-release-coverage.test.ts": [
-      "6557c3e3266870de",
-      "f2874c9a061f1956"
+      "29995a1cf470e10e",
+      "3afb178daef0121e"
     ],
     "scripts/ci-shared-jsc-cache.test.ts": [
-      "cc6ad03f8018e434"
+      "fb5d49a87525e197"
     ],
     "scripts/deploy-upgrade-browser.test.ts": [
-      "a104226bf9fd9f51",
-      "a665aecd1445683f",
-      "eae7895a0e3e57d2"
+      "6aa3d3b445e397bc",
+      "bd6ce1ca4ca09074",
+      "c0267e9a3f7916ce"
     ],
     "scripts/dns-lookup.test.ts": [
-      "fee2235c451612b5"
+      "b08cb4334debada4"
     ],
     "scripts/engine-arm-registry.test.ts": [
-      "4a83800ba7a4a52d"
+      "1ca7a4cc29171fc5"
     ],
     "scripts/engine-arm-registry.ts": [
-      "4a83800ba7a4a52d"
+      "af0ee48059d96727"
     ],
     "scripts/engine-memory-hook.test.ts": [
-      "75cc78c028265267"
+      "b495f1bda2a2f721"
     ],
     "scripts/fetch-lifetime.test.ts": [
-      "d7c765400aea5238"
+      "ab2809e7f23ab979"
     ],
     "scripts/fixtures/deadline-scenario.ts": [
-      "9f3c32ee5f1cbb1a"
+      "38c932357d647191"
     ],
     "scripts/fixtures/jsc-json-bench.ts": [
-      "47e9a96a71287636",
-      "911ba69190b089d5"
+      "7b1b215548522f80",
+      "bc2b92654a362072"
     ],
     "scripts/fixtures/oxc-memory-probe.ts": [
-      "72165dae38ae20a9"
+      "d692306c60b61f17"
     ],
     "scripts/fixtures/rolldown-memory-probe.ts": [
-      "7a765d84adce9f77"
+      "285dd3ae72e1b5bb"
     ],
     "scripts/fs-options.test.ts": [
-      "f99906d3197e986e"
+      "e2bb2556f0d0dc2d"
     ],
     "scripts/fs-promises-watch.test.ts": [
-      "b4fd390e53818e2e"
+      "5854ba8637e6473e"
     ],
     "scripts/generate-crypto-vectors.mjs": [
-      "9b1eecb9adb96002"
+      "13986796ba7bfa15"
     ],
     "scripts/goals-matrix/build-deadlines.test.ts": [
-      "69fcff7328db2cb2"
+      "633bce31e664be12"
     ],
     "scripts/goals-matrix/cell-deadlines.test.ts": [
-      "3104db9620354eb2",
-      "432faf8a46505d05",
-      "716701ba4a45f9a4",
-      "c89c34d6925bdf07",
-      "dd68e193c696e410",
-      "e9204ff218d7c625"
+      "2ea1c81f05ba56e7",
+      "30fd2b9b6fc951e2",
+      "5211fac9d60e1f17",
+      "58908e07eb38f75d",
+      "7aa1300f44e498ad",
+      "bc213561b7334bf3"
     ],
     "scripts/goals-matrix/deadlines.test.ts": [
-      "ba61c4dc7cd2c33b",
-      "c30e904a6e42532e",
-      "dd68e193c696e410",
-      "e9204ff218d7c625"
+      "113abbed8a69cc7f",
+      "12ef859e8e660856",
+      "441c4c4ae8d165cc",
+      "c50e96b609552c9c"
     ],
     "scripts/goals-matrix/model.ts": [
-      "61d2b6908a6a9a42",
-      "7aeb2f2f345743ed"
+      "05f492f2a3947e97",
+      "b1bfd4f3ff1de64c"
     ],
     "scripts/goals-matrix/next-build-observer.test.ts": [
-      "0423061e0a0750a0"
+      "11f650d96876ce05"
     ],
     "scripts/goals-matrix/owner-slot-deadline-browser.test.ts": [
-      "2dccab6885f7a500",
-      "96dcd1c8e6cbb944"
+      "cbc60d061eba89c0",
+      "d64831ac58377ade"
     ],
     "scripts/goals-matrix/policy-metadata.ts": [
-      "03698360f34acf82"
+      "ba704519b24c75a6"
     ],
     "scripts/goals-matrix/run.test.ts": [
-      "5060be77ea6ae806"
+      "16800566e7a58546"
     ],
     "scripts/goals-matrix/safari-ownership.ts": [
-      "9372f407d2324ceb",
-      "c1484bf27aae7525",
-      "d9d8681728290245"
+      "983359267703b7ef",
+      "bf9b01b1f4ec6f8d",
+      "de1f389c899befb3"
     ],
     "scripts/goals-matrix/safari-transport.ts": [
-      "7b25251b314b32e3"
+      "a86d0c8002666d1e"
     ],
     "scripts/goals-matrix/view.ts": [
-      "02b86995652428b7",
-      "f7aca28fbe8a32b2"
+      "082c83daabeb4918",
+      "355e32d5a589327e"
     ],
     "scripts/guest-core-receipt.ts": [
-      "5e0b647370e2ceb7"
+      "7ce8f35d59bc539e"
     ],
     "scripts/guest-source-manifest.ts": [
-      "2c89c494c896f866",
-      "7f5e1d721eefdc68",
-      "aa76efd07572e10f"
+      "0b500d06f9db2dbd",
+      "733d731094819ccf",
+      "a1d43bc329a7a1db"
     ],
     "scripts/http-response-lifecycle.ts": [
-      "fe1e731480fc3e6d"
+      "992b13ec969ac308"
     ],
     "scripts/install-tarballs.test.ts": [
-      "5fa9229af3f2f1a4"
+      "6ed12a160fd0133e"
     ],
     "scripts/io-resource-context-intake.ts": [
-      "7831bdcf4eaf49b1"
+      "cb4996c0c2ec39ce"
     ],
     "scripts/iphone-smoke-watch/scheduler.ts": [
-      "49c8e7e007691275"
+      "a001750d4bf85a82"
     ],
     "scripts/iphone-smoke/run.ts": [
-      "4f82fe697f4f29ab"
+      "cfb51c4bbe1d7946"
     ],
     "scripts/iphone-smoke/smoke.test.ts": [
-      "88f0cbc2c97a0fac"
+      "8821a1d27c060442"
     ],
     "scripts/jsc-parser-reserve.test.ts": [
-      "7c73befac8aa3a07"
+      "7ca6e49cfbd9c417"
     ],
     "scripts/measure-light-startup.ts": [
-      "74dc191e909ea3f0"
+      "d2d60fa23b029828"
     ],
     "scripts/mode-memory-allowlist.test.ts": [
-      "eab86ba786e33347"
+      "a0d4e0e0c490cccb"
     ],
     "scripts/navigation-server-browser.test.ts": [
-      "298b981b8dc26953"
+      "c1e5d0ebe23a3ce7"
     ],
     "scripts/net-listener.test.ts": [
-      "44547db29e5775bf"
+      "3b67769fb528bcbd"
     ],
     "scripts/next-acceptance-http.test.ts": [
-      "5b1e7dd4c931972f",
-      "de9526cdb2d5bc76"
+      "157906176be354d2",
+      "f7228cf571e458d5"
     ],
     "scripts/package-scripts.test.ts": [
-      "51221c185516ae29"
+      "4b9846f90cc674d4"
     ],
     "scripts/performance/lifecycle-browser.ts": [
-      "48363f35843e4c01"
+      "041700cbe109c853"
     ],
     "scripts/performance/lifecycle-profile-analysis.ts": [
-      "85267c57619620c7"
+      "83f12ed84e3d459b"
     ],
     "scripts/pretty-output.test.ts": [
-      "0d49348e551d2447"
+      "c130be8c8d854992"
     ],
     "scripts/publish-guest.ts": [
-      "d2d2017a9e639706"
+      "fe5d43efa487577f"
     ],
     "scripts/quality-input-times.ts": [
-      "253751fd2f635c3e"
+      "74d0ce904ad57b37"
     ],
     "scripts/quickjs-regexp-test.test.ts": [
-      "754051d4c59c8e37"
+      "e573c6180cb18a96"
     ],
     "scripts/refresh-compatibility-docs.ts": [
-      "508c160227580efe"
+      "04f91cc67e12a499"
     ],
     "scripts/rolldown-memory-browser.ts": [
-      "7b0fd362df1c5230"
+      "7528607cee8e54ef"
     ],
     "scripts/runtime-emission.test.ts": [
-      "c555a31782374c72"
+      "3a632a9c01ebf287"
     ],
     "scripts/runtime-events.test.ts": [
-      "1d33d9fd6a65953c",
-      "649f048da5a00afd",
-      "b72f19735dff3e13",
-      "d7920a5a5a6f191a"
+      "16374a11e83631f4",
+      "633ffc294704bf5d",
+      "bec159feeddc6fe6",
+      "fa88c9179e2c31ab"
     ],
     "scripts/runtime-js-controls.test.ts": [
-      "3131c312f58d341e",
-      "77096f0e8cfeaa79"
+      "368f3ab3737400be",
+      "505c55930cd9db73"
     ],
     "scripts/runtime-util-controls.ts": [
-      "3feb3d2b361e2e03"
+      "d0897383aa986e5d"
     ],
     "scripts/sandbox-readiness-browser.test.ts": [
-      "aa005fd3dec8f097"
+      "4a9d42f4ef43a48e"
     ],
     "scripts/selected-message-tasks.test.ts": [
-      "162e43a48bf6bd96",
-      "60757bb7353822c6",
-      "b17910543dcd4cdc"
+      "2a7663c3e7a44000",
+      "2ab942598627b63c",
+      "6910d3f66b1dfb8e"
     ],
     "scripts/spawn-runtime-proc-fixture.ts": [
-      "41cb09b3da791add"
+      "78589da63679eeb7"
     ],
     "scripts/spawn-runtime-proc.test.ts": [
-      "e3f8c1e9590111e2"
+      "4759fbd88c6205e7"
     ],
     "scripts/spidermonkey-memory-browser.test.ts": [
-      "9e38e1844df48606"
+      "19e08911c95c4758"
     ],
     "scripts/spidermonkey-side-core-receipt.ts": [
-      "f4d74d71e58bd0ab"
+      "578333637efdc8c2"
     ],
     "scripts/stage-guest-wasm.ts": [
-      "508c160227580efe"
+      "8f04bfe8656f3cd7"
     ],
     "scripts/storage-diagnostics-browser.test.ts": [
-      "d0c56c996f23ce7a"
+      "7c624cec0ee3de59"
     ],
     "scripts/storage-document-browser.test.ts": [
-      "e852b181ff6393c9"
+      "93f93aa474b4d284"
     ],
     "scripts/storage-fs-metadata.ts": [
-      "baba8778862092fe"
+      "2b7bb896d386db41"
     ],
     "scripts/storage-fs-observation.ts": [
-      "6e31f3220f1ecd71"
+      "5dd395bc2cf0bd2f"
     ],
     "scripts/stream-polyfill-node-hooks.ts": [
-      "0d7f07b7f8721f78"
+      "7d03e9d0f4733182"
     ],
     "scripts/test-checks.test.ts": [
-      "10dd6848bbda5909",
-      "f54379ec23d2aeae"
+      "30645aa7bb319b89",
+      "35cc4528d985c773"
     ],
     "scripts/test-checks.ts": [
-      "e3735aeb6d99b348"
+      "ee8ecb8f881f57f0"
     ],
     "scripts/tls-qualification.test.ts": [
-      "0d4362378b390ce6",
-      "0d4362378b390ce6"
+      "a69cf2a68e5f790c",
+      "f2f4e74294a82c94"
     ],
     "scripts/wasm-size-breakdown.ts": [
-      "cb38ea3e1dfa7f65",
-      "cc7b60172f293c3b"
+      "163bab94c5dfe151",
+      "a6c868e1634cc43c"
     ],
     "spidermonkey/native-profile.ts": [
-      "2632e6a06fef0f59"
+      "23125e6555336624"
     ],
     "src/engine-kind.ts": [
-      "6c2690b96d5bca64"
+      "8bb981a7028f2e3a"
     ],
     "src/package-continuation.ts": [
-      "05bfdce99e6a7c39"
+      "bf61b8eaeda2863e"
     ],
     "tests/check-worker-regressions.ts": [
-      "be8b58630ed37fb6",
-      "d4fbcdecf4b43ace"
+      "0dae98c346789710",
+      "a43f716f484acc0d"
     ],
     "tests/install/commands.ts": [
-      "6e112697068ab74c",
-      "add2b51b2b32b15f"
+      "0ef6734af6d85714",
+      "fd6839555c791c9c"
     ],
     "tests/install/migration-review.ts": [
-      "3a92218e5b597042",
-      "684c0c03d7984fb2"
+      "43b7bd6b39cb7493",
+      "8061bc677484bafd"
     ],
     "tests/install/migration.ts": [
-      "3f72a6f89b1ee8a5",
-      "970718a780943515",
-      "ea8fb02a1e19b2cb"
+      "1994025541e8c2f6",
+      "7c0b1c867f6f3a11",
+      "fb60a8114bc234e2"
     ],
     "tests/install/package-options.ts": [
-      "9c2cdcd53b7e2560",
-      "f6ff3f7e0ff38114"
+      "e0e943e89d065144",
+      "e1e87711baba5212"
     ],
     "tests/install/root-overrides.ts": [
-      "9c2cdcd53b7e2560",
-      "f6ff3f7e0ff38114"
+      "6eb0cb4c5962237a",
+      "85e09910c8731854"
     ],
     "tests/install/run.mjs": [
-      "7dda8168ac733ac2",
-      "908154aea39a4447"
+      "73fbdbafd8b61a6d",
+      "925ad4f3b16dc2b8"
     ],
     "tests/install/security.ts": [
-      "630c5c0ed26b0946",
-      "684c0c03d7984fb2",
-      "8b0de59548626b51",
-      "92f9b218c38c6f75",
-      "a79653d23f2acfa5",
-      "aee61aac1b0d26a0",
-      "b2549cb9e70a10db",
-      "c2d40cbaa099770f"
+      "0d8b600d515880b1",
+      "330ddc648f753467",
+      "6a5ed7299dbcd5b7",
+      "6e189648dc5d332a",
+      "7b377a325903a993",
+      "da43ab34d20806f0",
+      "e4b3302de1ff36c7",
+      "f568f0a14c8cacb0"
     ],
     "tests/package/adapter.test.ts": [
-      "cfd9f2cbfd1e57aa"
+      "5d9056579a8b172a"
     ],
     "tests/package/engine-preparation.test.ts": [
-      "cf41051a7689d47e"
+      "ad3fc996cec59280"
     ],
     "tests/package/guest-acceptance.test.ts": [
-      "1c044ffb8fd8645e",
-      "9f14accac0e2c1af"
+      "40b0a5e8143f0c62",
+      "fc4af2e1437e8880"
     ],
     "tests/package/package-continuation.test.ts": [
-      "8324f2f0d37b9763",
-      "98b13842f4c29d3f",
-      "c2e0c1763773d9ab"
+      "06213d1f7551ce4b",
+      "1dcab94745e9f695",
+      "7170158417bd930d"
     ],
     "tests/package/package-handoff.test.ts": [
-      "587fe3f874855be5"
+      "431d58db7f478728"
     ],
     "tests/package/quickjs-plan-fixture.ts": [
-      "ec2dc78a64afd24f"
+      "1d0b50746d6319fd"
     ],
     "tests/test-directory-descriptors.ts": [
-      "07449c43c202e2ef"
+      "ad9c16281a40536d"
     ],
     "tests/wasm-tables/client.ts": [
-      "420bda97ba6ae581",
-      "85bb229f0ddef880"
+      "176058f652fccb55",
+      "d3f7b78058e763a1"
     ],
     "web/scripts/ci-process-bundles.ts": [
-      "551e784120ea281c"
+      "6dae3b2d3d2759b7"
     ],
     "web/scripts/node-host.ts": [
-      "9cd2c8781ce9ca45",
-      "9cd2c8781ce9ca45"
+      "b22a66fe485bcbf3",
+      "c93a9750576ae28e"
     ],
     "web/scripts/node-install-net.ts": [
-      "26f382978a0424ec",
-      "470fd09aa86781c8"
+      "3198f735179c5616",
+      "82a066bd9255c34e"
     ],
     "web/scripts/node-net.mjs": [
-      "ecfedf1a749c6660",
-      "f0811ef5bb9932ab"
+      "13d7bbbd336b94cc",
+      "93bfaedb55f81ff0"
     ],
     "web/scripts/node-process.ts": [
-      "2e19539a7eaef51a",
-      "d4b01327a83be0db"
+      "36471dede41175b7",
+      "e3ce3b5eee55bb1f"
     ],
     "web/serve.ts": [
-      "a2644fc726ae35a6"
+      "51da4a613e52e06d"
     ],
     "web/src/bun-executor.ts": [
-      "954be312c15cc55a"
+      "d8deb70ade182b90"
     ],
     "web/src/engine-host.js": [
-      "aaf3e73ce787c5f7",
-      "bf81fc0504d4edb7"
+      "d9b60a8e81fbc68f",
+      "e67e915e782efa93"
     ],
     "web/src/launch-failure.ts": [
-      "f9fa395051cf6949"
+      "0e0ce90aa8ebb427"
     ],
     "web/src/native-readable-iterator.ts": [
-      "cf3439eeb5e14a87"
+      "69cc9243d3184421"
     ],
     "web/src/native-stream-state.ts": [
-      "ac92c7ddfa626766"
+      "c7dc7cfbf2cd8853"
     ],
     "web/src/nested/host.ts": [
-      "5b514705ce4dba1a",
-      "c2b138d859598535",
-      "d1298cf4efb69c33",
-      "d94747c6acd12378"
+      "0753bb1784b57ddf",
+      "4e64df45a20b25cc",
+      "b843effb409f3510",
+      "df5efd525934cdaf"
     ],
     "web/src/playground/editor-pane.tsx": [
-      "0b8982b7180c09f3"
+      "85e7052a0f14f26e"
     ],
     "web/src/playground/playground.ts": [
-      "35d92680912b08cc"
+      "6144a70018cf4e45"
     ],
     "web/src/preview-origin/sw-core.ts": [
-      "c3cfa56bed75c666"
+      "24781fabadcf60ad"
     ],
     "web/src/preview-owner-client.ts": [
-      "2713604a7670b907"
+      "6302989c5d6ca9a5"
     ],
     "web/src/promise-reactions.ts": [
-      "2ef167cd001f266b"
+      "284c649b9b43d4f6"
     ],
     "web/tests/browser-editor.ts": [
-      "0bd10f6ddb1f4ece",
-      "ff4655f326d2e5e5"
+      "07afd624319f5908",
+      "20c84dcd874fa7f6"
     ],
     "web/tests/browser-engine-interruption.ts": [
-      "a9284c4ea9499bb0"
+      "8fb158931ba261db"
     ],
     "web/tests/browser-persistence.ts": [
-      "e481f2b49fd90190"
+      "d21c66084ccc568c"
     ],
     "web/tests/browser-process-hosted.ts": [
-      "3b45e0bec6e70e6d"
+      "dc3b34d148034a43"
     ],
     "web/tests/browser-shell-product.ts": [
-      "b6609314403cc60d",
-      "d7ca1b661dd126a9"
+      "236f466c88df161b",
+      "be469c69bda93f9b"
     ],
     "web/tests/bun-executor.test.ts": [
-      "64a3e624373ad38e"
+      "b24d447b2817fcf9"
     ],
     "web/tests/bun-runtime-proc-fixtures.test.ts": [
-      "9cf251932fdf826b",
-      "bc4a2a66d6d58436"
+      "1d3f578aa6b1acb4",
+      "7154c79a3212e5fc"
     ],
     "web/tests/dns-lookup-lifecycle.test.ts": [
-      "e572654fdc450095"
+      "6e24048ce23b4376"
     ],
     "web/tests/engine-interruption-main.ts": [
-      "922c52c923b13f4a"
+      "cd06f68965512134"
     ],
     "web/tests/engine-interruption-probe.ts": [
-      "c8c497eff0159d14"
+      "f4f3da5a73b0cf0e"
     ],
     "web/tests/engine-interruption-scope.test.ts": [
-      "fe7531dafdde81a7"
+      "de7c2f90a02cc0f5"
     ],
     "web/tests/filesystem-bench-main.ts": [
-      "4cc9705e7117ca4c",
-      "d944ef964abbccbf"
+      "87b637ca57de5ba8",
+      "9cf5a4c40c4f1f61"
     ],
     "web/tests/fixtures/node-install-fetch.ts": [
-      "8270a160269bd70d"
+      "daea055b33f67033"
     ],
     "web/tests/fixtures/tls/pg-client.ts": [
-      "08c3e4fe2f0b3707",
-      "165a45e3a50b69d4",
-      "30be28ce2bc56a65",
-      "45933bf45b581ea9"
+      "47a622e1138e0d01",
+      "6250e0f869f10c4f",
+      "7682209766c19935",
+      "95106099eba0012d"
     ],
     "web/tests/install-cache.test.ts": [
-      "88f0cbc2c97a0fac",
-      "88f0cbc2c97a0fac"
+      "4f2f6ab5634253df",
+      "8559e4ffee485f0e"
     ],
     "web/tests/native-stream-dictionary-controls.ts": [
-      "be67bf64c1fb1027"
+      "000f8db0dc2f15fc"
     ],
     "web/tests/network-consumer.test.ts": [
-      "88f0cbc2c97a0fac"
+      "88270a92b086be89"
     ],
     "web/tests/next-framework-registry.ts": [
-      "22b765c858e97106"
+      "db64272c99ff9b0c"
     ],
     "web/tests/node-install-fetch.test.ts": [
-      "37c1af2e24de08ad"
+      "858adb22096d9dad"
     ],
     "web/tests/node-root-signals.ts": [
-      "abea0ec7b6be3659"
+      "5ebedf94b4876824"
     ],
     "web/tests/node-signals.test.ts": [
-      "503a72da2033f4ad"
+      "00d2dd200ddcba4d"
     ],
     "web/tests/persistence-browser-main.ts": [
-      "eda7234dc7af26a1"
+      "806e3ffd94d38f79"
     ],
     "web/tests/persistence-browser-worker.ts": [
-      "1c329de805746e15",
-      "917260c7ef61ee7b"
+      "1908611d23b2ab0e",
+      "22706962d308a180"
     ],
     "web/tests/playground-profile.test.ts": [
-      "7a3b797527376e36"
+      "f39166f7beb924fa"
     ],
     "web/tests/process-case-runner.ts": [
-      "d529a7c066512125"
+      "a52e92932d66898b"
     ],
     "web/tests/process-fixtures.ts": [
-      "3638ac91057efc26"
+      "7dd13f1a0248c445"
     ],
     "web/tests/process-page-adapter.ts": [
-      "314ded088b351920",
-      "58fb3bb08aeea8db",
-      "a1736b025a130b06"
+      "147db171cd097599",
+      "453e033c81552e65",
+      "a37610ebaae25a38"
     ],
     "web/tests/process-runtime-fixture.ts": [
-      "9e2b5cf2063d06b6"
+      "def9ada309dc8a80"
     ],
     "web/tests/runtime-proc-fixtures.test.ts": [
-      "369d5eab48451833",
-      "42ea2623a5966687",
-      "56654bb9fa67150c",
-      "c63193133e2e37f8",
-      "f7b7927821c53668"
+      "10368e6f780ccb6d",
+      "957025c3064691ba",
+      "9eb712876f37c2ea",
+      "ce0d47761e495461",
+      "e95063ee53217fae"
     ],
     "web/tests/serve-encoding.test.ts": [
-      "167091a3b788d0f7",
-      "4334674980041502",
-      "4334674980041502"
+      "56dff1c12c801647",
+      "8dcf91d8ec8409fc",
+      "b39a14a6027f7e66"
     ],
     "web/tests/shared-wasm-browser-plan.ts": [
-      "06c72ea6fdbe1691"
+      "f29c8151d9e210d1"
     ],
     "web/tests/shell-stop-check.ts": [
-      "3fa39aa34ff4663b"
+      "940b5ff9c7ed6b24"
     ],
     "web/tests/site-assets.test.ts": [
-      "167091a3b788d0f7",
-      "183591dc758a54f9",
-      "4334674980041502"
+      "28b48ee5280eb086",
+      "a92f4965fb01d40e",
+      "d8a377fc760ff175"
     ],
     "web/tests/timeout.test.ts": [
-      "e74a97600142f197"
+      "a6344277053122ea"
     ],
     "web/tests/tls-relay-page.ts": [
-      "c7c1944412cf8439"
+      "686137eca2b1fc77"
     ],
     "web/tests/ui-model-helpers.ts": [
-      "49eb926df4deb8c8"
+      "5be7e0545cdd2b48"
     ]
   }
 }

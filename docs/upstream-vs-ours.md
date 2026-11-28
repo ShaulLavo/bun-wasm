@@ -132,7 +132,7 @@ Visible directly in [crates/bunwasm-runtime/src/js/builtins.js](../crates/bunwas
 | `Bun.Terminal` | Not exposed on `Bun`; `web/src/bun-terminal.ts` only attaches host terminals | Waffle PTY exists; expose the public class over Waffle PTY handles. |
 | `node:inspector` | `open`/`waitForDebugger`/`Session` throw; `close` is a no-op | Requires engine debugging hooks, not OS syscalls. |
 | `node:perf_hooks` | `PerformanceObserver` is a no-op; histograms return zeros; `timerify` returns the original function | Needs host engine instrumentation or explicit capability errors. |
-| `node:diagnostics_channel` | `bindStore`/`unbindStore`/`subscribe`/`unsubscribe` are no-ops; trace helpers just call `fn` | High-leverage Slice 2 cutover: upstream catalog entry has **zero native hooks** and only depends on `internal:validators`. |
+| `node:diagnostics_channel` | Ordinary `Channel` (`subscribe`, `unsubscribe`, `publish`, `hasSubscribers`) works; `bindStore`/`unbindStore`/`runStores` and `tracingChannel` methods (`subscribe`/`unsubscribe`/`traceSync`/`tracePromise`/`traceCallback`) are no-ops or pass-throughs | High-leverage Slice 2 cutover: upstream catalog entry has **zero native hooks** and only depends on `internal:validators`. |
 | `node:async_hooks` | Adapted `AsyncLocalStorage` works; `createHook` is a no-op and async IDs stay constant | Needs engine async-resource hooks; keep working ALS without faking full hook coverage. |
 | `node:domain`, `node:trace_events` | Explicit unsupported stubs | Low priority / deliberate unavailability contract. |
 | `bun:ffi`, N-API `.node` addons | Methods throw; `process.dlopen` throws | Native machine-code `.so`/`.node` binaries cannot run as Wasm; requires a WASI/host extension ABI and compiled WASI packages. |
