@@ -55,6 +55,14 @@ interface ResolvedRewrite {
   readonly credentials?: RequestCredentials;
 }
 
+function parseRewriteUrl(rawUrl: string | URL): URL {
+  try {
+    return rawUrl instanceof URL ? new URL(rawUrl.href) : new URL(rawUrl, baseHref());
+  } catch {
+    throw new TypeError("Rewritten package URL must be a valid http or https URL without credentials");
+  }
+}
+
 function resolveRewrite(current: URL, rewrite?: PackageRewrite): ResolvedRewrite {
   if (!rewrite) return { target: current, rewritten: false };
   const rewritten = rewrite.rewriteUrl({ url: current.href, kind: rewrite.kind });
@@ -65,9 +73,9 @@ function resolveRewrite(current: URL, rewrite?: PackageRewrite): ResolvedRewrite
   if (typeof rawUrl === "string" && !rawUrl.trim()) {
     throw new TypeError("Rewritten package URL must not be empty");
   }
-  const next = rawUrl instanceof URL ? new URL(rawUrl.href) : new URL(rawUrl, baseHref());
+  const next = parseRewriteUrl(rawUrl);
   if (!["https:", "http:"].includes(next.protocol) || next.username || next.password || AUTH_OPTION.test(next.href)) {
-    throw new TypeError(`Rewritten package URL must use http or https without credentials: ${redactPackageUrl(next)}`);
+    throw new TypeError("Rewritten package URL must use http or https without credentials");
   }
   return { target: next, rewritten: true, credentials };
 }

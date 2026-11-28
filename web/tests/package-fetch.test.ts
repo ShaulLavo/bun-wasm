@@ -168,7 +168,7 @@ test("packageFetch resolves same-origin relative proxy paths and passes through 
   }
 });
 
-test("packageFetch rejects empty or non-http(s) rewritten package URLs and redacts credentials", async () => {
+test("packageFetch rejects empty, malformed, credential-bearing, or non-http(s) rewritten URLs without echoing them", async () => {
   const { calls, fetcher } = createFetcher(() => new Response("never"));
   for (const bad of ["", "   ", "javascript:alert(1)", "file:///etc/passwd", "https://user:pass@proxy.invalid/pkg.tgz"]) {
     await expect(packageFetch("https://registry.invalid/pkg.tgz", {}, fetcher, {
@@ -176,25 +176,53 @@ test("packageFetch rejects empty or non-http(s) rewritten package URLs and redac
       rewriteUrl: () => bad,
     })).rejects.toThrow(TypeError);
   }
-  for (const secretUrl of [
-    "https://user:secret-pass@proxy.invalid/pkg.tgz?token=secret-token#secret-frag",
-    "https://proxy.invalid/pkg.tgz?:_authToken=secret-token",
-  ]) {
+  const sensitiveCases: ReadonlyArray<{ url: string | URL; forbidden: readonly string[] }> = [
+    {
+      url: "https://user:secret-pass@proxy.invalid/pkg.tgz?token=secret-token#secret-frag",
+      forbidden: ["user", "secret-pass", "secret-token", "secret-frag", "proxy.invalid"],
+    },
+    {
+      url: "https://proxy.invalid/pkg.tgz?:_authToken=secret-token",
+      forbidden: ["_authToken", "secret-token", "proxy.invalid"],
+    },
+    {
+      url: "data:text/plain,secret-data-payload",
+      forbidden: ["data:", "secret-data-payload"],
+    },
+    {
+      url: new URL("data:text/plain;base64,c2VjcmV0LXVybC1wYXlsb2Fk"),
+      forbidden: ["data:", "c2VjcmV0LXVybC1wYXlsb2Fk"],
+    },
+    {
+      url: "http://[::1/secret-malformed?token=secret-token",
+      forbidden: ["[::1", "secret-malformed", "secret-token"],
+    },
+    {
+      url: "://secret-malformed-host/pkg.tgz",
+      forbidden: ["secret-malformed-host", "pkg.tgz"],
+    },
+    {
+      url: "/relative-without-base/secret-path?token=secret-token",
+      forbidden: ["relative-without-base", "secret-path", "secret-token"],
+    },
+  ];
+  for (const { url, forbidden } of sensitiveCases) {
     let thrown: unknown;
     try {
       await packageFetch("https://registry.invalid/pkg.tgz", {}, fetcher, {
         kind: "tarball",
-        rewriteUrl: () => secretUrl,
+        rewriteUrl: () => url,
       });
     } catch (error) {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(TypeError);
     if (!(thrown instanceof TypeError)) throw new Error("Expected TypeError");
-    expect(thrown.message).not.toContain("user");
-    expect(thrown.message).not.toContain("secret-pass");
-    expect(thrown.message).not.toContain("secret-token");
-    expect(thrown.message).not.toContain("secret-frag");
+    expect("input" in thrown).toBe(false);
+    expect(thrown.cause).toBeUndefined();
+    for (const token of forbidden) {
+      expect(thrown.message).not.toContain(token);
+    }
   }
   expect(calls).toHaveLength(0);
 });

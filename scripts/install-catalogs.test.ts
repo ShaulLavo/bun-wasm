@@ -408,15 +408,37 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
     }, null, 2));
     await install(target, pnpmLockOnlyRoot, registry.base, ["--lockfile-only"]);
     await runGuestUpdate(target, pnpmLockOnlyRoot, registry.base, ["--latest", "--lockfile-only"]);
-    assert.equal(
-      (JSON.parse(readFileSync(join(pnpmLockOnlyRoot, "package.json"), "utf8")) as {
-        workspaces: { catalog: { versioned: string } };
-      }).workspaces.catalog.versioned,
-      "^2.0.0",
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(pnpmLockOnlyRoot, "package.json"), "utf8")),
+      {
+        name: "update-pnpm-lock-only",
+        workspaces: {
+          packages: ["packages/*"],
+          catalog: { versioned: "^2.0.0" },
+        },
+      },
     );
     assert.equal(readFileSync(join(pnpmLockOnlyRoot, "pnpm-workspace.yaml"), "utf8"), pnpmLockOnlyYaml);
     assert.match(readFileSync(join(pnpmLockOnlyRoot, "bun.lock"), "utf8"), /"versioned@2\.0\.0"/);
     await install(target, pnpmLockOnlyRoot, registry.base, ["--frozen-lockfile", "--lockfile-only"]);
+
+    // Plain `bun update --lockfile-only` with an unchanged YAML catalog must leave root `package.json` untouched.
+    const pnpmUnchangedRoot = join(directory, "update-pnpm-catalog-unchanged");
+    mkdirSync(join(pnpmUnchangedRoot, "packages/a"), { recursive: true });
+    const compactUnchangedRoot = "{\"name\":\"update-pnpm-unchanged\"}";
+    writeFileSync(join(pnpmUnchangedRoot, "package.json"), compactUnchangedRoot);
+    const pnpmUnchangedYaml = "packages:\n  - packages/*\ncatalog:\n  versioned: \"1.10.0\"\n";
+    writeFileSync(join(pnpmUnchangedRoot, "pnpm-workspace.yaml"), pnpmUnchangedYaml);
+    writeFileSync(join(pnpmUnchangedRoot, "packages/a/package.json"), JSON.stringify({
+      name: "@fixture/pnpm-unchanged-a",
+      version: "1.0.0",
+      dependencies: { versioned: "catalog:" },
+    }, null, 2));
+    await install(target, pnpmUnchangedRoot, registry.base, ["--lockfile-only"]);
+    await runGuestUpdate(target, pnpmUnchangedRoot, registry.base, ["--lockfile-only"]);
+    assert.equal(readFileSync(join(pnpmUnchangedRoot, "package.json"), "utf8"), compactUnchangedRoot);
+    assert.equal(readFileSync(join(pnpmUnchangedRoot, "pnpm-workspace.yaml"), "utf8"), pnpmUnchangedYaml);
+    await install(target, pnpmUnchangedRoot, registry.base, ["--frozen-lockfile", "--lockfile-only"]);
 
     const tagUpdateRoot = join(directory, "update-tag-catalog");
     mkdirSync(join(tagUpdateRoot, "packages/a"), { recursive: true });

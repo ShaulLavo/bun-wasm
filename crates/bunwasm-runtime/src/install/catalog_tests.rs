@@ -2474,9 +2474,11 @@ fn pnpm_auto_installed_workspace_peer_link_migration() {
     });
 }
 
-fn run_cached_catalog_update(opts: Options) {
+fn run_cached_catalog_update(opts: Options) -> bool {
     let cwd = std::env::current_dir().unwrap();
-    let mut manifest = io::read(Path::new("package.json"), "JSON", &TestParser).unwrap();
+    let mut manifest = manifest("update", &TestParser).unwrap();
+    let unseeded_root = manifest.clone();
+    let seeded_catalogs = seed_external_catalogs(&cwd, &mut manifest, &TestParser).unwrap();
     let old_manifest = manifest.clone();
     let scope = all_referenced_catalog_keys(&cwd, &manifest, &opts, &TestParser).unwrap();
     update_manifest(&mut manifest, &opts, Some(&scope)).unwrap();
@@ -2500,11 +2502,22 @@ fn run_cached_catalog_update(opts: Options) {
         Some(&scope),
     )
     .unwrap();
+    let write_manifest = manifest != old_manifest;
+    if seeded_catalogs && !write_manifest {
+        manifest = unseeded_root;
+    }
     resolver.catalogs =
         catalog::Catalogs::load(&cwd, &manifest, &resolver.locked, &TestParser).unwrap();
     let lock = lockfile(&manifest, &resolver).unwrap();
-    fs::write("package.json", format!("{manifest}\n")).unwrap();
+    if write_manifest {
+        io::write(
+            Path::new("package.json"),
+            format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()).as_bytes(),
+        )
+        .unwrap();
+    }
     fs::write("bun.lock", lock).unwrap();
+    write_manifest
 }
 
 #[test]
@@ -2688,4 +2701,115 @@ fn update_npm_prefixed_catalog_ranges_and_aliases() {
         );
         install("install", &["--frozen-lockfile", "--lockfile-only"]).unwrap();
     });
+}
+
+#[test]
+fn update_preserves_absent_dependency_sections_and_skips_spurious_yaml_writeback() {
+    isolated(
+        "update_preserves_absent_dependency_sections_and_skips_spurious_yaml_writeback",
+        || {
+            seed_registry_package("versioned", &["1.0.0", "1.10.0", "2.0.0"]);
+
+            // 1. Plain `bun update --lockfile-only` with an external YAML catalog must not insert
+            // `null` dependency sections or copy unchanged YAML catalogs into root `package.json`.
+            fs::create_dir_all("packages/a").unwrap();
+            let compact_root = r#"{"name":"root"}"#;
+            fs::write("package.json", compact_root).unwrap();
+            fs::write(
+                "packages/a/package.json",
+                json!({
+                    "name": "@fixture/a",
+                    "version": "1.0.0",
+                    "dependencies": { "versioned": "catalog:" }
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let unchanged_yaml = "packages:\n  - packages/*\ncatalog:\n  versioned: \"1.10.0\"\n";
+            fs::write("pnpm-workspace.yaml", unchanged_yaml).unwrap();
+
+            install("install", &["--lockfile-only"]).unwrap();
+            let wrote = run_cached_catalog_update(Options {
+                lockfile_only: true,
+                ..Options::default()
+            });
+            assert!(!wrote);
+            assert_eq!(fs::read_to_string("package.json").unwrap(), compact_root);
+            assert_eq!(
+                fs::read_to_string("pnpm-workspace.yaml").unwrap(),
+                unchanged_yaml
+            );
+
+            // 2. `bun update --latest --lockfile-only` when already at latest must also leave
+            // root `package.json` untouched (covers the `opts.latest` pass in `update_manifest`).
+            let latest_yaml = "packages:\n  - packages/*\ncatalog:\n  versioned: \"^2.0.0\"\n";
+            fs::write("pnpm-workspace.yaml", latest_yaml).unwrap();
+            install("install", &["--lockfile-only"]).unwrap();
+            let wrote = run_cached_catalog_update(Options {
+                latest: true,
+                lockfile_only: true,
+                ..Options::default()
+            });
+            assert!(!wrote);
+            assert_eq!(fs::read_to_string("package.json").unwrap(), compact_root);
+            assert_eq!(
+                fs::read_to_string("pnpm-workspace.yaml").unwrap(),
+                latest_yaml
+            );
+
+            // 3. When `--latest` does change the YAML catalog, root `package.json` persists only
+            // the updated catalog with no inserted `null` dependency fields.
+            let updatable_yaml = "packages:\n  - packages/*\ncatalog:\n  versioned: \"^1.0.0\"\n";
+            fs::write("pnpm-workspace.yaml", updatable_yaml).unwrap();
+            install("install", &["--lockfile-only"]).unwrap();
+            let wrote = run_cached_catalog_update(Options {
+                latest: true,
+                lockfile_only: true,
+                ..Options::default()
+            });
+            assert!(wrote);
+            let updated = parse_json(&fs::read("package.json").unwrap()).unwrap();
+            assert_eq!(
+                updated,
+                json!({
+                    "name": "root",
+                    "workspaces": {
+                        "packages": ["packages/*"],
+                        "catalog": { "versioned": "^2.0.0" }
+                    }
+                })
+            );
+            assert_eq!(
+                fs::read_to_string("pnpm-workspace.yaml").unwrap(),
+                updatable_yaml
+            );
+
+            // 4. Plain `bun update --lockfile-only` and explicit-version update against an
+            // unchanged manifest catalog with absent dependency sections must leave the manifest
+            // untouched without creating `null` dependency fields.
+            fs::remove_file("pnpm-workspace.yaml").unwrap();
+            let manifest_catalog_root = r#"{"name":"root","workspaces":{"packages":["packages/*"],"catalog":{"versioned":"2.0.0"}}}"#;
+            fs::write("package.json", manifest_catalog_root).unwrap();
+            install("install", &["--lockfile-only"]).unwrap();
+            let wrote = run_cached_catalog_update(Options {
+                lockfile_only: true,
+                ..Options::default()
+            });
+            assert!(!wrote);
+            assert_eq!(
+                fs::read_to_string("package.json").unwrap(),
+                manifest_catalog_root
+            );
+            let wrote = run_cached_catalog_update(Options {
+                names: vec!["versioned@2.0.0".into()],
+                lockfile_only: true,
+                ..Options::default()
+            });
+            assert!(!wrote);
+            assert_eq!(
+                fs::read_to_string("package.json").unwrap(),
+                manifest_catalog_root
+            );
+        },
+    );
 }

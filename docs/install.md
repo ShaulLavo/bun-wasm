@@ -142,10 +142,15 @@ non-root preopens; the bounded upstream comparison records that separate limit.
 The installer discovers `workspaces` arrays and object-form `packages` patterns,
 along with `catalog:` and `catalog:<name>` definitions from `workspaces.catalog`/
 `workspaces.catalogs`, top-level `catalog`/`catalogs`, `pnpm-workspace.yaml`, and
-`.yarnrc.yml`. Matching native Bun, `bun update` persists changed external YAML
-catalogs into root `package.json` (`workspaces.catalog`/`workspaces.catalogs`)
-without modifying `pnpm-workspace.yaml` or `.yarnrc.yml`, and `package.json`
-takes precedence over external YAML catalogs on subsequent installs.
+`.yarnrc.yml`. Like native Bun 1.4.5, `bun update` persists changed
+`pnpm-workspace.yaml` catalogs into root `package.json` under
+`workspaces.catalog` and `workspaces.catalogs` without modifying
+`pnpm-workspace.yaml`, and `package.json` takes precedence over external YAML
+catalogs on subsequent installs. Unlike native Bun 1.4.5, which only reads
+`.yarnrc.yml` catalogs during `yarn.lock` migration and rejects them when no
+`yarn.lock` is present, the guest also loads `.yarnrc.yml` catalogs directly
+without `yarn.lock` and persists `bun update` changes into root `package.json`
+without modifying `.yarnrc.yml`.
 Members are linked into `node_modules`. Local `link:` and directory `file:`
 dependencies resolve relative to the declaring manifest. Running `bun add` from
 a member updates its manifest and the root lockfile.

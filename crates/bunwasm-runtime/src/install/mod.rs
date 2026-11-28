@@ -1285,11 +1285,19 @@ fn pm(opts: &Options, parser: &dyn Transpiler) -> Result<()> {
     Ok(())
 }
 
+const DEPENDENCY_FIELDS: [&str; 4] = [
+    "dependencies",
+    "devDependencies",
+    "optionalDependencies",
+    "peerDependencies",
+];
+
 /// Seeds external catalogs (`pnpm-workspace.yaml` / `.yarnrc.yml`) into the in-memory root
-/// `package.json` for `bun update`. Matches native Bun 1.4.5: when an update changes a catalog
-/// entry, the updated catalog is persisted under root `package.json` `workspaces.catalog` /
-/// `workspaces.catalogs`, the external YAML file is left untouched, and `package.json` takes
-/// precedence over external YAML files on subsequent installs.
+/// `package.json` for `bun update`. Matches native Bun 1.4.5 for `pnpm-workspace.yaml` and
+/// applies the same writeback to guest-loaded `.yarnrc.yml` catalogs: when an update changes a
+/// catalog entry, the updated catalog is persisted under root `package.json`
+/// `workspaces.catalog` / `workspaces.catalogs`, the external YAML file is left untouched, and
+/// `package.json` takes precedence over external YAML files on subsequent installs.
 fn seed_external_catalogs(
     cwd: &Path,
     root_manifest: &mut Value,
@@ -1310,45 +1318,57 @@ fn update_manifest(
     for input in &opts.names {
         let (name, range) = resolve::spec(input)?;
         if input.rfind('@').is_some_and(|at| at > 0) {
-            for field in [
-                "dependencies",
-                "devDependencies",
-                "optionalDependencies",
-                "peerDependencies",
-            ] {
-                if opts.production && field == "devDependencies" {
-                    continue;
-                }
-                if manifest[field][&name]
-                    .as_str()
-                    .is_some_and(|existing| !catalog::is_protocol(existing))
-                {
-                    manifest[field][&name] = range.clone().into();
-                }
-            }
+            stage_explicit_dependency_update(manifest, &name, &range, opts.production);
         }
     }
     if opts.latest {
-        for field in [
-            "dependencies",
-            "devDependencies",
-            "optionalDependencies",
-            "peerDependencies",
-        ] {
-            if opts.production && field == "devDependencies" {
-                continue;
-            }
-            let Some(deps) = manifest[field].as_object_mut() else {
-                continue;
-            };
-            for (name, range) in deps {
-                if selected(name, opts) && range.as_str().is_some_and(|r| !r.contains(':')) {
-                    *range = "latest".into();
-                }
-            }
-        }
+        stage_latest_dependencies(manifest, opts);
     }
     update_manifest_catalogs(manifest, opts, scope)
+}
+
+fn stage_explicit_dependency_update(
+    manifest: &mut Value,
+    name: &str,
+    range: &str,
+    production: bool,
+) {
+    for field in DEPENDENCY_FIELDS {
+        if production && field == "devDependencies" {
+            continue;
+        }
+        let Some(deps) = manifest.get_mut(field).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        if deps
+            .get(name)
+            .and_then(Value::as_str)
+            .is_some_and(|existing| !catalog::is_protocol(existing))
+        {
+            deps.insert(name.to_owned(), range.into());
+        }
+    }
+}
+
+fn stage_latest_dependencies(manifest: &mut Value, opts: &Options) {
+    for field in DEPENDENCY_FIELDS {
+        if opts.production && field == "devDependencies" {
+            continue;
+        }
+        let Some(deps) = manifest.get_mut(field).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        stage_latest_entries(deps, opts);
+    }
+}
+
+fn stage_latest_entries(deps: &mut serde_json::Map<String, Value>, opts: &Options) {
+    for (name, range) in deps {
+        if !selected(name, opts) || !range.as_str().is_some_and(|r| !r.contains(':')) {
+            continue;
+        }
+        *range = "latest".into();
+    }
 }
 
 fn validate_member_update_names(manifest: &Value, opts: &Options) -> Result<()> {
@@ -1563,12 +1583,14 @@ fn for_each_manifest_catalog_mut(
     if let Some(entries) = container.get_mut("catalog").and_then(Value::as_object_mut) {
         visit(None, entries);
     }
-    if let Some(catalogs) = container.get_mut("catalogs").and_then(Value::as_object_mut) {
-        for (group, entries) in catalogs {
-            if let Some(entries) = entries.as_object_mut() {
-                visit(Some(group.as_str()), entries);
-            }
-        }
+    let Some(catalogs) = container.get_mut("catalogs").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (group, entries) in catalogs {
+        let Some(entries) = entries.as_object_mut() else {
+            continue;
+        };
+        visit(Some(group.as_str()), entries);
     }
 }
 
@@ -1615,34 +1637,38 @@ fn finalize_updates(
     member: Option<&Path>,
     scope: Option<&BTreeSet<(Option<String>, String)>>,
 ) -> Result<()> {
-    for field in [
-        "dependencies",
-        "devDependencies",
-        "optionalDependencies",
-        "peerDependencies",
-    ] {
-        let Some(deps) = manifest[field].as_object_mut() else {
+    for field in DEPENDENCY_FIELDS {
+        let Some(deps) = manifest.get_mut(field).and_then(Value::as_object_mut) else {
             continue;
         };
-        for (name, range) in deps {
-            if !selected(name, opts) {
-                continue;
-            }
-            let Some(package) = command_package(resolver, name, member) else {
-                continue;
-            };
-            let old = range.as_str().unwrap_or("");
-            if old.contains(':') {
-                continue;
-            }
-            *range = updated_range(old, &package.version, opts.exact).into();
-        }
+        finalize_dependency_entries(deps, opts, resolver, member);
     }
     if member.is_some() {
         return Ok(());
     }
     finalize_catalog_updates(manifest, old_manifest, opts, resolver, scope);
     Ok(())
+}
+
+fn finalize_dependency_entries(
+    deps: &mut serde_json::Map<String, Value>,
+    opts: &Options,
+    resolver: &Resolver,
+    member: Option<&Path>,
+) {
+    for (name, range) in deps {
+        if !selected(name, opts) {
+            continue;
+        }
+        let Some(package) = command_package(resolver, name, member) else {
+            continue;
+        };
+        let old = range.as_str().unwrap_or("");
+        if old.contains(':') {
+            continue;
+        }
+        *range = updated_range(old, &package.version, opts.exact).into();
+    }
 }
 
 fn updated_range(old: &str, version: &str, exact: bool) -> String {
