@@ -192,6 +192,91 @@
     if (Array.isArray(argv) && argv.length > 0xfffffffd) throw new TypeError("cmd array is too large");
   }
 
+  const bunValueFlags = new Set(["--breakpoint-resolve", "--conditions", "--console-depth", "--cpu-prof-dir",
+    "--cpu-prof-interval", "--cpu-prof-name", "--cron-period", "--cron-title", "--cwd", "--define",
+    "--disable-warning", "--dns-result-order", "--drop", "--elide-lines", "--env-file", "--extension-order",
+    "--feature", "--fetch-preconnect", "--filter", "--heap-prof-dir", "--heap-prof-interval", "--heap-prof-name",
+    "--import", "--install", "--jsx-factory", "--jsx-fragment", "--jsx-import-source", "--jsx-runtime", "--loader",
+    "--main-fields", "--max-http-header-size", "--origin", "--port", "--preload", "--redirect-warnings",
+    "--require", "--shell", "--stack-trace-limit", "--title", "--trace-event-categories", "--trace-event-file-pattern",
+    "--tsconfig-override", "--unhandled-rejections", "--user-agent", "--watch-kill-signal"]);
+
+  function isAsciiWs(ch: string): boolean {
+    return ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f";
+  }
+
+  function nextBunOptionToken(raw: string, start: number): { end: number; value: string } {
+    let at = start;
+    let quote = "";
+    let escape = false;
+    let value = "";
+    while (at < raw.length) {
+      const ch = raw[at]!;
+      if (!escape && !quote && isAsciiWs(ch)) break;
+      at++;
+      if (escape) {
+        value += ch;
+        escape = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escape = true;
+        continue;
+      }
+      if (quote === ch) {
+        quote = "";
+        continue;
+      }
+      if (!quote && (ch === "'" || ch === "\"")) {
+        quote = ch;
+        continue;
+      }
+      value += ch;
+    }
+    return { end: at, value };
+  }
+
+  function stripParallelFromBunOptions(raw: string): string {
+    const kept: string[] = [];
+    let at = 0;
+    let skipValue = false;
+    while (at < raw.length) {
+      if (isAsciiWs(raw[at]!)) { at++; continue; }
+      const { end, value } = nextBunOptionToken(raw, at);
+      const token = raw.slice(at, end);
+      at = end;
+      if (!skipValue && (value === "--parallel" || value.startsWith("--parallel="))) continue;
+      kept.push(token);
+      skipValue = !skipValue && bunValueFlags.has(value);
+    }
+    return kept.join(" ");
+  }
+
+  function isBunExecutableName(exe: string): boolean {
+    const name = (exe.split("/").pop() ?? exe).replace(/\.wasm$/, "");
+    return name === "bun" || name === "bunx";
+  }
+
+  function stripInheritedTestParallel(
+    exe: string,
+    env: Record<string, string>,
+    parentEnv: Readonly<Record<string, string | undefined>>,
+    explicitEnv: Record<string, unknown> | undefined,
+  ): void {
+    if (typeof native.argv !== "function" || native.argv()[1] !== "test") return;
+    const isExecPath = typeof native.execPath === "function" && exe === native.execPath();
+    if (!isExecPath && !isBunExecutableName(exe)) return;
+    const inherited = parentEnv.BUN_OPTIONS;
+    if (!inherited || env.BUN_OPTIONS === undefined) return;
+    if (explicitEnv !== undefined && env.BUN_OPTIONS !== inherited) return;
+    const cleaned = stripParallelFromBunOptions(env.BUN_OPTIONS);
+    if (cleaned) {
+      env.BUN_OPTIONS = cleaned;
+      return;
+    }
+    delete env.BUN_OPTIONS;
+  }
+
   function normalize(cmd: unknown, options: SpawnOptions | undefined, sync: boolean, operation: SpawnOperation): Spec {
     if (!Array.isArray(cmd)) {
       options = (cmd || {}) as SpawnOptions;
@@ -209,6 +294,7 @@
     if (!native.hostCaps.proc_spawn) throw unsupported("Spawning a process without host process support");
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(options.env || proc.env)) if (value !== undefined) env[key] = String(value);
+    stripInheritedTestParallel(argv[0], env, proc.env, options.env);
     const io = options.stdio;
     const input = Array.isArray(io) ? io[0] : options.stdin;
     const output = Array.isArray(io) ? io[1] : options.stdout;

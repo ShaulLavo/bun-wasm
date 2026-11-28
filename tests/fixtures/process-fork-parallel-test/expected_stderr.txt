@@ -1,8 +1,9 @@
 
 index.test.ts:
 (pass) fork succeeds under bun --parallel=2 test
+(pass) BUN_OPTIONS=--parallel=2 stays readable in test and forks cleanly
 
- 1 pass
+ 2 pass
  0 fail
- 1 expect() calls
-Ran 1 test across 1 file. [TIME]
+ 2 expect() calls
+Ran 2 tests across 1 file. [TIME]

@@ -98,6 +98,10 @@ function probeStructurePolicyTampering(): void {
     rejectsGate("structure", "structure config weakens rule");
     writeFileSync(configPath, `${JSON.stringify({ ...JSON.parse(originalConfig), ignore: ["web/src/net/**"] }, null, 2)}\n`);
     rejectsGate("structure", "structure config adds ignore pattern");
+    withProbe("tsconfig.unknot-shadow-probe.json", '{"extends":"./tsconfig.unknot.json","compilerOptions":{"moduleSuffixes":[".missing"]}}\n', () => {
+      writeFileSync(configPath, `${JSON.stringify({ ...JSON.parse(originalConfig), projects: ["tsconfig.unknot-shadow-probe.json", "tsconfig.unknot.json"] }, null, 2)}\n`);
+      rejectsGate("structure", "structure config reorders or removes project");
+    });
     writeFileSync(configPath, originalConfig);
     writeFileSync(projectPath, originalProject.replace('    "web/src/**/*"\n', "").replace('"src/**/*",\n', '"src/**/*"\n'));
     rejectsGate("structure", "structure project tsconfig.unknot.json removes include");

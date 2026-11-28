@@ -260,10 +260,10 @@ function verifyConfigMonotonic(requiredRules: ReadonlySet<string>): void {
   }
   const base = parseConfig(baseSource, `comparison ${configFilename}`);
   verifyConfigRules(current.rules, base.rules, requiredRules);
-  const currentProjects = new Set(current.projects);
-  for (const project of base.projects) {
-    if (!currentProjects.has(project)) {
-      throw new Error(`structure config removes project: ${project}`);
+  for (let index = 0; index < base.projects.length; index++) {
+    const project = base.projects[index]!;
+    if (current.projects[index] !== project) {
+      throw new Error(`structure config reorders or removes project: ${project}`);
     }
     verifyProjectScope(project);
   }
