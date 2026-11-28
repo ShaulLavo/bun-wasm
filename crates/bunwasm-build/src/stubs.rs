@@ -196,13 +196,39 @@ fn __bun_jsc_bytecode_link_encoder_finish(
 
 /// The resolver asks for this only when a bare import is missing from
 /// `node_modules` and auto-install is enabled; the error makes it report the
-/// import as unresolved.
+/// import as unresolved. Signature must match `vendor/bun/src/resolver/resolver.rs`.
 #[unsafe(no_mangle)]
-fn __bun_resolver_init_package_manager(
+unsafe fn __bun_resolver_init_package_manager(
     _log: NonNull<bun_ast::Log>,
     _install: Option<NonNull<bun_options_types::schema::api::BunInstall>>,
     _env: NonNull<bun_dotenv::Loader>,
     _prefer_offline: bool,
-) -> Result<NonNull<dyn bun_install_types::resolver_hooks::AutoInstaller>, bun_errno::SystemErrno> {
-    Err(bun_errno::SystemErrno::ENOSYS)
+    _importer_dir: &[u8],
+) -> bun_resolver::CrateResult<NonNull<dyn bun_install_types::resolver_hooks::AutoInstaller>> {
+    Err(bun_resolver::Error::Sys(bun_errno::SystemErrno::ENOSYS))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_installer_stub_matches_upstream_abi() {
+        let symbol: unsafe fn(
+            NonNull<bun_ast::Log>,
+            Option<NonNull<bun_options_types::schema::api::BunInstall>>,
+            NonNull<bun_dotenv::Loader>,
+            bool,
+            &[u8],
+        ) -> bun_resolver::CrateResult<
+            NonNull<dyn bun_install_types::resolver_hooks::AutoInstaller>,
+        > = __bun_resolver_init_package_manager;
+        let log = NonNull::<bun_ast::Log>::dangling();
+        let env = NonNull::<bun_dotenv::Loader>::dangling();
+        let result = unsafe { symbol(log, None, env, false, b"/") };
+        assert!(matches!(
+            result,
+            Err(bun_resolver::Error::Sys(bun_errno::SystemErrno::ENOSYS))
+        ));
+    }
 }

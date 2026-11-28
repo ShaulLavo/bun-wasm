@@ -24,7 +24,7 @@ bun-wasm registers `bun`, `node` and `nodejs` on a [Waffle](https://github.com/S
 
 ## Links
 
-- [Project overview](docs/project-overview.md) covers architecture, engines, performance and status.
+- [Project overview](docs/project-overview.md) and [Upstream vs. ours](docs/upstream-vs-ours.md) cover architecture, upstream Bun reuse, engines and status.
 - [Getting started](docs/getting-started.md)
 - [All documentation](docs/README.md)
 - [Development](docs/development.md)

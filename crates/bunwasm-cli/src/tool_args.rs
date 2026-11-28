@@ -73,7 +73,7 @@ pub fn is_node(executable: &str) -> bool {
 
 /// The letter of a chain of Bun's short flags that takes a value, and whether that value is the
 /// next argument. `-c` takes an optional value, which is never the next argument.
-fn short_with_value(flag: &str) -> Option<(u8, bool)> {
+pub(crate) fn short_with_value(flag: &str) -> Option<(u8, bool)> {
     let shorts = flag.strip_prefix('-')?.as_bytes();
     if shorts.first().is_none_or(|first| *first == b'-') {
         return None;

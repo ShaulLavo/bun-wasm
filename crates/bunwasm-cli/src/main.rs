@@ -756,6 +756,25 @@ fn node_command(args: Vec<String>) -> Command {
     }
 }
 
+fn unsupported_run_scope_flag(flag: &str) -> Option<&'static str> {
+    if flag == "--filter" || flag.starts_with("--filter=") {
+        return Some("--filter");
+    }
+    if flag == "--workspaces" || flag.starts_with("--workspaces=") {
+        return Some("--workspaces");
+    }
+    if flag == "--parallel" || flag.starts_with("--parallel=") {
+        return Some("--parallel");
+    }
+    if flag == "--sequential" || flag.starts_with("--sequential=") {
+        return Some("--sequential");
+    }
+    if matches!(tool_args::short_with_value(flag), Some((b'F', _))) {
+        return Some("-F");
+    }
+    None
+}
+
 fn direct_file(file: &str) -> String {
     let path = std::path::Path::new(file);
     if !path.is_file() {
@@ -989,6 +1008,13 @@ fn parse_command_with_flags(
             }
             // Flags native Bun accepts that change nothing here.
             "--smol" | "--no-install" => continue,
+            // Workspace/multi-script scope flags are not wired into `bun run` yet; fail explicitly
+            // instead of silently running in the current working directory.
+            flag if (!run_file || after_run) && unsupported_run_scope_flag(flag).is_some() => {
+                let name = unsupported_run_scope_flag(flag).unwrap_or(flag);
+                eprintln!("error: {name} is not supported in bun-wasm yet");
+                return Command::Exit(1);
+            }
             // Like native Bun, other runtime flags (Node's --enable-source-maps, --no-warnings, ...)
             // are accepted and kept in process.execArgv, so forked children receive them too.
             // `bun run --silent` reaches package scripts this way and hides their `$ command` lines.
@@ -1319,5 +1345,65 @@ mod tests {
         };
         assert_eq!(script_args, ["--experimental-stream-iter"]);
         assert!(!as_script_arg.experimental_stream_iter);
+    }
+
+    #[test]
+    fn rejects_unimplemented_run_scope_flags_explicitly() {
+        for argv in [
+            vec!["--filter", "pkg", "build"],
+            vec!["--filter=pkg", "build"],
+            vec!["run", "--filter", "pkg", "build"],
+            vec!["run", "--filter=pkg", "build"],
+            vec!["run", "-F", "pkg", "build"],
+            vec!["run", "-Fpkg", "build"],
+            vec!["run", "-bF", "pkg", "build"],
+            vec!["run", "--workspaces", "build"],
+            vec!["--workspaces", "build"],
+            vec!["run", "--parallel", "build", "lint"],
+            vec!["run", "--sequential", "build", "lint"],
+        ] {
+            let args = argv.into_iter().map(String::from).collect();
+            assert!(
+                matches!(parse_command(args, false), Command::Exit(1)),
+                "expected exit 1"
+            );
+        }
+
+        let Command::Run(Entry::File(entry), args, _, _, _) = parse_command(
+            vec![
+                "run".into(),
+                "build".into(),
+                "--filter".into(),
+                "pkg".into(),
+            ],
+            false,
+        ) else {
+            panic!("expected passthrough script args after script name");
+        };
+        assert_eq!(entry, "build");
+        assert_eq!(args, ["--filter", "pkg"]);
+
+        let Command::Run(Entry::File(entry), _, _, exec_argv, _) = parse_command(
+            vec!["--title".into(), "--filter".into(), "entry.ts".into()],
+            false,
+        ) else {
+            panic!("expected --filter to be consumed as --title value");
+        };
+        assert_eq!(entry, "entry.ts");
+        assert_eq!(exec_argv, ["--title", "--filter"]);
+
+        let Command::Install(cmd, install_args) = parse_command(
+            vec!["install".into(), "--filter".into(), "pkg".into()],
+            false,
+        ) else {
+            panic!("expected install to own its own --filter flags");
+        };
+        assert_eq!(cmd, "install");
+        assert_eq!(install_args, ["--filter", "pkg"]);
+
+        assert!(matches!(
+            node_command(vec!["--filter=pkg".into(), "entry.ts".into()]),
+            Command::Run(Entry::File(_), _, _, _, _)
+        ));
     }
 }

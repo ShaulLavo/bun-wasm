@@ -36,6 +36,15 @@ test("lint rejects an unused authored variable", () => {
 test("lint rejects accidental ambient browser name capture", () => {
   withProbe("web/src/quality-global-probe.ts", "export const qualityAmbientName = () => name;\n", () => rejectsGate("lint", "no-restricted-globals"));
 });
+test("lint rejects new nested ternaries and else-after-return", () => {
+  withProbe("src/quality-ternary-probe.ts", "export const pick = (a: number) => a === 1 ? 1 : a === 2 ? 2 : 3;\n", () => rejectsGate("lint", "no-nested-ternary"));
+  withProbe("src/quality-else-probe.ts", "export function sign(a: number) { if (a > 0) return 1; else return -1; }\n", () => rejectsGate("lint", "no-else-return"));
+});
+test("structure gate rejects a new import cycle in src/", () => {
+  withProbe("src/quality-cycle-a.ts", 'import { b } from "./quality-cycle-b"; export const a = () => b();\n', () => {
+    withProbe("src/quality-cycle-b.ts", 'import { a } from "./quality-cycle-a"; export const b = () => a();\n', () => rejectsGate("structure", "import-cycle"));
+  });
+});
 test("strict scripts project rejects a wrong type", () => {
   withProbe("scripts/quality-type-probe.ts", 'export const qualityValue: number = "wrong";\n', () => rejectsGate("types", "not assignable to type 'number'"));
 });

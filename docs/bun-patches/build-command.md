@@ -22,6 +22,7 @@ patch or copy Bun's argument-parser implementation.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | `crates/bunwasm-build/src/stubs.rs:151-161`, `crates/bunwasm-build/src/stubs.rs:172-182` | Original stub | Keep the two required upstream bytecode import declarations with their distinct symbols and signatures; both call the shared `missing(BYTECODE)` handler. |
+| `crates/bunwasm-build/src/stubs.rs:201-212` | Original stub | Match upstream `vendor/bun/src/resolver/resolver.rs:36-42` five-argument `__bun_resolver_init_package_manager` ABI (`importer_dir: &[u8]`) returning `bun_resolver::Error::Sys(ENOSYS)` until `bun_install` is linked. |
 | [`crates/bunwasm-build/src/lib.rs`, `src/args.rs`](#build-command) | Port | Extract Bun's build command and option model from its JSC runtime. |
 | [`crates/bunwasm-build/src/args.rs`, `src/cli.rs` and both command entrypoints](#original-command-adapters) | Host feature | Share the original command adapter without copying Bun's argument parser. |
 
