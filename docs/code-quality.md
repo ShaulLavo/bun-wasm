@@ -196,11 +196,12 @@ private executor is configured.
   `tests/build` and `tests/jsc` are not host source. Intentional classic-script
   factory evaluation and ABI-specific operations have local explained exceptions.
 - Unknot 0.1.2 (`quality:structure` via `scripts/quality-structure.ts`) checks module
-  structure across `src/` and `web/src/` in one unified graph (configured in `.unknot.json`,
-  with pre-existing debt recorded in `.unknot.allow`), rejecting new structural findings
-  (including cross-boundary cycles), any new `.unknot.allow` entry, any removed `# rules:`
-  rule, and any `.unknot.json` change that disables an adopted rule, drops a project, or
-  adds an ignore pattern compared to the CI base commit.
+  structure across `src/` and `web/src/` in one unified graph (configured in `.unknot.json`
+  and `tsconfig.unknot.json`, with pre-existing debt recorded in `.unknot.allow`), rejecting
+  new structural findings (including cross-boundary cycles), any new `.unknot.allow` entry,
+  any removed `# rules:` rule, any `.unknot.json` change that disables/weakens a rule, drops
+  a project, or adds an ignore pattern, and any `tsconfig.unknot.json` scope shrinkage
+  compared to the CI base commit.
 - TypeScript 7.0.2 runs strict runtime-factory, package, scripts/site, web and sandbox projects.
   Both application quality projects include authored TS test files and their
   browser/worker entrypoints. Legacy JS gets correctness lint, not a claim of

@@ -93,6 +93,8 @@ test("structure and lint gates reject import cycles and allowlist growth", () =>
       const originalAllow = readFileSync(allowPath, "utf8");
       const configPath = resolve(root, ".unknot.json");
       const originalConfig = readFileSync(configPath, "utf8");
+      const projectPath = resolve(root, "tsconfig.unknot.json");
+      const originalProject = readFileSync(projectPath, "utf8");
       try {
         writeFileSync(allowPath, `${originalAllow}module-cycle src <-> web/src/net\n`);
         rejectsGate("structure", "structure allowlist adds entry");
@@ -101,11 +103,17 @@ test("structure and lint gates reject import cycles and allowlist growth", () =>
         writeFileSync(allowPath, originalAllow);
         writeFileSync(configPath, `${JSON.stringify({ ...JSON.parse(originalConfig), rules: { "module-cycle": false } }, null, 2)}\n`);
         rejectsGate("structure", "structure config disables adopted rule");
+        writeFileSync(configPath, `${JSON.stringify({ ...JSON.parse(originalConfig), rules: { "wide-directory": { max: 100 } } }, null, 2)}\n`);
+        rejectsGate("structure", "structure config weakens rule");
         writeFileSync(configPath, `${JSON.stringify({ ...JSON.parse(originalConfig), ignore: ["web/src/net/**"] }, null, 2)}\n`);
         rejectsGate("structure", "structure config adds ignore pattern");
+        writeFileSync(configPath, originalConfig);
+        writeFileSync(projectPath, originalProject.replace('    "web/src/**/*"\n', "").replace('"src/**/*",\n', '"src/**/*"\n'));
+        rejectsGate("structure", "structure project tsconfig.unknot.json removes include");
       } finally {
         writeFileSync(allowPath, originalAllow);
         writeFileSync(configPath, originalConfig);
+        writeFileSync(projectPath, originalProject);
       }
     });
   });

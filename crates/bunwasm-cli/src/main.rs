@@ -1339,6 +1339,39 @@ fn plain_argument(env: &[u8], start: usize) -> (String, usize) {
     (String::from_utf8_lossy(&buf).into_owned(), i)
 }
 
+/// Removes standalone `--parallel` / `--parallel=*` flags from `BUN_OPTIONS` while keeping
+/// flag values (such as `--title --parallel=2`) and original quoting intact.
+fn strip_parallel_bun_options(env: &str) -> Option<String> {
+    let bytes = env.as_bytes();
+    let mut out = String::new();
+    let mut i = 0;
+    let mut removed = false;
+    let mut skip_next_value = false;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        let (arg, end) = if bytes[i..].starts_with(b"--") {
+            option_argument(bytes, i)
+        } else {
+            plain_argument(bytes, i)
+        };
+        if !skip_next_value && is_parallel_flag(&arg) {
+            removed = true;
+            i = end;
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&env[i..end]);
+        skip_next_value = !skip_next_value && tool_args::takes_next_argument(&arg);
+        i = end;
+    }
+    removed.then_some(out)
+}
+
 fn main() {
     // Sets the parser's stack limit and keeps Bun's C/POSIX shims linked.
     #[cfg(all(
@@ -1420,6 +1453,19 @@ fn main() {
             (entry, args, conditions, exec_argv, flags)
         }
     };
+    if matches!(entry, Entry::Test(_))
+        && let Ok(options) = std::env::var("BUN_OPTIONS")
+        && let Some(cleaned) = strip_parallel_bun_options(&options)
+    {
+        // SAFETY: startup is single-threaded before the runtime starts.
+        unsafe {
+            if cleaned.is_empty() {
+                std::env::remove_var("BUN_OPTIONS");
+            } else {
+                std::env::set_var("BUN_OPTIONS", cleaned);
+            }
+        }
+    }
     let code = bunwasm_runtime::run(Options {
         entry,
         args,
@@ -1773,5 +1819,22 @@ mod tests {
         };
         assert_eq!(cmd, "install");
         assert_eq!(install_args, ["--registry", "--cwd", "--lockfile-only"]);
+    }
+
+    #[test]
+    fn strip_parallel_bun_options_removes_only_standalone_parallel_flags() {
+        assert_eq!(
+            strip_parallel_bun_options("--parallel=2"),
+            Some(String::new())
+        );
+        assert_eq!(
+            strip_parallel_bun_options("--disable-warning=DEP2 --parallel=2 --title \"two words\""),
+            Some("--disable-warning=DEP2 --title \"two words\"".to_owned())
+        );
+        assert_eq!(
+            strip_parallel_bun_options("--title --parallel=2 --parallel"),
+            Some("--title --parallel=2".to_owned())
+        );
+        assert_eq!(strip_parallel_bun_options("--disable-warning=DEP2"), None);
     }
 }

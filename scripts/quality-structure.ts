@@ -22,6 +22,13 @@ type ParsedConfig = {
   readonly rules: Readonly<Record<string, unknown>>;
 };
 
+type ParsedProjectConfig = {
+  readonly extendsValue: string | undefined;
+  readonly include: readonly string[];
+  readonly exclude: readonly string[];
+  readonly files: readonly string[] | undefined;
+};
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -29,6 +36,15 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function stringListField(config: Record<string, unknown>, key: string, label: string): readonly string[] {
   const value = config[key];
   if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every(item => typeof item === "string")) {
+    throw new Error(`${label} "${key}" must be a list of strings`);
+  }
+  return value;
+}
+
+function optionalStringListField(config: Record<string, unknown>, key: string, label: string): readonly string[] | undefined {
+  const value = config[key];
+  if (value === undefined) return undefined;
   if (!Array.isArray(value) || !value.every(item => typeof item === "string")) {
     throw new Error(`${label} "${key}" must be a list of strings`);
   }
@@ -45,6 +61,21 @@ function parseConfig(source: string, label: string): ParsedConfig {
     throw new Error(`${label} "rules" must be an object`);
   }
   return { projects, ignore, rules: rulesValue ?? {} };
+}
+
+function parseProjectConfig(source: string, label: string): ParsedProjectConfig {
+  const raw = JSON.parse(source) as unknown;
+  if (!isObject(raw)) throw new Error(`${label} must hold an object`);
+  const extendsRaw = raw.extends;
+  if (extendsRaw !== undefined && typeof extendsRaw !== "string") {
+    throw new Error(`${label} "extends" must be a string`);
+  }
+  return {
+    extendsValue: extendsRaw,
+    include: stringListField(raw, "include", label),
+    exclude: stringListField(raw, "exclude", label),
+    files: optionalStringListField(raw, "files", label),
+  };
 }
 
 function parseAllowlist(source: string): ParsedAllowlist {
@@ -82,21 +113,79 @@ function verifyAllowlistEntries(current: ReadonlyMap<string, number>, base: Read
   }
 }
 
-function verifyConfigMonotonic(requiredRules: ReadonlySet<string>): void {
-  const current = parseConfig(readFileSync(configPath, "utf8"), configFilename);
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isObject(value)) {
+    const pairs = Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`);
+    return `{${pairs.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function verifyConfigRules(
+  currentRules: Readonly<Record<string, unknown>>,
+  baseRules: Readonly<Record<string, unknown>>,
+  requiredRules: ReadonlySet<string>,
+): void {
   for (const rule of requiredRules) {
-    if (current.rules[rule] === false) {
+    if (currentRules[rule] === false) {
       throw new Error(`structure config disables adopted rule: ${rule}`);
     }
   }
-  const baseSource = loadComparisonFile(configFilename, "STRUCTURE_BASE_REF");
+  for (const [rule, setting] of Object.entries(currentRules)) {
+    if (setting === true) continue;
+    if (Object.hasOwn(baseRules, rule) && canonicalJson(setting) === canonicalJson(baseRules[rule])) continue;
+    throw new Error(`structure config weakens rule: ${rule}`);
+  }
+}
+
+function verifyProjectScope(projectPath: string): void {
+  const baseSource = loadComparisonFile(projectPath, "STRUCTURE_BASE_REF");
   if (baseSource === undefined) return;
+  const current = parseProjectConfig(readFileSync(resolve(root, projectPath), "utf8"), projectPath);
+  const base = parseProjectConfig(baseSource, `comparison ${projectPath}`);
+  if (current.extendsValue !== base.extendsValue) {
+    throw new Error(`structure project ${projectPath} changes extends`);
+  }
+  const currentInclude = new Set(current.include);
+  for (const glob of base.include) {
+    if (!currentInclude.has(glob)) {
+      throw new Error(`structure project ${projectPath} removes include: ${glob}`);
+    }
+  }
+  const baseExclude = new Set(base.exclude);
+  for (const glob of current.exclude) {
+    if (!baseExclude.has(glob)) {
+      throw new Error(`structure project ${projectPath} adds exclude: ${glob}`);
+    }
+  }
+  if (base.files === undefined && current.files !== undefined) {
+    throw new Error(`structure project ${projectPath} adds files restriction`);
+  }
+  if (base.files === undefined) return;
+  const currentFiles = new Set(current.files ?? []);
+  for (const file of base.files) {
+    if (!currentFiles.has(file)) {
+      throw new Error(`structure project ${projectPath} removes file: ${file}`);
+    }
+  }
+}
+
+function verifyConfigMonotonic(requiredRules: ReadonlySet<string>): void {
+  const current = parseConfig(readFileSync(configPath, "utf8"), configFilename);
+  const baseSource = loadComparisonFile(configFilename, "STRUCTURE_BASE_REF");
+  if (baseSource === undefined) {
+    verifyConfigRules(current.rules, {}, requiredRules);
+    return;
+  }
   const base = parseConfig(baseSource, `comparison ${configFilename}`);
+  verifyConfigRules(current.rules, base.rules, requiredRules);
   const currentProjects = new Set(current.projects);
   for (const project of base.projects) {
     if (!currentProjects.has(project)) {
       throw new Error(`structure config removes project: ${project}`);
     }
+    verifyProjectScope(project);
   }
   const baseIgnore = new Set(base.ignore);
   for (const pattern of current.ignore) {
