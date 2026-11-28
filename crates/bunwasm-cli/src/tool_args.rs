@@ -168,12 +168,32 @@ fn check_chain(chain: &str) -> Vec<String> {
     }
 }
 
+#[allow(dead_code)] // Shared across bunwasm-cli, bunwasm-host, and bunwasm-tools.
 pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGlobals)> {
+    before_command_inner(args, 0)
+}
+
+#[allow(dead_code)] // Called by bunwasm-host and bunwasm-tools, which share this module.
+pub fn before_command_with_env(
+    args: &[String],
+    bun_options_env: Option<&str>,
+) -> Option<(String, Vec<String>, ToolGlobals)> {
+    let mut effective = bun_options_env.map(bun_options).unwrap_or_default();
+    let env_count = effective.len();
+    effective.extend(args.iter().cloned());
+    before_command_inner(&effective, env_count)
+}
+
+fn before_command_inner(
+    args: &[String],
+    env_count: usize,
+) -> Option<(String, Vec<String>, ToolGlobals)> {
     let mut unknown = Vec::new();
     let mut for_check = Vec::new();
     let mut globals = ToolGlobals::default();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
+        let from_env = at < env_count;
         let next = args.get(at + 1).map(String::as_str);
         // `bun -ptsconfig.json check`, `bun -h check`: the check command parses the chain.
         let is_of_check = next == Some("check") && is_chain_of_check(arg);
@@ -214,9 +234,15 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
             flag if takes_next_argument(flag) => at += 1,
             flag if is_check_option(flag) => {
                 for_check.push(arg.clone());
-                unknown.push(arg.clone());
+                if !from_env {
+                    unknown.push(arg.clone());
+                }
             }
-            flag if flag.starts_with('-') => unknown.push(arg.clone()),
+            flag if flag.starts_with('-') => {
+                if !from_env {
+                    unknown.push(arg.clone());
+                }
+            }
             _ => return None,
         }
         at += 1;
@@ -305,6 +331,7 @@ pub fn plain_argument(env: &[u8], start: usize) -> (String, usize) {
     (String::from_utf8_lossy(&buf).into_owned(), i)
 }
 
+#[allow(dead_code)] // Shared across bunwasm-cli, bunwasm-host, and bunwasm-tools.
 pub fn with_bun_options(args: &[String], bun_options_env: Option<&str>) -> Vec<String> {
     let mut effective = bun_options_env.map(bun_options).unwrap_or_default();
     effective.extend(args.iter().cloned());
@@ -420,9 +447,18 @@ mod tests {
         assert_eq!(forwarded, ["--no-warnings"]);
         assert!(select(&["-", "check"]).is_none());
         assert!(select(&["--project", "app", "check"]).is_none());
-        assert!(before_command(&with_bun_options(&["fmt".into()], Some("--filter=app"))).is_none());
+        assert!(before_command_with_env(&["fmt".into()], Some("--filter=app")).is_none());
+        let (cmd, forwarded, globals) = before_command_with_env(
+            &["fmt".into(), "--help".into()],
+            Some("--no-warnings --disable-warning=DEP2 --cwd project"),
+        )
+        .unwrap();
+        assert_eq!(cmd, "fmt");
+        assert_eq!(forwarded, ["--help"]);
+        assert_eq!(globals.cwd_before.as_deref(), Some("project"));
         assert!(
-            before_command(&with_bun_options(&["fmt".into()], Some("--cwd project"))).is_some()
+            before_command_with_env(&["fmt".into()], Some("--no-warnings\x0B--filter=app"))
+                .is_some()
         );
     }
 }

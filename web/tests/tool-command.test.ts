@@ -27,4 +27,5 @@ test("BUN_OPTIONS prefixes command classification", () => {
   expect(isToolCommand(["fmt"], "bun", "--title \"two words\" --filter=app")).toBe(false);
   expect(isToolCommand(["fmt"], "bun", "--cwd project")).toBe(true);
   expect(isToolCommand(["fmt"], "bun", "--title --filter=app")).toBe(true);
+  expect(isToolCommand(["fmt"], "bun", "--no-warnings\v--filter=app")).toBe(true);
 });

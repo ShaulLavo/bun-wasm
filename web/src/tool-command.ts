@@ -12,8 +12,9 @@ const longWithValue = new Set(["--breakpoint-resolve", "--conditions", "--consol
 const shortWithValue = "deFlpru";
 const shortWithoutValue = "bhv";
 
+// Matches Rust `u8::is_ascii_whitespace` (SP, HT, LF, FF, CR — excluding vertical tab).
 function isWhitespace(ch: string): boolean {
-  return ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f" || ch === "\v";
+  return ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f";
 }
 
 function optionArgument(env: string, start: number): [string, number] {

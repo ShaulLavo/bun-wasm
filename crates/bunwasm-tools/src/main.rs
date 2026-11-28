@@ -25,8 +25,9 @@ fn main() {
     }
     let cli_args: Vec<String> = std::env::args().skip(1).collect();
     let bun_options = std::env::var("BUN_OPTIONS").ok();
-    let args = tool_args::with_bun_options(&cli_args, bun_options.as_deref());
-    let Some((command, forwarded, globals)) = tool_args::before_command(&args) else {
+    let Some((command, forwarded, globals)) =
+        tool_args::before_command_with_env(&cli_args, bun_options.as_deref())
+    else {
         eprintln!("error: bun-tools supports bun lint, bun fmt and bun check");
         std::process::exit(2);
     };

@@ -167,11 +167,40 @@ function resolveEffectiveTsProject(projectPath: string, fromComparisonCommit: bo
   return ts.parseJsonConfigFileContent(parsed.config, host, dirname(absPath), undefined, absPath);
 }
 
+const resolutionOptions: readonly (keyof ts.CompilerOptions)[] = [
+  "allowJs",
+  "checkJs",
+  "allowImportingTsExtensions",
+  "allowArbitraryExtensions",
+  "baseUrl",
+  "paths",
+  "rootDir",
+  "rootDirs",
+  "module",
+  "moduleDetection",
+  "moduleResolution",
+  "moduleSuffixes",
+  "customConditions",
+  "noResolve",
+  "resolveJsonModule",
+  "resolvePackageJsonExports",
+  "resolvePackageJsonImports",
+  "typeRoots",
+  "types",
+  "jsx",
+  "target",
+  "preserveSymlinks",
+  "allowSyntheticDefaultImports",
+  "esModuleInterop",
+];
+
 function verifyEffectiveProjectFiles(projectPath: string): void {
   const baseResolved = resolveEffectiveTsProject(projectPath, true);
   const currentResolved = resolveEffectiveTsProject(projectPath, false);
-  if (baseResolved.options.allowJs && !currentResolved.options.allowJs) {
-    throw new Error(`structure project ${projectPath} disables allowJs`);
+  for (const option of resolutionOptions) {
+    if (canonicalJson(currentResolved.options[option]) !== canonicalJson(baseResolved.options[option])) {
+      throw new Error(`structure project ${projectPath} changes resolution option: ${option}`);
+    }
   }
   const currentFiles = new Set(currentResolved.fileNames.map(file => resolve(file)));
   for (const file of baseResolved.fileNames) {
