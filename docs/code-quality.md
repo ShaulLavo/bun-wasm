@@ -185,21 +185,21 @@ private executor is configured.
   tests. Correctness and unused-variable rules are errors, control-flow depth is limited
   to 3, `else` / `else if` after `return` (`no-else-return` with `allowElseIf: false`)
   and nested ternaries (`no-nested-ternary`) are errors, and complexity is limited to 40.
-  Pre-existing nested ternaries are pinned by context-bound SHA-256 hashes (filename,
-  enclosing declaration, surrounding lines, and diagnostic span) in
+  Pre-existing nested ternaries are pinned by AST context-bound SHA-256 hashes (filename,
+  enclosing declaration path, surrounding lines, and diagnostic span) in
   `.oxlint-nested-ternary-baseline.json`, and `quality:lint` rejects any baseline growth
-  against the comparison commit. Adding a new nested ternary, relocating an identical
-  expression to another function, or running `--write-baseline` to expand allowances all
-  fail CI.
+  against the comparison commit. Adding a new nested ternary, moving a grandfathered body
+  into another function, or running `--write-baseline` to expand allowances all fail CI.
   Unqualified browser-global `name` is forbidden, so a renamed local cannot
   silently capture `window.name` inside a callback.
   Guest fixtures deliberately testing invalid input under `tests/fixtures`,
   `tests/build` and `tests/jsc` are not host source. Intentional classic-script
   factory evaluation and ABI-specific operations have local explained exceptions.
-- Unknot 0.1.2 (`quality:structure`) checks module structure across `src/` and `web/src/`
-  in one unified graph (configured in `.unknot.json`, with pre-existing debt recorded in
-  `.unknot.allow`), failing CI on any new structural finding including cross-boundary
-  import cycles between `src/` and `web/src/`.
+- Unknot 0.1.2 (`quality:structure` via `scripts/quality-structure.ts`) checks module
+  structure across `src/` and `web/src/` in one unified graph (configured in `.unknot.json`,
+  with pre-existing debt recorded in `.unknot.allow`), rejecting both new structural
+  findings (including cross-boundary cycles) and any new entry added to `.unknot.allow`
+  compared to the CI base commit.
 - TypeScript 7.0.2 runs strict runtime-factory, package, scripts/site, web and sandbox projects.
   Both application quality projects include authored TS test files and their
   browser/worker entrypoints. Legacy JS gets correctness lint, not a claim of

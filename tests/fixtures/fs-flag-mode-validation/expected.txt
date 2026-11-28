@@ -42,4 +42,3 @@ promise rejects ERR_INVALID_ARG_VALUE
 system error goes to callback ENOENT
 string mode applied true
 nonblock directory open ok
-wasi nonblock readdir 0 0 true

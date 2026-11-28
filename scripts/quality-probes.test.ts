@@ -40,14 +40,25 @@ test("lint rejects new nested ternaries (including moved copies and baseline gro
   withProbe("src/quality-ternary-probe.ts", "export const pick = (a: number) => a === 1 ? 1 : a === 2 ? 2 : 3;\n", () => rejectsGate("lint", "no-nested-ternary"));
   const baselineFile = resolve(root, "src/engine-kind.ts");
   const original = readFileSync(baselineFile, "utf8");
-  const grandfatheredLine = "const limits = id === 2 ? memoryImport(section) : id === 5 && readUnsigned(section) > 0 ? readLimits(section) : undefined;";
-  expect(original).toContain(grandfatheredLine);
+  const grandfatheredBody = [
+    "  const module: Cursor = { bytes, at: 8 };",
+    "  while (module.at < bytes.length) {",
+    "    const id = bytes[module.at++];",
+    "    const size = readUnsigned(module);",
+    "    const section: Cursor = { bytes: bytes.subarray(module.at, module.at + size), at: 0 };",
+    "    module.at += size;",
+    "    const limits = id === 2 ? memoryImport(section) : id === 5 && readUnsigned(section) > 0 ? readLimits(section) : undefined;",
+    "    if (limits) return limits.maximum === undefined ? undefined : limits.maximum * 65536;",
+    "  }",
+    "  return undefined;",
+  ].join("\n");
+  expect(original).toContain(grandfatheredBody);
   try {
     writeFileSync(baselineFile, `${original}\nexport const qualityAddedTernary = (n: number) => n === 1 ? "a" : n === 2 ? "b" : "c";\n`);
     rejectsGate("lint", "no-nested-ternary");
-    const relocated = original.replace(grandfatheredLine, "const limits = id === 2 ? memoryImport(section) : undefined;")
-      + `\nexport function qualityMovedTernary(id: number, section: { bytes: Uint8Array; at: number }) { ${grandfatheredLine} return limits; }\n`;
-    writeFileSync(baselineFile, relocated);
+    const movedBody = original.replace(grandfatheredBody, "  return qualityExtractedMemoryMax(bytes);")
+      + `\nfunction qualityExtractedMemoryMax(bytes: Uint8Array): number | undefined {\n${grandfatheredBody}\n}\n`;
+    writeFileSync(baselineFile, movedBody);
     rejectsGate("lint", "no-nested-ternary");
   } finally {
     writeFileSync(baselineFile, original);
@@ -64,7 +75,7 @@ test("lint rejects new nested ternaries (including moved copies and baseline gro
   }
   withProbe("src/quality-else-probe.ts", "export function sign(a: number) { if (a > 0) return 1; else if (a < 0) return -1; return 0; }\n", () => rejectsGate("lint", "no-else-return"));
 });
-test("structure and lint gates reject import cycles within src/ and across src/ and web/src/", () => {
+test("structure and lint gates reject import cycles and allowlist growth", () => {
   withProbe("src/quality-cycle-a.ts", 'import { b } from "./quality-cycle-b"; export const a = () => b();\n', () => {
     withProbe("src/quality-cycle-b.ts", 'import { a } from "./quality-cycle-a"; export const b = () => a();\n', () => rejectsGate("structure", "import-cycle"));
   });
@@ -72,7 +83,17 @@ test("structure and lint gates reject import cycles within src/ and across src/ 
     withProbe("web/src/quality-cross-b.ts", 'import { a } from "../../src/quality-cross-a"; export const b = () => a();\n', () => rejectsGate("lint", "no-cycle"));
   });
   withProbe("src/quality-cross-net-a.ts", 'import { b } from "../web/src/net/quality-cross-net-b"; export const a = () => b();\n', () => {
-    withProbe("web/src/net/quality-cross-net-b.ts", 'import { a } from "../../../src/quality-cross-net-a"; export const b = () => a();\n', () => rejectsGate("structure", "module-cycle"));
+    withProbe("web/src/net/quality-cross-net-b.ts", 'import { a } from "../../../src/quality-cross-net-a"; export const b = () => a();\n', () => {
+      rejectsGate("structure", "module-cycle");
+      const allowPath = resolve(root, ".unknot.allow");
+      const originalAllow = readFileSync(allowPath, "utf8");
+      try {
+        writeFileSync(allowPath, `${originalAllow}module-cycle src <-> web/src/net\n`);
+        rejectsGate("structure", "structure allowlist adds entry");
+      } finally {
+        writeFileSync(allowPath, originalAllow);
+      }
+    });
   });
 });
 test("strict scripts project rejects a wrong type", () => {

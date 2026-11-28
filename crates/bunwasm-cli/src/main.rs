@@ -610,6 +610,7 @@ fn build(_: Vec<String>) -> i32 {
 mod tool_args;
 
 enum Command {
+    InDir(Vec<String>, Box<Command>),
     Run(Entry, Vec<String>, Vec<String>, Vec<String>, RunFlags),
     Build(Vec<String>),
     Lint,
@@ -623,7 +624,6 @@ enum Command {
 struct RunFlags {
     mode: RunMode,
     experimental_stream_iter: bool,
-    parallel: bool,
 }
 
 /// `bun exec <script>`: the script runs in the system shell (bash-web), as package scripts do.
@@ -733,8 +733,9 @@ fn run_command(
     conditions: Vec<String>,
     exec_argv: Vec<String>,
     flags: RunFlags,
+    parallel: bool,
 ) -> Command {
-    if flags.parallel && !matches!(&entry, Entry::Test(_)) {
+    if parallel && !matches!(&entry, Entry::Test(_)) {
         eprintln!("error: --parallel is not supported in bun-wasm yet");
         return Command::Exit(1);
     }
@@ -781,16 +782,27 @@ fn is_parallel_flag(flag: &str) -> bool {
     flag == "--parallel" || flag.starts_with("--parallel=")
 }
 
-fn direct_file(file: &str) -> String {
-    let path = std::path::Path::new(file);
-    if !path.is_file() {
+fn effective_cwd(cwds: &[String]) -> std::path::PathBuf {
+    let mut dir = std::env::current_dir().unwrap_or_default();
+    for cwd in cwds {
+        dir = dir.join(cwd);
+    }
+    dir
+}
+
+fn direct_file(file: &str, cwds: &[String]) -> String {
+    let candidate = effective_cwd(cwds).join(file);
+    if !candidate.is_file() {
         return file.to_owned();
     }
-    std::env::current_dir()
-        .unwrap_or_default()
-        .join(path)
-        .to_string_lossy()
-        .into_owned()
+    candidate.to_string_lossy().into_owned()
+}
+
+fn wrap_cwd(cwds: Vec<String>, command: Command) -> Command {
+    if cwds.is_empty() || matches!(command, Command::Exit(_) | Command::Lint) {
+        return command;
+    }
+    Command::InDir(cwds, Box::new(command))
 }
 
 fn parse_command(args: Vec<String>, run_file: bool) -> Command {
@@ -800,31 +812,42 @@ fn parse_command(args: Vec<String>, run_file: bool) -> Command {
         false,
         Vec::new(),
         Vec::new(),
+        Vec::new(),
         RunFlags::default(),
+        false,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_command_with_flags(
     args: Vec<String>,
     run_file: bool,
     after_run: bool,
     conditions: Vec<String>,
     exec_argv: Vec<String>,
+    cwds: Vec<String>,
     flags: RunFlags,
+    parallel: bool,
 ) -> Command {
     let mut rest = args.into_iter();
     let mut conditions = conditions;
     let mut exec_argv = exec_argv;
+    let mut cwds = cwds;
     let mut flags = flags;
+    let mut parallel = parallel;
     while let Some(arg) = rest.next() {
         // `bun -` runs standard input, like `bun run -`; `bun - check` passes it `check`.
         if arg == "-" || run_file && !arg.starts_with('-') {
-            return run_command(
-                Entry::File(arg),
-                rest.collect(),
-                conditions,
-                exec_argv,
-                flags,
+            return wrap_cwd(
+                cwds,
+                run_command(
+                    Entry::File(arg),
+                    rest.collect(),
+                    conditions,
+                    exec_argv,
+                    flags,
+                    parallel,
+                ),
             );
         }
         if arg == "--conditions" {
@@ -839,6 +862,19 @@ fn parse_command_with_flags(
         if let Some(value) = arg.strip_prefix("--conditions=") {
             conditions.push(value.to_owned());
             exec_argv.push(arg);
+            continue;
+        }
+        if (!run_file || after_run) && arg == "--cwd" {
+            let Some(dir) = rest.next() else {
+                return usage_error("--cwd requires a directory");
+            };
+            cwds.push(dir);
+            continue;
+        }
+        if (!run_file || after_run)
+            && let Some(dir) = arg.strip_prefix("--cwd=")
+        {
+            cwds.push(dir.to_owned());
             continue;
         }
         if flags.mode == RunMode::Hot
@@ -870,7 +906,7 @@ fn parse_command_with_flags(
         {
             return usage_error("--hot supports only file-based ESM server entries");
         }
-        if flags.parallel && !arg.starts_with('-') && !matches!(arg.as_str(), "test" | "help") {
+        if parallel && !arg.starts_with('-') && !matches!(arg.as_str(), "test" | "help") {
             eprintln!("error: --parallel is not supported in bun-wasm yet");
             return Command::Exit(1);
         }
@@ -922,12 +958,16 @@ fn parse_command_with_flags(
                 let Some(code) = rest.next() else {
                     return usage_error("--eval requires code");
                 };
-                return run_command(
-                    Entry::Eval(code),
-                    rest.collect(),
-                    conditions,
-                    exec_argv,
-                    flags,
+                return wrap_cwd(
+                    cwds,
+                    run_command(
+                        Entry::Eval(code),
+                        rest.collect(),
+                        conditions,
+                        exec_argv,
+                        flags,
+                        parallel,
+                    ),
                 );
             }
             "-p" | "--print" => {
@@ -938,49 +978,65 @@ fn parse_command_with_flags(
                     "const __bunwasm_print = await (0, eval)({code:?}); \
                      console.log(typeof __bunwasm_print === 'string' ? __bunwasm_print : Bun.inspect(__bunwasm_print));"
                 );
-                return run_command(
-                    Entry::Eval(wrapped),
-                    Vec::new(),
-                    conditions,
-                    exec_argv,
-                    flags,
+                return wrap_cwd(
+                    cwds,
+                    run_command(
+                        Entry::Eval(wrapped),
+                        Vec::new(),
+                        conditions,
+                        exec_argv,
+                        flags,
+                        parallel,
+                    ),
                 );
             }
             "lint" | "fmt" | "check" => return Command::Lint,
             "test" => {
-                return run_command(
-                    Entry::Test(rest.collect()),
-                    Vec::new(),
-                    conditions,
-                    exec_argv,
-                    flags,
+                return wrap_cwd(
+                    cwds,
+                    run_command(
+                        Entry::Test(rest.collect()),
+                        Vec::new(),
+                        conditions,
+                        exec_argv,
+                        flags,
+                        parallel,
+                    ),
                 );
             }
-            "build" | "bun" => return Command::Build(rest.collect()),
+            "build" | "bun" => return wrap_cwd(cwds, Command::Build(rest.collect())),
             "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm"
-            | "update" | "up" => return Command::Install(arg, rest.collect()),
-            "x" | "bunx" => return Command::X(rest.collect()),
-            "create" | "c" => return create_command(rest.collect()),
-            "init" => return Command::Init(rest.collect()),
+            | "update" | "up" => return wrap_cwd(cwds, Command::Install(arg, rest.collect())),
+            "x" | "bunx" => return wrap_cwd(cwds, Command::X(rest.collect())),
+            "create" | "c" => return wrap_cwd(cwds, create_command(rest.collect())),
+            "init" => return wrap_cwd(cwds, Command::Init(rest.collect())),
             "repl" => {
-                return run_command(
-                    Entry::Eval(REPL.to_owned()),
-                    rest.collect(),
-                    conditions,
-                    exec_argv,
-                    flags,
+                return wrap_cwd(
+                    cwds,
+                    run_command(
+                        Entry::Eval(REPL.to_owned()),
+                        rest.collect(),
+                        conditions,
+                        exec_argv,
+                        flags,
+                        parallel,
+                    ),
                 );
             }
             "exec" => {
                 let Some(script) = rest.next() else {
                     return usage_error("bun exec needs a script to run");
                 };
-                return run_command(
-                    Entry::Eval(EXEC.to_owned()),
-                    vec![script],
-                    conditions,
-                    exec_argv,
-                    flags,
+                return wrap_cwd(
+                    cwds,
+                    run_command(
+                        Entry::Eval(EXEC.to_owned()),
+                        vec![script],
+                        conditions,
+                        exec_argv,
+                        flags,
+                        parallel,
+                    ),
                 );
             }
             "upgrade" | "link" | "unlink" | "outdated" | "publish" | "patch" | "patch-commit"
@@ -996,19 +1052,25 @@ fn parse_command_with_flags(
                     true,
                     conditions,
                     exec_argv,
+                    cwds,
                     flags,
+                    parallel,
                 );
             }
             "--" => {
                 let Some(file) = rest.next() else {
                     return usage_error("bun run needs a file to run");
                 };
-                return run_command(
-                    Entry::File(file),
-                    rest.collect(),
-                    conditions,
-                    exec_argv,
-                    flags,
+                return wrap_cwd(
+                    cwds,
+                    run_command(
+                        Entry::File(file),
+                        rest.collect(),
+                        conditions,
+                        exec_argv,
+                        flags,
+                        parallel,
+                    ),
                 );
             }
             // `--bun` changes nothing here, and Bun lists it in process.execArgv.
@@ -1033,7 +1095,7 @@ fn parse_command_with_flags(
                     eprintln!("error: --parallel is not supported in bun-wasm yet");
                     return Command::Exit(1);
                 }
-                flags.parallel = true;
+                parallel = true;
                 continue;
             }
             // Like native Bun, other runtime flags (Node's --enable-source-maps, --no-warnings, ...)
@@ -1046,17 +1108,22 @@ fn parse_command_with_flags(
             }
             flag if flag.starts_with('-') => exec_argv.push(flag.to_owned()),
             file => {
-                return run_command(
-                    Entry::File(direct_file(file)),
-                    rest.collect(),
-                    conditions,
-                    exec_argv,
-                    flags,
+                let resolved = direct_file(file, &cwds);
+                return wrap_cwd(
+                    cwds,
+                    run_command(
+                        Entry::File(resolved),
+                        rest.collect(),
+                        conditions,
+                        exec_argv,
+                        flags,
+                        parallel,
+                    ),
                 );
             }
         }
     }
-    if flags.parallel {
+    if parallel {
         eprintln!("error: --parallel is not supported in bun-wasm yet");
         return Command::Exit(1);
     }
@@ -1208,8 +1275,20 @@ fn main() {
     } else {
         argv
     };
-    let command = parse(args, &executable);
+    let command = match parse(args, &executable) {
+        Command::InDir(cwds, inner) => {
+            for dir in cwds {
+                if let Err(error) = std::env::set_current_dir(&dir) {
+                    eprintln!("error: --cwd {dir}: {error}");
+                    std::process::exit(1);
+                }
+            }
+            *inner
+        }
+        command => command,
+    };
     let (entry, args, conditions, exec_argv, flags) = match command {
+        Command::InDir(_, _) => unreachable!("nested InDir"),
         Command::Exit(code) => std::process::exit(code),
         Command::Lint => {
             eprintln!(
@@ -1451,6 +1530,40 @@ mod tests {
         assert!(matches!(
             node_command(vec!["--filter=pkg".into(), "entry.ts".into()]),
             Command::Run(Entry::File(_), _, _, _, _)
+        ));
+    }
+
+    #[test]
+    fn cwd_flag_wraps_command_without_leaking_to_exec_argv() {
+        let Command::InDir(cwds, inner) =
+            parse(vec!["--cwd".into(), "app".into(), "index.ts".into()], "bun")
+        else {
+            panic!("expected --cwd to wrap command in InDir");
+        };
+        assert_eq!(cwds, ["app"]);
+        let Command::Run(Entry::File(_), _, _, exec_argv, _) = *inner else {
+            panic!("expected Run inside InDir");
+        };
+        assert!(exec_argv.is_empty());
+
+        let Command::InDir(cwds, inner) = parse(
+            vec![
+                "--cwd".into(),
+                "a".into(),
+                "run".into(),
+                "--cwd=b".into(),
+                "index.ts".into(),
+            ],
+            "bun",
+        ) else {
+            panic!("expected chained --cwd flags to preserve order");
+        };
+        assert_eq!(cwds, ["a", "b"]);
+        assert!(matches!(*inner, Command::Run(Entry::File(_), _, _, _, _)));
+
+        assert!(matches!(
+            parse(vec!["--cwd".into()], "bun"),
+            Command::Exit(1)
         ));
     }
 }

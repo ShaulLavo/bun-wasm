@@ -108,7 +108,8 @@
       ],
       "ignoreDependencies": [
         "^bash-web(?:/.*)?$",
-        "^oxlint$"
+        "^oxlint$",
+        "^unknot$"
       ]
     },
     "web": {
