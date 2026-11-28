@@ -116,7 +116,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   let attempt: number | undefined;
   try {
     if (!active()) throw new Error("Bun process launch was revoked");
-    const module = options.loadTools && isToolCommand(context.request.argv.slice(1), context.request.argv[0])
+    const module = options.loadTools && isToolCommand(context.request.argv.slice(1), context.request.argv[0], context.request.env.BUN_OPTIONS)
       ? await options.loadTools() : context.module;
     if (!active()) throw new Error("Bun process launch was revoked");
     const [{ createRing }, { createBunNetworkHelper, dispatchBunNetwork }, network] = await Promise.all([

@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
+import ts from "typescript-api";
 import { loadComparisonFile } from "./quality-lint";
 
 const root = resolve(import.meta.dir, "..");
@@ -139,6 +140,64 @@ function verifyConfigRules(
   }
 }
 
+function readRepoComparisonJson(filePath: string): string | undefined {
+  const rel = relative(root, resolve(filePath)).replaceAll("\\", "/");
+  if (rel.startsWith("..") || rel.startsWith("/")) return undefined;
+  return loadComparisonFile(rel, "STRUCTURE_BASE_REF");
+}
+
+function resolveEffectiveTsProject(projectPath: string, fromComparisonCommit: boolean): ts.ParsedCommandLine {
+  const absPath = resolve(root, projectPath);
+  const readJson = (path: string): string | undefined => {
+    if (fromComparisonCommit && path.endsWith(".json")) {
+      return readRepoComparisonJson(path);
+    }
+    return ts.sys.readFile(path);
+  };
+  const parsed = ts.readConfigFile(absPath, readJson);
+  if (parsed.error) {
+    throw new Error(`Failed to read ${projectPath}: ${ts.flattenDiagnosticMessageText(parsed.error.messageText, "\n")}`);
+  }
+  const host: ts.ParseConfigHost = {
+    useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+    readDirectory: ts.sys.readDirectory,
+    fileExists: path => (fromComparisonCommit && path.endsWith(".json") ? readRepoComparisonJson(path) !== undefined : ts.sys.fileExists(path)),
+    readFile: readJson,
+  };
+  return ts.parseJsonConfigFileContent(parsed.config, host, dirname(absPath), undefined, absPath);
+}
+
+function verifyEffectiveProjectFiles(projectPath: string): void {
+  const baseResolved = resolveEffectiveTsProject(projectPath, true);
+  const currentResolved = resolveEffectiveTsProject(projectPath, false);
+  if (baseResolved.options.allowJs && !currentResolved.options.allowJs) {
+    throw new Error(`structure project ${projectPath} disables allowJs`);
+  }
+  const currentFiles = new Set(currentResolved.fileNames.map(file => resolve(file)));
+  for (const file of baseResolved.fileNames) {
+    if (!currentFiles.has(resolve(file))) {
+      throw new Error(`structure project ${projectPath} drops file from effective scope: ${relative(root, file)}`);
+    }
+  }
+}
+
+function verifyProjectFilesList(
+  projectPath: string,
+  currentFiles: readonly string[] | undefined,
+  baseFiles: readonly string[] | undefined,
+): void {
+  if (baseFiles === undefined && currentFiles !== undefined) {
+    throw new Error(`structure project ${projectPath} adds files restriction`);
+  }
+  if (baseFiles === undefined) return;
+  const kept = new Set(currentFiles ?? []);
+  for (const file of baseFiles) {
+    if (!kept.has(file)) {
+      throw new Error(`structure project ${projectPath} removes file: ${file}`);
+    }
+  }
+}
+
 function verifyProjectScope(projectPath: string): void {
   const baseSource = loadComparisonFile(projectPath, "STRUCTURE_BASE_REF");
   if (baseSource === undefined) return;
@@ -159,16 +218,8 @@ function verifyProjectScope(projectPath: string): void {
       throw new Error(`structure project ${projectPath} adds exclude: ${glob}`);
     }
   }
-  if (base.files === undefined && current.files !== undefined) {
-    throw new Error(`structure project ${projectPath} adds files restriction`);
-  }
-  if (base.files === undefined) return;
-  const currentFiles = new Set(current.files ?? []);
-  for (const file of base.files) {
-    if (!currentFiles.has(file)) {
-      throw new Error(`structure project ${projectPath} removes file: ${file}`);
-    }
-  }
+  verifyProjectFilesList(projectPath, current.files, base.files);
+  verifyEffectiveProjectFiles(projectPath);
 }
 
 function verifyConfigMonotonic(requiredRules: ReadonlySet<string>): void {

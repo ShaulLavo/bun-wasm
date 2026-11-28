@@ -23,7 +23,9 @@ fn main() {
     if let Ok(pwd) = std::env::var("PWD") {
         let _ = std::env::set_current_dir(&pwd);
     }
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cli_args: Vec<String> = std::env::args().skip(1).collect();
+    let bun_options = std::env::var("BUN_OPTIONS").ok();
+    let args = tool_args::with_bun_options(&cli_args, bun_options.as_deref());
     let Some((command, forwarded, globals)) = tool_args::before_command(&args) else {
         eprintln!("error: bun-tools supports bun lint, bun fmt and bun check");
         std::process::exit(2);

@@ -106,7 +106,7 @@ async function main() {
   const baseModule = base.module;
   const programs = new Map<WebAssembly.Module, SharedLinkPlan>();
   if (base.linkPlan) programs.set(baseModule, base.linkPlan);
-  const module = await nodeModule({ args: config.args, baseModule, wasmPath: config.wasmPath });
+  const module = await nodeModule({ args: config.args, bunOptions: config.env.BUN_OPTIONS, baseModule, wasmPath: config.wasmPath });
   const engines: Partial<Record<PairedEngine, WebAssembly.Module>> = {};
   for (const engine of pairedEngineKinds) {
     const path = config.engines[engine];
@@ -186,7 +186,7 @@ async function run(data: GuestData) {
     let instance: WebAssembly.Instance;
     if (config.withNet && data.adapter === "bun") cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
     const host = processHost.install(imports, () => instance, cliFetch?.call);
-    const module = request && data.adapter === "bun" ? await nodeModule({ args, executable: request?.argv[0], baseModule: data.module, wasmPath: config.wasmPath }) : data.module;
+    const module = request && data.adapter === "bun" ? await nodeModule({ args, executable: request?.argv[0], bunOptions: env.BUN_OPTIONS, baseModule: data.module, wasmPath: config.wasmPath }) : data.module;
     if (data.linkPlan && module === data.module) linked = await linkNodeProgram(data.linkPlan, imports, config.engineAllocationFault);
     instance = linked?.entry ?? await WebAssembly.instantiate(module, imports);
     cliFetch?.install();

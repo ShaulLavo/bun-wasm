@@ -359,7 +359,7 @@ fn run_module_instance(
         .iter()
         .find(|(key, _)| key == "PWD")
         .map_or_else(|| "/".into(), |(_, value)| value.clone());
-    let selected = runtime.module_for(&argv, module)?;
+    let selected = runtime.module_for(&argv, &env, module)?;
     let member = runtime.linked.member(
         selected,
         process_admission.execution_id().get() as u32,

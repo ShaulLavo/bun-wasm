@@ -261,11 +261,19 @@ impl Runtime {
     pub fn module_for<'a>(
         &'a self,
         argv: &[String],
+        env: &[(String, String)],
         base: &'a wasmtime::Module,
     ) -> anyhow::Result<&'a wasmtime::Module> {
         let executable = argv.first().map_or("", String::as_str);
+        let bun_options = env
+            .iter()
+            .rev()
+            .find(|(key, _)| key == "BUN_OPTIONS")
+            .map(|(_, value)| value.as_str());
+        let effective =
+            crate::tool_args::with_bun_options(argv.get(1..).unwrap_or_default(), bun_options);
         if crate::tool_args::is_node(executable)
-            || crate::tool_args::before_command(argv.get(1..).unwrap_or_default()).is_none()
+            || crate::tool_args::before_command(&effective).is_none()
         {
             return Ok(base);
         }

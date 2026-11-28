@@ -18,3 +18,13 @@ test("node runs files, never subcommands", () => {
   for (const executable of ["/bin/node", "nodejs", "/usr/bin/node.wasm"]) expect(isToolCommand(["check"], executable)).toBe(false);
   expect(isToolCommand(["check"], "/bin/bun")).toBe(true);
 });
+
+test("BUN_OPTIONS prefixes command classification", () => {
+  expect(isToolCommand(["fmt"], "bun", "--filter=app")).toBe(false);
+  expect(isToolCommand(["lint"], "bun", "--filter app")).toBe(false);
+  expect(isToolCommand(["check"], "bun", "--workspaces")).toBe(false);
+  expect(isToolCommand(["fmt"], "bun", "--parallel")).toBe(false);
+  expect(isToolCommand(["fmt"], "bun", "--title \"two words\" --filter=app")).toBe(false);
+  expect(isToolCommand(["fmt"], "bun", "--cwd project")).toBe(true);
+  expect(isToolCommand(["fmt"], "bun", "--title --filter=app")).toBe(true);
+});

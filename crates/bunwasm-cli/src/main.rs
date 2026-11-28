@@ -782,10 +782,17 @@ fn is_parallel_flag(flag: &str) -> bool {
     flag == "--parallel" || flag.starts_with("--parallel=")
 }
 
+fn normalize_cwd_dir(dir: &str) -> String {
+    if !dir.contains('\\') || std::path::Path::new(dir).exists() {
+        return dir.to_owned();
+    }
+    dir.replace('\\', "/")
+}
+
 fn effective_cwd(cwd: Option<&str>) -> std::path::PathBuf {
     let current = std::env::current_dir().unwrap_or_default();
     match cwd {
-        Some(dir) => current.join(dir),
+        Some(dir) => current.join(normalize_cwd_dir(dir)),
         None => current,
     }
 }
@@ -1258,87 +1265,6 @@ static KEEP_HOST_CALL: (
 static KEEP_HOST_SLOTS: extern "C" fn() -> *mut bunwasm_runtime::host::HostSlots =
     bunwasm_runtime::host::bun_wasm_host_slots;
 
-/// Splits `BUN_OPTIONS` into arguments the way Bun's `append_options_env`
-/// (src/bun_core/util.rs) does: `--flag=value`, `--flag "quoted"` and `--flag='quoted'`
-/// stay one argument with their quotes, and bare words lose quotes and backslashes.
-/// docs/bun-patches/bun-options-env.md records the port.
-fn bun_options(env: &str) -> Vec<String> {
-    let env = env.as_bytes();
-    let mut args = Vec::new();
-    let mut i = 0;
-    while i < env.len() {
-        if env[i].is_ascii_whitespace() {
-            i += 1;
-            continue;
-        }
-        let (arg, end) = if env[i..].starts_with(b"--") {
-            option_argument(env, i)
-        } else {
-            plain_argument(env, i)
-        };
-        args.push(arg);
-        i = end;
-    }
-    args
-}
-
-fn option_argument(env: &[u8], start: usize) -> (String, usize) {
-    let mut j = start;
-    while j < env.len() && !env[j].is_ascii_whitespace() && env[j] != b'=' {
-        j += 1;
-    }
-    let end_of_flag = j;
-    let found_equals = j < env.len() && env[j] == b'=';
-    if found_equals {
-        j += 1;
-    }
-    while !found_equals && j < env.len() && env[j].is_ascii_whitespace() {
-        j += 1;
-    }
-    if j < env.len() && (env[j] == b'\'' || env[j] == b'"') {
-        let quote = env[j];
-        j += 1;
-        while j < env.len() && env[j] != quote {
-            j += 1;
-        }
-        j = (j + 1).min(env.len());
-    } else if found_equals {
-        while j < env.len() && !env[j].is_ascii_whitespace() {
-            j += 1;
-        }
-    } else {
-        // `--flag value`: the value becomes an argument of its own.
-        j = end_of_flag;
-    }
-    (String::from_utf8_lossy(&env[start..j]).into_owned(), j)
-}
-
-fn plain_argument(env: &[u8], start: usize) -> (String, usize) {
-    let mut buf = Vec::new();
-    let mut quote: Option<u8> = None;
-    let mut escape = false;
-    let mut i = start;
-    while let Some(&ch) = env.get(i) {
-        if !escape && quote.is_none() && ch.is_ascii_whitespace() {
-            break;
-        }
-        i += 1;
-        if escape {
-            buf.push(ch);
-            escape = false;
-        } else if ch == b'\\' {
-            escape = true;
-        } else if quote == Some(ch) {
-            quote = None;
-        } else if quote.is_none() && (ch == b'\'' || ch == b'"') {
-            quote = Some(ch);
-        } else {
-            buf.push(ch);
-        }
-    }
-    (String::from_utf8_lossy(&buf).into_owned(), i)
-}
-
 /// Removes standalone `--parallel` / `--parallel=*` flags from `BUN_OPTIONS` while keeping
 /// flag values (such as `--title --parallel=2`) and original quoting intact.
 fn strip_parallel_bun_options(env: &str) -> Option<String> {
@@ -1353,9 +1279,9 @@ fn strip_parallel_bun_options(env: &str) -> Option<String> {
             continue;
         }
         let (arg, end) = if bytes[i..].starts_with(b"--") {
-            option_argument(bytes, i)
+            tool_args::option_argument(bytes, i)
         } else {
-            plain_argument(bytes, i)
+            tool_args::plain_argument(bytes, i)
         };
         if !skip_next_value && is_parallel_flag(&arg) {
             removed = true;
@@ -1389,12 +1315,9 @@ fn main() {
     let mut argv = std::env::args();
     let executable = argv.next().unwrap_or_default();
     // Like Bun, BUN_OPTIONS arguments come right after argv[0], before what was typed.
-    let argv: Vec<String> = std::env::var("BUN_OPTIONS")
-        .map(|options| bun_options(&options))
-        .unwrap_or_default()
-        .into_iter()
-        .chain(argv)
-        .collect();
+    let cli_argv: Vec<String> = argv.collect();
+    let bun_options_env = std::env::var("BUN_OPTIONS").ok();
+    let argv = tool_args::with_bun_options(&cli_argv, bun_options_env.as_deref());
     let args = if executable
         .rsplit('/')
         .next()
@@ -1408,7 +1331,8 @@ fn main() {
     };
     let command = match parse(args, &executable) {
         Command::InDir(dir, inner) => {
-            if let Err(error) = std::env::set_current_dir(&dir) {
+            let normalized = normalize_cwd_dir(&dir);
+            if let Err(error) = std::env::set_current_dir(&normalized) {
                 eprintln!("error: --cwd {dir}: {error}");
                 std::process::exit(1);
             }
@@ -1503,7 +1427,7 @@ mod tests {
             ("", &[]),
         ];
         for (env, expected) in cases {
-            assert_eq!(bun_options(env), expected, "{env:?}");
+            assert_eq!(tool_args::bun_options(env), expected, "{env:?}");
         }
     }
 
@@ -1836,5 +1760,11 @@ mod tests {
             Some("--title --parallel=2".to_owned())
         );
         assert_eq!(strip_parallel_bun_options("--disable-warning=DEP2"), None);
+    }
+
+    #[test]
+    fn normalize_cwd_dir_converts_windows_separators() {
+        assert_eq!(normalize_cwd_dir(r"app\nested"), "app/nested");
+        assert_eq!(normalize_cwd_dir("app/nested"), "app/nested");
     }
 }

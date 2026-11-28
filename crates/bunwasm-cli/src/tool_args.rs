@@ -224,6 +224,93 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
     None
 }
 
+/// Splits `BUN_OPTIONS` into arguments the way Bun's `append_options_env`
+/// (src/bun_core/util.rs) does: `--flag=value`, `--flag "quoted"` and `--flag='quoted'`
+/// stay one argument with their quotes, and bare words lose quotes and backslashes.
+/// docs/bun-patches/bun-options-env.md records the port.
+pub fn bun_options(env: &str) -> Vec<String> {
+    let env = env.as_bytes();
+    let mut args = Vec::new();
+    let mut i = 0;
+    while i < env.len() {
+        if env[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        let (arg, end) = if env[i..].starts_with(b"--") {
+            option_argument(env, i)
+        } else {
+            plain_argument(env, i)
+        };
+        args.push(arg);
+        i = end;
+    }
+    args
+}
+
+pub fn option_argument(env: &[u8], start: usize) -> (String, usize) {
+    let mut j = start;
+    while j < env.len() && !env[j].is_ascii_whitespace() && env[j] != b'=' {
+        j += 1;
+    }
+    let end_of_flag = j;
+    let found_equals = j < env.len() && env[j] == b'=';
+    if found_equals {
+        j += 1;
+    }
+    while !found_equals && j < env.len() && env[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    if j < env.len() && (env[j] == b'\'' || env[j] == b'"') {
+        let quote = env[j];
+        j += 1;
+        while j < env.len() && env[j] != quote {
+            j += 1;
+        }
+        j = (j + 1).min(env.len());
+    } else if found_equals {
+        while j < env.len() && !env[j].is_ascii_whitespace() {
+            j += 1;
+        }
+    } else {
+        // `--flag value`: the value becomes an argument of its own.
+        j = end_of_flag;
+    }
+    (String::from_utf8_lossy(&env[start..j]).into_owned(), j)
+}
+
+pub fn plain_argument(env: &[u8], start: usize) -> (String, usize) {
+    let mut buf = Vec::new();
+    let mut quote: Option<u8> = None;
+    let mut escape = false;
+    let mut i = start;
+    while let Some(&ch) = env.get(i) {
+        if !escape && quote.is_none() && ch.is_ascii_whitespace() {
+            break;
+        }
+        i += 1;
+        if escape {
+            buf.push(ch);
+            escape = false;
+        } else if ch == b'\\' {
+            escape = true;
+        } else if quote == Some(ch) {
+            quote = None;
+        } else if quote.is_none() && (ch == b'\'' || ch == b'"') {
+            quote = Some(ch);
+        } else {
+            buf.push(ch);
+        }
+    }
+    (String::from_utf8_lossy(&buf).into_owned(), i)
+}
+
+pub fn with_bun_options(args: &[String], bun_options_env: Option<&str>) -> Vec<String> {
+    let mut effective = bun_options_env.map(bun_options).unwrap_or_default();
+    effective.extend(args.iter().cloned());
+    effective
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,6 +420,10 @@ mod tests {
         assert_eq!(forwarded, ["--no-warnings"]);
         assert!(select(&["-", "check"]).is_none());
         assert!(select(&["--project", "app", "check"]).is_none());
+        assert!(before_command(&with_bun_options(&["fmt".into()], Some("--filter=app"))).is_none());
+        assert!(
+            before_command(&with_bun_options(&["fmt".into()], Some("--cwd project"))).is_some()
+        );
     }
 }
 

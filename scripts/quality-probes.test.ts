@@ -110,6 +110,8 @@ test("structure and lint gates reject import cycles and allowlist growth", () =>
         writeFileSync(configPath, originalConfig);
         writeFileSync(projectPath, originalProject.replace('    "web/src/**/*"\n', "").replace('"src/**/*",\n', '"src/**/*"\n'));
         rejectsGate("structure", "structure project tsconfig.unknot.json removes include");
+        writeFileSync(projectPath, `${JSON.stringify({ ...JSON.parse(originalProject), compilerOptions: { allowJs: false } }, null, 2)}\n`);
+        rejectsGate("structure", "structure project tsconfig.unknot.json disables allowJs");
       } finally {
         writeFileSync(allowPath, originalAllow);
         writeFileSync(configPath, originalConfig);
