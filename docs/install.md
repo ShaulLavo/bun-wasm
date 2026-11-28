@@ -69,7 +69,7 @@ its isolated installations under the cache directory's `bunx` folder, as native
 Bun keeps its own; they are installed tools, not downloads.
 Packuments expire after five minutes; integrity-checked tarballs do not expire.
 The browser persists successful unauthenticated tarballs up to its 4 MiB
-cache-only capture budget in Cache Storage under `bun-wasm-install-v1`, after
+cache-only capture budget in Cache Storage under `bun-wasm-install-v2`, after
 the response has been consumed. Larger downloads still stream to the guest and
 remain eligible for its integrity-checked cache. Metadata uses the guest cache,
 where configured credentials can be checked before persistence. These caches can
@@ -139,7 +139,18 @@ the package and bin. Installation continues and writes its lockfile. Other
 errors remain fatal. Node's native WASI also rejects some relative links under
 non-root preopens; the bounded upstream comparison records that separate limit.
 
-The installer discovers `workspaces` arrays and object-form `packages` patterns.
+The installer discovers `workspaces` arrays and object-form `packages` patterns,
+along with `catalog:` and `catalog:<name>` definitions from `workspaces.catalog`/
+`workspaces.catalogs`, top-level `catalog`/`catalogs`, `pnpm-workspace.yaml`, and
+`.yarnrc.yml`. Like native Bun 1.4.5, `bun update` persists changed
+`pnpm-workspace.yaml` catalogs into root `package.json` under
+`workspaces.catalog` and `workspaces.catalogs` without modifying
+`pnpm-workspace.yaml`, and `package.json` takes precedence over external YAML
+catalogs on subsequent installs. Unlike native Bun 1.4.5, which only reads
+`.yarnrc.yml` catalogs during `yarn.lock` migration and rejects them when no
+`yarn.lock` is present, the guest also loads `.yarnrc.yml` catalogs directly
+without `yarn.lock` and persists `bun update` changes into root `package.json`
+without modifying `.yarnrc.yml`.
 Members are linked into `node_modules`. Local `link:` and directory `file:`
 dependencies resolve relative to the declaring manifest. Running `bun add` from
 a member updates its manifest and the root lockfile.

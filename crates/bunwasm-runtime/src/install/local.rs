@@ -20,13 +20,9 @@ pub struct Local {
 pub fn root(parser: &dyn Transpiler) -> Result<Option<PathBuf>> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     for ancestor in cwd.ancestors().skip(1) {
-        if !ancestor.join("package.json").exists() {
+        let Some(manifest) = workspace_manifest(ancestor, parser)? else {
             continue;
-        }
-        let manifest = io::read(&ancestor.join("package.json"), "JSON", parser)?;
-        if manifest.get("workspaces").is_none() {
-            continue;
-        }
+        };
         let members = workspaces(ancestor, &manifest, parser)?;
         if members.values().any(|member| member.path == cwd) {
             std::env::set_current_dir(ancestor).map_err(|e| e.to_string())?;
@@ -34,6 +30,35 @@ pub fn root(parser: &dyn Transpiler) -> Result<Option<PathBuf>> {
         }
     }
     Ok(None)
+}
+
+fn workspace_manifest(ancestor: &Path, parser: &dyn Transpiler) -> Result<Option<Value>> {
+    if !ancestor.join("package.json").is_file() {
+        return Ok(None);
+    }
+    let mut manifest = io::read(&ancestor.join("package.json"), "JSON", parser)?;
+    if manifest["workspaces"].is_null()
+        && ancestor.join("pnpm-workspace.yaml").is_file()
+        && let Ok(config) = io::read(&ancestor.join("pnpm-workspace.yaml"), "YAML", parser)
+        && config["packages"].is_array()
+    {
+        manifest["workspaces"] = config["packages"].clone();
+    }
+    Ok((!manifest["workspaces"].is_null()).then_some(manifest))
+}
+
+fn workspace_patterns(config: &Value) -> Result<&[Value]> {
+    if let Some(patterns) = config.as_array() {
+        return Ok(patterns.as_slice());
+    }
+    let Some(object) = config.as_object() else {
+        return Err("workspaces must be an array or an object with packages".into());
+    };
+    match object.get("packages") {
+        None | Some(Value::Null) => Ok(&[]),
+        Some(Value::Array(patterns)) => Ok(patterns.as_slice()),
+        Some(_) => Err("workspaces must be an array or an object with packages".into()),
+    }
 }
 
 pub fn workspaces(
@@ -46,10 +71,7 @@ pub fn workspaces(
     if config.is_null() {
         return Ok(members);
     }
-    let patterns = config
-        .as_array()
-        .or_else(|| config["packages"].as_array())
-        .ok_or("workspaces must be an array or an object with packages")?;
+    let patterns = workspace_patterns(config)?;
     let mut paths = Vec::new();
     for pattern in patterns {
         let pattern = pattern

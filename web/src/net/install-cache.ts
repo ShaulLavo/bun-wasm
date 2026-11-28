@@ -1,14 +1,30 @@
-import { packageFetch } from "./package-fetch.js";
+import { packageFetch, type PackageRequestKind, type PackageRewrite, type PackageUrlRewriter } from "./package-fetch.js";
+
+const packagePolicyHeaders = new WeakMap<object, string>();
+
+/** Mark an in-memory `headers` object with a per-helper package-policy token without adding any HTTP header. */
+export function markPackageFetchHeaders<T extends HeadersInit>(headers: T, token: string): T {
+  packagePolicyHeaders.set(headers, token);
+  return headers;
+}
+
+export interface InstallFetchOptions {
+  readonly fetch?: (url: string, options: RequestInit) => Promise<Response>;
+  readonly rewritePackageUrl?: PackageUrlRewriter;
+  /** Per-helper token required before treating a request as an installer package request. */
+  readonly packagePolicyToken?: string;
+}
 
 const METADATA = "application/vnd.npm.install-v1+json";
 const TARBALL = "application/vnd.bun.install-tarball";
-const CACHE = "bun-wasm-install-v1";
+const CACHE = "bun-wasm-install-v2";
+const RETIRED_CACHES = ["bun-wasm-install-v1"] as const;
 const CACHE_METADATA_HEADER = "x-bun-wasm-cache-metadata";
 const CACHE_CAPTURE_LIMIT = 4 * 1024 * 1024;
 const PUT_QUEUE_BYTE_LIMIT = 8 * 1024 * 1024;
 const PUT_QUEUE_ENTRY_LIMIT = 512;
 const SESSION_IDLE_REFRESH_MS = 2_000;
-const INVALIDATION_CHANNEL = "bun-wasm-install-cache-v1";
+const INVALIDATION_CHANNEL = "bun-wasm-install-cache-v2";
 const BODY_FORBIDDEN_STATUS = new Set([204, 205, 304]);
 
 type CaptureState =
@@ -165,7 +181,10 @@ export async function clearInstallCache(): Promise<boolean> {
   invalidateSession(sessions.get(storage));
   broadcastClear();
   try {
-    return typeof storage.delete === "function" ? await storage.delete(CACHE) : false;
+    if (typeof storage.delete !== "function") return false;
+    const deleted = await storage.delete(CACHE);
+    const retired = await Promise.all(RETIRED_CACHES.map(name => storage.delete(name).catch(() => false)));
+    return deleted || retired.some(Boolean);
   } finally {
     invalidateSession(sessions.get(storage));
     broadcastClear();
@@ -217,41 +236,130 @@ function getOpenedCache(storage: CacheStorage, session: CacheSession, now: numbe
   return opening;
 }
 
+/** Build an installer fetch policy with optional URL rewriting and underlying transport. */
+export function createInstallFetch(config: InstallFetchOptions = {}): (url: string, options: RequestInit) => Promise<Response> {
+  const { fetch: transport, rewritePackageUrl, packagePolicyToken } = config;
+  return (url, options) => runInstallFetch(url, options, transport, rewritePackageUrl, packagePolicyToken);
+}
+
 /** Cache npm downloads across playground runs, without caching ordinary user fetches. */
 export async function installFetch(url: string, options: RequestInit): Promise<Response> {
+  return runInstallFetch(url, options, undefined, undefined, undefined);
+}
+
+async function runInstallFetch(
+  url: string,
+  options: RequestInit,
+  transport: ((url: string, options: RequestInit) => Promise<Response>) | undefined,
+  rewritePackageUrl: PackageUrlRewriter | undefined,
+  packagePolicyToken: string | undefined,
+): Promise<Response> {
   const headers = new Headers(options.headers);
+  const marked = packagePolicyToken !== undefined
+    && typeof options.headers === "object"
+    && options.headers !== null
+    && packagePolicyHeaders.get(options.headers) === packagePolicyToken;
   const header = headers.get("accept") ?? "";
   const accept = header.split(";", 1)[0];
+  const fetcher = transport ?? fetch;
   if (options.method !== "GET" || accept !== METADATA && accept !== TARBALL) {
-    return fetch(url, options);
+    return fetcher(url, options);
   }
-  if (accept === METADATA || typeof caches === "undefined" || headers.has("authorization")) {
-    return packageFetch(url, options);
+  const verifiedPackage = packagePolicyToken === undefined || marked;
+  if (!verifiedPackage && (accept === METADATA || rewritePackageUrl !== undefined)) {
+    return fetcher(url, options);
   }
-  const directives = headers.get("cache-control")?.match(/(?:[^,"]|"(?:[^"\\]|\\.)*")+/g);
-  const refresh = header.includes("; no-cache") || (directives?.some(value => value.trim().toLowerCase() === "no-cache") ?? false);
+  const kind: PackageRequestKind = accept === TARBALL ? "tarball" : "metadata";
+  const rewrite: PackageRewrite | undefined = verifiedPackage && rewritePackageUrl ? { kind, rewriteUrl: rewritePackageUrl } : undefined;
+  if (accept === METADATA || typeof caches === "undefined" || transport !== undefined || headers.has("authorization")) {
+    return packageFetch(url, options, fetcher, rewrite);
+  }
+  const requestDirectives = cacheControlDirectives(headers);
+  const refresh = header.includes("; no-cache") || requestDirectives.includes("no-cache");
+  const skipRequestStore = requestDirectives.includes("no-store");
   const storage = caches;
   const session = getSession(storage);
-  const key = cacheKey(url);
-  const now = Date.now();
-  const opening = getOpenedCache(storage, session, now);
+  let opening: Promise<OpenedCache | undefined> | undefined;
+  const openCache = () => {
+    opening ??= getOpenedCache(storage, session, Date.now());
+    return opening;
+  };
   session.activeFetches++;
-  session.lastActivity = now;
+  session.lastActivity = Date.now();
   try {
-    const opened = await opening;
-    const activeOpened = opened && opened.generation === session.generation ? opened : undefined;
-    if (activeOpened && !refresh) {
-      const cached = await matchKnownEntry(activeOpened, key, url);
-      if (cached) return restoreCachedResponse(cached);
-    }
-    const response = await packageFetch(url, options);
-    if (!response.ok || !activeOpened || activeOpened.generation !== session.generation) return response;
-    return prepareCachedResponse(response, session, activeOpened, key, url, options.signal);
+    return await packageFetch(
+      url,
+      options,
+      (hopUrl, hopOptions) => fetchCachedTarballHop(hopUrl, hopOptions, fetcher, session, openCache, refresh, skipRequestStore),
+      rewrite,
+    );
   } finally {
     session.activeFetches--;
     session.lastActivity = Date.now();
     scheduleIdleRelease(session);
   }
+}
+
+function isSameOriginUrl(url: string): boolean {
+  if (typeof location !== "object" || typeof location?.href !== "string") return false;
+  try {
+    return new URL(url, location.href).origin === new URL(location.href).origin;
+  } catch {
+    return false;
+  }
+}
+
+function isCredentialedRequest(url: string, options: RequestInit): boolean {
+  const headers = new Headers(options.headers);
+  if (headers.has("authorization") || headers.has("cookie") || headers.has("proxy-authorization")) {
+    return true;
+  }
+  if (options.credentials === "include") return true;
+  if (options.credentials === "omit") return false;
+  return isSameOriginUrl(url);
+}
+
+function isNonShareableResponse(response: Response): boolean {
+  const directives = cacheControlDirectives(response.headers);
+  if (directives.includes("no-store") || directives.includes("private")) return true;
+  const vary = response.headers.get("vary");
+  if (!vary) return false;
+  return vary.split(",").some(field => {
+    const name = field.trim().toLowerCase();
+    return name === "*" || name === "cookie" || name === "authorization";
+  });
+}
+
+async function fetchCachedTarballHop(
+  hopUrl: string,
+  hopOptions: RequestInit,
+  fetcher: (url: string, options: RequestInit) => Promise<Response>,
+  session: CacheSession,
+  openCache: () => Promise<OpenedCache | undefined>,
+  refresh: boolean,
+  skipRequestStore: boolean,
+): Promise<Response> {
+  if (isCredentialedRequest(hopUrl, hopOptions)) {
+    return fetcher(hopUrl, hopOptions);
+  }
+  const opened = await openCache();
+  const activeOpened = opened && opened.generation === session.generation ? opened : undefined;
+  const key = cacheKey(hopUrl);
+  if (activeOpened && !refresh && !skipRequestStore) {
+    const cached = await matchKnownEntry(activeOpened, key, hopUrl);
+    if (cached) return restoreCachedResponse(cached);
+  }
+  const response = await fetcher(hopUrl, hopOptions);
+  if (!response.ok || !activeOpened || activeOpened.generation !== session.generation || skipRequestStore || isNonShareableResponse(response)) {
+    return response;
+  }
+  return prepareCachedResponse(response, session, activeOpened, key, hopUrl, hopOptions.signal);
+}
+
+function cacheControlDirectives(headers: Headers): string[] {
+  const value = headers.get("cache-control");
+  if (!value) return [];
+  return value.match(/(?:[^,"]|"(?:[^"\\]|\\.)*")+/g)?.map(token => token.trim().toLowerCase()) ?? [];
 }
 
 async function matchKnownEntry(opened: OpenedCache, key: string, url: string): Promise<Response | undefined> {

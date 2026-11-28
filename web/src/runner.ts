@@ -14,6 +14,7 @@ import { createRing } from "./net/ring";
 import { SubprocessBroker, type ExecutableRegistration } from "./subprocess-broker";
 import { siblingWorkerUrl, type Preview1LauncherOptions } from "./bun-launcher.js";
 import { entryAssetUrl } from "./entry-assets.js";
+import { PAGE_INSTALL_ENV } from "./install-cache.js";
 import { createNotificationBridge, type NotificationBridge } from "waffle/browser/notification-relay";
 import { createPreview1Network } from "waffle/browser/preview1-network";
 import { isToolCommand } from "./tool-command";
@@ -97,7 +98,11 @@ function rootCommand(options: RunOptions): Pick<RunRequest, "args" | "env"> {
   const executable = `${ENGINE_BIN[options.engine]}/bun`;
   return {
     args: [executable].concat(options.args),
-    env: { ...engineEnvironment(options.engine, bunEnvironment(options.env)), BUNWASM_EXEC_PATH: executable },
+    env: {
+      ...engineEnvironment(options.engine, bunEnvironment(options.env)),
+      ...(options.network?.rewritePackageUrl ? PAGE_INSTALL_ENV : undefined),
+      BUNWASM_EXEC_PATH: executable,
+    },
   };
 }
 

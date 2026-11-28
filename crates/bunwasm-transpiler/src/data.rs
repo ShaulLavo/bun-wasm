@@ -5,6 +5,7 @@ use bun_alloc::Arena;
 use bun_ast::{Expr, ExprData, Source};
 use serde_json::{Value, json};
 
+#[derive(Debug)]
 pub enum Error {
     Syntax(String),
     Range(String),
@@ -76,20 +77,25 @@ pub fn parse(source: &[u8], format: &str) -> Result<String, Error> {
                 Error::Syntax(message)
             }
         })?;
-    let mut graph = Graph::default();
+    let mut graph = Graph {
+        yaml_source: (format == "YAML").then_some(source.contents()),
+        ..Graph::default()
+    };
     let root = graph.value(root)?;
     Ok(json!({"root": root, "nodes": graph.nodes}).to_string())
 }
 
 #[derive(Default)]
-struct Graph {
+struct Graph<'a> {
     seen: HashMap<usize, usize>,
     nodes: Vec<Value>,
     pending: Vec<(Expr, usize)>,
     depth: usize,
+    yaml_source: Option<&'a [u8]>,
+    yaml_aliases: Option<HashMap<usize, &'a str>>,
 }
 
-impl Graph {
+impl Graph<'_> {
     fn value(&mut self, expr: Expr) -> Result<Value, Error> {
         let root = self.encode(expr)?;
         while let Some((expr, depth)) = self.pending.pop() {
@@ -129,16 +135,10 @@ impl Graph {
                 })
             }
             ExprData::ENumber(n) => {
-                let n = n.value();
-                let text = if n.is_infinite() {
-                    if n < 0.0 {
-                        "-Infinity".into()
-                    } else {
-                        "Infinity".into()
-                    }
-                } else {
-                    n.to_string()
-                };
+                let text = format_number(n.value());
+                if let Some(raw) = self.yaml_raw_number(expr.loc.start) {
+                    return Ok(json!([4, text, raw]));
+                }
                 Ok(json!([4, text]))
             }
             ExprData::EBoolean(b) | ExprData::EBranchBoolean(b) => Ok(json!([0, b.value])),
@@ -179,6 +179,95 @@ impl Graph {
             key,
             self.encode(prop.value.ok_or("Parsed property has no value")?)?
         ]))
+    }
+
+    fn yaml_raw_number(&mut self, start: i32) -> Option<&str> {
+        let bytes = self.yaml_source?;
+        let start = usize::try_from(start).ok()?;
+        let rest = bytes.get(start..)?;
+        if rest.first() != Some(&b'*') {
+            return yaml_plain_number(rest);
+        }
+        let aliases = self
+            .yaml_aliases
+            .get_or_insert_with(|| index_yaml_alias_scalars(bytes));
+        aliases.get(&start).copied()
+    }
+}
+
+fn format_number(n: f64) -> String {
+    if !n.is_infinite() {
+        return n.to_string();
+    }
+    if n < 0.0 {
+        "-Infinity".into()
+    } else {
+        "Infinity".into()
+    }
+}
+
+fn yaml_plain_number(rest: &[u8]) -> Option<&str> {
+    let len = rest
+        .iter()
+        .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-' | b'_'))
+        .count();
+    if len == 0 {
+        return None;
+    }
+    std::str::from_utf8(&rest[..len]).ok()
+}
+
+fn index_yaml_alias_scalars(source: &[u8]) -> HashMap<usize, &str> {
+    use bun_parsers::yaml::{SourceTokenKind, YAML};
+    let Ok(tokens) = YAML::parse_as_written(source, |_, tokens| tokens.to_vec()) else {
+        return HashMap::new();
+    };
+    let mut anchors: HashMap<&[u8], &str> = HashMap::new();
+    let mut aliases = HashMap::new();
+    for (idx, tok) in tokens.iter().enumerate() {
+        let Some(name) = source.get(tok.start as usize + 1..tok.end as usize) else {
+            continue;
+        };
+        if tok.kind == SourceTokenKind::Anchor {
+            match anchor_scalar_value(source, &tokens[idx + 1..], &anchors) {
+                Some(raw) => {
+                    anchors.insert(name, raw);
+                }
+                None => {
+                    anchors.remove(name);
+                }
+            }
+            continue;
+        }
+        if tok.kind == SourceTokenKind::Alias
+            && let Some(&raw) = anchors.get(name)
+        {
+            aliases.insert(tok.start as usize, raw);
+        }
+    }
+    aliases
+}
+
+fn anchor_scalar_value<'a>(
+    source: &'a [u8],
+    rest: &[bun_parsers::yaml::SourceToken],
+    anchors: &HashMap<&'a [u8], &'a str>,
+) -> Option<&'a str> {
+    use bun_parsers::yaml::SourceTokenKind;
+    let target = rest
+        .iter()
+        .find(|tok| !matches!(tok.kind, SourceTokenKind::Tag | SourceTokenKind::Comment))?;
+    match target.kind {
+        SourceTokenKind::Scalar => {
+            let raw = source.get(target.start as usize..target.end as usize)?;
+            let text = std::str::from_utf8(raw).ok()?.trim();
+            (yaml_plain_number(text.as_bytes()) == Some(text)).then_some(text)
+        }
+        SourceTokenKind::Alias => {
+            let name = source.get(target.start as usize + 1..target.end as usize)?;
+            anchors.get(name).copied()
+        }
+        _ => None,
     }
 }
 
@@ -303,4 +392,85 @@ fn string_end(source: &[u8], start: usize, format: &str) -> usize {
         i += 1;
     }
     i
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse;
+    use serde_json::Value;
+
+    fn raw_catalog_entry(yaml: &str, key: &str) -> String {
+        let graph: Value = serde_json::from_str(&parse(yaml.as_bytes(), "YAML").unwrap()).unwrap();
+        let nodes = graph["nodes"].as_array().unwrap();
+        let root_idx = graph["root"][1].as_u64().unwrap() as usize;
+        let catalog_ref = nodes[root_idx][1]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|pair| pair[0] == Value::Array(vec![Value::from(0), Value::from("catalog")]))
+            .unwrap()[1][1]
+            .as_u64()
+            .unwrap() as usize;
+        let entry = nodes[catalog_ref][1]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|pair| pair[0] == Value::Array(vec![Value::from(0), Value::from(key)]))
+            .unwrap();
+        entry[1][2].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn yaml_numbers_carry_exact_source_scalar() {
+        assert_eq!(
+            raw_catalog_entry("catalog:\n  versioned: 1.10\n", "versioned"),
+            "1.10"
+        );
+        assert_eq!(
+            raw_catalog_entry("{catalog: { versioned: 1.10 }}\n", "versioned"),
+            "1.10"
+        );
+        assert_eq!(
+            raw_catalog_entry(
+                "catalog:\n  versioned: &pin 1.10\n  other: *pin\n",
+                "versioned"
+            ),
+            "1.10"
+        );
+        assert_eq!(
+            raw_catalog_entry("catalog:\n  versioned: &pin 1.10\n  other: *pin\n", "other"),
+            "1.10"
+        );
+        assert_eq!(
+            raw_catalog_entry("catalog:\n  versioned: !!float 1.10 # pin\n", "versioned"),
+            "1.10"
+        );
+        assert_eq!(
+            raw_catalog_entry(
+                "catalog:\n  a: &pin 1.10\n  b: *pin\n  c: &pin !!float 2.10\n  d: *pin\n",
+                "b"
+            ),
+            "1.10"
+        );
+        assert_eq!(
+            raw_catalog_entry(
+                "catalog:\n  a: &pin 1.10\n  b: *pin\n  c: &pin !!float 2.10\n  d: *pin\n",
+                "d"
+            ),
+            "2.10"
+        );
+        assert_eq!(
+            raw_catalog_entry(
+                "defaults: &defs\n  versioned: 2.10\ncatalog:\n  <<: *defs\n",
+                "versioned"
+            ),
+            "2.10"
+        );
+        // Many numeric aliases resolve in a single linear pass.
+        let mut many = String::from("catalog:\n  p0: &a 1.10\n");
+        for i in 1..2000 {
+            many.push_str(&format!("  p{i}: *a\n"));
+        }
+        assert_eq!(raw_catalog_entry(&many, "p1999"), "1.10");
+    }
 }

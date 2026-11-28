@@ -1,4 +1,5 @@
 //! Hoisted npm installs over the optional fetch ABI. No JS engine or OS processes.
+mod catalog;
 mod early;
 mod io;
 mod local;
@@ -112,7 +113,12 @@ fn execute(
             &BUN_REVISION[..9.min(BUN_REVISION.len())]
         );
     }
-    let root_manifest = manifest(command, parser)?;
+    let mut root_manifest = manifest(command, parser)?;
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let unseeded_root = root_manifest.clone();
+    let seeded_catalogs =
+        command == "update" && seed_external_catalogs(&cwd, &mut root_manifest, parser)?;
+    let old_root_manifest = root_manifest.clone();
     let manifest_path = member.as_ref().map_or_else(
         || Path::new("package.json").to_owned(),
         |path| path.join("package.json"),
@@ -123,8 +129,26 @@ fn execute(
         root_manifest.clone()
     };
     let old_manifest = manifest.clone();
+    let catalog_scope = if command == "update" {
+        if member.is_some() {
+            validate_member_update_names(&manifest, &opts)?;
+            Some(referenced_catalog_keys(&manifest, &root_manifest, &opts)?)
+        } else {
+            Some(all_referenced_catalog_keys(
+                &cwd,
+                &root_manifest,
+                &opts,
+                parser,
+            )?)
+        }
+    } else {
+        None
+    };
     if command == "update" {
-        update_manifest(&mut manifest, &opts)?;
+        update_manifest(&mut manifest, &opts, catalog_scope.as_ref())?;
+        if member.is_some() {
+            update_manifest_catalogs(&mut root_manifest, &opts, catalog_scope.as_ref())?;
+        }
     }
     if command == "remove" {
         remove_names(&mut manifest, &opts.names)?;
@@ -141,16 +165,7 @@ fn execute(
         let locked = if Path::new("bun.lock").exists() {
             io::read(Path::new("bun.lock"), "JSONC", parser)?
         } else {
-            migration::read(
-                if member.is_some() {
-                    &root_manifest
-                } else {
-                    &old_manifest
-                },
-                parser,
-                &registry,
-            )?
-            .unwrap_or_else(|| json!({}))
+            migration::read(&unseeded_root, parser, &registry)?.unwrap_or_else(|| json!({}))
         };
         let mut resolution_lock = locked.clone();
         if command == "update" {
@@ -182,6 +197,7 @@ fn execute(
                     .into_keys()
                     .filter(|name| selected(name, &opts))
                     .collect(),
+                catalogs: catalog_scope.clone().unwrap_or_default(),
             });
         }
         let project_manifest = if member.is_some() {
@@ -189,11 +205,9 @@ fn execute(
         } else {
             &manifest
         };
-        resolver.workspaces = local::workspaces(
-            &std::env::current_dir().map_err(|e| e.to_string())?,
-            project_manifest,
-            parser,
-        )?;
+        resolver.workspaces = local::workspaces(&cwd, project_manifest, parser)?;
+        resolver.catalogs =
+            catalog::Catalogs::load(&cwd, project_manifest, &resolver.locked, parser)?;
         if let Some(member) = &member
             && let Some(local) = resolver
                 .workspaces
@@ -208,8 +222,40 @@ fn execute(
         if command != "remove" && command != "update" {
             finalize_additions(&mut manifest, &opts, &resolver, member.as_deref())?;
         }
+        let mut write_manifest = manifest != old_manifest;
+        let mut write_root = false;
         if command == "update" {
-            finalize_updates(&mut manifest, &opts, &resolver, member.as_deref())?;
+            finalize_updates(
+                &mut manifest,
+                &old_manifest,
+                &opts,
+                &resolver,
+                member.as_deref(),
+                catalog_scope.as_ref(),
+            )?;
+            write_manifest = manifest != old_manifest;
+            if member.is_some() {
+                finalize_catalog_updates(
+                    &mut root_manifest,
+                    &old_root_manifest,
+                    &opts,
+                    &resolver,
+                    catalog_scope.as_ref(),
+                );
+                write_root = root_manifest != old_root_manifest;
+                if seeded_catalogs && !write_root {
+                    root_manifest = unseeded_root.clone();
+                }
+            } else if seeded_catalogs && !write_manifest {
+                manifest = unseeded_root.clone();
+            }
+            let finalized_root = if member.is_some() {
+                &root_manifest
+            } else {
+                &manifest
+            };
+            resolver.catalogs =
+                catalog::Catalogs::load(&cwd, finalized_root, &resolver.locked, parser)?;
         }
         if let Some(member) = &member
             && let Some(local) = resolver
@@ -238,10 +284,20 @@ fn execute(
             trace::time("link-bins", || link_bins(&resolver, &manifests))?;
             count
         };
-        if manifest != old_manifest {
+        if write_manifest {
             io::write(
                 &manifest_path,
                 format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()).as_bytes(),
+            )?;
+        }
+        if write_root {
+            io::write(
+                Path::new("package.json"),
+                format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&root_manifest).unwrap()
+                )
+                .as_bytes(),
             )?;
         }
         if !opts.frozen
@@ -370,7 +426,10 @@ fn finalize_additions(
         let Some(package) = command_package(resolver, &name, member) else {
             continue;
         };
-        let range = if opts.exact && !resolve::tarball::is_specifier(&range) {
+        let range = if opts.exact
+            && !resolve::tarball::is_specifier(&range)
+            && !catalog::is_protocol(&range)
+        {
             package.version.clone()
         } else if range == "latest" {
             format!("^{}", package.version)
@@ -931,6 +990,8 @@ fn same_lock(
     });
     Ok(locked["workspaces"] == planned["workspaces"]
         && locked["overrides"] == planned["overrides"]
+        && locked["catalog"] == planned["catalog"]
+        && locked["catalogs"] == planned["catalogs"]
         && packages_match)
 }
 
@@ -996,6 +1057,12 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> Result<String> {
     {
         lock["overrides"] = resolver.overrides.metadata.clone();
     }
+    if let Some(catalog) = resolver.catalogs.default_value() {
+        lock["catalog"] = catalog;
+    }
+    if let Some(catalogs) = resolver.catalogs.named_value() {
+        lock["catalogs"] = catalogs;
+    }
     write_lock(&lock, &resolver.registry)
 }
 
@@ -1018,10 +1085,12 @@ fn write_lock(lock: &Value, registry: &io::Registry) -> Result<String> {
         }
     }
     out.push_str("  },\n");
-    if let Some(overrides) = lock.get("overrides") {
-        out.push_str("  \"overrides\": ");
-        pretty(overrides, 1, &mut out);
-        out.push_str(",\n");
+    for field in ["overrides", "catalog", "catalogs"] {
+        if let Some(section) = lock.get(field) {
+            out.push_str(&format!("  \"{field}\": "));
+            pretty(section, 1, &mut out);
+            out.push_str(",\n");
+        }
     }
     if lock["packages"]
         .as_object()
@@ -1216,47 +1285,313 @@ fn pm(opts: &Options, parser: &dyn Transpiler) -> Result<()> {
     Ok(())
 }
 
-fn update_manifest(manifest: &mut Value, opts: &Options) -> Result<()> {
+const DEPENDENCY_FIELDS: [&str; 4] = [
+    "dependencies",
+    "devDependencies",
+    "optionalDependencies",
+    "peerDependencies",
+];
+
+/// Seeds external catalogs (`pnpm-workspace.yaml` / `.yarnrc.yml`) into the in-memory root
+/// `package.json` for `bun update`. Matches native Bun 1.4.5 for `pnpm-workspace.yaml` and
+/// applies the same writeback to guest-loaded `.yarnrc.yml` catalogs: when an update changes a
+/// catalog entry, the updated catalog is persisted under root `package.json`
+/// `workspaces.catalog` / `workspaces.catalogs`, the external YAML file is left untouched, and
+/// `package.json` takes precedence over external YAML files on subsequent installs.
+fn seed_external_catalogs(
+    cwd: &Path,
+    root_manifest: &mut Value,
+    parser: &dyn Transpiler,
+) -> Result<bool> {
+    if catalog::has_manifest_catalogs(root_manifest) {
+        return Ok(false);
+    }
+    let external = catalog::Catalogs::load(cwd, root_manifest, &json!({}), parser)?;
+    Ok(external.write_to_manifest(root_manifest))
+}
+
+fn update_manifest(
+    manifest: &mut Value,
+    opts: &Options,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
+) -> Result<()> {
     for input in &opts.names {
         let (name, range) = resolve::spec(input)?;
         if input.rfind('@').is_some_and(|at| at > 0) {
-            for field in [
-                "dependencies",
-                "devDependencies",
-                "optionalDependencies",
-                "peerDependencies",
-            ] {
-                if opts.production && field == "devDependencies" {
-                    continue;
-                }
-                if manifest[field].get(&name).is_some() {
-                    manifest[field][&name] = range.clone().into();
-                }
-            }
+            stage_explicit_dependency_update(manifest, &name, &range, opts.production);
         }
+    }
+    if opts.latest {
+        stage_latest_dependencies(manifest, opts);
+    }
+    update_manifest_catalogs(manifest, opts, scope)
+}
+
+fn stage_explicit_dependency_update(
+    manifest: &mut Value,
+    name: &str,
+    range: &str,
+    production: bool,
+) {
+    for field in DEPENDENCY_FIELDS {
+        if production && field == "devDependencies" {
+            continue;
+        }
+        let Some(deps) = manifest.get_mut(field).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        if deps
+            .get(name)
+            .and_then(Value::as_str)
+            .is_some_and(|existing| !catalog::is_protocol(existing))
+        {
+            deps.insert(name.to_owned(), range.into());
+        }
+    }
+}
+
+fn stage_latest_dependencies(manifest: &mut Value, opts: &Options) {
+    for field in DEPENDENCY_FIELDS {
+        if opts.production && field == "devDependencies" {
+            continue;
+        }
+        let Some(deps) = manifest.get_mut(field).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        stage_latest_entries(deps, opts);
+    }
+}
+
+fn stage_latest_entries(deps: &mut serde_json::Map<String, Value>, opts: &Options) {
+    for (name, range) in deps {
+        if !selected(name, opts) || !range.as_str().is_some_and(|r| !r.contains(':')) {
+            continue;
+        }
+        *range = "latest".into();
+    }
+}
+
+fn validate_member_update_names(manifest: &Value, opts: &Options) -> Result<()> {
+    if opts.names.is_empty() {
+        return Ok(());
+    }
+    let deps = resolve::dependencies(manifest, opts.production, true);
+    for input in &opts.names {
+        let (name, _) = resolve::spec(input)?;
+        if !deps.contains_key(&name) {
+            return Err(format!("\"{name}\" is not a dependency of this workspace"));
+        }
+    }
+    Ok(())
+}
+
+fn collect_catalog_keys(
+    manifest: &Value,
+    overrides: &overrides::Overrides,
+    catalogs: &catalog::Catalogs,
+    opts: &Options,
+    keys: &mut BTreeSet<(Option<String>, String)>,
+) {
+    for (name, (range, _, _)) in resolve::dependencies(manifest, opts.production, true) {
+        if !selected(&name, opts) {
+            continue;
+        }
+        if let Some(key) = resolve::resolved_catalog_key(&name, &range, overrides, catalogs, true) {
+            keys.insert(key);
+        }
+    }
+}
+
+fn referenced_catalog_keys(
+    manifest: &Value,
+    root_manifest: &Value,
+    opts: &Options,
+) -> Result<BTreeSet<(Option<String>, String)>> {
+    let overrides = overrides::Overrides::new(root_manifest, &json!({}))?;
+    let catalogs = catalog::Catalogs::from_manifest(root_manifest, &json!({}))?;
+    let mut keys = BTreeSet::new();
+    collect_catalog_keys(manifest, &overrides, &catalogs, opts, &mut keys);
+    Ok(keys)
+}
+
+fn all_referenced_catalog_keys(
+    cwd: &Path,
+    root_manifest: &Value,
+    opts: &Options,
+    parser: &dyn Transpiler,
+) -> Result<BTreeSet<(Option<String>, String)>> {
+    let overrides = overrides::Overrides::new(root_manifest, &json!({}))?;
+    let catalogs = catalog::Catalogs::from_manifest(root_manifest, &json!({}))?;
+    let mut keys = BTreeSet::new();
+    collect_catalog_keys(root_manifest, &overrides, &catalogs, opts, &mut keys);
+    for local in local::workspaces(cwd, root_manifest, parser)?.values() {
+        collect_catalog_keys(&local.meta, &overrides, &catalogs, opts, &mut keys);
+    }
+    Ok(keys)
+}
+
+fn catalog_in_scope(
+    group: Option<&str>,
+    name: &str,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
+) -> bool {
+    let Some(scope) = scope else {
+        return true;
+    };
+    let group_key = group.filter(|g| *g != "default").map(str::to_owned);
+    scope.contains(&(group_key, name.to_owned()))
+}
+
+enum CatalogRegistrySpec<'a> {
+    Range(&'a str),
+    Alias { target: &'a str, range: &'a str },
+}
+
+impl<'a> CatalogRegistrySpec<'a> {
+    fn target(&self) -> Option<&'a str> {
+        match self {
+            Self::Range(_) => None,
+            Self::Alias { target, .. } => Some(target),
+        }
+    }
+
+    fn range(&self) -> &'a str {
+        match self {
+            Self::Range(range) | Self::Alias { range, .. } => range,
+        }
+    }
+
+    fn format_with(&self, range: &str) -> String {
+        match self.target() {
+            Some(target) => format!("npm:{target}@{range}"),
+            None => range.to_owned(),
+        }
+    }
+}
+
+fn parse_catalog_registry_spec(spec: &str) -> Option<CatalogRegistrySpec<'_>> {
+    let trimmed = spec.trim();
+    if !trimmed.contains(':') {
+        return Some(CatalogRegistrySpec::Range(trimmed));
+    }
+    let without_npm = catalog::without_npm_protocol(trimmed);
+    if without_npm != trimmed {
+        return (!without_npm.contains(':')).then_some(CatalogRegistrySpec::Range(without_npm));
+    }
+    let alias = trimmed.strip_prefix("npm:")?;
+    let split = alias
+        .char_indices()
+        .find_map(|(i, ch)| (i > 0 && ch == '@').then_some(i));
+    let (target, range) = match split {
+        Some(index) => (&alias[..index], &alias[index + 1..]),
+        None => (alias, "latest"),
+    };
+    if resolve::valid_name(target).is_err() || range.is_empty() || range.contains(':') {
+        return None;
+    }
+    Some(CatalogRegistrySpec::Alias { target, range })
+}
+
+fn update_manifest_catalogs(
+    manifest: &mut Value,
+    opts: &Options,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
+) -> Result<()> {
+    for input in &opts.names {
+        let (name, range) = resolve::spec(input)?;
+        if !input.rfind('@').is_some_and(|at| at > 0) {
+            continue;
+        }
+        stage_explicit_catalog_update(manifest, &name, &range, scope);
     }
     if !opts.latest {
         return Ok(());
     }
-    for field in [
-        "dependencies",
-        "devDependencies",
-        "optionalDependencies",
-        "peerDependencies",
-    ] {
-        if opts.production && field == "devDependencies" {
+    for_each_manifest_catalog_mut(manifest, |group, entries| {
+        stage_latest_catalog_entries(group, entries, opts, scope);
+    });
+    Ok(())
+}
+
+fn stage_explicit_catalog_update(
+    manifest: &mut Value,
+    name: &str,
+    range: &str,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
+) {
+    for_each_manifest_catalog_mut(manifest, |group, entries| {
+        if !catalog_in_scope(group, name, scope) {
+            return;
+        }
+        let Some(existing) = entries.get(name).and_then(Value::as_str) else {
+            return;
+        };
+        let Some(parsed) = parse_catalog_registry_spec(existing) else {
+            return;
+        };
+        let staged = if !range.contains(':') {
+            parsed.format_with(range)
+        } else if parse_catalog_registry_spec(range).is_some() {
+            range.to_owned()
+        } else {
+            return;
+        };
+        entries.insert(name.to_owned(), staged.into());
+    });
+}
+
+fn stage_latest_catalog_entries(
+    group: Option<&str>,
+    entries: &mut serde_json::Map<String, Value>,
+    opts: &Options,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
+) {
+    for (name, range) in entries {
+        if !selected(name, opts) || !catalog_in_scope(group, name, scope) {
             continue;
         }
-        let Some(deps) = manifest[field].as_object_mut() else {
+        let Some(parsed) = range.as_str().and_then(parse_catalog_registry_spec) else {
             continue;
         };
-        for (name, range) in deps {
-            if selected(name, opts) && range.as_str().is_some_and(|r| !r.contains(':')) {
-                *range = "latest".into();
-            }
-        }
+        *range = parsed.format_with("latest").into();
     }
-    Ok(())
+}
+
+fn has_explicit_version(name: &str, opts: &Options) -> bool {
+    opts.names.iter().any(|input| {
+        input.rfind('@').is_some_and(|at| at > 0)
+            && resolve::spec(input).is_ok_and(|(n, _)| n == name)
+    })
+}
+
+fn for_each_manifest_catalog_mut(
+    manifest: &mut Value,
+    mut visit: impl FnMut(Option<&str>, &mut serde_json::Map<String, Value>),
+) {
+    let Some(workspaces) = manifest.get("workspaces").filter(|v| !v.is_null()) else {
+        return;
+    };
+    let nested = workspaces.as_object().is_some_and(|ws| {
+        ws.get("catalog").is_some_and(|v| !v.is_null())
+            || ws.get("catalogs").is_some_and(|v| !v.is_null())
+    });
+    let container = if nested {
+        &mut manifest["workspaces"]
+    } else {
+        manifest
+    };
+    if let Some(entries) = container.get_mut("catalog").and_then(Value::as_object_mut) {
+        visit(None, entries);
+    }
+    let Some(catalogs) = container.get_mut("catalogs").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (group, entries) in catalogs {
+        let Some(entries) = entries.as_object_mut() else {
+            continue;
+        };
+        visit(Some(group.as_str()), entries);
+    }
 }
 
 fn selected(name: &str, opts: &Options) -> bool {
@@ -1267,6 +1602,22 @@ fn selected(name: &str, opts: &Options) -> bool {
             .any(|input| resolve::spec(input).is_ok_and(|(n, _)| n == name))
 }
 
+fn lock_leaf_name(key: &str) -> &str {
+    let mut rest = key;
+    loop {
+        let end = if rest.starts_with('@') {
+            rest.find('/')
+                .and_then(|first| rest[first + 1..].find('/').map(|second| first + 1 + second))
+        } else {
+            rest.find('/')
+        };
+        let Some(next) = end else {
+            return rest;
+        };
+        rest = &rest[next + 1..];
+    }
+}
+
 fn unlock(locked: &mut Value, opts: &Options, manifest: &Value, workspace: Option<&str>) {
     if workspace.is_some() {
         return;
@@ -1275,53 +1626,233 @@ fn unlock(locked: &mut Value, opts: &Options, manifest: &Value, workspace: Optio
     let Some(packages) = locked["packages"].as_object_mut() else {
         return;
     };
-    packages.retain(|key, row| {
-        !selected(key, opts)
-            || row[1]
-                .as_str()
-                .is_some_and(|source| sources.contains(source))
-    });
+    packages.retain(|key, _| !selected(lock_leaf_name(key), opts) || sources.contains(key));
 }
 
 fn finalize_updates(
     manifest: &mut Value,
+    old_manifest: &Value,
     opts: &Options,
     resolver: &Resolver,
     member: Option<&Path>,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
 ) -> Result<()> {
-    for field in [
-        "dependencies",
-        "devDependencies",
-        "optionalDependencies",
-        "peerDependencies",
-    ] {
-        let Some(deps) = manifest[field].as_object_mut() else {
+    for field in DEPENDENCY_FIELDS {
+        let Some(deps) = manifest.get_mut(field).and_then(Value::as_object_mut) else {
             continue;
         };
-        for (name, range) in deps {
-            if !selected(name, opts) {
-                continue;
-            }
-            let Some(package) = command_package(resolver, name, member) else {
-                continue;
-            };
-            let old = range.as_str().unwrap_or("");
-            if old.contains(':') {
-                continue;
-            }
-            let prefix = if opts.exact {
-                ""
-            } else if old.starts_with('~') {
-                "~"
-            } else if old.starts_with('^') || old == "latest" {
-                "^"
-            } else {
-                ""
-            };
-            *range = format!("{prefix}{}", package.version).into();
+        finalize_dependency_entries(deps, opts, resolver, member);
+    }
+    if member.is_some() {
+        return Ok(());
+    }
+    finalize_catalog_updates(manifest, old_manifest, opts, resolver, scope);
+    Ok(())
+}
+
+fn finalize_dependency_entries(
+    deps: &mut serde_json::Map<String, Value>,
+    opts: &Options,
+    resolver: &Resolver,
+    member: Option<&Path>,
+) {
+    for (name, range) in deps {
+        if !selected(name, opts) {
+            continue;
+        }
+        let Some(package) = command_package(resolver, name, member) else {
+            continue;
+        };
+        let old = range.as_str().unwrap_or("");
+        if old.contains(':') {
+            continue;
+        }
+        *range = updated_range(old, &package.version, opts.exact).into();
+    }
+}
+
+fn updated_range(old: &str, version: &str, exact: bool) -> String {
+    let prefix = if exact {
+        ""
+    } else if old.starts_with('~') {
+        "~"
+    } else if old.starts_with('^') || old == "latest" {
+        "^"
+    } else {
+        ""
+    };
+    format!("{prefix}{version}")
+}
+
+fn split_ascii_digits(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+    let len = bytes.iter().take_while(|b| b.is_ascii_digit()).count();
+    (len > 0).then(|| bytes.split_at(len))
+}
+
+fn skip_ascii_digits(bytes: &[u8]) -> Option<&[u8]> {
+    split_ascii_digits(bytes).map(|(_, rest)| rest)
+}
+
+fn short_range_keeps_ceiling(op: u8, tail: &[u8]) -> bool {
+    let Some((major, rest)) = split_ascii_digits(tail) else {
+        return false;
+    };
+    let Some((minor, rest)) = rest.strip_prefix(b".").and_then(split_ascii_digits) else {
+        return op == b'^' && major.iter().any(|b| *b != b'0');
+    };
+    if rest
+        .strip_prefix(b".")
+        .and_then(skip_ascii_digits)
+        .is_some()
+    {
+        return true;
+    }
+    op == b'~' || major.iter().any(|b| *b != b'0') || minor.iter().any(|b| *b != b'0')
+}
+
+fn keeps_declared_range(literal: &str) -> bool {
+    let mut rest = literal.trim().as_bytes();
+    while let [
+        b'=' | b'v' | b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C,
+        tail @ ..,
+    ] = rest
+    {
+        rest = tail;
+    }
+    if let [op @ (b'^' | b'~'), tail @ ..] = rest {
+        let tail = std::str::from_utf8(tail).map_or(tail, |s| s.trim().as_bytes());
+        return tail.iter().any(|b| b" \t|<>".contains(b)) || !short_range_keeps_ceiling(*op, tail);
+    }
+    let Some(rest) = skip_ascii_digits(rest)
+        .and_then(|r| r.strip_prefix(b"."))
+        .and_then(skip_ascii_digits)
+        .and_then(|r| r.strip_prefix(b"."))
+        .and_then(skip_ascii_digits)
+    else {
+        return true;
+    };
+    match rest {
+        [] => false,
+        [b'-' | b'+', tail @ ..] => tail.iter().any(|b| b" \t|<>".contains(b)),
+        _ => true,
+    }
+}
+
+fn updated_catalog_range(template: &str, version: &str, exact: bool) -> String {
+    let trimmed = template.trim();
+    let exact_prefix = if trimmed.starts_with('=') { "=" } else { "" };
+    if exact {
+        return format!("{exact_prefix}{version}");
+    }
+    if trimmed.starts_with('~') {
+        return format!("~{version}");
+    }
+    if trimmed.starts_with('^') || keeps_declared_range(trimmed) {
+        return format!("^{version}");
+    }
+    format!("{exact_prefix}{version}")
+}
+
+fn finalize_catalog_updates(
+    manifest: &mut Value,
+    old_manifest: &Value,
+    opts: &Options,
+    resolver: &Resolver,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
+) {
+    let Some(workspaces) = manifest.get("workspaces").filter(|v| !v.is_null()) else {
+        return;
+    };
+    let nested = workspaces.as_object().is_some_and(|ws| {
+        ws.get("catalog").is_some_and(|v| !v.is_null())
+            || ws.get("catalogs").is_some_and(|v| !v.is_null())
+    });
+    let (container, old_container) = if nested {
+        (&mut manifest["workspaces"], &old_manifest["workspaces"])
+    } else {
+        (manifest, old_manifest)
+    };
+    if let Some(entries) = container.get_mut("catalog").and_then(Value::as_object_mut) {
+        finalize_catalog_entries(
+            entries,
+            &old_container["catalog"],
+            None,
+            opts,
+            resolver,
+            scope,
+        );
+    }
+    let Some(catalogs) = container.get_mut("catalogs").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (group, entries) in catalogs {
+        if let Some(entries) = entries.as_object_mut() {
+            finalize_catalog_entries(
+                entries,
+                &old_container["catalogs"][group],
+                Some(group.as_str()),
+                opts,
+                resolver,
+                scope,
+            );
         }
     }
-    Ok(())
+}
+
+fn finalize_catalog_entries(
+    entries: &mut serde_json::Map<String, Value>,
+    old_entries: &Value,
+    group: Option<&str>,
+    opts: &Options,
+    resolver: &Resolver,
+    scope: Option<&BTreeSet<(Option<String>, String)>>,
+) {
+    let group_key = group.filter(|g| *g != "default").map(str::to_owned);
+    for (name, range) in entries {
+        if !selected(name, opts) || !catalog_in_scope(group, name, scope) {
+            continue;
+        }
+        let old = old_entries[name.as_str()]
+            .as_str()
+            .unwrap_or_else(|| range.as_str().unwrap_or(""));
+        let Some(old_spec) = parse_catalog_registry_spec(old) else {
+            *range = old.into();
+            continue;
+        };
+        if !opts.latest
+            && !has_explicit_version(name, opts)
+            && keeps_declared_range(old_spec.range())
+        {
+            *range = old.into();
+            continue;
+        }
+        let key = (group_key.clone(), name.clone());
+        let Some(version) = resolver.used_catalogs.get(&key) else {
+            *range = old.into();
+            continue;
+        };
+        let exact = opts.exact && !resolver.peer_catalogs.contains(&key);
+        *range =
+            finalized_catalog_value(&old_spec, range.as_str(), version, opts.latest, exact).into();
+    }
+}
+
+fn finalized_catalog_value(
+    old_spec: &CatalogRegistrySpec<'_>,
+    staged: Option<&str>,
+    version: &str,
+    latest: bool,
+    exact: bool,
+) -> String {
+    let staged_spec = staged.and_then(parse_catalog_registry_spec);
+    let target_spec = staged_spec.as_ref().unwrap_or(old_spec);
+    let template = if latest {
+        old_spec.range()
+    } else {
+        target_spec.range()
+    };
+    let updated = updated_catalog_range(template, version, exact);
+    target_spec.format_with(&updated)
 }
 
 fn link_package_bins(package: &Package, manifest: Option<&Value>) -> Result<()> {
@@ -1532,6 +2063,8 @@ fn package_binary(
         .filter(|file| file.is_file()))
 }
 
+#[cfg(test)]
+mod catalog_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod early_tests;
 #[cfg(test)]

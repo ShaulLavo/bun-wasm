@@ -2,9 +2,16 @@
 // only Bun's installer download cache is selected here.
 import { NetHelper as RuntimeNetHelper, type NetNamespace, type NetHelperHooks } from "waffle/browser/net/helper";
 import type { NetConnect } from "waffle/browser/net/outbound";
-import { installFetch } from "./install-cache.js";
+import { createInstallFetch, installFetch, markPackageFetchHeaders } from "./install-cache.js";
+import type { PackageRequest, PackageRequestKind, PackageRewriteResult, PackageUrlRewriter } from "./package-fetch.js";
 
 export type { ConnectionSink, NetFetch, NetHelperHooks, PreviewConnection, PreviewSink } from "waffle/browser/net/helper";
+export type {
+  PackageRequest as BunPackageRequest,
+  PackageRequestKind as BunPackageRequestKind,
+  PackageRewriteResult as BunPackageRewriteResult,
+  PackageUrlRewriter as BunPackageUrlRewriter,
+};
 
 export class NetHelper extends RuntimeNetHelper {
   constructor(sab: SharedArrayBuffer, namespace: NetNamespace, hooks: NetHelperHooks = {}) {
@@ -28,6 +35,13 @@ export interface BunRelayOptions {
 
 export interface BunNetworkOptions {
   readonly fetch?: NetFetch;
+  /**
+   * Rewrites outbound `bun install` metadata and tarball URLs before the browser fetches them,
+   * while keeping `bun-wasm`'s tarball cache and redirect checks intact. Return an absolute or
+   * same-origin relative URL to route through a host proxy, or `null` / `undefined` to fetch
+   * the original URL directly.
+   */
+  readonly rewritePackageUrl?: PackageUrlRewriter;
   readonly relay?: BunRelayOptions;
   readonly connect?: NetConnect;
   readonly pathScope?: Parameters<RuntimeNetwork["createHelper"]>[0]["pathScope"];
@@ -46,18 +60,30 @@ export interface BunProcessStart {
   readonly job: number;
 }
 
+function tagPackageFetch(request: NetRequest, packagePolicyToken: string): NetRequest {
+  if (request.type !== "fetch") return request;
+  if (!("credentialPolicy" in request) || request.credentialPolicy !== "package") return request;
+  return { ...request, headers: markPackageFetchHeaders(request.headers.slice(), packagePolicyToken) };
+}
+
+const packagePolicyTokens = new WeakMap<RuntimeNetworkHelper, string>();
+
 export function createBunNetworkHelper(
   network: RuntimeNetwork,
   ring: SharedArrayBuffer,
   options: BunNetworkOptions = {},
 ): RuntimeNetworkHelper {
-  const fetch = options.fetch ?? installFetch;
+  const packagePolicyToken = options.rewritePackageUrl || !options.fetch ? crypto.randomUUID() : undefined;
+  const fetch = packagePolicyToken !== undefined
+    ? createInstallFetch({ fetch: options.fetch, rewritePackageUrl: options.rewritePackageUrl, packagePolicyToken })
+    : options.fetch!;
   const listening = options.listening;
   const stopped = options.stopped;
   const helper = network.createHelper({ ring, fetch, connect: options.connect, pathScope: options.pathScope, hooks: {
     listening: port => listening?.(port, helper),
     stopped: port => stopped?.(port, helper),
   } });
+  if (packagePolicyToken !== undefined) packagePolicyTokens.set(helper, packagePolicyToken);
   return helper;
 }
 
@@ -100,11 +126,13 @@ function validFetch(value: object): boolean {
   if (!("method" in value) || typeof value.method !== "string" || !("url" in value) || typeof value.url !== "string") return false;
   if (!("body" in value) || value.body !== null && !(value.body instanceof Uint8Array)) return false;
   if (!("redirect" in value) || typeof value.redirect !== "string" || !["error", "follow", "manual"].includes(value.redirect)) return false;
+  if ("credentialPolicy" in value && value.credentialPolicy !== undefined && value.credentialPolicy !== "package") return false;
   return "headers" in value && Array.isArray(value.headers) && value.headers.every(header => Array.isArray(header) && header.length === 2 && header.every(part => typeof part === "string"));
 }
 
 export function dispatchBunNetwork(helper: RuntimeNetworkHelper, message: unknown): void {
   if (!message || typeof message !== "object" || !("type" in message) || message.type !== "net") return;
   if (!("req" in message) || !isNetRequest(message.req)) throw new TypeError("Invalid Bun network request");
-  helper.handle(message.req);
+  const token = packagePolicyTokens.get(helper);
+  helper.handle(token === undefined ? message.req : tagPackageFetch(message.req, token));
 }

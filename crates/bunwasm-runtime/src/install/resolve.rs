@@ -15,6 +15,7 @@ use bun_semver::{SlicedString, Version};
 use serde_json::{Value, json};
 
 use super::{
+    catalog::Catalogs,
     io::{self, Result},
     local::Local,
     overrides::Overrides,
@@ -174,12 +175,19 @@ fn add_dependencies(
 pub struct MemberUpdate {
     pub member: String,
     pub dependencies: BTreeSet<String>,
+    pub catalogs: BTreeSet<(Option<String>, String)>,
 }
 
 #[derive(Clone, Copy)]
 enum LockLookup {
     Use,
     Skip,
+}
+
+enum Placement {
+    Add(Vec<String>),
+    Satisfied(String),
+    IncompatiblePeer,
 }
 
 pub struct Resolver {
@@ -195,9 +203,14 @@ pub struct Resolver {
     explicit_sources: BTreeSet<String>,
     pending: VecDeque<String>,
     pub workspaces: BTreeMap<String, Local>,
+    root_deps: BTreeSet<String>,
     production: bool,
     pub member_update: Option<MemberUpdate>,
     pub(super) overrides: Overrides,
+    pub(super) catalogs: Catalogs,
+    pub(super) used_catalogs: BTreeMap<(Option<String>, String), String>,
+    pub(super) peer_catalogs: BTreeSet<(Option<String>, String)>,
+    locked_catalogs: Catalogs,
     /// Installs placed packages while metadata loads (cold installs only).
     pub(super) early: Option<super::early::Early>,
 }
@@ -206,6 +219,7 @@ impl Resolver {
     pub fn new(registry: io::Registry, locked: Value, refresh: bool) -> Self {
         Self {
             explicit_sources: tarball::locked_sources(&locked, &Value::Null),
+            locked_catalogs: Catalogs::from_lock(&locked),
             packages: BTreeMap::new(),
             skipped: BTreeMap::new(),
             registry,
@@ -217,9 +231,13 @@ impl Resolver {
             downloads: io::Downloads::new(io::METADATA_PREFETCHES),
             pending: VecDeque::new(),
             workspaces: BTreeMap::new(),
+            root_deps: BTreeSet::new(),
             production: false,
             member_update: None,
             overrides: Overrides::default(),
+            catalogs: Catalogs::default(),
+            used_catalogs: BTreeMap::new(),
+            peer_catalogs: BTreeSet::new(),
             early: None,
         }
     }
@@ -238,6 +256,21 @@ impl Resolver {
     fn resolve_graph(&mut self, manifest: &Value, production: bool) -> Result<()> {
         self.production = production;
         self.overrides = Overrides::new(manifest, &self.locked)?;
+        if !self.catalogs.loaded {
+            self.catalogs = Catalogs::from_manifest(manifest, &self.locked)?;
+        }
+        self.locked_catalogs = Catalogs::from_lock(&self.locked);
+        self.locked_catalogs.from_yarn = self.catalogs.from_yarn;
+        self.explicit_sources.clear();
+        tarball::collect_workspace_sources(
+            manifest,
+            &self.locked,
+            &self.workspaces,
+            &self.overrides,
+            &self.catalogs,
+            &self.locked_catalogs,
+            &mut self.explicit_sources,
+        );
         let members: Vec<_> = self.workspaces.keys().cloned().collect();
         for name in members {
             self.add(&name, "workspace:*", vec![name.clone()], false, None)?;
@@ -245,11 +278,34 @@ impl Resolver {
         let dependencies: Vec<_> = dependencies(manifest, production, true)
             .into_iter()
             .collect();
+        self.root_deps = dependencies.iter().map(|(name, _)| name.clone()).collect();
         let mut lookahead = self.metadata_lookahead(&dependencies, None);
-        for (index, (name, (range, optional, _))) in dependencies.iter().enumerate() {
+        for (index, (name, (range, optional, peer))) in dependencies.iter().enumerate() {
             self.prefetch_dependencies(&mut lookahead, index);
-            let range = self.overrides.target(name, range).to_owned();
-            self.add(name, &range, vec![name.clone()], *optional, None)?;
+            let cat_key = resolved_catalog_key(name, range, &self.overrides, &self.catalogs, true);
+            if *peer && let Some(cat_key) = &cat_key {
+                self.peer_catalogs.insert(cat_key.clone());
+            }
+            let range = match self.resolve_range(None, name, range) {
+                Ok(range) => range,
+                Err(_) if *optional => continue,
+                Err(error) => return Err(error),
+            };
+            let lookup = if self.overrides.changed.contains(name)
+                || cat_key
+                    .as_ref()
+                    .is_some_and(|key| self.is_member_catalog_update(key))
+            {
+                LockLookup::Skip
+            } else {
+                LockLookup::Use
+            };
+            self.add_with_lookup(name, &range, vec![name.clone()], *optional, None, lookup)?;
+            if let Some(cat_key) = cat_key
+                && let Some(pkg) = self.packages.get(name)
+            {
+                self.used_catalogs.insert(cat_key, pkg.version.clone());
+            }
         }
         self.downloads.clear();
         let mut pending_peers = VecDeque::new();
@@ -364,46 +420,89 @@ impl Resolver {
     }
 
     fn children(&mut self, parent: &Package, peers: bool) -> Result<()> {
-        let dependencies: Vec<_> = dependencies(
-            &parent.meta,
-            self.production,
-            parent.local.as_ref().is_some_and(|p| p.workspace),
-        )
-        .into_iter()
-        .filter(|(_, (_, _, peer))| *peer == peers)
-        .collect();
+        let workspace = parent.local.as_ref().is_some_and(|p| p.workspace);
+        let dependencies: Vec<_> = dependencies(&parent.meta, self.production, workspace)
+            .into_iter()
+            .filter(|(_, (_, _, peer))| *peer == peers)
+            .collect();
         let mut lookahead = self.metadata_lookahead(&dependencies, Some(parent));
         for (index, (name, (range, optional, peer))) in dependencies.iter().enumerate() {
             self.prefetch_dependencies(&mut lookahead, index);
-            let range = self.edge_range(Some(parent), name, range);
-            let Some(target) = self.target(parent, name, &range, *optional || parent.optional)?
+            let is_optional = *optional || parent.optional;
+            let cat_key =
+                resolved_catalog_key(name, range, &self.overrides, &self.catalogs, workspace);
+            if *peer && let Some(cat_key) = &cat_key {
+                self.peer_catalogs.insert(cat_key.clone());
+            }
+            let range = match self.resolve_range(Some(parent), name, range) {
+                Ok(range) => range,
+                Err(_) if is_optional => continue,
+                Err(error) => return Err(error),
+            };
+            if *peer && !workspace && super::catalog::is_protocol(&range) {
+                continue;
+            }
+            let Some(target) =
+                self.target(parent, name, &range, is_optional, *peer, cat_key.as_ref())?
             else {
                 continue;
             };
-            let chain = self.placement(parent, name, &target, *peer, *optional || parent.optional);
-            let Some(chain) = chain else {
-                continue;
+            let placed_key = match self.placement(parent, name, &target, *peer, is_optional) {
+                Placement::Add(chain) => {
+                    let key = chain.join("/");
+                    let parent_key = parent.key();
+                    self.add(name, &target, chain, is_optional, Some(&parent_key))?;
+                    Some(key)
+                }
+                Placement::Satisfied(key) => Some(key),
+                Placement::IncompatiblePeer => None,
             };
-            let parent_key = parent.key();
-            self.add(
-                name,
-                &target,
-                chain,
-                *optional || parent.optional,
-                Some(&parent_key),
-            )?;
+            self.record_used_catalog(cat_key, placed_key.as_deref(), name, &range, *peer);
         }
         Ok(())
     }
 
-    fn edge_range(&self, parent: Option<&Package>, name: &str, range: &str) -> String {
-        let Some(parent) = parent else {
-            return self.overrides.target(name, range).into();
+    fn record_used_catalog(
+        &mut self,
+        cat_key: Option<(Option<String>, String)>,
+        placed_key: Option<&str>,
+        name: &str,
+        range: &str,
+        peer: bool,
+    ) {
+        let Some(cat_key) = cat_key else {
+            return;
         };
-        self.overrides
-            .replacement(name, range)
-            .map(str::to_owned)
-            .unwrap_or_else(|| declared_local_target(parent, range.into()))
+        let Some(pkg) = placed_key.and_then(|key| self.packages.get(key)) else {
+            return;
+        };
+        if peer && pkg.name != name && !range.starts_with("npm:") {
+            return;
+        }
+        if peer {
+            self.used_catalogs
+                .entry(cat_key)
+                .or_insert_with(|| pkg.version.clone());
+            return;
+        }
+        self.used_catalogs.insert(cat_key, pkg.version.clone());
+    }
+
+    fn resolve_range(&self, parent: Option<&Package>, name: &str, range: &str) -> Result<String> {
+        let workspace = parent.is_none_or(|p| p.local.as_ref().is_some_and(|l| l.workspace));
+        let (target, replaced) =
+            resolve_declared(name, range, &self.overrides, &self.catalogs, workspace)?;
+        if replaced {
+            return Ok(target.into());
+        }
+        Ok(match parent {
+            Some(parent) => declared_local_target(parent, target.into()),
+            None => target.into(),
+        })
+    }
+
+    fn edge_range(&self, parent: Option<&Package>, name: &str, range: &str) -> Option<String> {
+        self.resolve_range(parent, name, range).ok()
     }
 
     fn prefetch_dependencies(&mut self, current: &mut MetadataLookahead, index: usize) {
@@ -421,9 +520,11 @@ impl Resolver {
         parent: Option<&Package>,
     ) -> MetadataLookahead {
         let mut remaining = VecDeque::new();
-        for (index, (name, (range, optional, _))) in current.iter().enumerate() {
-            let range = self.edge_range(parent, name, range);
-            if let Some(name) = self.prefetch_name(parent, name, &range, *optional) {
+        for (index, (name, (range, optional, peer))) in current.iter().enumerate() {
+            let Some(range) = self.edge_range(parent, name, range) else {
+                continue;
+            };
+            if let Some(name) = self.prefetch_name(parent, name, &range, *optional, *peer) {
                 remaining.push_back(MetadataCandidate {
                     edge: Some(index),
                     name,
@@ -459,8 +560,11 @@ impl Resolver {
             if peer {
                 continue;
             }
-            let range = self.edge_range(Some(parent), &name, &range);
-            let Some(name) = self.prefetch_name(Some(parent), &name, &range, optional) else {
+            let Some(range) = self.edge_range(Some(parent), &name, &range) else {
+                continue;
+            };
+            let Some(name) = self.prefetch_name(Some(parent), &name, &range, optional, false)
+            else {
                 continue;
             };
             candidates.push_back(MetadataCandidate { edge: None, name });
@@ -473,6 +577,7 @@ impl Resolver {
         name: &str,
         range: &str,
         optional: bool,
+        peer: bool,
     ) -> Option<String> {
         // Existing placements can satisfy or reject peers without fetching anything.
         if self.packages.contains_key(name)
@@ -492,7 +597,7 @@ impl Resolver {
             });
             if updating {
                 lookup = LockLookup::Skip;
-            } else if let Some(locked) = self.locked_child(parent, name, &range) {
+            } else if let Some(locked) = self.locked_child(parent, name, &range, peer) {
                 range = locked;
             }
         }
@@ -515,6 +620,7 @@ impl Resolver {
         if range.starts_with("file:")
             || range.starts_with("link:")
             || range.starts_with("workspace:")
+            || super::catalog::is_protocol(range)
             || tarball::is_specifier(range)
             || self.responses.contains_key(name)
         {
@@ -541,22 +647,44 @@ impl Resolver {
         format!("{}/{}", self.registry.url, name.replace('/', "%2f"))
     }
 
+    fn is_member_catalog_update(&self, key: &(Option<String>, String)) -> bool {
+        self.member_update
+            .as_ref()
+            .is_some_and(|update| update.catalogs.contains(key))
+    }
+
+    fn is_member_update(
+        &self,
+        parent: &Package,
+        name: &str,
+        cat_key: Option<&(Option<String>, String)>,
+    ) -> bool {
+        let Some(update) = &self.member_update else {
+            return false;
+        };
+        (update.member == parent.name && update.dependencies.contains(name))
+            || cat_key.is_some_and(|key| update.catalogs.contains(key))
+    }
+
     fn target(
         &mut self,
         parent: &Package,
         name: &str,
         range: &str,
         optional: bool,
+        peer: bool,
+        cat_key: Option<&(Option<String>, String)>,
     ) -> Result<Option<String>> {
         if tarball::is_specifier(range) || self.local_package(name, range)?.is_some() {
             return Ok(Some(range.into()));
         }
-        if self.member_update.as_ref().is_some_and(|update| {
-            update.member == parent.name && update.dependencies.contains(name)
-        }) {
-            return self.resolved_target(name, range, optional, LockLookup::Skip);
+        if self.is_member_update(parent, name, cat_key) {
+            return self.member_update_target(parent, name, range, optional, peer);
         }
-        if let Some(version) = self.locked_child(parent, name, range) {
+        if let Some(version) = self.locked_child(parent, name, range, peer) {
+            return Ok(Some(version));
+        }
+        if peer && let Some(version) = self.existing_peer_tag_target(parent, name, range) {
             return Ok(Some(version));
         }
         if (!is_tag(range) && !range.starts_with("npm:")) || self.workspaces.contains_key(name) {
@@ -568,6 +696,25 @@ impl Resolver {
             LockLookup::Use
         };
         self.resolved_target(name, range, optional, lookup)
+    }
+
+    fn member_update_target(
+        &mut self,
+        parent: &Package,
+        name: &str,
+        range: &str,
+        optional: bool,
+        peer: bool,
+    ) -> Result<Option<String>> {
+        if peer && self.root_deps.contains(name) && self.dependency_key(parent, name).is_some() {
+            if let Some(version) = self.existing_peer_tag_target(parent, name, range) {
+                return Ok(Some(version));
+            }
+            if !is_tag_spec(range) {
+                return Ok(Some(range.into()));
+            }
+        }
+        self.resolved_target(name, range, optional, LockLookup::Skip)
     }
 
     fn resolved_target(
@@ -588,28 +735,112 @@ impl Resolver {
         }
     }
 
-    fn locked_child(&self, parent: &Package, name: &str, range: &str) -> Option<String> {
+    fn existing_peer_tag_target(
+        &self,
+        parent: &Package,
+        name: &str,
+        range: &str,
+    ) -> Option<String> {
+        let workspace = parent.local.as_ref().is_some_and(|local| local.workspace);
+        if workspace && !self.root_deps.contains(name) {
+            return None;
+        }
+        let alias = range.strip_prefix("npm:").map(spec).transpose().ok()?;
+        let target_range = alias.as_ref().map_or(range, |(_, range)| range.as_str());
+        if !is_tag(target_range) {
+            return None;
+        }
+        for level in (0..=parent.chain.len()).rev() {
+            let mut candidate = parent.chain[..level].to_vec();
+            candidate.push(name.into());
+            let Some(found) = self.packages.get(&candidate.join("/")) else {
+                continue;
+            };
+            if self.refresh && found.name == name {
+                return None;
+            }
+            if let Some((target_name, _)) = &alias {
+                return (found.name == *target_name)
+                    .then(|| format!("npm:{target_name}@{}", found.version));
+            }
+            return Some(found.version.clone());
+        }
+        None
+    }
+
+    fn locked_parent_declaration(&self, parent: &Package) -> Option<(Vec<String>, &Value, bool)> {
+        if let Some(source_chain) = parent.source_chain.as_deref() {
+            let row = &self.locked["packages"][source_chain.join("/")];
+            if row[0] != format!("{}@{}", parent.name, parent.version) {
+                return None;
+            }
+            return Some((source_chain.to_vec(), &row[2], false));
+        }
+        if !parent.local.as_ref().is_some_and(|local| local.workspace) {
+            return None;
+        }
+        let prefix = format!("{}@workspace:", parent.name);
+        let rel_path = self.locked["packages"][&parent.name][0]
+            .as_str()?
+            .strip_prefix(&prefix)?;
+        let ws_meta = self.locked["workspaces"].get(rel_path)?;
+        Some((parent.chain.clone(), ws_meta, true))
+    }
+
+    fn locked_child(
+        &self,
+        parent: &Package,
+        name: &str,
+        range: &str,
+        peer: bool,
+    ) -> Option<String> {
         if self.overrides.changed.contains(name) {
             return None;
         }
-        let source_chain = parent.source_chain.as_deref()?;
-        let row = &self.locked["packages"][source_chain.join("/")];
-        if row[0] != format!("{}@{}", parent.name, parent.version)
-            || !declared_effective(&row[2], name, range, &self.overrides)
-        {
-            return None;
-        }
+        let (source_chain, declared_meta, workspace) = self.locked_parent_declaration(parent)?;
         let alias = range.strip_prefix("npm:").map(spec).transpose().ok()?;
         let (target_name, target_range) = alias.as_ref().map_or((name, range), |(name, range)| {
             (name.as_str(), range.as_str())
         });
-        for level in (0..=source_chain.len()).rev() {
+        let declared = if workspace {
+            declared_root(
+                declared_meta,
+                name,
+                target_name,
+                target_range,
+                &self.overrides,
+                &self.locked_catalogs,
+            )
+        } else {
+            declared_effective(
+                declared_meta,
+                name,
+                range,
+                &self.overrides,
+                &self.locked_catalogs,
+                false,
+            )
+        };
+        if !declared {
+            return None;
+        }
+        let min_level = usize::from(workspace && !is_tag(target_range));
+        for level in (min_level..=source_chain.len()).rev() {
             let mut candidate = source_chain[..level].to_vec();
             candidate.push(name.into());
-            let row = &self.locked["packages"][candidate.join("/")];
-            let Some(version) = locked_version(row, target_name) else {
+            let key = candidate.join("/");
+            let row = &self.locked["packages"][&key];
+            let version = if peer && alias.is_none() {
+                locked_peer_version(row)
+            } else {
+                locked_version(row, target_name)
+            };
+            let Some(version) = version else {
                 continue;
             };
+            if !peer && self.explicit_sources.contains(&key) {
+                return None;
+            }
             if !matches(version, target_range) && !is_tag(target_range) {
                 return None;
             }
@@ -628,7 +859,7 @@ impl Resolver {
         range: &str,
         peer: bool,
         optional: bool,
-    ) -> Option<Vec<String>> {
+    ) -> Placement {
         let target = self.local_package(name, range).ok().flatten();
         let alias = range
             .strip_prefix("npm:")
@@ -647,6 +878,8 @@ impl Resolver {
                     .is_some_and(|local| local.path == target.path)
             } else if tarball::is_specifier(range) {
                 tarball::matches(found, name, range)
+            } else if found.explicit_tarball && !peer {
+                false
             } else if let Some((name, range)) = &alias {
                 found.name == *name && matches(&found.version, range)
             } else {
@@ -654,23 +887,27 @@ impl Resolver {
             };
             if satisfies {
                 self.require(&key, optional);
-                return None;
+                return Placement::Satisfied(key);
             }
             if peer {
+                let workspace = parent.local.as_ref().is_some_and(|local| local.workspace);
+                if workspace && !self.root_deps.contains(name) {
+                    break;
+                }
                 eprintln!(
                     "warn: incorrect peer dependency \"{}\"",
                     io::redact(&format!("{name}@{range}"))
                 );
-                return None;
+                return Placement::IncompatiblePeer;
             }
             break;
         }
         if !self.packages.contains_key(name) {
-            return Some(vec![name.into()]);
+            return Placement::Add(vec![name.into()]);
         }
         let mut chain = parent.chain.clone();
         chain.push(name.into());
-        Some(chain)
+        Placement::Add(chain)
     }
 
     fn require(&mut self, key: &str, optional: bool) {
@@ -695,15 +932,27 @@ impl Resolver {
         optional: bool,
         parent: Option<&str>,
     ) -> Result<()> {
-        if chain.len() > 128 || self.packages.len() >= 10000 {
-            return Err("Dependency graph exceeds install limit".into());
-        }
-        valid_name(name)?;
         let lookup = if self.overrides.changed.contains(name) {
             LockLookup::Skip
         } else {
             LockLookup::Use
         };
+        self.add_with_lookup(name, range, chain, optional, parent, lookup)
+    }
+
+    fn add_with_lookup(
+        &mut self,
+        name: &str,
+        range: &str,
+        chain: Vec<String>,
+        optional: bool,
+        parent: Option<&str>,
+        lookup: LockLookup,
+    ) -> Result<()> {
+        if chain.len() > 128 || self.packages.len() >= 10000 {
+            return Err("Dependency graph exceeds install limit".into());
+        }
+        valid_name(name)?;
         let result = self.package(name, range, chain, optional, lookup);
         let package = match result {
             Ok(package) => package,
@@ -825,9 +1074,10 @@ impl Resolver {
                     .as_mut()
                     .is_some_and(|early| early.work(metadata, registry, arrived))
             };
-            let bytes =
-                self.downloads
-                    .fetch_with(&url, false, self.refresh, &self.registry, &mut idle)?;
+            let bytes = self
+                .downloads
+                .fetch_with(&url, false, self.refresh, &self.registry, &mut idle)
+                .map_err(|error| io::package_fetch_error(name, error))?;
             self.responses.insert(name.into(), bytes);
         }
         Ok(())
@@ -886,8 +1136,9 @@ impl Resolver {
         chain: &[String],
         optional: bool,
     ) -> Option<Package> {
-        let row = &self.locked["packages"][chain.join("/")];
-        if let Some(package) = self.locked_row(row, name, range, chain, optional) {
+        let key = chain.join("/");
+        let row = &self.locked["packages"][&key];
+        if let Some(package) = self.locked_row(row, &key, name, range, chain, optional) {
             return Some(package);
         }
         Version::parse_exact(SlicedString::init(range.as_bytes(), range.as_bytes()))?;
@@ -895,7 +1146,7 @@ impl Resolver {
             .as_object()?
             .iter()
             .find_map(|(key, row)| {
-                let mut package = self.locked_row(row, name, range, chain, optional)?;
+                let mut package = self.locked_row(row, key, name, range, chain, optional)?;
                 package.source_chain = Some(super::chain_from_lock(key, row).ok()?);
                 Some(package)
             })
@@ -904,6 +1155,7 @@ impl Resolver {
     fn locked_row(
         &self,
         row: &Value,
+        row_key: &str,
         name: &str,
         range: &str,
         chain: &[String],
@@ -919,12 +1171,13 @@ impl Resolver {
                 name,
                 range,
                 &self.overrides,
+                &self.locked_catalogs,
             );
         if !matches(version, range) && !root_tag {
             return None;
         }
         let source = row[1].as_str()?;
-        if self.explicit_sources.contains(source) {
+        if self.explicit_sources.contains(row_key) {
             return None;
         }
         let tarball = if source.is_empty() {
@@ -985,12 +1238,19 @@ fn platform_package<'a>(name: &'a str, version: &str) -> &'a str {
     name
 }
 
+fn locked_peer_version(row: &Value) -> Option<&str> {
+    let (_, version) = row[0].as_str()?.rsplit_once('@')?;
+    let bytes = version.as_bytes();
+    Version::parse_exact(SlicedString::init(bytes, bytes))?;
+    Some(version)
+}
+
 fn locked_version<'a>(row: &'a Value, name: &str) -> Option<&'a str> {
     let (resolved_name, version) = row[0].as_str()?.rsplit_once('@')?;
     (resolved_name == platform_package(name, version)).then_some(version)
 }
 
-fn is_tag(range: &str) -> bool {
+pub(super) fn is_tag(range: &str) -> bool {
     range
         .as_bytes()
         .first()
@@ -1000,7 +1260,76 @@ fn is_tag(range: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
 }
 
-fn declared_effective(meta: &Value, name: &str, range: &str, overrides: &Overrides) -> bool {
+fn is_tag_spec(range: &str) -> bool {
+    let target_range = range
+        .strip_prefix("npm:")
+        .and_then(|alias| spec(alias).ok())
+        .map(|(_, range)| range);
+    is_tag(target_range.as_deref().unwrap_or(range))
+}
+
+pub(super) fn resolved_catalog_key(
+    name: &str,
+    declared: &str,
+    overrides: &Overrides,
+    catalogs: &Catalogs,
+    workspace: bool,
+) -> Option<(Option<String>, String)> {
+    if let Some(replacement) = overrides.replacement(name, declared) {
+        return super::catalog::ref_group(replacement).map(|group| (group, name.to_owned()));
+    }
+    let expanded = workspace
+        .then(|| catalogs.resolve(name, declared).ok().flatten())
+        .flatten()?;
+    if let Some(replacement) = overrides.replacement(name, expanded) {
+        return super::catalog::ref_group(replacement).map(|group| (group, name.to_owned()));
+    }
+    super::catalog::ref_group(declared).map(|group| (group, name.to_owned()))
+}
+
+fn resolve_declared<'a>(
+    name: &str,
+    declared: &'a str,
+    overrides: &'a Overrides,
+    catalogs: &'a Catalogs,
+    workspace: bool,
+) -> Result<(&'a str, bool)> {
+    if let Some(replacement) = overrides.replacement(name, declared) {
+        return Ok((catalogs.resolve_str(name, replacement)?, true));
+    }
+    let Some(expanded) = workspace
+        .then(|| catalogs.resolve(name, declared))
+        .transpose()?
+        .flatten()
+    else {
+        return Ok((declared, false));
+    };
+    if let Some(replacement) = overrides.replacement(name, expanded) {
+        return Ok((catalogs.resolve_str(name, replacement)?, true));
+    }
+    Ok((expanded, true))
+}
+
+fn effective_declared<'a>(
+    name: &str,
+    declared: &'a str,
+    overrides: &'a Overrides,
+    catalogs: &'a Catalogs,
+    workspace: bool,
+) -> Option<&'a str> {
+    resolve_declared(name, declared, overrides, catalogs, workspace)
+        .ok()
+        .map(|(target, _)| target)
+}
+
+fn declared_effective(
+    meta: &Value,
+    name: &str,
+    range: &str,
+    overrides: &Overrides,
+    catalogs: &Catalogs,
+    workspace: bool,
+) -> bool {
     [
         "dependencies",
         "devDependencies",
@@ -1009,7 +1338,8 @@ fn declared_effective(meta: &Value, name: &str, range: &str, overrides: &Overrid
     ]
     .iter()
     .filter_map(|field| meta[*field][name].as_str())
-    .any(|declared| overrides.target(name, declared) == range)
+    .filter_map(|declared| effective_declared(name, declared, overrides, catalogs, workspace))
+    .any(|effective| effective == range)
 }
 
 fn declared_root(
@@ -1018,8 +1348,11 @@ fn declared_root(
     resolved_name: &str,
     range: &str,
     overrides: &Overrides,
+    catalogs: &Catalogs,
 ) -> bool {
-    if logical_name == resolved_name && declared_effective(meta, logical_name, range, overrides) {
+    if logical_name == resolved_name
+        && declared_effective(meta, logical_name, range, overrides, catalogs, true)
+    {
         return true;
     }
     [
@@ -1030,7 +1363,7 @@ fn declared_root(
     ]
     .iter()
     .filter_map(|field| meta[*field][logical_name].as_str())
-    .map(|value| overrides.target(logical_name, value))
+    .filter_map(|value| effective_declared(logical_name, value, overrides, catalogs, true))
     .filter_map(|value| value.strip_prefix("npm:"))
     .filter_map(|alias| spec(alias).ok())
     .any(|(name, target)| name == resolved_name && target == range)

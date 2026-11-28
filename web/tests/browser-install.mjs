@@ -47,7 +47,7 @@ async function checkBrowser(browserName, runtime, url) {
     await writeFile(page, "/home/user/check-cache.ts", 'import fs from "node:fs"; console.log("install cache:", fs.existsSync(".bun/install/cache"));\n');
     assert.match(await command(page, "bun run check-cache.ts"), /install cache: false/);
     await command(page, "rm -r node_modules");
-    assert.ok(await page.evaluate(async () => (await caches.open("bun-wasm-install-v1")).keys().then(keys => keys.length)) >= 3);
+    assert.ok(await page.evaluate(async () => (await caches.open("bun-wasm-install-v2")).keys().then(keys => keys.length)) >= 3);
     registry.setOffline(true);
     try {
       await command(page, "bun i");

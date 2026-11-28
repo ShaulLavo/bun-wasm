@@ -193,18 +193,34 @@ fn has_embedded_auth(value: &str) -> bool {
 }
 
 pub fn parsed(source: &[u8], format: &str, parser: &dyn Transpiler) -> Result<Value> {
-    let graph = parser.parse_data(source, format).map_err(|e| e.message)?;
-    let graph: Value = serde_json::from_str(&graph).map_err(|e| e.to_string())?;
-    decode(&graph["root"], &graph["nodes"], 0)
+    parsed_with_options(source, format, parser, false)
 }
 
-fn decode(value: &Value, nodes: &Value, depth: usize) -> Result<Value> {
+pub fn parsed_yaml_preserving_numbers(source: &[u8], parser: &dyn Transpiler) -> Result<Value> {
+    parsed_with_options(source, "YAML", parser, true)
+}
+
+fn parsed_with_options(
+    source: &[u8],
+    format: &str,
+    parser: &dyn Transpiler,
+    preserve_raw_numbers: bool,
+) -> Result<Value> {
+    let graph = parser.parse_data(source, format).map_err(|e| e.message)?;
+    let graph: Value = serde_json::from_str(&graph).map_err(|e| e.to_string())?;
+    decode(&graph["root"], &graph["nodes"], 0, preserve_raw_numbers)
+}
+
+fn decode(value: &Value, nodes: &Value, depth: usize, preserve_raw_numbers: bool) -> Result<Value> {
     if depth > 128 {
         return Err("Package data exceeds nesting limit".into());
     }
     match value[0].as_u64() {
         Some(0) => Ok(value[1].clone()),
         Some(4) => {
+            if preserve_raw_numbers && let Some(raw) = value[2].as_str() {
+                return Ok(Value::String(raw.to_owned()));
+            }
             serde_json::from_str(value[1].as_str().unwrap_or("null")).map_err(|e| e.to_string())
         }
         Some(5) => {
@@ -220,22 +236,31 @@ fn decode(value: &Value, nodes: &Value, depth: usize) -> Result<Value> {
             &nodes[value[1].as_u64().ok_or("Invalid data reference")? as usize],
             nodes,
             depth + 1,
+            preserve_raw_numbers,
         ),
         _ => Err("Unsupported value in package data".into()),
     }
 }
 
-fn decode_node(node: &Value, nodes: &Value, depth: usize) -> Result<Value> {
+fn decode_node(
+    node: &Value,
+    nodes: &Value,
+    depth: usize,
+    preserve_raw_numbers: bool,
+) -> Result<Value> {
     let items = node[1].as_array().ok_or("Invalid parsed data")?;
     if node[0] == "array" {
-        return items.iter().map(|v| decode(v, nodes, depth)).collect();
+        return items
+            .iter()
+            .map(|v| decode(v, nodes, depth, preserve_raw_numbers))
+            .collect();
     }
     let mut object = serde_json::Map::new();
     for item in items {
-        let key = decode(&item[0], nodes, depth)?;
+        let key = decode(&item[0], nodes, depth, preserve_raw_numbers)?;
         object.insert(
             key.as_str().ok_or("Invalid property name")?.into(),
-            decode(&item[1], nodes, depth)?,
+            decode(&item[1], nodes, depth, preserve_raw_numbers)?,
         );
     }
     Ok(Value::Object(object))
@@ -245,6 +270,13 @@ pub fn read(path: &Path, format: &str, parser: &dyn Transpiler) -> Result<Value>
     parsed(
         &fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?,
         format,
+        parser,
+    )
+}
+
+pub fn read_yaml_preserving_numbers(path: &Path, parser: &dyn Transpiler) -> Result<Value> {
+    parsed_yaml_preserving_numbers(
+        &fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?,
         parser,
     )
 }
@@ -501,7 +533,7 @@ impl Downloads {
             });
         }
         let cache = cache_path(url);
-        !refresh && fresh_cache(&cache, tarball) && cache.is_file()
+        !refresh && self.cache.enabled() && fresh_cache(&cache, tarball) && cache.is_file()
     }
 
     /// `fetch`, running `idle` while the response has not arrived yet. `idle` gets the
@@ -649,17 +681,26 @@ enum Body {
 struct Download {
     handle: i32,
     url: String,
+    current_url: url::Url,
+    authorization: Option<String>,
     tarball: bool,
+    refresh: bool,
+    redirects: u8,
     body: Vec<u8>,
     state: Body,
 }
 
 impl Download {
     fn start(url: &url::Url, tarball: bool, refresh: bool, registry: &Registry) -> Result<Self> {
+        let authorization = registry.authorization_for(url).map(str::to_owned);
         Ok(Self {
-            handle: start_request(url, tarball, refresh, registry)?,
+            handle: start_request(url, tarball, refresh, authorization.as_deref(), registry)?,
             url: url.as_str().into(),
+            current_url: url.clone(),
+            authorization,
             tarball,
+            refresh,
+            redirects: 0,
             body: Vec::new(),
             state: Body::Head,
         })
@@ -713,14 +754,18 @@ impl Download {
             // Checked only after the read above, so a response that arrived during idle work
             // is taken, and idle work never extends a stalled response's deadline.
             if pending.expired(Instant::now()) {
-                return Err(format!("Timeout downloading {}", self.url));
+                return Err(format!(
+                    "Timeout downloading {}",
+                    registry.redact(self.current_url.as_str())
+                ));
             }
             let (worked, moved) = self.idle(others, registry, idle);
             if moved {
                 pending.progressed(Instant::now());
             }
             if !worked {
-                wait(&mut pending, &self.url)?;
+                let url = registry.redact(self.current_url.as_str());
+                wait(&mut pending, &url)?;
             }
         }
     }
@@ -769,8 +814,16 @@ impl Download {
                 return head || self.body.len() > start;
             }
             BodyRead::Ended => self.state = Body::Done,
-            BodyRead::TooLarge => self.fail("Download exceeds 256 MiB limit".into()),
-            BodyRead::Stopped(_) => self.fail(network_error(handle, registry)),
+            BodyRead::TooLarge => {
+                self.fail(format_fetch_error(
+                    self.current_url.as_str(),
+                    "Download exceeds 256 MiB limit",
+                    registry,
+                ));
+            }
+            BodyRead::Stopped(_) => {
+                self.fail(network_error(handle, self.current_url.as_str(), registry))
+            }
         }
         true
     }
@@ -787,22 +840,122 @@ impl Download {
             Ok(head) => head,
             Err(host::AGAIN) => return false,
             Err(_) => {
-                self.fail(network_error(self.handle, registry));
+                self.fail(network_error(
+                    self.handle,
+                    self.current_url.as_str(),
+                    registry,
+                ));
                 return true;
             }
         };
-        match response_status(&head) {
-            Ok(status) if (200..300).contains(&status) => self.state = Body::Reading,
-            Ok(status) => self.fail(format!("GET {} - {status}", self.url)),
-            Err(error) => self.fail(error),
+        match response_head(&head) {
+            Ok((status, _, final_url)) if (200..300).contains(&status) => {
+                self.accept_head(final_url.as_deref());
+            }
+            Ok((status, Some(location), _))
+                if matches!(status, 301 | 302 | 303 | 307 | 308)
+                    && is_loopback_url(&self.current_url) =>
+            {
+                self.follow_redirect(&location, registry);
+            }
+            Ok((status, _, final_url)) => {
+                let failing_url = final_url.as_deref().unwrap_or(self.current_url.as_str());
+                self.fail(format_fetch_error(
+                    failing_url,
+                    &status.to_string(),
+                    registry,
+                ));
+            }
+            Err(error) => self.fail(format_fetch_error(
+                self.current_url.as_str(),
+                &error,
+                registry,
+            )),
         }
         true
     }
+
+    fn accept_head(&mut self, final_url: Option<&str>) {
+        if let Some(url) = final_url.and_then(|value| url::Url::parse(value).ok()) {
+            self.current_url = url;
+        }
+        self.state = Body::Reading;
+    }
+
+    fn follow_redirect(&mut self, location: &str, registry: &Registry) {
+        let next = match resolve_redirect(&self.current_url, location, self.redirects) {
+            Ok(url) => url,
+            Err(error) => {
+                self.fail(format_fetch_error(
+                    self.current_url.as_str(),
+                    &error,
+                    registry,
+                ));
+                return;
+            }
+        };
+        let next_auth =
+            redirect_authorization(&self.current_url, &next, self.authorization.as_deref());
+        match start_request(&next, self.tarball, self.refresh, next_auth, registry) {
+            Ok(handle) => {
+                host::close(self.handle);
+                self.handle = handle;
+                if self.current_url.origin() != next.origin() {
+                    self.authorization = None;
+                }
+                self.current_url = next;
+                self.redirects += 1;
+                self.state = Body::Head;
+            }
+            Err(error) => self.fail(error),
+        }
+    }
 }
 
-fn response_status(head: &[u8]) -> Result<u64> {
+fn response_head(head: &[u8]) -> Result<(u64, Option<String>, Option<String>)> {
     let head: Value = serde_json::from_slice(head).map_err(|e| e.to_string())?;
-    Ok(head["status"].as_u64().unwrap_or(0))
+    let status = head["status"].as_u64().unwrap_or(0);
+    let location = head["headers"].as_array().and_then(|headers| {
+        headers.iter().find_map(|entry| {
+            let name = entry.get(0)?.as_str()?;
+            name.eq_ignore_ascii_case("location")
+                .then(|| entry.get(1)?.as_str().map(str::to_owned))
+                .flatten()
+        })
+    });
+    let url = head["url"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    Ok((status, location, url))
+}
+
+fn is_loopback_url(url: &url::Url) -> bool {
+    url.scheme() == "http"
+        && matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "0.0.0.0" | "[::1]" | "[::]")
+        )
+}
+
+fn resolve_redirect(current: &url::Url, location: &str, redirects: u8) -> Result<url::Url> {
+    if redirects >= 20 {
+        return Err("Fetch redirect limit exceeded".into());
+    }
+    let next = current
+        .join(location)
+        .map_err(|e| format!("Invalid redirect URL: {e}"))?;
+    if !matches!(next.scheme(), "http" | "https") {
+        return Err("UnsupportedRedirectProtocol".into());
+    }
+    if !next.username().is_empty()
+        || next.password().is_some()
+        || next.query().is_some()
+        || has_embedded_auth(next.as_str())
+    {
+        return Err("Package redirect cannot include credentials or query parameters".into());
+    }
+    Ok(next)
 }
 
 fn idle_timeout() -> Duration {
@@ -830,10 +983,21 @@ fn cacheable(bytes: &[u8], tarball: bool, registry: &Registry) -> bool {
     registry.safe_metadata(&metadata)
 }
 
+fn redirect_authorization<'a>(
+    current: &url::Url,
+    next: &url::Url,
+    authorization: Option<&'a str>,
+) -> Option<&'a str> {
+    (current.origin() == next.origin())
+        .then_some(authorization)
+        .flatten()
+}
+
 fn start_request(
     url_value: &url::Url,
     tarball: bool,
     refresh: bool,
+    authorization: Option<&str>,
     registry: &Registry,
 ) -> Result<i32> {
     let url = url_value.as_str();
@@ -843,7 +1007,7 @@ fn start_request(
         "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*"
     };
     let mut headers = json!([["accept", accept], ["accept-encoding", "gzip"]]);
-    if let Some(authorization) = registry.authorization_for(url_value) {
+    if let Some(authorization) = authorization {
         headers
             .as_array_mut()
             .unwrap()
@@ -855,10 +1019,15 @@ fn start_request(
             .unwrap()
             .push(json!(["cache-control", "no-cache"]));
     }
-    let meta = json!({"method":"GET", "url":url, "headers":headers, "redirect":"follow", "credentialPolicy":"package"});
+    let redirect = if is_loopback_url(url_value) {
+        "manual"
+    } else {
+        "follow"
+    };
+    let meta = json!({"method":"GET", "url":url, "headers":headers, "redirect":redirect, "credentialPolicy":"package"});
     let handle = host::fetch(meta.to_string().as_bytes(), &[]);
     if handle < 0 {
-        return Err(network_error(handle, registry));
+        return Err(network_error(handle, url, registry));
     }
     Ok(handle)
 }
@@ -871,11 +1040,35 @@ fn wait(pending: &mut Pending, url: &str) -> Result<()> {
     Ok(())
 }
 
-fn network_error(handle: i32, registry: &Registry) -> String {
-    if handle == host::UNSUPPORTED {
-        return "Package installation needs a host with networking support".into();
+pub(super) const NO_NETWORK: &str = "Package installation needs a host with networking support";
+
+fn has_formatted_url(message: &str) -> bool {
+    message.starts_with("GET http://")
+        || message.starts_with("GET https://")
+        || message.starts_with("GET [redacted")
+}
+
+pub(super) fn format_fetch_error(url: &str, message: &str, registry: &Registry) -> String {
+    let url = registry.redact(url);
+    let message = registry.redact(message);
+    if has_formatted_url(&message) || message.contains(&url) {
+        return message;
     }
-    host::error(handle)
+    format!("GET {url} - {message}")
+}
+
+pub(super) fn package_fetch_error(name: &str, error: String) -> String {
+    if error == NO_NETWORK {
+        return error;
+    }
+    format!("failed to fetch \"{name}\": {error}")
+}
+
+fn network_error(handle: i32, url: &str, registry: &Registry) -> String {
+    if handle == host::UNSUPPORTED {
+        return NO_NETWORK.into();
+    }
+    let message = host::error(handle)
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         .and_then(|v| {
@@ -883,7 +1076,8 @@ fn network_error(handle: i32, registry: &Registry) -> String {
                 .as_str()
                 .map(|message| registry.redact(message))
         })
-        .unwrap_or_else(|| "Registry request failed".into())
+        .unwrap_or_else(|| "Registry request failed".into());
+    format_fetch_error(url, &message, registry)
 }
 
 fn parsed_integrity(sri: &str) -> Option<(&'static str, Vec<u8>)> {
@@ -1384,10 +1578,15 @@ mod tests {
     #[test]
     fn a_failed_download_drops_its_buffered_body() {
         let registry = Registry::new("https://registry.invalid").unwrap();
+        let url = url::Url::parse("https://registry.invalid/package").unwrap();
         let mut download = Download {
             handle: 1,
-            url: "https://registry.invalid/package".into(),
+            url: url.as_str().into(),
+            current_url: url,
+            authorization: None,
             tarball: true,
+            refresh: false,
+            redirects: 0,
             body: vec![0; 4096],
             state: Body::Reading,
         };
@@ -1395,6 +1594,68 @@ mod tests {
         assert!(download.advance(usize::MAX, &mut [0; 8], &registry));
         assert!(matches!(download.state, Body::Failed(_)));
         assert_eq!(download.body.capacity(), 0);
+    }
+
+    #[test]
+    fn loopback_redirects_validate_scheme_credentials_and_limit() {
+        let loopback = url::Url::parse("http://127.0.0.1:4873/pkg.tgz").unwrap();
+        assert!(is_loopback_url(&loopback));
+        assert!(!is_loopback_url(
+            &url::Url::parse("https://github.com/org/repo/pkg.tgz").unwrap()
+        ));
+        assert_eq!(
+            resolve_redirect(&loopback, "https://github.com/org/repo/pkg.tgz", 0)
+                .unwrap()
+                .as_str(),
+            "https://github.com/org/repo/pkg.tgz"
+        );
+        assert_eq!(
+            resolve_redirect(&loopback, "/v2/pkg.tgz", 0)
+                .unwrap()
+                .as_str(),
+            "http://127.0.0.1:4873/v2/pkg.tgz"
+        );
+        assert!(resolve_redirect(&loopback, "file:///etc/passwd", 0).is_err());
+        assert!(resolve_redirect(&loopback, "https://user:pass@example.com/p.tgz", 0).is_err());
+        assert!(resolve_redirect(&loopback, "/final.tgz?variant=default", 0).is_err());
+        assert!(resolve_redirect(&loopback, "https://example.com/:_authtoken=secret", 0).is_err());
+        assert!(resolve_redirect(&loopback, "https://example.com/p.tgz", 20).is_err());
+
+        let same_origin = url::Url::parse("http://127.0.0.1:4873/v2/pkg.tgz").unwrap();
+        let registry = url::Url::parse("https://registry.invalid/pkg.tgz").unwrap();
+        assert_eq!(redirect_authorization(&loopback, &registry, None), None);
+        assert_eq!(
+            redirect_authorization(&loopback, &same_origin, Some("Bearer tok")),
+            Some("Bearer tok")
+        );
+        assert_eq!(
+            redirect_authorization(&loopback, &registry, Some("Bearer tok")),
+            None
+        );
+
+        let parsed = response_head(
+            br#"{"status":404,"url":"https://user:pass@cdn.example/missing.tgz?sig=secret","headers":[["Location","/other"]]}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.0, 404);
+        assert_eq!(parsed.1.as_deref(), Some("/other"));
+        assert_eq!(
+            parsed.2.as_deref(),
+            Some("https://user:pass@cdn.example/missing.tgz?sig=secret")
+        );
+        let reg = Registry::new("https://registry.invalid").unwrap();
+        assert_eq!(
+            format_fetch_error(parsed.2.as_deref().unwrap(), "404", &reg),
+            "GET https://cdn.example/missing.tgz - 404"
+        );
+        assert_eq!(
+            format_fetch_error(
+                "http://127.0.0.1:4873/start.tgz",
+                "GET http://127.0.0.1:4873/disconnected.tgz - fetch failed",
+                &reg
+            ),
+            "GET http://127.0.0.1:4873/disconnected.tgz - fetch failed"
+        );
     }
 }
 

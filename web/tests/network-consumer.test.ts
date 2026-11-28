@@ -227,7 +227,7 @@ test("Runtime-borrowed helpers retain the default installer tarball cache policy
     const handle = host.fetch(JSON.stringify({ url: "https://network.invalid/pkg.tgz", headers: [["accept", "application/vnd.bun.install-tarball"]] }));
     for (let turn = 0; turn < 100 && host.fetchHead(handle) === AGAIN; turn++) await Bun.sleep(1);
     expect(host.read(handle, 100)).toEqual(new TextEncoder().encode("cached runtime tarball"));
-    expect(opened).toEqual(["bun-wasm-install-v1"]);
+    expect(opened).toEqual(["bun-wasm-install-v2"]);
   } finally {
     helper.dispose(); await runtime.dispose(); globalThis.fetch = originalFetch;
     if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches); else Reflect.deleteProperty(globalThis, "caches");
@@ -290,6 +290,240 @@ test("closed runtime relay rejects stale connect before token acquisition", asyn
     expect(counter.calls).toBe(0);
   } finally {
     await relay.close();
+    await runtime.dispose();
+  }
+});
+
+import { NetHost as BunNetHost } from "../src/net/host";
+
+function fetchThroughSlot(host: BunNetHost, meta: object): number {
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  host.attach(memory);
+  const bytes = new TextEncoder().encode(JSON.stringify(meta));
+  new Uint8Array(memory.buffer).set(bytes, 16);
+  const fetchSlot = host.slots().fetch;
+  if (!fetchSlot) throw new Error("missing fetch slot");
+  return fetchSlot(16, bytes.length, 0, 0);
+}
+
+test("rewritePackageUrl only intercepts package-policy requests and ignores ordinary npm-accept fetches", async () => {
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
+  const ring = createRing();
+  const seen: Array<{ url: string; kind: string }> = [];
+  const fetched: Array<{ url: string; headers: Headers }> = [];
+  const tarball = "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz";
+  const proxy = `https://sprockt.invalid/api/tarball-proxy?url=${encodeURIComponent(tarball)}`;
+  const helper = createBunNetworkHelper(await runtime.network(), ring, {
+    rewritePackageUrl(request) {
+      seen.push(request);
+      return request.url.startsWith("https://github.com/") ? proxy : undefined;
+    },
+    fetch: async (url, init) => {
+      fetched.push({ url, headers: new Headers(init.headers) });
+      if (url === proxy) return new Response("proxied-tarball");
+      if (url === "https://registry.invalid/evlog") return new Response("{\"name\":\"evlog\"}");
+      return new Response("ordinary-fetch");
+    },
+  });
+  const bunHost = new BunNetHost(ring, req => dispatchBunNetwork(helper, { type: "net", req }), undefined, { shared: true });
+  const runtimeHost = bunHost.runtime;
+  try {
+    const readHandle = async (handle: number) => {
+      for (let turn = 0; turn < 100 && runtimeHost.fetchHead(handle) === AGAIN; turn++) await Bun.sleep(1);
+      const data = runtimeHost.read(handle, 1024);
+      runtimeHost.close(handle);
+      return data instanceof Uint8Array ? new TextDecoder().decode(data) : String(data);
+    };
+    const pkgTarball = fetchThroughSlot(bunHost, {
+      url: tarball, method: "GET", credentialPolicy: "package",
+      headers: [["accept", "application/vnd.bun.install-tarball"]],
+    });
+    expect(await readHandle(pkgTarball)).toBe("proxied-tarball");
+    const pkgMeta = fetchThroughSlot(bunHost, {
+      url: "https://registry.invalid/evlog", method: "GET", credentialPolicy: "package",
+      headers: [["accept", "application/vnd.npm.install-v1+json; q=1.0"]],
+    });
+    expect(await readHandle(pkgMeta)).toBe("{\"name\":\"evlog\"}");
+    // Ordinary user fetch requesting npm abbreviated metadata must bypass rewritePackageUrl.
+    const userMeta = runtimeHost.fetch(JSON.stringify({
+      url: "https://github.com/user-npm-meta", method: "GET",
+      headers: [["accept", "application/vnd.npm.install-v1+json"]],
+    }), null);
+    expect(await readHandle(userMeta)).toBe("ordinary-fetch");
+    const userTarball = runtimeHost.fetch(JSON.stringify({
+      url: "https://github.com/user-tarball", method: "GET",
+      headers: [["accept", "application/vnd.bun.install-tarball"]],
+    }), null);
+    expect(await readHandle(userTarball)).toBe("ordinary-fetch");
+    // Package-policy fetches to a guest loopback registry must carry no internal headers.
+    const listener = runtimeHost.listen("127.0.0.1", 0);
+    const loopbackPort = runtimeHost.localPort(listener);
+    const loopbackFetch = fetchThroughSlot(bunHost, {
+      url: `http://127.0.0.1:${loopbackPort}/evlog`, method: "GET", credentialPolicy: "package",
+      headers: [["accept", "application/vnd.npm.install-v1+json"]],
+    });
+    let accepted = AGAIN;
+    for (let turn = 0; turn < 100 && accepted === AGAIN; turn++) {
+      await Bun.sleep(1);
+      accepted = runtimeHost.accept(listener);
+    }
+    expect(accepted).toBeGreaterThan(0);
+    let requestText = "";
+    for (let turn = 0; turn < 100 && !requestText.includes("\r\n\r\n"); turn++) {
+      const chunk = runtimeHost.read(accepted, 2048);
+      if (chunk instanceof Uint8Array) requestText += new TextDecoder().decode(chunk);
+      else await Bun.sleep(1);
+    }
+    expect(requestText.toLowerCase()).not.toContain("x-bun-wasm-package-policy");
+    runtimeHost.write(accepted, new TextEncoder().encode("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"));
+    runtimeHost.close(accepted);
+    runtimeHost.close(listener);
+    expect(await readHandle(loopbackFetch)).toBe("ok");
+    expect(seen).toEqual([
+      { url: tarball, kind: "tarball" },
+      { url: "https://registry.invalid/evlog", kind: "metadata" },
+    ]);
+    expect(fetched.map(call => call.url)).toEqual([
+      proxy,
+      "https://registry.invalid/evlog",
+      "https://github.com/user-npm-meta",
+      "https://github.com/user-tarball",
+    ]);
+    for (const call of fetched) expect(call.headers.has("x-bun-wasm-package-policy")).toBe(false);
+  } finally {
+    helper.dispose();
+    await runtime.dispose();
+  }
+});
+
+test("rewritePackageUrl resolves the route before Cache Storage lookup and isolates distinct proxies", async () => {
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
+  const originalFetch = globalThis.fetch;
+  const originalCaches = Object.getOwnPropertyDescriptor(globalThis, "caches");
+  const stored = new Map<string, string>();
+  const fetched: string[] = [];
+  const rewriteCalls: string[] = [];
+  const tarball = "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz";
+  const proxyA = `https://proxy-a.invalid/api/tarball-proxy?url=${encodeURIComponent(tarball)}`;
+  const proxyB = `https://proxy-b.invalid/api/tarball-proxy?url=${encodeURIComponent(tarball)}`;
+  const cache = {
+    async open() {
+      return {
+        async match(url: string) {
+          const hit = stored.get(url);
+          return hit === undefined ? undefined : new Response(hit);
+        },
+        async put(url: string, response: Response) {
+          stored.set(url, await response.text());
+        },
+      };
+    },
+  };
+  const makeClient = async (proxyUrl: string, customFetch?: BunNetworkOptions["fetch"]) => {
+    const ring = createRing();
+    const helper = createBunNetworkHelper(await runtime.network(), ring, {
+      rewritePackageUrl: ({ url, kind }) => {
+        rewriteCalls.push(`${proxyUrl}:${kind}`);
+        return kind === "tarball" && url === tarball ? proxyUrl : undefined;
+      },
+      fetch: customFetch,
+    });
+    const bunHost = new BunNetHost(ring, req => dispatchBunNetwork(helper, { type: "net", req }), undefined, { shared: true });
+    const runtimeHost = bunHost.runtime;
+    const runFetch = async () => {
+      const handle = fetchThroughSlot(bunHost, {
+        url: tarball, method: "GET", credentialPolicy: "package",
+        headers: [["accept", "application/vnd.bun.install-tarball"]],
+      });
+      for (let turn = 0; turn < 100 && runtimeHost.fetchHead(handle) === AGAIN; turn++) await Bun.sleep(1);
+      const chunks: number[] = [];
+      for (let turn = 0; turn < 100; turn++) {
+        const piece = runtimeHost.read(handle, 1024);
+        if (piece === 0) break;
+        if (piece === AGAIN) { await Bun.sleep(1); continue; }
+        if (piece instanceof Uint8Array) chunks.push(...piece);
+      }
+      runtimeHost.close(handle);
+      return new TextDecoder().decode(new Uint8Array(chunks));
+    };
+    return { helper, runFetch };
+  };
+  const customCalls: string[] = [];
+  const clientA = await makeClient(proxyA);
+  const clientB = await makeClient(proxyB);
+  const clientCustom = await makeClient(proxyA, async url => {
+    customCalls.push(url);
+    return new Response(`custom-transport-${customCalls.length}`);
+  });
+  try {
+    Object.defineProperty(globalThis, "caches", { configurable: true, value: cache });
+    globalThis.fetch = Object.assign(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      fetched.push(url);
+      return new Response(url === proxyA ? "cached-via-proxy-a" : "cached-via-proxy-b");
+    }, { preconnect: originalFetch.preconnect });
+    expect(await clientA.runFetch()).toBe("cached-via-proxy-a");
+    for (let turn = 0; turn < 50 && !stored.has(proxyA); turn++) await Bun.sleep(2);
+    expect(stored.has(proxyA)).toBe(true);
+    expect(stored.has(tarball)).toBe(false);
+    // Same proxy hits warm cache without a second network request.
+    expect(await clientA.runFetch()).toBe("cached-via-proxy-a");
+    // Distinct proxy must invoke its own rewriter and never receive proxy A's cached bytes.
+    expect(await clientB.runFetch()).toBe("cached-via-proxy-b");
+    for (let turn = 0; turn < 50 && !stored.has(proxyB); turn++) await Bun.sleep(2);
+    expect(stored.has(proxyB)).toBe(true);
+    // Custom fetch transport bypasses shared Cache Storage even when proxyA is warm.
+    expect(await clientCustom.runFetch()).toBe("custom-transport-1");
+    expect(await clientCustom.runFetch()).toBe("custom-transport-2");
+    expect(customCalls).toEqual([proxyA, proxyA]);
+    expect(fetched).toEqual([proxyA, proxyB]);
+    expect(rewriteCalls).toEqual([`${proxyA}:tarball`, `${proxyA}:tarball`, `${proxyB}:tarball`, `${proxyA}:tarball`, `${proxyA}:tarball`]);
+  } finally {
+    clientA.helper.dispose();
+    clientB.helper.dispose();
+    clientCustom.helper.dispose();
+    await runtime.dispose();
+    globalThis.fetch = originalFetch;
+    if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches);
+    else Reflect.deleteProperty(globalThis, "caches");
+  }
+});
+
+test("bunLauncher disables the guest disk cache when rewritePackageUrl is configured", async () => {
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
+  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  const launchWith = async (rewritePackageUrl?: BunNetworkOptions["rewritePackageUrl"]) => {
+    const context = {
+      identity: { pid: 1, parentPid: 0, host: null },
+      outcome: outcomeWord(),
+      registerRevocation: () => () => {},
+      module,
+      interruptible: false,
+      request: { executable: "/bin/bun", argv: ["bun", "install"], env: { BUN_WASM_INSTALL_CACHE: "on" }, cwd: "/" },
+    } as unknown as RuntimeProcessContext;
+    let launch: Parameters<ProcessService["launchWorker"]>[1] | undefined;
+    const service = {
+      networkPathScope: networkPathScopeFixture,
+      launchWorker(_context: unknown, value: typeof launch) {
+        launch = value;
+        return { terminate() {} };
+      },
+    } as unknown as ProcessService;
+    await bunLauncher("browser", {
+      workerUrl: "https://example.test/worker.js",
+      notificationWorkerUrl: "https://example.test/notification-worker.js",
+      runtime,
+      network: rewritePackageUrl ? { rewritePackageUrl } : undefined,
+    })(context, service);
+    if (!launch) throw new Error("missing launch");
+    const env = (launch.request as RunRequest).env;
+    launch.cleanup?.();
+    return env;
+  };
+  try {
+    expect((await launchWith()).BUN_WASM_INSTALL_CACHE).toBe("on");
+    expect((await launchWith(({ url }) => url)).BUN_WASM_INSTALL_CACHE).toBe("off");
+  } finally {
     await runtime.dispose();
   }
 });
