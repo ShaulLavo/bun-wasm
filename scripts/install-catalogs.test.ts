@@ -372,10 +372,8 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
         join(pnpmUpdateRoot, "package.json"),
         JSON.stringify(hasPackages ? { name: `update-pnpm-${label}` } : { name: `update-pnpm-${label}`, dependencies: { versioned: "catalog:" } }, null, 2),
       );
-      writeFileSync(
-        join(pnpmUpdateRoot, "pnpm-workspace.yaml"),
-        `${hasPackages ? "packages:\n  - packages/*\n" : ""}catalog:\n  versioned: ^1.0.0\n`,
-      );
+      const initialPnpmYaml = `${hasPackages ? "packages:\n  - packages/*\n" : ""}catalog:\n  versioned: ^1.0.0\n`;
+      writeFileSync(join(pnpmUpdateRoot, "pnpm-workspace.yaml"), initialPnpmYaml);
       if (hasPackages) {
         writeFileSync(join(pnpmUpdateRoot, "packages/a/package.json"), JSON.stringify({
           name: "@fixture/pnpm-cat-a",
@@ -391,9 +389,34 @@ async function yamlCatalogPreservesNumericScalars(target: InstallFixtureTarget) 
         }).workspaces.catalog.versioned,
         "^2.0.0",
       );
+      assert.equal(readFileSync(join(pnpmUpdateRoot, "pnpm-workspace.yaml"), "utf8"), initialPnpmYaml);
       assert.equal(installedVersion(pnpmUpdateRoot, "versioned"), "2.0.0");
       await install(target, pnpmUpdateRoot, registry.base, ["--frozen-lockfile"]);
     }
+
+    // Native Bun parity: `--lockfile-only` update against a pnpm YAML catalog persists the updated
+    // catalog into root `package.json`, leaves `pnpm-workspace.yaml` unchanged, and stays frozen-clean.
+    const pnpmLockOnlyRoot = join(directory, "update-pnpm-catalog-lockfile-only");
+    mkdirSync(join(pnpmLockOnlyRoot, "packages/a"), { recursive: true });
+    writeFileSync(join(pnpmLockOnlyRoot, "package.json"), JSON.stringify({ name: "update-pnpm-lock-only" }, null, 2));
+    const pnpmLockOnlyYaml = "packages:\n  - packages/*\ncatalog:\n  versioned: ^1.0.0\n";
+    writeFileSync(join(pnpmLockOnlyRoot, "pnpm-workspace.yaml"), pnpmLockOnlyYaml);
+    writeFileSync(join(pnpmLockOnlyRoot, "packages/a/package.json"), JSON.stringify({
+      name: "@fixture/pnpm-lock-only-a",
+      version: "1.0.0",
+      dependencies: { versioned: "catalog:" },
+    }, null, 2));
+    await install(target, pnpmLockOnlyRoot, registry.base, ["--lockfile-only"]);
+    await runGuestUpdate(target, pnpmLockOnlyRoot, registry.base, ["--latest", "--lockfile-only"]);
+    assert.equal(
+      (JSON.parse(readFileSync(join(pnpmLockOnlyRoot, "package.json"), "utf8")) as {
+        workspaces: { catalog: { versioned: string } };
+      }).workspaces.catalog.versioned,
+      "^2.0.0",
+    );
+    assert.equal(readFileSync(join(pnpmLockOnlyRoot, "pnpm-workspace.yaml"), "utf8"), pnpmLockOnlyYaml);
+    assert.match(readFileSync(join(pnpmLockOnlyRoot, "bun.lock"), "utf8"), /"versioned@2\.0\.0"/);
+    await install(target, pnpmLockOnlyRoot, registry.base, ["--frozen-lockfile", "--lockfile-only"]);
 
     const tagUpdateRoot = join(directory, "update-tag-catalog");
     mkdirSync(join(tagUpdateRoot, "packages/a"), { recursive: true });

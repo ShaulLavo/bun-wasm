@@ -1143,3 +1143,40 @@ test("same-origin proxies bypass cache by default, opt into caching with credent
     else Reflect.deleteProperty(globalThis, "location");
   }
 });
+
+test("same-proxy-origin redirect after credentials include keeps bypassing shared Cache Storage", async () => {
+  const env = indexedCacheStorage();
+  const seen: Array<{ url: string; credentials: RequestCredentials | undefined }> = [];
+  const token = "policy-include-redirect";
+  const fetcher = createInstallFetch({
+    packagePolicyToken: token,
+    rewritePackageUrl: ({ url }) => (url.startsWith("https://github.com/")
+      ? { url: `https://auth-proxy.invalid/tarball?url=${encodeURIComponent(url)}`, credentials: "include" }
+      : null),
+  });
+
+  await withStorage(env.storage, async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    seen.push({ url, credentials: init?.credentials });
+    if (url.startsWith("https://auth-proxy.invalid/tarball")) {
+      return new Response(null, { status: 302, headers: { location: "/blob.tgz" } });
+    }
+    return new Response(`auth-blob-${seen.length}`);
+  }, async () => {
+    const options: RequestInit = {
+      method: "GET",
+      headers: markPackageFetchHeaders({ accept: TARBALL }, token),
+    };
+    expect(await (await fetcher("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("auth-blob-2");
+    expect(await (await fetcher("https://github.com/org/repo/pkg.tgz", options)).text()).toBe("auth-blob-4");
+  });
+
+  expect(seen).toEqual([
+    { url: `https://auth-proxy.invalid/tarball?url=${encodeURIComponent("https://github.com/org/repo/pkg.tgz")}`, credentials: "include" },
+    { url: "https://auth-proxy.invalid/blob.tgz", credentials: "include" },
+    { url: `https://auth-proxy.invalid/tarball?url=${encodeURIComponent("https://github.com/org/repo/pkg.tgz")}`, credentials: "include" },
+    { url: "https://auth-proxy.invalid/blob.tgz", credentials: "include" },
+  ]);
+  expect(env.putCalls).toEqual([]);
+  expect(env.stored.size).toBe(0);
+});

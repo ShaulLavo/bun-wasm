@@ -1285,6 +1285,11 @@ fn pm(opts: &Options, parser: &dyn Transpiler) -> Result<()> {
     Ok(())
 }
 
+/// Seeds external catalogs (`pnpm-workspace.yaml` / `.yarnrc.yml`) into the in-memory root
+/// `package.json` for `bun update`. Matches native Bun 1.4.5: when an update changes a catalog
+/// entry, the updated catalog is persisted under root `package.json` `workspaces.catalog` /
+/// `workspaces.catalogs`, the external YAML file is left untouched, and `package.json` takes
+/// precedence over external YAML files on subsequent installs.
 fn seed_external_catalogs(
     cwd: &Path,
     root_manifest: &mut Value,

@@ -139,7 +139,13 @@ the package and bin. Installation continues and writes its lockfile. Other
 errors remain fatal. Node's native WASI also rejects some relative links under
 non-root preopens; the bounded upstream comparison records that separate limit.
 
-The installer discovers `workspaces` arrays and object-form `packages` patterns.
+The installer discovers `workspaces` arrays and object-form `packages` patterns,
+along with `catalog:` and `catalog:<name>` definitions from `workspaces.catalog`/
+`workspaces.catalogs`, top-level `catalog`/`catalogs`, `pnpm-workspace.yaml`, and
+`.yarnrc.yml`. Matching native Bun, `bun update` persists changed external YAML
+catalogs into root `package.json` (`workspaces.catalog`/`workspaces.catalogs`)
+without modifying `pnpm-workspace.yaml` or `.yarnrc.yml`, and `package.json`
+takes precedence over external YAML catalogs on subsequent installs.
 Members are linked into `node_modules`. Local `link:` and directory `file:`
 dependencies resolve relative to the declaring manifest. Running `bun add` from
 a member updates its manifest and the root lockfile.

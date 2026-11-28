@@ -14,6 +14,11 @@ export interface PackageRewriteResult {
    * Fetch credentials mode for the rewritten request. Pass `"omit"` for a public/anonymous
    * proxy (including same-origin proxies) so no ambient cookies are sent and responses can
    * use shared Cache Storage.
+   *
+   * `"omit"` stays sticky across subsequent redirect hops unless a later rewrite sets a
+   * different mode. Other explicit modes (`"include"`, `"same-origin"`) persist across
+   * subsequent same-origin redirect hops and reset on origin changes so credential access
+   * is never broadened across origins.
    */
   readonly credentials?: RequestCredentials;
 }
@@ -62,7 +67,7 @@ function resolveRewrite(current: URL, rewrite?: PackageRewrite): ResolvedRewrite
   }
   const next = rawUrl instanceof URL ? new URL(rawUrl.href) : new URL(rawUrl, baseHref());
   if (!["https:", "http:"].includes(next.protocol) || next.username || next.password || AUTH_OPTION.test(next.href)) {
-    throw new TypeError(`Rewritten package URL must use http or https without credentials: ${next.href}`);
+    throw new TypeError(`Rewritten package URL must use http or https without credentials: ${redactPackageUrl(next)}`);
   }
   return { target: next, rewritten: true, credentials };
 }
@@ -123,6 +128,37 @@ async function fetchHop(
   }
 }
 
+interface CredentialsState {
+  base: RequestCredentials | undefined;
+  scopedOrigin: string | undefined;
+  scopedMode: RequestCredentials | undefined;
+}
+
+function resolveHopCredentials(
+  state: CredentialsState,
+  target: URL,
+  rewritten: boolean,
+  credentials: RequestCredentials | undefined,
+): RequestCredentials | undefined {
+  if (rewritten && credentials !== undefined) {
+    if (credentials === "omit") {
+      state.base = "omit";
+      state.scopedOrigin = undefined;
+      state.scopedMode = undefined;
+      return "omit";
+    }
+    state.scopedOrigin = target.origin;
+    state.scopedMode = credentials;
+    return credentials;
+  }
+  if (state.scopedOrigin === target.origin && state.scopedMode !== undefined) {
+    return state.scopedMode;
+  }
+  state.scopedOrigin = undefined;
+  state.scopedMode = undefined;
+  return state.base;
+}
+
 export async function packageFetch(
   input: string,
   options: RequestInit,
@@ -131,11 +167,14 @@ export async function packageFetch(
 ): Promise<Response> {
   let url = new URL(input);
   const headers = new Headers(options.headers);
-  let carriedCredentials = options.credentials;
+  const credentialsState: CredentialsState = {
+    base: options.credentials,
+    scopedOrigin: undefined,
+    scopedMode: undefined,
+  };
   for (let redirects = 0; redirects <= 20; redirects++) {
     const { target, rewritten, credentials } = resolveRewrite(url, rewrite);
-    const hopCredentials = rewritten && credentials !== undefined ? credentials : carriedCredentials;
-    if (hopCredentials === "omit") carriedCredentials = "omit";
+    const hopCredentials = resolveHopCredentials(credentialsState, target, rewritten, credentials);
     const hopUrl = redirects === 0 && !rewritten ? input : target.href;
     stripCredentialsOnOriginChange(url, target, headers);
     const response = await fetchHop(fetcher, hopUrl, target, options, headers, rewritten, hopCredentials, redirects);

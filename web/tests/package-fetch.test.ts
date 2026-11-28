@@ -168,13 +168,33 @@ test("packageFetch resolves same-origin relative proxy paths and passes through 
   }
 });
 
-test("packageFetch rejects empty or non-http(s) rewritten package URLs", async () => {
+test("packageFetch rejects empty or non-http(s) rewritten package URLs and redacts credentials", async () => {
   const { calls, fetcher } = createFetcher(() => new Response("never"));
   for (const bad of ["", "   ", "javascript:alert(1)", "file:///etc/passwd", "https://user:pass@proxy.invalid/pkg.tgz"]) {
     await expect(packageFetch("https://registry.invalid/pkg.tgz", {}, fetcher, {
       kind: "tarball",
       rewriteUrl: () => bad,
     })).rejects.toThrow(TypeError);
+  }
+  for (const secretUrl of [
+    "https://user:secret-pass@proxy.invalid/pkg.tgz?token=secret-token#secret-frag",
+    "https://proxy.invalid/pkg.tgz?:_authToken=secret-token",
+  ]) {
+    let thrown: unknown;
+    try {
+      await packageFetch("https://registry.invalid/pkg.tgz", {}, fetcher, {
+        kind: "tarball",
+        rewriteUrl: () => secretUrl,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TypeError);
+    if (!(thrown instanceof TypeError)) throw new Error("Expected TypeError");
+    expect(thrown.message).not.toContain("user");
+    expect(thrown.message).not.toContain("secret-pass");
+    expect(thrown.message).not.toContain("secret-token");
+    expect(thrown.message).not.toContain("secret-frag");
   }
   expect(calls).toHaveLength(0);
 });
@@ -270,13 +290,23 @@ test("packageFetch includes redacted proxy URL in opaqueredirect errors", async 
   ).rejects.toThrow("GET https://proxy.invalid/tarball - Package redirect destination is unavailable to this browser");
 });
 
-test("packageFetch carries explicit credentials omit across redirect hops", async () => {
-  const seenCredentials: Array<RequestCredentials | undefined> = [];
-  const fetcher = Object.assign(async (_input: FetchInput, init?: FetchInit) => {
-    seenCredentials.push(init?.credentials);
-    if (seenCredentials.length === 1) return redirectResponse("https://app.invalid/blob.tgz", () => {});
+function createCredentialsFetcher(
+  handler: (seen: Array<RequestCredentials | undefined>) => Response | Promise<Response>,
+): { seen: Array<RequestCredentials | undefined>; fetcher: typeof fetch } {
+  const seen: Array<RequestCredentials | undefined> = [];
+  const implementation = async (_input: FetchInput, init?: FetchInit) => {
+    seen.push(init?.credentials);
+    return handler(seen);
+  };
+  return { seen, fetcher: Object.assign(implementation, { preconnect: fetch.preconnect }) };
+}
+
+test("packageFetch carries explicit credentials omit across same-origin and cross-origin redirects", async () => {
+  const { seen, fetcher } = createCredentialsFetcher(calls => {
+    if (calls.length === 1) return redirectResponse("https://app.invalid/blob.tgz", () => {});
+    if (calls.length === 2) return redirectResponse("https://cdn.invalid/final.tgz", () => {});
     return new Response("blob");
-  }, { preconnect: fetch.preconnect });
+  });
   const response = await packageFetch("https://github.com/org/repo/releases/download/v1/pkg.tgz", {}, fetcher, {
     kind: "tarball",
     rewriteUrl: ({ url }) => (url.startsWith("https://github.com/")
@@ -284,5 +314,74 @@ test("packageFetch carries explicit credentials omit across redirect hops", asyn
       : null),
   });
   expect(await response.text()).toBe("blob");
-  expect(seenCredentials).toEqual(["omit", "omit"]);
+  expect(seen).toEqual(["omit", "omit", "omit"]);
+});
+
+test("packageFetch preserves explicit credentials include on same-origin redirects and resets across origins", async () => {
+  const sameOrigin = createCredentialsFetcher(calls => (
+    calls.length === 1 ? redirectResponse("/blob.tgz", () => {}) : new Response("same-origin-blob")
+  ));
+  const sameOriginResponse = await packageFetch("https://github.com/org/repo/releases/download/v1/pkg.tgz", {}, sameOrigin.fetcher, {
+    kind: "tarball",
+    rewriteUrl: ({ url }) => (url.startsWith("https://github.com/")
+      ? { url: `https://proxy.invalid/tarball?url=${encodeURIComponent(url)}`, credentials: "include" }
+      : null),
+  });
+  expect(await sameOriginResponse.text()).toBe("same-origin-blob");
+  expect(sameOrigin.seen).toEqual(["include", "include"]);
+
+  const crossOrigin = createCredentialsFetcher(calls => {
+    if (calls.length === 1) return redirectResponse("https://cdn.invalid/hop.tgz", () => {});
+    if (calls.length === 2) return redirectResponse("https://proxy.invalid/bounce.tgz", () => {});
+    return new Response("cross-origin-blob");
+  });
+  const crossOriginResponse = await packageFetch("https://github.com/org/repo/releases/download/v1/pkg.tgz", {}, crossOrigin.fetcher, {
+    kind: "tarball",
+    rewriteUrl: ({ url }) => (url.startsWith("https://github.com/")
+      ? { url: `https://proxy.invalid/tarball?url=${encodeURIComponent(url)}`, credentials: "include" }
+      : null),
+  });
+  expect(await crossOriginResponse.text()).toBe("cross-origin-blob");
+  expect(crossOrigin.seen).toEqual(["include", undefined, undefined]);
+
+  const rewriteOriginChange = createCredentialsFetcher(calls => (
+    calls.length === 1 ? redirectResponse("/next.tgz", () => {}) : new Response("other-proxy-blob")
+  ));
+  const rewriteOriginChangeResponse = await packageFetch(
+    "https://github.com/org/repo/releases/download/v1/pkg.tgz",
+    {},
+    rewriteOriginChange.fetcher,
+    {
+      kind: "tarball",
+      rewriteUrl: ({ url }) => {
+        if (url.startsWith("https://github.com/")) {
+          return { url: `https://proxy-a.invalid/tarball?url=${encodeURIComponent(url)}`, credentials: "include" };
+        }
+        if (url === "https://proxy-a.invalid/next.tgz") return "https://proxy-b.invalid/next.tgz";
+        return null;
+      },
+    },
+  );
+  expect(await rewriteOriginChangeResponse.text()).toBe("other-proxy-blob");
+  expect(rewriteOriginChange.seen).toEqual(["include", undefined]);
+
+  const downgrade = createCredentialsFetcher(calls => {
+    if (calls.length === 1) return redirectResponse("/public-hop.tgz", () => {});
+    if (calls.length === 2) return redirectResponse("/public-final.tgz", () => {});
+    return new Response("downgraded-blob");
+  });
+  const downgradeResponse = await packageFetch("https://github.com/org/repo/releases/download/v1/pkg.tgz", {}, downgrade.fetcher, {
+    kind: "tarball",
+    rewriteUrl: ({ url }) => {
+      if (url.startsWith("https://github.com/")) {
+        return { url: `https://proxy.invalid/tarball?url=${encodeURIComponent(url)}`, credentials: "include" };
+      }
+      if (url === "https://proxy.invalid/public-hop.tgz") {
+        return { url: "https://proxy.invalid/public-anon.tgz", credentials: "omit" };
+      }
+      return null;
+    },
+  });
+  expect(await downgradeResponse.text()).toBe("downgraded-blob");
+  expect(downgrade.seen).toEqual(["include", "omit", "omit"]);
 });
