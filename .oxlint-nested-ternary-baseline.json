@@ -29,12 +29,12 @@
       "927fd84b7a174b6f"
     ],
     "crates/bunwasm-runtime/src/js/bun_test.js": [
-      "2cb9456541e8c2b6",
-      "4728267ba5204f19",
-      "5dff48bb30380d49",
-      "7516828ba1c360fc",
-      "a1331e5cc431b792",
-      "d4a70918fcc8a1c6"
+      "50ded05ea3a0a800",
+      "82bea95ed78cc4f2",
+      "ab4b073bb879dfa2",
+      "b94020ba1a1eadb2",
+      "cdd2e9ca8f646c9a",
+      "d82f08bab4ef643c"
     ],
     "crates/bunwasm-runtime/src/js/caller_origin.ts": [
       "8b3062a43a61d774"
@@ -85,15 +85,15 @@
       "14b93d256f2e290e"
     ],
     "crates/bunwasm-runtime/src/js/inspect.js": [
-      "0aeeb32f9910acb1",
-      "2605337bdeb809be",
-      "5f5fa1452cffd18d",
-      "7419e638a85e877b",
-      "883a7aed580339f4",
-      "88f12b11bd30ce3d",
-      "9c79fd009f483285",
-      "c11b86c37872dcbd",
-      "ec28a03c673c0aaf"
+      "019e2e4af373497f",
+      "4c5bae246a0738c4",
+      "62cb53975e136a69",
+      "82319ae8bbf3150d",
+      "ad7527eb51335414",
+      "b720481e1f7a9806",
+      "cad574f12b669de6",
+      "cd91054aa0722b93",
+      "e82369b0c1f5a83f"
     ],
     "crates/bunwasm-runtime/src/js/jsonl.ts": [
       "4bb4d597c521fe59",

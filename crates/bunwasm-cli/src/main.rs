@@ -610,7 +610,7 @@ fn build(_: Vec<String>) -> i32 {
 mod tool_args;
 
 enum Command {
-    InDir(Vec<String>, Box<Command>),
+    InDir(String, Box<Command>),
     Run(Entry, Vec<String>, Vec<String>, Vec<String>, RunFlags),
     Build(Vec<String>),
     Lint,
@@ -782,27 +782,70 @@ fn is_parallel_flag(flag: &str) -> bool {
     flag == "--parallel" || flag.starts_with("--parallel=")
 }
 
-fn effective_cwd(cwds: &[String]) -> std::path::PathBuf {
-    let mut dir = std::env::current_dir().unwrap_or_default();
-    for cwd in cwds {
-        dir = dir.join(cwd);
+fn effective_cwd(cwd: Option<&str>) -> std::path::PathBuf {
+    let current = std::env::current_dir().unwrap_or_default();
+    match cwd {
+        Some(dir) => current.join(dir),
+        None => current,
     }
-    dir
 }
 
-fn direct_file(file: &str, cwds: &[String]) -> String {
-    let candidate = effective_cwd(cwds).join(file);
+fn direct_file(file: &str, cwd: Option<&str>) -> String {
+    let candidate = effective_cwd(cwd).join(file);
     if !candidate.is_file() {
         return file.to_owned();
     }
     candidate.to_string_lossy().into_owned()
 }
 
-fn wrap_cwd(cwds: Vec<String>, command: Command) -> Command {
-    if cwds.is_empty() || matches!(command, Command::Exit(_) | Command::Lint) {
+fn wrap_cwd(cwd: Option<String>, command: Command) -> Command {
+    let Some(dir) = cwd else {
+        return command;
+    };
+    if matches!(command, Command::Exit(_) | Command::Lint) {
         return command;
     }
-    Command::InDir(cwds, Box::new(command))
+    Command::InDir(dir, Box::new(command))
+}
+
+fn test_flag_takes_next_argument(flag: &str) -> bool {
+    matches!(
+        flag,
+        "--timeout" | "--preload" | "-t" | "--test-name-pattern" | "--max-concurrency"
+    )
+}
+
+fn extract_test_cwd(
+    args: impl Iterator<Item = String>,
+    mut cwd: Option<String>,
+) -> Result<(Option<String>, Vec<String>), Command> {
+    let mut rest = args;
+    let mut kept = Vec::new();
+    while let Some(arg) = rest.next() {
+        if arg == "--" {
+            kept.push(arg);
+            kept.extend(rest);
+            break;
+        }
+        if arg == "--cwd" {
+            let Some(dir) = rest.next() else {
+                return Err(usage_error("--cwd requires a directory"));
+            };
+            cwd = Some(dir);
+            continue;
+        }
+        if let Some(dir) = arg.strip_prefix("--cwd=") {
+            cwd = Some(dir.to_owned());
+            continue;
+        }
+        if test_flag_takes_next_argument(&arg) {
+            kept.push(arg);
+            kept.extend(rest.next());
+            continue;
+        }
+        kept.push(arg);
+    }
+    Ok((cwd, kept))
 }
 
 fn parse_command(args: Vec<String>, run_file: bool) -> Command {
@@ -812,7 +855,7 @@ fn parse_command(args: Vec<String>, run_file: bool) -> Command {
         false,
         Vec::new(),
         Vec::new(),
-        Vec::new(),
+        None,
         RunFlags::default(),
         false,
     )
@@ -825,21 +868,21 @@ fn parse_command_with_flags(
     after_run: bool,
     conditions: Vec<String>,
     exec_argv: Vec<String>,
-    cwds: Vec<String>,
+    cwd: Option<String>,
     flags: RunFlags,
     parallel: bool,
 ) -> Command {
     let mut rest = args.into_iter();
     let mut conditions = conditions;
     let mut exec_argv = exec_argv;
-    let mut cwds = cwds;
+    let mut cwd = cwd;
     let mut flags = flags;
     let mut parallel = parallel;
     while let Some(arg) = rest.next() {
         // `bun -` runs standard input, like `bun run -`; `bun - check` passes it `check`.
         if arg == "-" || run_file && !arg.starts_with('-') {
             return wrap_cwd(
-                cwds,
+                cwd,
                 run_command(
                     Entry::File(arg),
                     rest.collect(),
@@ -868,13 +911,13 @@ fn parse_command_with_flags(
             let Some(dir) = rest.next() else {
                 return usage_error("--cwd requires a directory");
             };
-            cwds.push(dir);
+            cwd = Some(dir);
             continue;
         }
         if (!run_file || after_run)
             && let Some(dir) = arg.strip_prefix("--cwd=")
         {
-            cwds.push(dir.to_owned());
+            cwd = Some(dir.to_owned());
             continue;
         }
         if flags.mode == RunMode::Hot
@@ -959,7 +1002,7 @@ fn parse_command_with_flags(
                     return usage_error("--eval requires code");
                 };
                 return wrap_cwd(
-                    cwds,
+                    cwd,
                     run_command(
                         Entry::Eval(code),
                         rest.collect(),
@@ -979,7 +1022,7 @@ fn parse_command_with_flags(
                      console.log(typeof __bunwasm_print === 'string' ? __bunwasm_print : Bun.inspect(__bunwasm_print));"
                 );
                 return wrap_cwd(
-                    cwds,
+                    cwd,
                     run_command(
                         Entry::Eval(wrapped),
                         Vec::new(),
@@ -992,10 +1035,14 @@ fn parse_command_with_flags(
             }
             "lint" | "fmt" | "check" => return Command::Lint,
             "test" => {
+                let (cwd, test_args) = match extract_test_cwd(rest, cwd) {
+                    Ok(pair) => pair,
+                    Err(command) => return command,
+                };
                 return wrap_cwd(
-                    cwds,
+                    cwd,
                     run_command(
-                        Entry::Test(rest.collect()),
+                        Entry::Test(test_args),
                         Vec::new(),
                         conditions,
                         exec_argv,
@@ -1004,15 +1051,15 @@ fn parse_command_with_flags(
                     ),
                 );
             }
-            "build" | "bun" => return wrap_cwd(cwds, Command::Build(rest.collect())),
+            "build" | "bun" => return wrap_cwd(cwd, Command::Build(rest.collect())),
             "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm"
-            | "update" | "up" => return wrap_cwd(cwds, Command::Install(arg, rest.collect())),
-            "x" | "bunx" => return wrap_cwd(cwds, Command::X(rest.collect())),
-            "create" | "c" => return wrap_cwd(cwds, create_command(rest.collect())),
-            "init" => return wrap_cwd(cwds, Command::Init(rest.collect())),
+            | "update" | "up" => return wrap_cwd(cwd, Command::Install(arg, rest.collect())),
+            "x" | "bunx" => return wrap_cwd(cwd, Command::X(rest.collect())),
+            "create" | "c" => return wrap_cwd(cwd, create_command(rest.collect())),
+            "init" => return wrap_cwd(cwd, Command::Init(rest.collect())),
             "repl" => {
                 return wrap_cwd(
-                    cwds,
+                    cwd,
                     run_command(
                         Entry::Eval(REPL.to_owned()),
                         rest.collect(),
@@ -1028,7 +1075,7 @@ fn parse_command_with_flags(
                     return usage_error("bun exec needs a script to run");
                 };
                 return wrap_cwd(
-                    cwds,
+                    cwd,
                     run_command(
                         Entry::Eval(EXEC.to_owned()),
                         vec![script],
@@ -1052,7 +1099,7 @@ fn parse_command_with_flags(
                     true,
                     conditions,
                     exec_argv,
-                    cwds,
+                    cwd,
                     flags,
                     parallel,
                 );
@@ -1062,7 +1109,7 @@ fn parse_command_with_flags(
                     return usage_error("bun run needs a file to run");
                 };
                 return wrap_cwd(
-                    cwds,
+                    cwd,
                     run_command(
                         Entry::File(file),
                         rest.collect(),
@@ -1108,9 +1155,9 @@ fn parse_command_with_flags(
             }
             flag if flag.starts_with('-') => exec_argv.push(flag.to_owned()),
             file => {
-                let resolved = direct_file(file, &cwds);
+                let resolved = direct_file(file, cwd.as_deref());
                 return wrap_cwd(
-                    cwds,
+                    cwd,
                     run_command(
                         Entry::File(resolved),
                         rest.collect(),
@@ -1276,12 +1323,10 @@ fn main() {
         argv
     };
     let command = match parse(args, &executable) {
-        Command::InDir(cwds, inner) => {
-            for dir in cwds {
-                if let Err(error) = std::env::set_current_dir(&dir) {
-                    eprintln!("error: --cwd {dir}: {error}");
-                    std::process::exit(1);
-                }
+        Command::InDir(dir, inner) => {
+            if let Err(error) = std::env::set_current_dir(&dir) {
+                eprintln!("error: --cwd {dir}: {error}");
+                std::process::exit(1);
             }
             *inner
         }
@@ -1535,34 +1580,88 @@ mod tests {
 
     #[test]
     fn cwd_flag_wraps_command_without_leaking_to_exec_argv() {
-        let Command::InDir(cwds, inner) =
+        let Command::InDir(cwd, inner) =
             parse(vec!["--cwd".into(), "app".into(), "index.ts".into()], "bun")
         else {
             panic!("expected --cwd to wrap command in InDir");
         };
-        assert_eq!(cwds, ["app"]);
+        assert_eq!(cwd, "app");
         let Command::Run(Entry::File(_), _, _, exec_argv, _) = *inner else {
             panic!("expected Run inside InDir");
         };
         assert!(exec_argv.is_empty());
 
-        let Command::InDir(cwds, inner) = parse(
+        let Command::InDir(cwd, inner) = parse(
             vec![
                 "--cwd".into(),
-                "a".into(),
+                "first".into(),
                 "run".into(),
-                "--cwd=b".into(),
+                "--cwd=second".into(),
                 "index.ts".into(),
             ],
             "bun",
         ) else {
-            panic!("expected chained --cwd flags to preserve order");
+            panic!("expected repeated --cwd flags to keep the last directory");
         };
-        assert_eq!(cwds, ["a", "b"]);
+        assert_eq!(cwd, "second");
         assert!(matches!(*inner, Command::Run(Entry::File(_), _, _, _, _)));
+
+        let Command::InDir(cwd, inner) = parse(
+            vec![
+                "test".into(),
+                "--cwd".into(),
+                "second".into(),
+                "./index.test.ts".into(),
+            ],
+            "bun",
+        ) else {
+            panic!("expected bun test --cwd to wrap command in InDir");
+        };
+        assert_eq!(cwd, "second");
+        let Command::Run(Entry::Test(test_args), _, _, _, _) = *inner else {
+            panic!("expected Test inside InDir");
+        };
+        assert_eq!(test_args, ["./index.test.ts"]);
+
+        let Command::InDir(cwd, inner) = parse(
+            vec![
+                "--cwd".into(),
+                "first".into(),
+                "test".into(),
+                "--cwd=second".into(),
+                "--".into(),
+                "--cwd".into(),
+                "literal".into(),
+            ],
+            "bun",
+        ) else {
+            panic!("expected bun --cwd first test --cwd=second to keep last cwd");
+        };
+        assert_eq!(cwd, "second");
+        let Command::Run(Entry::Test(test_args), _, _, _, _) = *inner else {
+            panic!("expected Test inside InDir");
+        };
+        assert_eq!(test_args, ["--", "--cwd", "literal"]);
+
+        let Command::Run(Entry::Test(test_args), _, _, _, _) = parse(
+            vec![
+                "test".into(),
+                "--preload".into(),
+                "--cwd".into(),
+                "./index.test.ts".into(),
+            ],
+            "bun",
+        ) else {
+            panic!("expected --cwd after --preload to stay a preload value");
+        };
+        assert_eq!(test_args, ["--preload", "--cwd", "./index.test.ts"]);
 
         assert!(matches!(
             parse(vec!["--cwd".into()], "bun"),
+            Command::Exit(1)
+        ));
+        assert!(matches!(
+            parse(vec!["test".into(), "--cwd".into()], "bun"),
             Command::Exit(1)
         ));
     }

@@ -1,0 +1,4 @@
+test
+--cwd
+second
+./index.test.ts

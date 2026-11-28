@@ -97,7 +97,8 @@ function spanHash(fileCache: Map<string, CachedFile>, filename: string, span: Sp
   if (!span || span.offset < 0 || span.length <= 0) return "missing-span";
   const { bytes, lines, sourceFile } = loadCachedFile(fileCache, filename);
   const lineIndex = Math.max(0, span.line - 1);
-  const enclosing = enclosingDeclarationPath(sourceFile, span.offset);
+  const utf16Offset = bytes.subarray(0, span.offset).toString("utf8").length;
+  const enclosing = enclosingDeclarationPath(sourceFile, utf16Offset);
   const prevLine = nearestNonEmptyLine(lines, lineIndex, -1);
   const currentLine = lines[lineIndex]?.trim() ?? "";
   const nextLine = nearestNonEmptyLine(lines, lineIndex, 1);

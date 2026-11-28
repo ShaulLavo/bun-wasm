@@ -6,16 +6,27 @@ import { loadComparisonFile } from "./quality-lint";
 const root = resolve(import.meta.dir, "..");
 const allowFilename = ".unknot.allow";
 const allowPath = resolve(root, allowFilename);
+// Matches unknot's default adopted rule set when `# rules:` is omitted.
+const defaultUnknotRules = ["module-cycle", "tangle", "field-leak", "shallow-module"];
 
-function parseAllowlist(source: string): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const rawLine of source.split(/\r?\n/)) {
-    const line = rawLine.trim();
+type ParsedAllowlist = {
+  readonly rules: ReadonlySet<string>;
+  readonly entries: ReadonlyMap<string, number>;
+};
+
+function parseAllowlist(source: string): ParsedAllowlist {
+  const lines = source.split(/\r?\n/).map(line => line.trim());
+  const ruleHeader = lines.find(line => line.startsWith("# rules:"));
+  const rules = new Set(
+    ruleHeader ? ruleHeader.slice("# rules:".length).trim().split(/\s+/).filter(Boolean) : defaultUnknotRules,
+  );
+  const entries = new Map<string, number>();
+  for (const line of lines) {
     if (line.length === 0 || line.startsWith("#")) continue;
     const normalized = line.replace(/\s+/g, " ");
-    counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
+    entries.set(normalized, (entries.get(normalized) ?? 0) + 1);
   }
-  return counts;
+  return { rules, entries };
 }
 
 function verifyAllowlistMonotonic(): void {
@@ -23,8 +34,13 @@ function verifyAllowlistMonotonic(): void {
   const baseSource = loadComparisonFile(allowFilename, "STRUCTURE_BASE_REF");
   if (baseSource === undefined) return;
   const base = parseAllowlist(baseSource);
-  for (const [entry, count] of current.entries()) {
-    const baseCount = base.get(entry);
+  for (const rule of base.rules) {
+    if (!current.rules.has(rule)) {
+      throw new Error(`structure allowlist removes adopted rule: ${rule}`);
+    }
+  }
+  for (const [entry, count] of current.entries.entries()) {
+    const baseCount = base.entries.get(entry);
     if (baseCount === undefined) {
       throw new Error(`structure allowlist adds entry: ${entry}`);
     }

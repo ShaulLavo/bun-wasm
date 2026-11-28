@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/cli-test-cwd",
+  "engines": ["quickjs", "jsc", "browser"]
+}

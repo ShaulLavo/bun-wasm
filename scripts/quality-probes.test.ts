@@ -60,6 +60,10 @@ test("lint rejects new nested ternaries (including moved copies and baseline gro
       + `\nfunction qualityExtractedMemoryMax(bytes: Uint8Array): number | undefined {\n${grandfatheredBody}\n}\n`;
     writeFileSync(baselineFile, movedBody);
     rejectsGate("lint", "no-nested-ternary");
+    // Adding multi-byte UTF-8 text above an unchanged baseline ternary must not invalidate it.
+    writeFileSync(baselineFile, `// Café 🚀 non-ASCII comment\n${original}`);
+    const unicodeResult = spawnSync("bun", ["run", "quality:lint"], { cwd: root, encoding: "utf8" });
+    expect(unicodeResult.status, unicodeResult.stdout + unicodeResult.stderr).toBe(0);
   } finally {
     writeFileSync(baselineFile, original);
   }
@@ -90,6 +94,8 @@ test("structure and lint gates reject import cycles and allowlist growth", () =>
       try {
         writeFileSync(allowPath, `${originalAllow}module-cycle src <-> web/src/net\n`);
         rejectsGate("structure", "structure allowlist adds entry");
+        writeFileSync(allowPath, originalAllow.replace(" module-cycle", ""));
+        rejectsGate("structure", "structure allowlist removes adopted rule");
       } finally {
         writeFileSync(allowPath, originalAllow);
       }
