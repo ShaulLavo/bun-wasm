@@ -135,6 +135,18 @@ function runOxlint(): Diagnostic[] {
   return parsed.diagnostics;
 }
 
+function parseFileFingerprints(filename: string, hashes: unknown, label: string): string[] {
+  if (!Array.isArray(hashes) || hashes.length === 0) {
+    throw new Error(`${label}.files[${filename}] must be a nonempty array`);
+  }
+  for (const hash of hashes) {
+    if (typeof hash !== "string" || !fingerprintPattern.test(hash)) {
+      throw new Error(`${label}.files[${filename}] has malformed fingerprint: ${String(hash)}`);
+    }
+  }
+  return hashes.slice();
+}
+
 function parseBaseline(value: unknown, label = "nested-ternary baseline"): NestedTernaryBaseline {
   if (!isObject(value)) throw new Error(`${label} must be an object`);
   if (typeof value.reason !== "string" || value.reason.length === 0 || value.reason !== value.reason.trim()) {
@@ -144,15 +156,7 @@ function parseBaseline(value: unknown, label = "nested-ternary baseline"): Neste
   if (!isObject(value.files)) throw new Error(`${label}.files must be an object`);
   const files: Record<string, string[]> = {};
   for (const [filename, hashes] of Object.entries(value.files)) {
-    if (!Array.isArray(hashes) || hashes.length === 0) {
-      throw new Error(`${label}.files[${filename}] must be a nonempty array`);
-    }
-    for (const hash of hashes) {
-      if (typeof hash !== "string" || !fingerprintPattern.test(hash)) {
-        throw new Error(`${label}.files[${filename}] has malformed fingerprint: ${String(hash)}`);
-      }
-    }
-    files[filename] = hashes.slice();
+    files[filename] = parseFileFingerprints(filename, hashes, label);
   }
   return { reason: value.reason, files };
 }
@@ -167,25 +171,32 @@ function countMap(values: readonly string[]): Map<string, number> {
   return counts;
 }
 
+function compareFileAllowances(
+  filename: string,
+  hashes: readonly string[],
+  baseHashes: readonly string[] | undefined,
+): void {
+  if (!baseHashes) {
+    throw new Error(`nested-ternary baseline adds allowance for file ${filename}`);
+  }
+  const baseCounts = countMap(baseHashes);
+  for (const [hash, count] of countMap(hashes).entries()) {
+    const baseCount = baseCounts.get(hash);
+    if (baseCount === undefined) {
+      throw new Error(`nested-ternary baseline adds allowance ${filename}:${hash}`);
+    }
+    if (count > baseCount) {
+      throw new Error(`nested-ternary baseline increases allowance ${filename}:${hash}: ${baseCount} -> ${count}`);
+    }
+  }
+}
+
 function compareAllowances(
   current: Readonly<Record<string, readonly string[]>>,
   base: Readonly<Record<string, readonly string[]>>,
 ): void {
   for (const [filename, hashes] of Object.entries(current)) {
-    const baseHashes = base[filename];
-    if (!baseHashes) {
-      throw new Error(`nested-ternary baseline adds allowance for file ${filename}`);
-    }
-    const baseCounts = countMap(baseHashes);
-    for (const [hash, count] of countMap(hashes).entries()) {
-      const baseCount = baseCounts.get(hash);
-      if (baseCount === undefined) {
-        throw new Error(`nested-ternary baseline adds allowance ${filename}:${hash}`);
-      }
-      if (count > baseCount) {
-        throw new Error(`nested-ternary baseline increases allowance ${filename}:${hash}: ${baseCount} -> ${count}`);
-      }
-    }
+    compareFileAllowances(filename, hashes, base[filename]);
   }
 }
 

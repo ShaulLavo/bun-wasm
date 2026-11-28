@@ -91,13 +91,21 @@ test("structure and lint gates reject import cycles and allowlist growth", () =>
       rejectsGate("structure", "module-cycle");
       const allowPath = resolve(root, ".unknot.allow");
       const originalAllow = readFileSync(allowPath, "utf8");
+      const configPath = resolve(root, ".unknot.json");
+      const originalConfig = readFileSync(configPath, "utf8");
       try {
         writeFileSync(allowPath, `${originalAllow}module-cycle src <-> web/src/net\n`);
         rejectsGate("structure", "structure allowlist adds entry");
         writeFileSync(allowPath, originalAllow.replace(" module-cycle", ""));
         rejectsGate("structure", "structure allowlist removes adopted rule");
+        writeFileSync(allowPath, originalAllow);
+        writeFileSync(configPath, `${JSON.stringify({ ...JSON.parse(originalConfig), rules: { "module-cycle": false } }, null, 2)}\n`);
+        rejectsGate("structure", "structure config disables adopted rule");
+        writeFileSync(configPath, `${JSON.stringify({ ...JSON.parse(originalConfig), ignore: ["web/src/net/**"] }, null, 2)}\n`);
+        rejectsGate("structure", "structure config adds ignore pattern");
       } finally {
         writeFileSync(allowPath, originalAllow);
+        writeFileSync(configPath, originalConfig);
       }
     });
   });

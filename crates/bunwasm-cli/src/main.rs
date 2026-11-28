@@ -815,14 +815,46 @@ fn test_flag_takes_next_argument(flag: &str) -> bool {
     )
 }
 
-fn extract_test_cwd(
+fn install_flag_takes_next_argument(flag: &str) -> bool {
+    matches!(
+        flag,
+        "--registry" | "--linker" | "--filter" | "-F" | "-m" | "--message"
+    )
+}
+
+fn build_flag_takes_next_argument(flag: &str) -> bool {
+    matches!(
+        flag,
+        "--outdir"
+            | "--outfile"
+            | "--root"
+            | "--format"
+            | "--target"
+            | "--packages"
+            | "-e"
+            | "--external"
+            | "--define"
+            | "--drop"
+            | "--conditions"
+            | "--public-path"
+            | "--banner"
+            | "--footer"
+            | "--entry-naming"
+            | "--chunk-naming"
+            | "--asset-naming"
+    )
+}
+
+fn extract_subcommand_cwd(
     args: impl Iterator<Item = String>,
     mut cwd: Option<String>,
+    takes_next_arg: fn(&str) -> bool,
+    stop_at_help: bool,
 ) -> Result<(Option<String>, Vec<String>), Command> {
     let mut rest = args;
     let mut kept = Vec::new();
     while let Some(arg) = rest.next() {
-        if arg == "--" {
+        if arg == "--" || (stop_at_help && matches!(arg.as_str(), "-h" | "--help")) {
             kept.push(arg);
             kept.extend(rest);
             break;
@@ -838,7 +870,7 @@ fn extract_test_cwd(
             cwd = Some(dir.to_owned());
             continue;
         }
-        if test_flag_takes_next_argument(&arg) {
+        if takes_next_arg(&arg) {
             kept.push(arg);
             kept.extend(rest.next());
             continue;
@@ -1035,10 +1067,11 @@ fn parse_command_with_flags(
             }
             "lint" | "fmt" | "check" => return Command::Lint,
             "test" => {
-                let (cwd, test_args) = match extract_test_cwd(rest, cwd) {
-                    Ok(pair) => pair,
-                    Err(command) => return command,
-                };
+                let (cwd, test_args) =
+                    match extract_subcommand_cwd(rest, cwd, test_flag_takes_next_argument, false) {
+                        Ok(pair) => pair,
+                        Err(command) => return command,
+                    };
                 return wrap_cwd(
                     cwd,
                     run_command(
@@ -1051,9 +1084,27 @@ fn parse_command_with_flags(
                     ),
                 );
             }
-            "build" | "bun" => return wrap_cwd(cwd, Command::Build(rest.collect())),
+            "build" | "bun" => {
+                let (cwd, build_args) =
+                    match extract_subcommand_cwd(rest, cwd, build_flag_takes_next_argument, true) {
+                        Ok(pair) => pair,
+                        Err(command) => return command,
+                    };
+                return wrap_cwd(cwd, Command::Build(build_args));
+            }
             "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm"
-            | "update" | "up" => return wrap_cwd(cwd, Command::Install(arg, rest.collect())),
+            | "update" | "up" => {
+                let (cwd, install_args) = match extract_subcommand_cwd(
+                    rest,
+                    cwd,
+                    install_flag_takes_next_argument,
+                    false,
+                ) {
+                    Ok(pair) => pair,
+                    Err(command) => return command,
+                };
+                return wrap_cwd(cwd, Command::Install(arg, install_args));
+            }
             "x" | "bunx" => return wrap_cwd(cwd, Command::X(rest.collect())),
             "create" | "c" => return wrap_cwd(cwd, create_command(rest.collect())),
             "init" => return wrap_cwd(cwd, Command::Init(rest.collect())),
@@ -1664,5 +1715,63 @@ mod tests {
             parse(vec!["test".into(), "--cwd".into()], "bun"),
             Command::Exit(1)
         ));
+
+        let Command::InDir(cwd, inner) = parse(
+            vec![
+                "--cwd=first".into(),
+                "install".into(),
+                "--cwd".into(),
+                "second".into(),
+                "--lockfile-only".into(),
+            ],
+            "bun",
+        ) else {
+            panic!("expected repeated --cwd on install to resolve once to the last directory");
+        };
+        assert_eq!(cwd, "second");
+        let Command::Install(cmd, install_args) = *inner else {
+            panic!("expected Install inside InDir");
+        };
+        assert_eq!(cmd, "install");
+        assert_eq!(install_args, ["--lockfile-only"]);
+
+        let Command::InDir(cwd, inner) = parse(
+            vec![
+                "--cwd=first".into(),
+                "build".into(),
+                "--cwd=second".into(),
+                "entry.ts".into(),
+            ],
+            "bun",
+        ) else {
+            panic!("expected repeated --cwd on build to resolve once to the last directory");
+        };
+        assert_eq!(cwd, "second");
+        let Command::Build(build_args) = *inner else {
+            panic!("expected Build inside InDir");
+        };
+        assert_eq!(build_args, ["entry.ts"]);
+
+        let Command::Build(build_args) = parse(
+            vec!["build".into(), "--help".into(), "--cwd=missing".into()],
+            "bun",
+        ) else {
+            panic!("expected build --help to stop before trailing --cwd");
+        };
+        assert_eq!(build_args, ["--help", "--cwd=missing"]);
+
+        let Command::Install(cmd, install_args) = parse(
+            vec![
+                "install".into(),
+                "--registry".into(),
+                "--cwd".into(),
+                "--lockfile-only".into(),
+            ],
+            "bun",
+        ) else {
+            panic!("expected --cwd after --registry to stay a registry value");
+        };
+        assert_eq!(cmd, "install");
+        assert_eq!(install_args, ["--registry", "--cwd", "--lockfile-only"]);
     }
 }
