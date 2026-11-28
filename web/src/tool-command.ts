@@ -35,6 +35,11 @@ function evaluates(flag: string): boolean {
   return name === "--eval" || name === "--print" || letter === "e" || letter === "p";
 }
 
+function isWorkspaceScopeFlag(flag: string): boolean {
+  const name = flag.split("=", 1)[0];
+  return name === "--filter" || name === "--workspaces" || name === "--parallel" || name === "--sequential" || shortValue(flag)?.letter === "F";
+}
+
 /** `args` follows the executable; `executable` is argv[0]. */
 export function isToolCommand(args: readonly string[], executable = "bun"): boolean {
   if (isNodeExecutable(executable)) return false;
@@ -48,7 +53,7 @@ export function isToolCommand(args: readonly string[], executable = "bun"): bool
     // `bun -ptsconfig.json check`: before `check`, `-p` is its `--project`, as upstream.
     if (args[at + 1] === "check" && shortValue(arg)?.letter === "p") continue;
     if (arg === "--cwd") { at++; continue; }
-    if (["-v", "--version", "--revision"].includes(arg) || evaluates(arg)) return false;
+    if (["-v", "--version", "--revision"].includes(arg) || evaluates(arg) || isWorkspaceScopeFlag(arg)) return false;
     if (longWithValue.has(arg) || shortValue(arg)?.next) { at++; continue; }
     if (!arg.startsWith("-")) return false;
   }

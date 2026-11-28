@@ -210,22 +210,19 @@ unsafe fn __bun_resolver_init_package_manager(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn auto_installer_stub_matches_upstream_abi() {
-        let symbol: unsafe fn(
-            NonNull<bun_ast::Log>,
-            Option<NonNull<bun_options_types::schema::api::BunInstall>>,
-            NonNull<bun_dotenv::Loader>,
-            bool,
-            &[u8],
-        ) -> bun_resolver::CrateResult<
-            NonNull<dyn bun_install_types::resolver_hooks::AutoInstaller>,
-        > = __bun_resolver_init_package_manager;
-        let log = NonNull::<bun_ast::Log>::dangling();
-        let env = NonNull::<bun_dotenv::Loader>::dangling();
-        let result = unsafe { symbol(log, None, env, false, b"/") };
+        let arena = bun_alloc::Arena::new();
+        let mut log = Box::new(bun_ast::Log::init());
+        let mut transpiler = bun_bundler::transpiler::Transpiler::init(
+            &arena,
+            &raw mut *log,
+            bun_options_types::schema::api::TransformOptions::default(),
+            None,
+        )
+        .expect("transpiler init");
+        transpiler.resolver.env_loader = core::ptr::NonNull::new(transpiler.env);
+        let result = transpiler.resolver.get_package_manager();
         assert!(matches!(
             result,
             Err(bun_resolver::Error::Sys(bun_errno::SystemErrno::ENOSYS))

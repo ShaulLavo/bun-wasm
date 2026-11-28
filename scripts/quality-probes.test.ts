@@ -36,13 +36,27 @@ test("lint rejects an unused authored variable", () => {
 test("lint rejects accidental ambient browser name capture", () => {
   withProbe("web/src/quality-global-probe.ts", "export const qualityAmbientName = () => name;\n", () => rejectsGate("lint", "no-restricted-globals"));
 });
-test("lint rejects new nested ternaries and else-after-return", () => {
+test("lint rejects new nested ternaries (even in baseline files) and else/else-if after return", () => {
   withProbe("src/quality-ternary-probe.ts", "export const pick = (a: number) => a === 1 ? 1 : a === 2 ? 2 : 3;\n", () => rejectsGate("lint", "no-nested-ternary"));
-  withProbe("src/quality-else-probe.ts", "export function sign(a: number) { if (a > 0) return 1; else return -1; }\n", () => rejectsGate("lint", "no-else-return"));
+  const baselineFile = resolve(root, "src/engine-kind.ts");
+  const original = readFileSync(baselineFile, "utf8");
+  try {
+    writeFileSync(baselineFile, `${original}\nexport const qualityAddedTernary = (n: number) => n === 1 ? "a" : n === 2 ? "b" : "c";\n`);
+    rejectsGate("lint", "no-nested-ternary");
+  } finally {
+    writeFileSync(baselineFile, original);
+  }
+  withProbe("src/quality-else-probe.ts", "export function sign(a: number) { if (a > 0) return 1; else if (a < 0) return -1; return 0; }\n", () => rejectsGate("lint", "no-else-return"));
 });
-test("structure gate rejects a new import cycle in src/", () => {
+test("structure and lint gates reject import cycles within src/ and across src/ and web/src/", () => {
   withProbe("src/quality-cycle-a.ts", 'import { b } from "./quality-cycle-b"; export const a = () => b();\n', () => {
     withProbe("src/quality-cycle-b.ts", 'import { a } from "./quality-cycle-a"; export const b = () => a();\n', () => rejectsGate("structure", "import-cycle"));
+  });
+  withProbe("src/quality-cross-a.ts", 'import { b } from "../web/src/quality-cross-b"; export const a = () => b();\n', () => {
+    withProbe("web/src/quality-cross-b.ts", 'import { a } from "../../src/quality-cross-a"; export const b = () => a();\n', () => rejectsGate("lint", "no-cycle"));
+  });
+  withProbe("src/quality-cross-net-a.ts", 'import { b } from "../web/src/net/quality-cross-net-b"; export const a = () => b();\n', () => {
+    withProbe("web/src/net/quality-cross-net-b.ts", 'import { a } from "../../../src/quality-cross-net-a"; export const b = () => a();\n', () => rejectsGate("structure", "module-cycle"));
   });
 });
 test("strict scripts project rejects a wrong type", () => {

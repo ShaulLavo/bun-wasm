@@ -23,6 +23,7 @@ const LONG_WITH_VALUE: &[&str] = &[
     "--cpu-prof-name",
     "--cron-period",
     "--cron-title",
+    "--cwd",
     "--define",
     "--disable-warning",
     "--dns-result-order",
@@ -92,6 +93,15 @@ pub(crate) fn short_with_value(flag: &str) -> Option<(u8, bool)> {
 fn evaluates(flag: &str) -> bool {
     let name = flag.split_once('=').map_or(flag, |(name, _)| name);
     matches!(name, "--eval" | "--print") || matches!(short_with_value(flag), Some((b'e' | b'p', _)))
+}
+
+/// Whether `flag` selects workspace or multi-script execution rather than a tool subcommand.
+pub(crate) fn is_workspace_scope_flag(flag: &str) -> bool {
+    let name = flag.split_once('=').map_or(flag, |(name, _)| name);
+    matches!(
+        name,
+        "--filter" | "--workspaces" | "--parallel" | "--sequential"
+    ) || matches!(short_with_value(flag), Some((b'F', _)))
 }
 
 /// Whether `flag` is one of Bun's whose value is the next argument.
@@ -195,6 +205,7 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
             flag if flag.starts_with("--config=") || flag.starts_with("-c=") => {
                 globals.bunfig = Some(flag.split_once('=')?.1.to_owned());
             }
+            flag if is_workspace_scope_flag(flag) => return None,
             _ if is_of_check => {
                 globals.check_chain = Some(for_check.len());
                 for_check.extend(check_chain(arg));
@@ -254,6 +265,13 @@ mod tests {
             &["-brcheck", "entry.ts"],
             &["--print", "1", "check"],
             &["--", "--entry.ts", "check"],
+            &["--filter=a", "check"],
+            &["--filter", "a", "lint"],
+            &["-F", "a", "fmt"],
+            &["-Fa", "check"],
+            &["--workspaces", "lint"],
+            &["--parallel", "lint"],
+            &["--sequential", "check"],
         ] {
             assert!(select(args).is_none(), "{args:?}");
         }

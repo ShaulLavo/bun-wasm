@@ -623,6 +623,7 @@ enum Command {
 struct RunFlags {
     mode: RunMode,
     experimental_stream_iter: bool,
+    parallel: bool,
 }
 
 /// `bun exec <script>`: the script runs in the system shell (bash-web), as package scripts do.
@@ -733,6 +734,10 @@ fn run_command(
     exec_argv: Vec<String>,
     flags: RunFlags,
 ) -> Command {
+    if flags.parallel && !matches!(&entry, Entry::Test(_)) {
+        eprintln!("error: --parallel is not supported in bun-wasm yet");
+        return Command::Exit(1);
+    }
     if flags.mode == RunMode::Hot && !matches!(&entry, Entry::File(path) if path != "-") {
         return usage_error("--hot supports only file-based ESM server entries");
     }
@@ -763,9 +768,6 @@ fn unsupported_run_scope_flag(flag: &str) -> Option<&'static str> {
     if flag == "--workspaces" || flag.starts_with("--workspaces=") {
         return Some("--workspaces");
     }
-    if flag == "--parallel" || flag.starts_with("--parallel=") {
-        return Some("--parallel");
-    }
     if flag == "--sequential" || flag.starts_with("--sequential=") {
         return Some("--sequential");
     }
@@ -773,6 +775,10 @@ fn unsupported_run_scope_flag(flag: &str) -> Option<&'static str> {
         return Some("-F");
     }
     None
+}
+
+fn is_parallel_flag(flag: &str) -> bool {
+    flag == "--parallel" || flag.starts_with("--parallel=")
 }
 
 fn direct_file(file: &str) -> String {
@@ -946,7 +952,13 @@ fn parse_command_with_flags(
                     flags,
                 );
             }
-            "build" | "bun" => return Command::Build(rest.collect()),
+            "build" | "bun" => {
+                if flags.parallel {
+                    eprintln!("error: --parallel is not supported in bun-wasm yet");
+                    return Command::Exit(1);
+                }
+                return Command::Build(rest.collect());
+            }
             "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm"
             | "update" | "up" => return Command::Install(arg, rest.collect()),
             "x" | "bunx" => return Command::X(rest.collect()),
@@ -980,6 +992,10 @@ fn parse_command_with_flags(
                 return Command::Exit(1);
             }
             "run" => {
+                if flags.parallel {
+                    eprintln!("error: --parallel is not supported in bun-wasm yet");
+                    return Command::Exit(1);
+                }
                 return parse_command_with_flags(
                     rest.collect(),
                     true,
@@ -1014,6 +1030,16 @@ fn parse_command_with_flags(
                 let name = unsupported_run_scope_flag(flag).unwrap_or(flag);
                 eprintln!("error: {name} is not supported in bun-wasm yet");
                 return Command::Exit(1);
+            }
+            // `--parallel` is valid before `bun test` (`bun --parallel=2 test`), but not for `run`.
+            flag if (!run_file || after_run) && is_parallel_flag(flag) => {
+                if after_run {
+                    eprintln!("error: --parallel is not supported in bun-wasm yet");
+                    return Command::Exit(1);
+                }
+                flags.parallel = true;
+                exec_argv.push(arg);
+                continue;
             }
             // Like native Bun, other runtime flags (Node's --enable-source-maps, --no-warnings, ...)
             // are accepted and kept in process.execArgv, so forked children receive them too.
@@ -1354,20 +1380,35 @@ mod tests {
             vec!["--filter=pkg", "build"],
             vec!["run", "--filter", "pkg", "build"],
             vec!["run", "--filter=pkg", "build"],
+            vec!["run", "--cwd", "app", "--filter=a", "build"],
+            vec!["--cwd", "app", "--filter=a", "build"],
+            vec!["--filter=a", "check"],
+            vec!["--filter", "a", "lint"],
+            vec!["-F", "a", "fmt"],
+            vec!["--workspaces", "check"],
             vec!["run", "-F", "pkg", "build"],
             vec!["run", "-Fpkg", "build"],
             vec!["run", "-bF", "pkg", "build"],
             vec!["run", "--workspaces", "build"],
             vec!["--workspaces", "build"],
             vec!["run", "--parallel", "build", "lint"],
+            vec!["--parallel", "run", "build"],
+            vec!["--parallel=2", "build"],
             vec!["run", "--sequential", "build", "lint"],
         ] {
             let args = argv.into_iter().map(String::from).collect();
             assert!(
-                matches!(parse_command(args, false), Command::Exit(1)),
+                matches!(parse(args, "bun"), Command::Exit(1)),
                 "expected exit 1"
             );
         }
+
+        let Command::Run(Entry::Test(_), _, _, exec_argv, _) =
+            parse(vec!["--parallel=2".into(), "test".into()], "bun")
+        else {
+            panic!("expected --parallel=2 test to remain a test invocation");
+        };
+        assert_eq!(exec_argv, ["--parallel=2"]);
 
         let Command::Run(Entry::File(entry), args, _, _, _) = parse_command(
             vec![

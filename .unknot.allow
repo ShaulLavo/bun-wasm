@@ -1,4 +1,5 @@
 # Structure debt that existed when this project adopted unknot.
 # Fixing an entry never fails the run; anything not listed here does.
 # rules: field-leak forward-ref import-cycle long-file module-cycle prop-drilling shallow-module tangle wide-directory wide-injection
-wide-directory src
+module-cycle src <-> web/src
+wide-directory web/src

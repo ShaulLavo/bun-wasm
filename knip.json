@@ -107,7 +107,8 @@
         "tests/package/**/*.ts"
       ],
       "ignoreDependencies": [
-        "^bash-web(?:/.*)?$"
+        "^bash-web(?:/.*)?$",
+        "^oxlint$"
       ]
     },
     "web": {

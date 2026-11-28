@@ -180,19 +180,23 @@ private executor is configured.
 
 ## Coverage and versions
 
-- Oxlint 1.88.0 checks owned JavaScript and TypeScript, including runtime polyfills,
-  package code, web, sandbox, scripts and tests. Correctness and unused-variable
-  rules are errors, control-flow depth is limited to 3, nested ternaries and
-  `else` after `return` are errors (with a shrinking per-file legacy baseline for
-  pre-existing nested ternaries), and complexity is limited to 40.
+- Oxlint 1.88.0 (`quality:lint` via `scripts/quality-lint.ts`) checks owned JavaScript
+  and TypeScript, including runtime polyfills, package code, web, sandbox, scripts and
+  tests. Correctness and unused-variable rules are errors, control-flow depth is limited
+  to 3, `else` / `else if` after `return` (`no-else-return` with `allowElseIf: false`)
+  and nested ternaries (`no-nested-ternary`) are errors, and complexity is limited to 40.
+  Pre-existing nested ternaries are pinned by exact diagnostic span SHA-256 hashes in
+  `.oxlint-nested-ternary-baseline.json`, so adding a new nested ternary fails CI even
+  inside a listed file.
   Unqualified browser-global `name` is forbidden, so a renamed local cannot
   silently capture `window.name` inside a callback.
   Guest fixtures deliberately testing invalid input under `tests/fixtures`,
   `tests/build` and `tests/jsc` are not host source. Intentional classic-script
   factory evaluation and ABI-specific operations have local explained exceptions.
-- Unknot 0.1.2 (`quality:structure`) checks module structure across `src/` (0
-  findings) and `web/` (1 pre-existing `wide-directory` baseline entry in
-  `web/.unknot.allow`), failing CI on any new structural finding.
+- Unknot 0.1.2 (`quality:structure`) checks module structure across `src/` and `web/src/`
+  in one unified graph (configured in `.unknot.json`, with pre-existing debt recorded in
+  `.unknot.allow`), failing CI on any new structural finding including cross-boundary
+  import cycles between `src/` and `web/src/`.
 - TypeScript 7.0.2 runs strict runtime-factory, package, scripts/site, web and sandbox projects.
   Both application quality projects include authored TS test files and their
   browser/worker entrypoints. Legacy JS gets correctness lint, not a claim of
