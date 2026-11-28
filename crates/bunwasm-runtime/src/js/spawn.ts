@@ -52,6 +52,7 @@
     onExit?: (child: unknown, exitCode: number | null, signalCode: string | number | null, error: unknown) => void;
     _ipc?: boolean;
     _ipcTarget?: BunWasm.NodeEmitter;
+    _inheritedEnv?: boolean;
     [key: string]: unknown;
   }
   interface SpawnMeta {
@@ -293,8 +294,7 @@
     for (let i = 1; i < argv.length; i++) {
       const arg = argv[i]!;
       if (arg === "test") return true;
-      if (arg === "--") return argv[i + 1] === "test";
-      if (arg === "-" || !arg.startsWith("-") || bunFlagEvaluates(arg)) return false;
+      if (arg === "--" || arg === "-" || !arg.startsWith("-") || bunFlagEvaluates(arg)) return false;
       if (bunFlagNeedsNext(arg)) i++;
     }
     return false;
@@ -310,8 +310,9 @@
     env: Record<string, string>,
     parentEnv: Readonly<Record<string, string | undefined>>,
     explicitEnv: Record<string, unknown> | undefined,
+    inheritedEnv: boolean | undefined,
   ): void {
-    if (explicitEnv !== undefined) return;
+    if (explicitEnv !== undefined && !inheritedEnv) return;
     if (typeof native.argv !== "function" || native.argv()[1] !== "test") return;
     const exe = argv[0]!;
     const isExecPath = typeof native.execPath === "function" && exe === native.execPath();
@@ -344,7 +345,7 @@
     if (!native.hostCaps.proc_spawn) throw unsupported("Spawning a process without host process support");
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(options.env || proc.env)) if (value !== undefined) env[key] = String(value);
-    stripInheritedTestParallel(argv, env, proc.env, options.env);
+    stripInheritedTestParallel(argv, env, proc.env, options.env, options._inheritedEnv);
     const io = options.stdio;
     const input = Array.isArray(io) ? io[0] : options.stdin;
     const output = Array.isArray(io) ? io[1] : options.stdout;

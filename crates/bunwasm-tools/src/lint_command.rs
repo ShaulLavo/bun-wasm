@@ -44,8 +44,26 @@ fn configure_output() {
         .store(color.unwrap_or(Output::is_stderr_tty()), Ordering::Relaxed);
 }
 
+fn tool_accepts_flag(command: &str, flag: &[u8]) -> bool {
+    match command {
+        "lint" => cli::Options::parse(&[flag]).is_ok(),
+        _ => fmt::cli::Options::parse(&[flag]).is_ok(),
+    }
+}
+
+fn effective_args(command: &str, args: Vec<String>, env_flags_before: &[String]) -> Vec<String> {
+    let mut combined: Vec<String> = env_flags_before
+        .iter()
+        .filter(|flag| tool_accepts_flag(command, flag.as_bytes()))
+        .cloned()
+        .collect();
+    combined.extend(args);
+    combined
+}
+
 pub(super) fn run(command: &str, args: Vec<String>, globals: crate::tool_args::ToolGlobals) -> i32 {
     configure_output();
+    let args = effective_args(command, args, &globals.env_flags_before);
     let argv: Vec<&[u8]> = args.iter().map(|arg| arg.as_bytes()).collect();
     match execute(command, &argv, &globals) {
         Ok(outcome) => {
@@ -358,5 +376,38 @@ impl js_plugin::Engine for NativeRules {
     }
     fn busy(&self) -> usize {
         0
+    }
+}
+
+#[cfg(test)]
+mod env_flag_tests {
+    use super::effective_args;
+
+    #[test]
+    fn forwards_only_recognized_tool_flags_from_bun_options() {
+        assert_eq!(
+            effective_args(
+                "fmt",
+                vec!["file.ts".into()],
+                &[
+                    "--no-warnings".into(),
+                    "--check".into(),
+                    "--disable-warning=DEP2".into()
+                ],
+            ),
+            vec!["--check", "file.ts"]
+        );
+        assert_eq!(
+            effective_args("fmt", vec!["file.ts".into()], &["-c".into()]),
+            vec!["-c", "file.ts"]
+        );
+        assert_eq!(
+            effective_args(
+                "lint",
+                vec!["file.ts".into()],
+                &["--no-warnings".into(), "--fix".into()],
+            ),
+            vec!["--fix", "file.ts"]
+        );
     }
 }

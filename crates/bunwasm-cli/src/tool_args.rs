@@ -9,6 +9,9 @@ pub struct ToolGlobals {
     /// before `check` is. Its `b` letters are Bun's `--bun`, and it is a chain even when what
     /// remains reads like a compiler option: `bun -bt check` rejects `-t`.
     pub check_chain: Option<usize>,
+    /// Flags from `BUN_OPTIONS` before `fmt`/`lint` that Bun itself did not consume; the tool
+    /// forwards the ones its own parser recognizes (matching upstream `with_own_flags_before`).
+    pub env_flags_before: Vec<String>,
 }
 
 /// Bun's long flags whose value is the next argument (`AUTO_PARAMS` in upstream
@@ -234,12 +237,18 @@ fn before_command_inner(
             flag if takes_next_argument(flag) => at += 1,
             flag if is_check_option(flag) => {
                 for_check.push(arg.clone());
-                if !from_env {
+                if from_env {
+                    globals.env_flags_before.push(arg.clone());
+                } else {
                     unknown.push(arg.clone());
                 }
             }
             flag if flag.starts_with('-') => {
-                if !from_env {
+                if from_env {
+                    if flag != "--config" {
+                        globals.env_flags_before.push(arg.clone());
+                    }
+                } else {
                     unknown.push(arg.clone());
                 }
             }
@@ -456,6 +465,20 @@ mod tests {
         assert_eq!(cmd, "fmt");
         assert_eq!(forwarded, ["--help"]);
         assert_eq!(globals.cwd_before.as_deref(), Some("project"));
+        assert_eq!(
+            globals.env_flags_before,
+            ["--no-warnings", "--disable-warning=DEP2"]
+        );
+        let (cmd, forwarded, globals) =
+            before_command_with_env(&["file.ts".into()], Some("--check fmt")).unwrap();
+        assert_eq!(cmd, "fmt");
+        assert_eq!(forwarded, ["file.ts"]);
+        assert_eq!(globals.env_flags_before, ["--check"]);
+        let (cmd, forwarded, globals) =
+            before_command_with_env(&["file.ts".into()], Some("-c fmt")).unwrap();
+        assert_eq!(cmd, "fmt");
+        assert_eq!(forwarded, ["file.ts"]);
+        assert_eq!(globals.env_flags_before, ["-c"]);
         assert!(
             before_command_with_env(&["fmt".into()], Some("--no-warnings\x0B--filter=app"))
                 .is_some()

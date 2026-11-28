@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript-api";
 import { loadComparisonFile } from "./quality-lint";
@@ -278,7 +278,23 @@ function verifyConfigMonotonic(requiredRules: ReadonlySet<string>): void {
   }
 }
 
+const skippedNestedDirs = new Set([".git", "node_modules", "target", "vendor", "dist"]);
+
+function verifyNoNestedUnknotConfigs(dir: string): void {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = resolve(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (!skippedNestedDirs.has(entry.name)) verifyNoNestedUnknotConfigs(entryPath);
+      continue;
+    }
+    if (dir !== root && (entry.name === configFilename || entry.name === allowFilename)) {
+      throw new Error(`nested unknot config: ${relative(root, entryPath).replaceAll("\\", "/")}`);
+    }
+  }
+}
+
 function verifyStructurePolicy(): void {
+  verifyNoNestedUnknotConfigs(root);
   const current = parseAllowlist(readFileSync(allowPath, "utf8"));
   const baseSource = loadComparisonFile(allowFilename, "STRUCTURE_BASE_REF");
   const requiredRules = new Set(current.rules);

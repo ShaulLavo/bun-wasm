@@ -122,7 +122,10 @@ function probeStructurePolicyTampering(): void {
 
 test("structure and lint gates reject import cycles and allowlist growth", () => {
   withProbe("src/quality-cycle-a.ts", 'import { b } from "./quality-cycle-b"; export const a = () => b();\n', () => {
-    withProbe("src/quality-cycle-b.ts", 'import { a } from "./quality-cycle-a"; export const b = () => a();\n', () => rejectsGate("structure", "import-cycle"));
+    withProbe("src/quality-cycle-b.ts", 'import { a } from "./quality-cycle-a"; export const b = () => a();\n', () => {
+      rejectsGate("structure", "import-cycle");
+      withProbe("src/.unknot.json", '{"ignore":["**"]}\n', () => rejectsGate("structure", "nested unknot config: src/.unknot.json"));
+    });
   });
   withProbe("src/quality-cross-a.ts", 'import { b } from "../web/src/quality-cross-b"; export const a = () => b();\n', () => {
     withProbe("web/src/quality-cross-b.ts", 'import { a } from "../../src/quality-cross-a"; export const b = () => a();\n', () => rejectsGate("lint", "no-cycle"));

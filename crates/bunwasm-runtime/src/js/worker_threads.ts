@@ -1411,7 +1411,8 @@
       const id = this.#path.reduce((parent, counter) => (parent + counter) * (parent + counter + 1) / 2 + counter + 1, 0);
       if (!Number.isSafeInteger(id)) throw new RangeError("Worker thread identifier exhausted");
       const env: Record<string, string> = {};
-      const sourceEnv = options.env === undefined || options.env === SHARE_ENV ? process.env : record(options.env);
+      const inheritedEnv = options.env === undefined || options.env === SHARE_ENV;
+      const sourceEnv = inheritedEnv ? process.env : record(options.env);
       for (const [key, value] of Object.entries(sourceEnv)) if (value !== undefined) env[key] = String(value);
       if (this.resourceLimits.stackSizeMb) env.BUN_WASM_STACK_KIB = String(Math.max(16, Math.min(Number(env.BUN_WASM_STACK_KIB || 4096), this.resourceLimits.stackSizeMb * 1024)));
       const [publicPort, childPort] = portOps.pair();
@@ -1431,7 +1432,7 @@
       const memoryLimitMb = (this.resourceLimits.maxOldGenerationSizeMb || 0) + (this.resourceLimits.maxYoungGenerationSizeMb || 0);
       let child: BunWasm.WorkerChild;
       try { child = internal.require("spawn").spawnWorker([process.execPath].concat(exec.conditions, target.argv, argv), {
-        env, cwd: process.cwd(), stdin: options.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe",
+        env, _inheritedEnv: inheritedEnv, cwd: process.cwd(), stdin: options.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe",
         maxBuffer: Infinity,
       }, { resourceLimits: this.resourceLimits, memoryLimitMb: memoryLimitMb ? Math.ceil(memoryLimitMb) : undefined }); } catch (error) { transferPlan.abort(); if (cell) groupLanes?.exited(cell); publicPort.close(); childPort.close(); throw error; }
       this.#child = child;
