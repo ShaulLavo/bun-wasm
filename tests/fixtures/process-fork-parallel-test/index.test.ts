@@ -14,9 +14,18 @@ test("fork succeeds under bun --parallel=2 test", async () => {
   expect(message).toEqual({ execArgv: [], argv: ["ok"], bunOptions: null });
 });
 
-test("BUN_OPTIONS=--parallel=2 stays readable in test and forks cleanly", () => {
+test("BUN_OPTIONS=--parallel=2 stays readable in test, nested test, and forks cleanly", () => {
   const result = Bun.spawnSync([process.execPath, "test", join(import.meta.dir, "env-case.test.ts")], {
     env: { ...process.env, BUN_OPTIONS: "--parallel=2" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(result.exitCode).toBe(0);
+});
+
+test("BUN_OPTIONS='-u --parallel=2' keeps --parallel=2 as -u value when forking", () => {
+  const result = Bun.spawnSync([process.execPath, "test", join(import.meta.dir, "short-flag-case.test.ts")], {
+    env: { ...process.env, BUN_OPTIONS: "-u --parallel=2" },
     stdout: "pipe",
     stderr: "pipe",
   });

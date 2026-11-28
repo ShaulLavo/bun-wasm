@@ -205,7 +205,53 @@
     return ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f";
   }
 
-  function nextBunOptionToken(raw: string, start: number): { end: number; value: string } {
+  function shortValueLetter(flag: string): { letter: string; needsNext: boolean } | undefined {
+    if (flag.length < 2 || flag[0] !== "-" || flag[1] === "-") return undefined;
+    for (let i = 1; i < flag.length; i++) {
+      const ch = flag[i]!;
+      if ("deFlpru".includes(ch)) return { letter: ch, needsNext: i + 1 === flag.length };
+      if (!"bhv".includes(ch)) return undefined;
+    }
+    return undefined;
+  }
+
+  function bunFlagNeedsNext(flag: string): boolean {
+    return bunValueFlags.has(flag) || Boolean(shortValueLetter(flag)?.needsNext);
+  }
+
+  function bunFlagEvaluates(flag: string): boolean {
+    const eq = flag.indexOf("=");
+    const name = eq < 0 ? flag : flag.slice(0, eq);
+    if (name === "--eval" || name === "--print") return true;
+    const short = shortValueLetter(flag)?.letter;
+    return short === "e" || short === "p";
+  }
+
+  function scanQuoted(raw: string, start: number, quote: string): number {
+    let at = start;
+    while (at < raw.length && raw[at] !== quote) at++;
+    return Math.min(at + 1, raw.length);
+  }
+
+  function scanLongOption(raw: string, start: number): { end: number; value: string } {
+    let at = start;
+    while (at < raw.length && !isAsciiWs(raw[at]!) && raw[at] !== "=") at++;
+    const flagEnd = at;
+    const hasEq = at < raw.length && raw[at] === "=";
+    if (hasEq) at++;
+    while (!hasEq && at < raw.length && isAsciiWs(raw[at]!)) at++;
+    const ch = raw[at];
+    if (ch === "'" || ch === "\"") {
+      at = scanQuoted(raw, at + 1, ch);
+    } else if (hasEq) {
+      while (at < raw.length && !isAsciiWs(raw[at]!)) at++;
+    } else {
+      at = flagEnd;
+    }
+    return { end: at, value: raw.slice(start, at) };
+  }
+
+  function scanPlainOption(raw: string, start: number): { end: number; value: string } {
     let at = start;
     let quote = "";
     let escape = false;
@@ -214,23 +260,10 @@
       const ch = raw[at]!;
       if (!escape && !quote && isAsciiWs(ch)) break;
       at++;
-      if (escape) {
-        value += ch;
-        escape = false;
-        continue;
-      }
-      if (ch === "\\") {
-        escape = true;
-        continue;
-      }
-      if (quote === ch) {
-        quote = "";
-        continue;
-      }
-      if (!quote && (ch === "'" || ch === "\"")) {
-        quote = ch;
-        continue;
-      }
+      if (escape) { value += ch; escape = false; continue; }
+      if (ch === "\\") { escape = true; continue; }
+      if (quote === ch) { quote = ""; continue; }
+      if (!quote && (ch === "'" || ch === "\"")) { quote = ch; continue; }
       value += ch;
     }
     return { end: at, value };
@@ -240,16 +273,31 @@
     const kept: string[] = [];
     let at = 0;
     let skipValue = false;
+    let stop = false;
     while (at < raw.length) {
       if (isAsciiWs(raw[at]!)) { at++; continue; }
-      const { end, value } = nextBunOptionToken(raw, at);
-      const token = raw.slice(at, end);
-      at = end;
-      if (!skipValue && (value === "--parallel" || value.startsWith("--parallel="))) continue;
+      const parsed = raw.startsWith("--", at) ? scanLongOption(raw, at) : scanPlainOption(raw, at);
+      const token = raw.slice(at, parsed.end);
+      at = parsed.end;
+      if (!stop && !skipValue && (parsed.value === "--parallel" || parsed.value.startsWith("--parallel="))) continue;
       kept.push(token);
-      skipValue = !skipValue && bunValueFlags.has(value);
+      if (stop) continue;
+      if (skipValue) { skipValue = false; continue; }
+      if (parsed.value === "--" || !parsed.value.startsWith("-")) { stop = true; continue; }
+      skipValue = bunFlagNeedsNext(parsed.value);
     }
     return kept.join(" ");
+  }
+
+  function childRunsTest(argv: readonly string[]): boolean {
+    for (let i = 1; i < argv.length; i++) {
+      const arg = argv[i]!;
+      if (arg === "test") return true;
+      if (arg === "--") return argv[i + 1] === "test";
+      if (arg === "-" || !arg.startsWith("-") || bunFlagEvaluates(arg)) return false;
+      if (bunFlagNeedsNext(arg)) i++;
+    }
+    return false;
   }
 
   function isBunExecutableName(exe: string): boolean {
@@ -258,17 +306,19 @@
   }
 
   function stripInheritedTestParallel(
-    exe: string,
+    argv: readonly string[],
     env: Record<string, string>,
     parentEnv: Readonly<Record<string, string | undefined>>,
     explicitEnv: Record<string, unknown> | undefined,
   ): void {
+    if (explicitEnv !== undefined) return;
     if (typeof native.argv !== "function" || native.argv()[1] !== "test") return;
+    const exe = argv[0]!;
     const isExecPath = typeof native.execPath === "function" && exe === native.execPath();
     if (!isExecPath && !isBunExecutableName(exe)) return;
+    if (childRunsTest(argv)) return;
     const inherited = parentEnv.BUN_OPTIONS;
     if (!inherited || env.BUN_OPTIONS === undefined) return;
-    if (explicitEnv !== undefined && env.BUN_OPTIONS !== inherited) return;
     const cleaned = stripParallelFromBunOptions(env.BUN_OPTIONS);
     if (cleaned) {
       env.BUN_OPTIONS = cleaned;
@@ -294,7 +344,7 @@
     if (!native.hostCaps.proc_spawn) throw unsupported("Spawning a process without host process support");
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(options.env || proc.env)) if (value !== undefined) env[key] = String(value);
-    stripInheritedTestParallel(argv[0], env, proc.env, options.env);
+    stripInheritedTestParallel(argv, env, proc.env, options.env);
     const io = options.stdio;
     const input = Array.isArray(io) ? io[0] : options.stdin;
     const output = Array.isArray(io) ? io[1] : options.stdout;

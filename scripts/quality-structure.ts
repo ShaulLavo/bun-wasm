@@ -167,13 +167,14 @@ function resolveEffectiveTsProject(projectPath: string, fromComparisonCommit: bo
   return ts.parseJsonConfigFileContent(parsed.config, host, dirname(absPath), undefined, absPath);
 }
 
-const resolutionOptions: readonly (keyof ts.CompilerOptions)[] = [
+const resolutionOptions: readonly string[] = [
   "allowJs",
   "checkJs",
   "allowImportingTsExtensions",
   "allowArbitraryExtensions",
   "baseUrl",
   "paths",
+  "pathsBasePath",
   "rootDir",
   "rootDirs",
   "module",
@@ -197,8 +198,10 @@ const resolutionOptions: readonly (keyof ts.CompilerOptions)[] = [
 function verifyEffectiveProjectFiles(projectPath: string): void {
   const baseResolved = resolveEffectiveTsProject(projectPath, true);
   const currentResolved = resolveEffectiveTsProject(projectPath, false);
+  const baseOptions = baseResolved.options as Record<string, unknown>;
+  const currentOptions = currentResolved.options as Record<string, unknown>;
   for (const option of resolutionOptions) {
-    if (canonicalJson(currentResolved.options[option]) !== canonicalJson(baseResolved.options[option])) {
+    if (canonicalJson(currentOptions[option]) !== canonicalJson(baseOptions[option])) {
       throw new Error(`structure project ${projectPath} changes resolution option: ${option}`);
     }
   }

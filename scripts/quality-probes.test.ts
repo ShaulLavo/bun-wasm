@@ -109,6 +109,10 @@ function probeStructurePolicyTampering(): void {
     rejectsGate("structure", "structure project tsconfig.unknot.json changes resolution option: allowJs");
     writeFileSync(projectPath, `${JSON.stringify({ ...JSON.parse(originalProject), compilerOptions: { moduleSuffixes: [".missing"] } }, null, 2)}\n`);
     rejectsGate("structure", "structure project tsconfig.unknot.json changes resolution option: moduleSuffixes");
+    const qualityTsconfig = JSON.parse(readFileSync(resolve(root, "web/tsconfig.quality.json"), "utf8")) as { compilerOptions?: { paths?: Record<string, string[]> } };
+    expect(qualityTsconfig.compilerOptions?.paths).toBeDefined();
+    writeFileSync(projectPath, `${JSON.stringify({ ...JSON.parse(originalProject), compilerOptions: { paths: qualityTsconfig.compilerOptions?.paths } }, null, 2)}\n`);
+    rejectsGate("structure", "structure project tsconfig.unknot.json changes resolution option: pathsBasePath");
   } finally {
     writeFileSync(allowPath, originalAllow);
     writeFileSync(configPath, originalConfig);
