@@ -47,3 +47,9 @@ await new Promise<void>(resolve => fs.open("missing/deep.txt", "r", error => {
 }));
 writeFileSync("mode-check.txt", "x", { mode: "0600" as never });
 console.log("string mode applied", statSync("mode-check.txt").isFile());
+
+mkdirSync("nonblock-dir", { recursive: true });
+writeFileSync("nonblock-dir/hello.txt", "hi");
+const dirFd = openSync("nonblock-dir", fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NONBLOCK);
+closeSync(dirFd);
+console.log("nonblock directory open", "ok");

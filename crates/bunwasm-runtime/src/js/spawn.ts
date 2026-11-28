@@ -52,6 +52,7 @@
     onExit?: (child: unknown, exitCode: number | null, signalCode: string | number | null, error: unknown) => void;
     _ipc?: boolean;
     _ipcTarget?: BunWasm.NodeEmitter;
+    _inheritedEnv?: boolean;
     [key: string]: unknown;
   }
   interface SpawnMeta {
@@ -192,6 +193,141 @@
     if (Array.isArray(argv) && argv.length > 0xfffffffd) throw new TypeError("cmd array is too large");
   }
 
+  const bunValueFlags = new Set(["--breakpoint-resolve", "--conditions", "--console-depth", "--cpu-prof-dir",
+    "--cpu-prof-interval", "--cpu-prof-name", "--cron-period", "--cron-title", "--cwd", "--define",
+    "--disable-warning", "--dns-result-order", "--drop", "--elide-lines", "--env-file", "--extension-order",
+    "--feature", "--fetch-preconnect", "--filter", "--heap-prof-dir", "--heap-prof-interval", "--heap-prof-name",
+    "--import", "--install", "--jsx-factory", "--jsx-fragment", "--jsx-import-source", "--jsx-runtime", "--loader",
+    "--main-fields", "--max-http-header-size", "--origin", "--port", "--preload", "--redirect-warnings",
+    "--require", "--shell", "--stack-trace-limit", "--title", "--trace-event-categories", "--trace-event-file-pattern",
+    "--tsconfig-override", "--unhandled-rejections", "--user-agent", "--watch-kill-signal"]);
+
+  function isAsciiWs(ch: string): boolean {
+    return ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f";
+  }
+
+  function shortValueLetter(flag: string): { letter: string; needsNext: boolean } | undefined {
+    if (flag.length < 2 || flag[0] !== "-" || flag[1] === "-") return undefined;
+    for (let i = 1; i < flag.length; i++) {
+      const ch = flag[i]!;
+      if ("deFlpru".includes(ch)) return { letter: ch, needsNext: i + 1 === flag.length };
+      if (!"bhv".includes(ch)) return undefined;
+    }
+    return undefined;
+  }
+
+  function bunFlagNeedsNext(flag: string): boolean {
+    return bunValueFlags.has(flag) || Boolean(shortValueLetter(flag)?.needsNext);
+  }
+
+  function bunFlagEvaluates(flag: string): boolean {
+    const eq = flag.indexOf("=");
+    const name = eq < 0 ? flag : flag.slice(0, eq);
+    if (name === "--eval" || name === "--print") return true;
+    const short = shortValueLetter(flag)?.letter;
+    return short === "e" || short === "p";
+  }
+
+  function scanQuoted(raw: string, start: number, quote: string): number {
+    let at = start;
+    while (at < raw.length && raw[at] !== quote) at++;
+    return Math.min(at + 1, raw.length);
+  }
+
+  function scanLongOption(raw: string, start: number): { end: number; value: string } {
+    let at = start;
+    while (at < raw.length && !isAsciiWs(raw[at]!) && raw[at] !== "=") at++;
+    const flagEnd = at;
+    const hasEq = at < raw.length && raw[at] === "=";
+    if (hasEq) at++;
+    while (!hasEq && at < raw.length && isAsciiWs(raw[at]!)) at++;
+    const ch = raw[at];
+    if (ch === "'" || ch === "\"") {
+      at = scanQuoted(raw, at + 1, ch);
+    } else if (hasEq) {
+      while (at < raw.length && !isAsciiWs(raw[at]!)) at++;
+    } else {
+      at = flagEnd;
+    }
+    return { end: at, value: raw.slice(start, at) };
+  }
+
+  function scanPlainOption(raw: string, start: number): { end: number; value: string } {
+    let at = start;
+    let quote = "";
+    let escape = false;
+    let value = "";
+    while (at < raw.length) {
+      const ch = raw[at]!;
+      if (!escape && !quote && isAsciiWs(ch)) break;
+      at++;
+      if (escape) { value += ch; escape = false; continue; }
+      if (ch === "\\") { escape = true; continue; }
+      if (quote === ch) { quote = ""; continue; }
+      if (!quote && (ch === "'" || ch === "\"")) { quote = ch; continue; }
+      value += ch;
+    }
+    return { end: at, value };
+  }
+
+  function stripParallelFromBunOptions(raw: string): string {
+    const kept: string[] = [];
+    let at = 0;
+    let skipValue = false;
+    let stop = false;
+    while (at < raw.length) {
+      if (isAsciiWs(raw[at]!)) { at++; continue; }
+      const parsed = raw.startsWith("--", at) ? scanLongOption(raw, at) : scanPlainOption(raw, at);
+      const token = raw.slice(at, parsed.end);
+      at = parsed.end;
+      if (!stop && !skipValue && (parsed.value === "--parallel" || parsed.value.startsWith("--parallel="))) continue;
+      kept.push(token);
+      if (stop) continue;
+      if (skipValue) { skipValue = false; continue; }
+      if (parsed.value === "--" || !parsed.value.startsWith("-")) { stop = true; continue; }
+      skipValue = bunFlagNeedsNext(parsed.value);
+    }
+    return kept.join(" ");
+  }
+
+  function childRunsTest(argv: readonly string[]): boolean {
+    for (let i = 1; i < argv.length; i++) {
+      const arg = argv[i]!;
+      if (arg === "test") return true;
+      if (arg === "--" || arg === "-" || !arg.startsWith("-") || bunFlagEvaluates(arg)) return false;
+      if (bunFlagNeedsNext(arg)) i++;
+    }
+    return false;
+  }
+
+  function isBunExecutableName(exe: string): boolean {
+    const name = (exe.split("/").pop() ?? exe).replace(/\.wasm$/, "");
+    return name === "bun" || name === "bunx";
+  }
+
+  function stripInheritedTestParallel(
+    argv: readonly string[],
+    env: Record<string, string>,
+    parentEnv: Readonly<Record<string, string | undefined>>,
+    explicitEnv: Record<string, unknown> | undefined,
+    inheritedEnv: boolean | undefined,
+  ): void {
+    if (explicitEnv !== undefined && !inheritedEnv) return;
+    if (typeof native.argv !== "function" || native.argv()[1] !== "test") return;
+    const exe = argv[0]!;
+    const isExecPath = typeof native.execPath === "function" && exe === native.execPath();
+    if (!isExecPath && !isBunExecutableName(exe)) return;
+    if (childRunsTest(argv)) return;
+    const inherited = parentEnv.BUN_OPTIONS;
+    if (!inherited || env.BUN_OPTIONS === undefined) return;
+    const cleaned = stripParallelFromBunOptions(env.BUN_OPTIONS);
+    if (cleaned) {
+      env.BUN_OPTIONS = cleaned;
+      return;
+    }
+    delete env.BUN_OPTIONS;
+  }
+
   function normalize(cmd: unknown, options: SpawnOptions | undefined, sync: boolean, operation: SpawnOperation): Spec {
     if (!Array.isArray(cmd)) {
       options = (cmd || {}) as SpawnOptions;
@@ -209,6 +345,7 @@
     if (!native.hostCaps.proc_spawn) throw unsupported("Spawning a process without host process support");
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(options.env || proc.env)) if (value !== undefined) env[key] = String(value);
+    stripInheritedTestParallel(argv, env, proc.env, options.env, options._inheritedEnv);
     const io = options.stdio;
     const input = Array.isArray(io) ? io[0] : options.stdin;
     const output = Array.isArray(io) ? io[1] : options.stdout;

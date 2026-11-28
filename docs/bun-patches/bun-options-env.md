@@ -2,7 +2,7 @@
 
 | Local source | Classification | Upstream source |
 | --- | --- | --- |
-| `crates/bunwasm-cli/src/main.rs`, `bun_options`, `option_argument`, `plain_argument` | Adapted upstream implementation | Bun `src/bun_core/util.rs` (`append_options_env` and the `argv_view_init` splice) at `9510e74152073d850a18758ca41114d8f214ffa6`, SHA-256 `8e09f7413cd307db9087139806efd2fa28742f581ec8a2f250665005bb7f0a5b` |
+| `crates/bunwasm-cli/src/tool_args.rs`, `bun_options`, `option_argument`, `plain_argument` (mirrored in `web/src/tool-command.ts`) | Adapted upstream implementation | Bun `src/bun_core/util.rs` (`append_options_env` and the `argv_view_init` splice) at `9510e74152073d850a18758ca41114d8f214ffa6`, SHA-256 `8e09f7413cd307db9087139806efd2fa28742f581ec8a2f250665005bb7f0a5b` |
 
 Bun reads `BUN_OPTIONS` as extra command-line arguments placed right after `argv[0]`, before what was typed, for every command. The CLI now does the same before it parses, so `BUN_OPTIONS=--disable-warning=DEP2` reaches `process.execArgv` and the warning printer ([process warnings](process-warnings.md)), and a worker guest, which inherits the environment, sees it too.
 

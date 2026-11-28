@@ -45,7 +45,9 @@ The guest box is either one Wasm module for the `browser` engine, or a core modu
 
 ## What is Bun's and what is ours
 
-Two kinds of code sit in the guest.
+The architectural goal is to compile and reuse as much of upstream `vendor/bun` as possible without sacrificing browser cold-start speed or Wasm size. Speed and size come from platform boundaries (browser native JIT by default, lazy optional engines and tool/package-manager binaries, browser `fetch()`, and Waffle VFS/OS seams), not from maintaining custom reimplementations of Bun's Rust or JavaScript logic. See [Upstream vs. ours](../upstream-vs-ours.md) for the full subsystem inventory and cutover plan.
+
+Two kinds of code sit in the guest today.
 
 Bun's own Rust crates, including the transpiler, bundler, resolver, `bun_semver`, data parsers and glob, compile to `wasm32-wasip1` from a pinned checkout of `oven-sh/bun`. The pin lives in `scripts/sync-bun.sh`, which rebuilds `vendor/bun` from that commit plus the 28 patches in `patches/bun/` at the v1.4.5 pin. Those patches add `target_os = "wasi"` arms and a few host hooks without rewriting Bun. [Changes to Bun and other upstream source](../bun-patches.md) lists every patch, copied file and adapter.
 

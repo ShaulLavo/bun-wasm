@@ -36,6 +36,14 @@
       "error",
       3
     ],
+    "no-nested-ternary": "error",
+    "no-else-return": [
+      "error",
+      {
+        "allowElseIf": false
+      }
+    ],
+    "import/default": "off",
     "complexity": [
       "error",
       40
@@ -63,6 +71,15 @@
   "overrides": [
     {
       "files": [
+        "src/**/*",
+        "web/src/**/*"
+      ],
+      "rules": {
+        "import/no-cycle": "error"
+      }
+    },
+    {
+      "files": [
         "crates/bunwasm-runtime/src/js/*"
       ],
       "rules": {
@@ -72,6 +89,7 @@
   ],
   "plugins": [
     "typescript",
-    "oxc"
+    "oxc",
+    "import"
   ]
 }

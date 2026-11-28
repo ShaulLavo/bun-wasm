@@ -456,7 +456,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     worker.onerror = onError;
     const { port: _port, ...filesystem } = request.filesystem;
     transport.data = { ...(transport.data as object | undefined), filesystem };
-    if (options.adapter !== "preview1" && isToolCommand(options.args)) {
+    if (options.adapter !== "preview1" && isToolCommand(options.args, "bun", request.env.BUN_OPTIONS)) {
       request.module = await loadTools();
       Object.assign(request, programMetadata(request.module));
     }

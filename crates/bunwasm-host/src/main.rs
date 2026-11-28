@@ -348,6 +348,16 @@ fn run_module_instance(
     if !env.iter().any(|(k, _)| k == "BUN_WASM_STACK_KIB") {
         env.push(("BUN_WASM_STACK_KIB".into(), GUEST_STACK_KIB.into()));
     }
+    // Deduplicate env keys (last value wins) so launcher dispatch and WASI getenv agree.
+    let mut normalized_env: Vec<(String, String)> = Vec::with_capacity(env.len());
+    for (key, value) in env {
+        if let Some(existing) = normalized_env.iter_mut().find(|(k, _)| k == &key) {
+            existing.1 = value;
+        } else {
+            normalized_env.push((key, value));
+        }
+    }
+    let env = normalized_env;
     let mut wasi = WasiCtxBuilder::new();
     wasi.args(&argv).envs(&env);
     stdio.install(&mut wasi, cancel.clone());
@@ -359,7 +369,7 @@ fn run_module_instance(
         .iter()
         .find(|(key, _)| key == "PWD")
         .map_or_else(|| "/".into(), |(_, value)| value.clone());
-    let selected = runtime.module_for(&argv, module)?;
+    let selected = runtime.module_for(&argv, &env, module)?;
     let member = runtime.linked.member(
         selected,
         process_admission.execution_id().get() as u32,

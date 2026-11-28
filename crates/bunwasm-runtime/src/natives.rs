@@ -658,7 +658,7 @@ fn descriptor_stat(state: &State, fd: i32, bigint: bool) -> io::Result<Val> {
 
 // Public Node constants use Linux bit values, independent of the libc target.
 fn open_file(path: &str, flags: i32, mode: u32) -> io::Result<File> {
-    let supported = 3 | 64 | 128 | 512 | 1024 | 65536 | 131072 | 1052672;
+    let supported = 3 | 64 | 128 | 512 | 1024 | 2048 | 65536 | 131072 | 1052672;
     if flags & !supported != 0 {
         return Err(io::ErrorKind::Unsupported.into());
     }
@@ -673,6 +673,7 @@ fn open_file(path: &str, flags: i32, mode: u32) -> io::Result<File> {
         (128, libc::O_EXCL),
         (512, libc::O_TRUNC),
         (1024, libc::O_APPEND),
+        (2048, libc::O_NONBLOCK),
         (65536, libc::O_DIRECTORY),
         (131072, libc::O_NOFOLLOW),
         (4096, libc::O_DSYNC),
@@ -2858,8 +2859,10 @@ mod builtin_tests {
                 .iter()
                 .any(|(name, value)| name == "mtimeNs" && matches!(value, Val::Str(_)))
         );
+        drop(open_file(existing, 2048, 0o644).unwrap());
+        drop(open_file(fixture.0.to_str().unwrap(), 65536 | 2048, 0o644).unwrap());
         assert_eq!(
-            open_file(existing, 2048, 0o644).unwrap_err().kind(),
+            open_file(existing, 16384, 0o644).unwrap_err().kind(),
             io::ErrorKind::Unsupported
         );
         drop(open_file(existing, 513, 0o644).unwrap());

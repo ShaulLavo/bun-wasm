@@ -9,6 +9,9 @@ pub struct ToolGlobals {
     /// before `check` is. Its `b` letters are Bun's `--bun`, and it is a chain even when what
     /// remains reads like a compiler option: `bun -bt check` rejects `-t`.
     pub check_chain: Option<usize>,
+    /// Flags from `BUN_OPTIONS` before `fmt`/`lint` that Bun itself did not consume; the tool
+    /// forwards the ones its own parser recognizes (matching upstream `with_own_flags_before`).
+    pub env_flags_before: Vec<String>,
 }
 
 /// Bun's long flags whose value is the next argument (`AUTO_PARAMS` in upstream
@@ -23,6 +26,7 @@ const LONG_WITH_VALUE: &[&str] = &[
     "--cpu-prof-name",
     "--cron-period",
     "--cron-title",
+    "--cwd",
     "--define",
     "--disable-warning",
     "--dns-result-order",
@@ -73,7 +77,7 @@ pub fn is_node(executable: &str) -> bool {
 
 /// The letter of a chain of Bun's short flags that takes a value, and whether that value is the
 /// next argument. `-c` takes an optional value, which is never the next argument.
-fn short_with_value(flag: &str) -> Option<(u8, bool)> {
+pub(crate) fn short_with_value(flag: &str) -> Option<(u8, bool)> {
     let shorts = flag.strip_prefix('-')?.as_bytes();
     if shorts.first().is_none_or(|first| *first == b'-') {
         return None;
@@ -92,6 +96,15 @@ fn short_with_value(flag: &str) -> Option<(u8, bool)> {
 fn evaluates(flag: &str) -> bool {
     let name = flag.split_once('=').map_or(flag, |(name, _)| name);
     matches!(name, "--eval" | "--print") || matches!(short_with_value(flag), Some((b'e' | b'p', _)))
+}
+
+/// Whether `flag` selects workspace or multi-script execution rather than a tool subcommand.
+pub(crate) fn is_workspace_scope_flag(flag: &str) -> bool {
+    let name = flag.split_once('=').map_or(flag, |(name, _)| name);
+    matches!(
+        name,
+        "--filter" | "--workspaces" | "--parallel" | "--sequential"
+    ) || matches!(short_with_value(flag), Some((b'F', _)))
 }
 
 /// Whether `flag` is one of Bun's whose value is the next argument.
@@ -158,12 +171,32 @@ fn check_chain(chain: &str) -> Vec<String> {
     }
 }
 
+#[allow(dead_code)] // Shared across bunwasm-cli, bunwasm-host, and bunwasm-tools.
 pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGlobals)> {
+    before_command_inner(args, 0)
+}
+
+#[allow(dead_code)] // Called by bunwasm-host and bunwasm-tools, which share this module.
+pub fn before_command_with_env(
+    args: &[String],
+    bun_options_env: Option<&str>,
+) -> Option<(String, Vec<String>, ToolGlobals)> {
+    let mut effective = bun_options_env.map(bun_options).unwrap_or_default();
+    let env_count = effective.len();
+    effective.extend(args.iter().cloned());
+    before_command_inner(&effective, env_count)
+}
+
+fn before_command_inner(
+    args: &[String],
+    env_count: usize,
+) -> Option<(String, Vec<String>, ToolGlobals)> {
     let mut unknown = Vec::new();
     let mut for_check = Vec::new();
     let mut globals = ToolGlobals::default();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
+        let from_env = at < env_count;
         let next = args.get(at + 1).map(String::as_str);
         // `bun -ptsconfig.json check`, `bun -h check`: the check command parses the chain.
         let is_of_check = next == Some("check") && is_chain_of_check(arg);
@@ -195,6 +228,7 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
             flag if flag.starts_with("--config=") || flag.starts_with("-c=") => {
                 globals.bunfig = Some(flag.split_once('=')?.1.to_owned());
             }
+            flag if is_workspace_scope_flag(flag) => return None,
             _ if is_of_check => {
                 globals.check_chain = Some(for_check.len());
                 for_check.extend(check_chain(arg));
@@ -203,14 +237,114 @@ pub fn before_command(args: &[String]) -> Option<(String, Vec<String>, ToolGloba
             flag if takes_next_argument(flag) => at += 1,
             flag if is_check_option(flag) => {
                 for_check.push(arg.clone());
-                unknown.push(arg.clone());
+                if from_env {
+                    globals.env_flags_before.push(arg.clone());
+                } else {
+                    unknown.push(arg.clone());
+                }
             }
-            flag if flag.starts_with('-') => unknown.push(arg.clone()),
+            flag if flag.starts_with('-') => {
+                if from_env {
+                    if flag != "--config" {
+                        globals.env_flags_before.push(arg.clone());
+                    }
+                } else {
+                    unknown.push(arg.clone());
+                }
+            }
             _ => return None,
         }
         at += 1;
     }
     None
+}
+
+/// Splits `BUN_OPTIONS` into arguments the way Bun's `append_options_env`
+/// (src/bun_core/util.rs) does: `--flag=value`, `--flag "quoted"` and `--flag='quoted'`
+/// stay one argument with their quotes, and bare words lose quotes and backslashes.
+/// docs/bun-patches/bun-options-env.md records the port.
+pub fn bun_options(env: &str) -> Vec<String> {
+    let env = env.as_bytes();
+    let mut args = Vec::new();
+    let mut i = 0;
+    while i < env.len() {
+        if env[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        let (arg, end) = if env[i..].starts_with(b"--") {
+            option_argument(env, i)
+        } else {
+            plain_argument(env, i)
+        };
+        args.push(arg);
+        i = end;
+    }
+    args
+}
+
+pub fn option_argument(env: &[u8], start: usize) -> (String, usize) {
+    let mut j = start;
+    while j < env.len() && !env[j].is_ascii_whitespace() && env[j] != b'=' {
+        j += 1;
+    }
+    let end_of_flag = j;
+    let found_equals = j < env.len() && env[j] == b'=';
+    if found_equals {
+        j += 1;
+    }
+    while !found_equals && j < env.len() && env[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    if j < env.len() && (env[j] == b'\'' || env[j] == b'"') {
+        let quote = env[j];
+        j += 1;
+        while j < env.len() && env[j] != quote {
+            j += 1;
+        }
+        j = (j + 1).min(env.len());
+    } else if found_equals {
+        while j < env.len() && !env[j].is_ascii_whitespace() {
+            j += 1;
+        }
+    } else {
+        // `--flag value`: the value becomes an argument of its own.
+        j = end_of_flag;
+    }
+    (String::from_utf8_lossy(&env[start..j]).into_owned(), j)
+}
+
+pub fn plain_argument(env: &[u8], start: usize) -> (String, usize) {
+    let mut buf = Vec::new();
+    let mut quote: Option<u8> = None;
+    let mut escape = false;
+    let mut i = start;
+    while let Some(&ch) = env.get(i) {
+        if !escape && quote.is_none() && ch.is_ascii_whitespace() {
+            break;
+        }
+        i += 1;
+        if escape {
+            buf.push(ch);
+            escape = false;
+        } else if ch == b'\\' {
+            escape = true;
+        } else if quote == Some(ch) {
+            quote = None;
+        } else if quote.is_none() && (ch == b'\'' || ch == b'"') {
+            quote = Some(ch);
+        } else {
+            buf.push(ch);
+        }
+    }
+    (String::from_utf8_lossy(&buf).into_owned(), i)
+}
+
+#[allow(dead_code)] // Shared across bunwasm-cli, bunwasm-host, and bunwasm-tools.
+pub fn with_bun_options(args: &[String], bun_options_env: Option<&str>) -> Vec<String> {
+    let mut effective = bun_options_env.map(bun_options).unwrap_or_default();
+    effective.extend(args.iter().cloned());
+    effective
 }
 
 #[cfg(test)]
@@ -254,6 +388,13 @@ mod tests {
             &["-brcheck", "entry.ts"],
             &["--print", "1", "check"],
             &["--", "--entry.ts", "check"],
+            &["--filter=a", "check"],
+            &["--filter", "a", "lint"],
+            &["-F", "a", "fmt"],
+            &["-Fa", "check"],
+            &["--workspaces", "lint"],
+            &["--parallel", "lint"],
+            &["--sequential", "check"],
         ] {
             assert!(select(args).is_none(), "{args:?}");
         }
@@ -315,6 +456,33 @@ mod tests {
         assert_eq!(forwarded, ["--no-warnings"]);
         assert!(select(&["-", "check"]).is_none());
         assert!(select(&["--project", "app", "check"]).is_none());
+        assert!(before_command_with_env(&["fmt".into()], Some("--filter=app")).is_none());
+        let (cmd, forwarded, globals) = before_command_with_env(
+            &["fmt".into(), "--help".into()],
+            Some("--no-warnings --disable-warning=DEP2 --cwd project"),
+        )
+        .unwrap();
+        assert_eq!(cmd, "fmt");
+        assert_eq!(forwarded, ["--help"]);
+        assert_eq!(globals.cwd_before.as_deref(), Some("project"));
+        assert_eq!(
+            globals.env_flags_before,
+            ["--no-warnings", "--disable-warning=DEP2"]
+        );
+        let (cmd, forwarded, globals) =
+            before_command_with_env(&["file.ts".into()], Some("--check fmt")).unwrap();
+        assert_eq!(cmd, "fmt");
+        assert_eq!(forwarded, ["file.ts"]);
+        assert_eq!(globals.env_flags_before, ["--check"]);
+        let (cmd, forwarded, globals) =
+            before_command_with_env(&["file.ts".into()], Some("-c fmt")).unwrap();
+        assert_eq!(cmd, "fmt");
+        assert_eq!(forwarded, ["file.ts"]);
+        assert_eq!(globals.env_flags_before, ["-c"]);
+        assert!(
+            before_command_with_env(&["fmt".into()], Some("--no-warnings\x0B--filter=app"))
+                .is_some()
+        );
     }
 }
 

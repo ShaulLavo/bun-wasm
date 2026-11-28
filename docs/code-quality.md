@@ -180,14 +180,28 @@ private executor is configured.
 
 ## Coverage and versions
 
-- Oxlint 1.88.0 checks owned JavaScript and TypeScript, including runtime polyfills,
-  package code, web, sandbox, scripts and tests. Correctness and unused-variable
-  rules are errors, control-flow depth is limited to 3, and complexity to 40.
+- Oxlint 1.88.0 (`quality:lint` via `scripts/quality-lint.ts`) checks owned JavaScript
+  and TypeScript, including runtime polyfills, package code, web, sandbox, scripts and
+  tests. Correctness and unused-variable rules are errors, control-flow depth is limited
+  to 3, `else` / `else if` after `return` (`no-else-return` with `allowElseIf: false`)
+  and nested ternaries (`no-nested-ternary`) are errors, and complexity is limited to 40.
+  Pre-existing nested ternaries are pinned by AST context-bound SHA-256 hashes (filename,
+  enclosing declaration path, surrounding lines, and diagnostic span) in
+  `.oxlint-nested-ternary-baseline.json`, and `quality:lint` rejects any baseline growth
+  against the comparison commit. Adding a new nested ternary, moving a grandfathered body
+  into another function, or running `--write-baseline` to expand allowances all fail CI.
   Unqualified browser-global `name` is forbidden, so a renamed local cannot
   silently capture `window.name` inside a callback.
   Guest fixtures deliberately testing invalid input under `tests/fixtures`,
   `tests/build` and `tests/jsc` are not host source. Intentional classic-script
   factory evaluation and ABI-specific operations have local explained exceptions.
+- Unknot 0.1.2 (`quality:structure` via `scripts/quality-structure.ts`) checks module
+  structure across `src/` and `web/src/` in one unified graph (configured in `.unknot.json`
+  and `tsconfig.unknot.json`, with pre-existing debt recorded in `.unknot.allow`), rejecting
+  new structural findings (including cross-boundary cycles), any new `.unknot.allow` entry,
+  any removed `# rules:` rule, any `.unknot.json` change that disables/weakens a rule, drops
+  a project, or adds an ignore pattern, and any `tsconfig.unknot.json` scope shrinkage
+  compared to the CI base commit.
 - TypeScript 7.0.2 runs strict runtime-factory, package, scripts/site, web and sandbox projects.
   Both application quality projects include authored TS test files and their
   browser/worker entrypoints. Legacy JS gets correctness lint, not a claim of

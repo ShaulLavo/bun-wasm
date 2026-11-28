@@ -17,6 +17,7 @@ Start with [Getting started](getting-started.md). Everything else is one click f
 
 - [Project overview](project-overview.md): what runs, the architecture diagram, performance and status.
 - [Architecture](concepts/architecture.md): the layers, the four engines, the host interface.
+- [Upstream vs. ours](upstream-vs-ours.md): what compiles directly from `vendor/bun`, what is maintained locally, and the phased upstream cutover plan.
 - [Decision records](adr/001-three-engines-behind-one-runtime.md): why the code has its shape. [001 engines](adr/001-three-engines-behind-one-runtime.md), [002 host slots](adr/002-host-functions-installed-in-the-function-table.md), [003 processes](adr/003-processes-run-on-the-waffle-process-abi.md), [004 guest artifacts](adr/004-guests-live-outside-the-package.md), [005 patching Bun](adr/005-patch-bun-minimally-and-keep-a-ledger.md).
 
 ## Look up

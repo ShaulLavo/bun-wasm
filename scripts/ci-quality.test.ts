@@ -229,7 +229,7 @@ test("Rust tests select every workspace member and the patched crates without --
 
 test("local quality retains all gates and rejects invalid selections", () => {
   expect(qualityGates([])).toEqual(qualityGates(["--javascript"]).concat(qualityGates(["--native"])));
-  expect(qualityGates(["--javascript"])).toEqual(["lint", "types", "unused", "duplicates", "probes"]);
+  expect(qualityGates(["--javascript"])).toEqual(["lint", "types", "unused", "duplicates", "structure", "probes"]);
   expect(qualityGates(["--native"])).toEqual(["rust", "wasi"]);
   expect(() => qualityGates(["--wat"])).toThrow("Usage");
   expect(() => qualityGates(["--javascript", "--native"])).toThrow("Usage");

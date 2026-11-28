@@ -1,0 +1,10 @@
+{
+  "extends": "./web/tsconfig.quality.json",
+  "include": [
+    "src/**/*",
+    "web/src/**/*"
+  ],
+  "exclude": [
+    "src/guest-asset.generated.ts"
+  ]
+}

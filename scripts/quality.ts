@@ -2,9 +2,9 @@ import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { run } from "./quality-command";
 
-const staticJavascript = ["lint", "types", "unused", "duplicates"] as const;
+const staticJavascript = ["lint", "types", "unused", "duplicates", "structure"] as const;
 const gates = {
-  javascript: ["lint", "types", "unused", "duplicates", "probes"],
+  javascript: ["lint", "types", "unused", "duplicates", "structure", "probes"],
   native: ["rust", "wasi"],
 };
 

@@ -41,3 +41,4 @@ callback mkdir throws TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must b
 promise rejects ERR_INVALID_ARG_VALUE
 system error goes to callback ENOENT
 string mode applied true
+nonblock directory open ok

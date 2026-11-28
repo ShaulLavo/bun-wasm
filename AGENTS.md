@@ -19,6 +19,7 @@ Bun compiled to WebAssembly: one `wasm32-wasip1` guest that runs `bun run`, `bun
 
 ## Rules
 
+- **Upstream Bun first (owner, 2026-11-28):** Reuse as much of upstream `vendor/bun` as possible without sacrificing browser cold-start speed or Wasm size. Stop extending custom rewrites that later get deleted; get speed and size from platform boundaries (browser native JIT default, lazy optional engines and PM/tool binaries, browser `fetch()`, and Waffle VFS/OS seams). See `docs/upstream-vs-ours.md` before adding or extending runtime, resolver, or installer behavior.
 - Write new code in TypeScript. Do not hand-write JavaScript or check in compiled JavaScript unless a build step forces it (owner, 2026-10-16).
 - Use Rust for native work: fs, sockets, crypto, compression, parsing. Prefer Bun's own `src/js` modules through the builtin loader over writing new ones.
 - Keep engine-specific behavior behind the `Engine` trait (`crates/bunwasm-runtime/src/engine.rs`).

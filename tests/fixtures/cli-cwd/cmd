@@ -1,0 +1,6 @@
+run
+--cwd
+first
+--cwd
+app
+./index.ts

@@ -12,6 +12,61 @@ const longWithValue = new Set(["--breakpoint-resolve", "--conditions", "--consol
 const shortWithValue = "deFlpru";
 const shortWithoutValue = "bhv";
 
+// Matches Rust `u8::is_ascii_whitespace` (SP, HT, LF, FF, CR — excluding vertical tab).
+function isWhitespace(ch: string): boolean {
+  return ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f";
+}
+
+function optionArgument(env: string, start: number): [string, number] {
+  let j = start;
+  while (j < env.length && !isWhitespace(env[j]!) && env[j] !== "=") j++;
+  const endOfFlag = j;
+  const foundEquals = j < env.length && env[j] === "=";
+  if (foundEquals) j++;
+  while (!foundEquals && j < env.length && isWhitespace(env[j]!)) j++;
+  if (j < env.length && (env[j] === "'" || env[j] === "\"")) {
+    const quote = env[j++];
+    while (j < env.length && env[j] !== quote) j++;
+    j = Math.min(j + 1, env.length);
+  } else if (foundEquals) {
+    while (j < env.length && !isWhitespace(env[j]!)) j++;
+  } else {
+    j = endOfFlag;
+  }
+  return [env.slice(start, j), j];
+}
+
+function plainArgument(env: string, start: number): [string, number] {
+  let out = "";
+  let quote = "";
+  let escape = false;
+  let i = start;
+  while (i < env.length) {
+    const ch = env[i]!;
+    if (!escape && !quote && isWhitespace(ch)) break;
+    i++;
+    if (escape) { out += ch; escape = false; }
+    else if (ch === "\\") escape = true;
+    else if (quote === ch) quote = "";
+    else if (!quote && (ch === "'" || ch === "\"")) quote = ch;
+    else out += ch;
+  }
+  return [out, i];
+}
+
+/** Splits `BUN_OPTIONS` the way Bun's `append_options_env` and `tool_args::bun_options` do. */
+function bunOptions(env: string): string[] {
+  const args: string[] = [];
+  let i = 0;
+  while (i < env.length) {
+    if (isWhitespace(env[i]!)) { i++; continue; }
+    const [arg, end] = env.startsWith("--", i) ? optionArgument(env, i) : plainArgument(env, i);
+    args.push(arg);
+    i = end;
+  }
+  return args;
+}
+
 /** `node` and `nodejs` run files and have no subcommands. */
 function isNodeExecutable(executable: string): boolean {
   const name = (executable.split("/").pop() ?? executable).replace(/\.wasm$/, "");
@@ -35,20 +90,26 @@ function evaluates(flag: string): boolean {
   return name === "--eval" || name === "--print" || letter === "e" || letter === "p";
 }
 
-/** `args` follows the executable; `executable` is argv[0]. */
-export function isToolCommand(args: readonly string[], executable = "bun"): boolean {
+function isWorkspaceScopeFlag(flag: string): boolean {
+  const name = flag.split("=", 1)[0];
+  return name === "--filter" || name === "--workspaces" || name === "--parallel" || name === "--sequential" || shortValue(flag)?.letter === "F";
+}
+
+/** `args` follows the executable; `executable` is argv[0]; `bunOptionsEnv` is `BUN_OPTIONS`. */
+export function isToolCommand(args: readonly string[], executable = "bun", bunOptionsEnv?: string): boolean {
   if (isNodeExecutable(executable)) return false;
-  for (let at = 0; at < args.length; at++) {
-    const arg = args[at]!;
+  const effective = bunOptionsEnv ? bunOptions(bunOptionsEnv).concat(args) : args;
+  for (let at = 0; at < effective.length; at++) {
+    const arg = effective[at]!;
     if (toolWords.has(arg)) return true;
     // What follows `--` is the command or the file to run, even if it looks like a flag.
-    if (arg === "--") return toolWords.has(args[at + 1] ?? "");
+    if (arg === "--") return toolWords.has(effective[at + 1] ?? "");
     // `bun -` runs standard input: `bun - check` passes it `check`.
     if (arg === "-") return false;
     // `bun -ptsconfig.json check`: before `check`, `-p` is its `--project`, as upstream.
-    if (args[at + 1] === "check" && shortValue(arg)?.letter === "p") continue;
+    if (effective[at + 1] === "check" && shortValue(arg)?.letter === "p") continue;
     if (arg === "--cwd") { at++; continue; }
-    if (["-v", "--version", "--revision"].includes(arg) || evaluates(arg)) return false;
+    if (["-v", "--version", "--revision"].includes(arg) || evaluates(arg) || isWorkspaceScopeFlag(arg)) return false;
     if (longWithValue.has(arg) || shortValue(arg)?.next) { at++; continue; }
     if (!arg.startsWith("-")) return false;
   }
